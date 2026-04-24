@@ -50,9 +50,10 @@ Rules:
     // Extract JSON array even if there's surrounding text
     const match = raw.match(/\[[\s\S]*\]/);
     if (match) extracted = JSON.parse(match[0]);
-  } catch (e) {
+  } catch (e: any) {
     console.error("[Vision]", e);
-    return NextResponse.json({ error: "Extraction échouée — réessaie avec un screenshot plus net" }, { status: 500 });
+    const msg = e?.message ?? String(e);
+    return NextResponse.json({ error: `Extraction échouée : ${msg}` }, { status: 500 });
   }
 
   if (!extracted.length) {
