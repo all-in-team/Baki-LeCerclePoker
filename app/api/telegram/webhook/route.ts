@@ -20,15 +20,15 @@ async function sendMsg(chatId: number | string, text: string) {
 // ── Session helpers ───────────────────────────────────────
 type Step = "waiting_action_pct" | "waiting_wallet_game" | "waiting_wallet_cashout";
 
-function getSession(chatId: string | number): { step: Step; player_id: number } | null {
+function getSession(chatId: string | number): { step: Step; player_id: number; expected_tg_id: number | null } | null {
   return getDb().prepare(
-    `SELECT step, player_id FROM telegram_sessions WHERE chat_id = ?`
+    `SELECT step, player_id, expected_tg_id FROM telegram_sessions WHERE chat_id = ?`
   ).get(String(chatId)) as any ?? null;
 }
-function setSession(chatId: string | number, step: Step, player_id: number) {
+function setSession(chatId: string | number, step: Step, player_id: number, expected_tg_id?: number | null) {
   getDb().prepare(
-    `INSERT OR REPLACE INTO telegram_sessions (chat_id, step, player_id, created_at) VALUES (?, ?, ?, datetime('now'))`
-  ).run(String(chatId), step, player_id);
+    `INSERT OR REPLACE INTO telegram_sessions (chat_id, step, player_id, expected_tg_id, created_at) VALUES (?, ?, ?, ?, datetime('now'))`
+  ).run(String(chatId), step, player_id, expected_tg_id ?? null);
 }
 function clearSession(chatId: string | number) {
   getDb().prepare(`DELETE FROM telegram_sessions WHERE chat_id = ?`).run(String(chatId));
@@ -176,11 +176,15 @@ async function handleRawMessage(text: string, chatId: number) {
       return;
     }
     db.prepare(`UPDATE players SET tron_address = ? WHERE id = ?`).run(text, player.id);
-    setSession(chatId, "waiting_wallet_cashout", player.id);
+    // Next step: ask for cashout — player can reply themselves
+    const tgId = (db.prepare(`SELECT telegram_id FROM players WHERE id = ?`).get(player.id) as any)?.telegram_id ?? null;
+    const handle = (db.prepare(`SELECT telegram_handle FROM players WHERE id = ?`).get(player.id) as any)?.telegram_handle ?? null;
+    const mention = handle ? `@${handle}` : player.name;
+    setSession(chatId, "waiting_wallet_cashout", player.id, tgId);
     await sendMsg(chatId,
       `✅ <b>WALLET GAME enregistré</b> pour <b>${player.name}</b>\n<code>${text}</code>\n\n` +
-      `💸 <b>Étape 3/3</b> — Envoie le <b>WALLET CASHOUT</b> de ${player.name}\n` +
-      `<i>(son adresse Binance TRC20 pour recevoir les cashouts)</i>`
+      `💸 <b>Étape 3/3</b> — ${mention}, envoie ton <b>WALLET CASHOUT</b>\n` +
+      `<i>(ton adresse Binance TRC20 pour recevoir les cashouts)</i>`
     );
 
   } else if (session.step === "waiting_wallet_cashout") {
@@ -341,6 +345,49 @@ async function handleWallet(rawText: string, chatId: number) {
   }
 }
 
+// ── Command: /reset ───────────────────────────────────────
+// /reset hugo game    → efface WALLET GAME et relance le flow
+// /reset hugo cashout → efface WALLET CASHOUT et relance le flow
+// /reset hugo         → efface tout et repart de 0
+async function handleReset(rawText: string, chatId: number) {
+  const parts = rawText.trim().split(/\s+/);
+  const typeToken = parts[parts.length - 1]?.toLowerCase();
+  const hasType = ["game", "cashout", "deal"].includes(typeToken);
+  const playerQuery = hasType ? parts.slice(0, -1).join(" ").trim() : parts.join(" ").trim();
+
+  if (!playerQuery) { await sendMsg(chatId, `❌ Usage : <code>/reset hugo</code> ou <code>/reset hugo game</code>`); return; }
+
+  const players = findPlayer(playerQuery);
+  if (players.length === 0) { await sendMsg(chatId, `❌ Joueur "${playerQuery}" introuvable`); return; }
+  if (players.length > 1) { await sendMsg(chatId, `❌ Plusieurs joueurs :\n${players.map(x => `• ${x.name}`).join("\n")}`); return; }
+
+  const db = getDb();
+  const player = players[0];
+  clearSession(chatId);
+
+  if (typeToken === "game") {
+    db.prepare(`UPDATE players SET tron_address = NULL WHERE id = ?`).run(player.id);
+    const tgId = (db.prepare(`SELECT telegram_id FROM players WHERE id = ?`).get(player.id) as any)?.telegram_id ?? null;
+    setSession(chatId, "waiting_wallet_game", player.id, tgId);
+    const handle = (db.prepare(`SELECT telegram_handle FROM players WHERE id = ?`).get(player.id) as any)?.telegram_handle ?? null;
+    const mention = handle ? `@${handle}` : player.name;
+    await sendMsg(chatId, `🔄 WALLET GAME réinitialisé pour <b>${player.name}</b>\n\n📲 ${mention}, envoie ton <b>WALLET GAME</b> (adresse TRC20 de ton compte TELE)`);
+  } else if (typeToken === "cashout") {
+    db.prepare(`UPDATE players SET tele_wallet_cashout = NULL WHERE id = ?`).run(player.id);
+    const tgId = (db.prepare(`SELECT telegram_id FROM players WHERE id = ?`).get(player.id) as any)?.telegram_id ?? null;
+    setSession(chatId, "waiting_wallet_cashout", player.id, tgId);
+    const handle = (db.prepare(`SELECT telegram_handle FROM players WHERE id = ?`).get(player.id) as any)?.telegram_handle ?? null;
+    const mention = handle ? `@${handle}` : player.name;
+    await sendMsg(chatId, `🔄 WALLET CASHOUT réinitialisé pour <b>${player.name}</b>\n\n💸 ${mention}, envoie ton <b>WALLET CASHOUT</b> (adresse Binance TRC20)`);
+  } else {
+    // Full reset
+    db.prepare(`UPDATE players SET tron_address = NULL, tele_wallet_cashout = NULL WHERE id = ?`).run(player.id);
+    db.prepare(`DELETE FROM player_game_deals WHERE player_id = ? AND game_id = (SELECT id FROM games WHERE name='TELE')`).run(player.id);
+    setSession(chatId, "waiting_action_pct", player.id);
+    await sendMsg(chatId, `🔄 <b>${player.name}</b> réinitialisé complètement.\n\n📋 <b>Étape 1/3</b> — Quel est son % action sur TELE ?`);
+  }
+}
+
 // ── Command: /check ───────────────────────────────────────
 async function handleCheck(rawText: string, chatId: number) {
   const query = rawText.trim();
@@ -398,9 +445,12 @@ Quand un joueur rejoint → auto-créé. Puis :
 <code>/deal hugo tele 40% action</code>
 → le bot demande ensuite les wallets directement
 
-<b>— Override wallets —</b>
+<b>— Override / correction —</b>
 <code>/wallet hugo game TXxxx…</code>
 <code>/wallet hugo cashout TXxxx…</code>
+<code>/reset hugo game</code> — réinitialise WALLET GAME
+<code>/reset hugo cashout</code> — réinitialise WALLET CASHOUT
+<code>/reset hugo</code> — repart de zéro
 
 <b>— Vérifier un joueur —</b>
 <code>/check hugo</code>
@@ -471,6 +521,7 @@ export async function POST(req: NextRequest) {
       else if (cmd === "/depot")        await handleTx("deposit", rawArgs, chatId);
       else if (cmd === "/retrait")      await handleTx("withdrawal", rawArgs, chatId);
       else if (cmd === "/wallet")       await handleWallet(rawArgs, chatId);
+      else if (cmd === "/reset")        await handleReset(rawArgs, chatId);
       else if (cmd === "/check")        await handleCheck(rawArgs, chatId);
       else if (cmd === "/pnl")          await handlePnl(rawArgs, chatId);
       else if (cmd === "/aide" || cmd === "/help") await handleAide(chatId);
@@ -482,14 +533,20 @@ export async function POST(req: NextRequest) {
   }
 
   // Raw message → guided onboarding flow (action %, addresses)
-  if (msg?.text && !msg.text.startsWith("/") && OWNER_IDS.has(msg.from?.id)) {
+  if (msg?.text && !msg.text.startsWith("/")) {
     const text = msg.text.trim();
+    const senderId: number = msg.from?.id;
     const session = getSession(chatId);
     if (session) {
-      try { await handleRawMessage(text, chatId); } catch (e: any) {
-        console.error("[TG FLOW]", e);
+      // Accept if sender is owner OR sender is the expected player
+      const isOwner = OWNER_IDS.has(senderId);
+      const isExpectedPlayer = session.expected_tg_id != null && senderId === session.expected_tg_id;
+      if (isOwner || isExpectedPlayer) {
+        try { await handleRawMessage(text, chatId); } catch (e: any) {
+          console.error("[TG FLOW]", e);
+        }
+        return NextResponse.json({ ok: true });
       }
-      return NextResponse.json({ ok: true });
     }
   }
 
