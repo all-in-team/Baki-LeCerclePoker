@@ -18,7 +18,7 @@ async function sendMsg(chatId: number | string, text: string) {
 }
 
 // ── Session helpers ───────────────────────────────────────
-type Step = "waiting_wallet_game" | "waiting_wallet_cashout";
+type Step = "waiting_action_pct" | "waiting_wallet_game" | "waiting_wallet_cashout";
 
 function getSession(chatId: string | number): { step: Step; player_id: number } | null {
   return getDb().prepare(
@@ -136,33 +136,65 @@ function onboardingStatus(player: { id: number; name: string; tron_address: stri
   return `🟢 <b>${player.name} est 100% configuré</b> — deal ${deal!.action_pct}% action · WALLET GAME ✅ · WALLET CASHOUT ✅\nLance un <b>Sync TELE</b> sur le dashboard pour capturer ses transactions.`;
 }
 
-// ── Guided flow: handle raw TRC20 address ─────────────────
-async function handleRawAddress(address: string, chatId: number) {
+// ── Guided flow: handle raw messages ─────────────────────
+async function handleRawMessage(text: string, chatId: number) {
   const session = getSession(chatId);
-  if (!session) return; // no active session, ignore
+  if (!session) return;
 
   const player = getPlayerFull(session.player_id);
   if (!player) { clearSession(chatId); return; }
 
   const db = getDb();
-  const firstName = player.name.split(" ")[0].toLowerCase();
+  const teleGame = findGame("TELE");
 
-  if (session.step === "waiting_wallet_game") {
-    db.prepare(`UPDATE players SET tron_address = ? WHERE id = ?`).run(address, player.id);
+  if (session.step === "waiting_action_pct") {
+    // Accept "40", "40%", "40% action", "40 rb 5", etc.
+    const pctMatch = text.match(/(\d+(?:\.\d+)?)/);
+    if (!pctMatch) {
+      await sendMsg(chatId, `❌ Envoie juste le pourcentage, ex : <b>40</b>`);
+      return;
+    }
+    const action_pct = parseFloat(pctMatch[1]);
+    // Check for RB too (optional): "40 5" or "40% 5%"
+    const nums = [...text.matchAll(/(\d+(?:\.\d+)?)/g)].map(m => parseFloat(m[1]));
+    const rakeback_pct = nums.length >= 2 ? nums[1] : 0;
+
+    if (!teleGame) { await sendMsg(chatId, `❌ Game TELE introuvable`); return; }
+    upsertPlayerGameDeal({ player_id: player.id, game_id: teleGame.id, action_pct, rakeback_pct });
+
+    setSession(chatId, "waiting_wallet_game", player.id);
+    await sendMsg(chatId,
+      `✅ <b>Deal enregistré</b> — <b>${player.name}</b> sur TELE\n` +
+      `Action : <b>${action_pct}%</b>` + (rakeback_pct > 0 ? ` · RB : <b>${rakeback_pct}%</b>` : "") + `\n\n` +
+      `📲 <b>Étape 2/3</b> — Envoie le <b>WALLET GAME</b> de ${player.name}\n` +
+      `<i>(l'adresse TRC20 de son compte TELE — c'est là où on envoie les dépôts)</i>`
+    );
+
+  } else if (session.step === "waiting_wallet_game") {
+    if (!TRC20_RE.test(text)) {
+      await sendMsg(chatId, `❌ Adresse invalide — doit commencer par <b>T</b> et faire 34 caractères\nEnvoie le WALLET GAME de ${player.name}`);
+      return;
+    }
+    db.prepare(`UPDATE players SET tron_address = ? WHERE id = ?`).run(text, player.id);
     setSession(chatId, "waiting_wallet_cashout", player.id);
     await sendMsg(chatId,
-      `✅ <b>WALLET GAME enregistré</b> pour <b>${player.name}</b>\n<code>${address}</code>\n\n` +
-      `💸 <b>Étape 3/3</b> — Envoie maintenant le <b>WALLET CASHOUT</b> de ${player.name}\n` +
+      `✅ <b>WALLET GAME enregistré</b> pour <b>${player.name}</b>\n<code>${text}</code>\n\n` +
+      `💸 <b>Étape 3/3</b> — Envoie le <b>WALLET CASHOUT</b> de ${player.name}\n` +
       `<i>(son adresse Binance TRC20 pour recevoir les cashouts)</i>`
     );
+
   } else if (session.step === "waiting_wallet_cashout") {
-    db.prepare(`UPDATE players SET tele_wallet_cashout = ? WHERE id = ?`).run(address, player.id);
+    if (!TRC20_RE.test(text)) {
+      await sendMsg(chatId, `❌ Adresse invalide — doit commencer par <b>T</b> et faire 34 caractères\nEnvoie le WALLET CASHOUT de ${player.name}`);
+      return;
+    }
+    db.prepare(`UPDATE players SET tele_wallet_cashout = ? WHERE id = ?`).run(text, player.id);
     clearSession(chatId);
     const deal = getTeleDeal(player.id);
     await sendMsg(chatId,
-      `✅ <b>WALLET CASHOUT enregistré</b> pour <b>${player.name}</b>\n<code>${address}</code>\n\n` +
+      `✅ <b>WALLET CASHOUT enregistré</b> pour <b>${player.name}</b>\n<code>${text}</code>\n\n` +
       `🟢 <b>${player.name} est 100% configuré !</b>\n` +
-      `Deal : <b>${deal?.action_pct ?? "?"}% action</b> · RB : <b>${deal?.rakeback_pct ?? 0}%</b>\n` +
+      `Deal : <b>${deal?.action_pct ?? "?"}% action</b>` + (deal?.rakeback_pct ? ` · RB : <b>${deal.rakeback_pct}%</b>` : "") + `\n` +
       `WALLET GAME ✅ · WALLET CASHOUT ✅\n\n` +
       `Lance un <b>Sync TELE</b> sur le dashboard pour capturer ses transactions automatiquement.`
     );
@@ -203,17 +235,16 @@ async function handleDeal(rawText: string, chatId: number) {
     `✅ <b>Deal enregistré</b>\n<b>${players[0].name}</b> sur <b>${game.name}</b>\nAction : <b>${p.action_pct}%</b> · RB : <b>${rb}%</b>`
   );
 
-  // If TELE → start guided wallet flow
+  // If TELE → continue guided flow from where we are
   if (game.name === "TELE") {
     const player = getPlayerFull(players[0].id)!;
     const hasGame = !!(player.tron_address && TRC20_RE.test(player.tron_address));
     const hasCashout = !!(player.tele_wallet_cashout && TRC20_RE.test(player.tele_wallet_cashout));
-
     if (!hasGame) {
       setSession(chatId, "waiting_wallet_game", player.id);
       await sendMsg(chatId,
         `📲 <b>Étape 2/3</b> — Envoie le <b>WALLET GAME</b> de ${player.name}\n` +
-        `<i>(l'adresse TRC20 de son compte TELE — c'est là où on envoie les dépôts)</i>`
+        `<i>(l'adresse TRC20 de son compte TELE)</i>`
       );
     } else if (!hasCashout) {
       setSession(chatId, "waiting_wallet_cashout", player.id);
@@ -222,6 +253,7 @@ async function handleDeal(rawText: string, chatId: number) {
         `<i>(son adresse Binance TRC20 pour recevoir les cashouts)</i>`
       );
     } else {
+      clearSession(chatId);
       await sendMsg(chatId, `🟢 <b>${player.name} est déjà 100% configuré</b> — rien à faire.`);
     }
   }
@@ -405,12 +437,12 @@ async function handleNewMembers(members: any[], chatTitle: string, chatId: numbe
     db.prepare(`INSERT INTO crm_notes (player_id, content, type) VALUES (?, ?, 'note')`)
       .run(playerId, `${isNew ? "Créé automatiquement — a" : "A"} rejoint "${chatTitle}"`);
 
-    const firstName = name.split(" ")[0].toLowerCase();
     if (isNew) {
+      setSession(chatId, "waiting_action_pct", playerId);
       await sendMsg(chatId,
         `✅ <b>${name}</b> ajouté au CRM automatiquement.\n\n` +
-        `📋 <b>Étape 1/3</b> — Configure son deal :\n<code>/deal ${firstName} tele 40% action</code>\n` +
-        `<i>(ajuste le % selon ton deal avec lui)</i>`
+        `📋 <b>Étape 1/3</b> — Quel est son <b>% action sur TELE</b> ?\n` +
+        `<i>(envoie juste le chiffre, ex : <b>40</b> — ou <b>40 5</b> pour 40% action + 5% RB)</i>`
       );
     }
   }
@@ -449,12 +481,13 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ ok: true });
   }
 
-  // Raw TRC20 address → guided onboarding flow
-  if (msg?.text && OWNER_IDS.has(msg.from?.id)) {
+  // Raw message → guided onboarding flow (action %, addresses)
+  if (msg?.text && !msg.text.startsWith("/") && OWNER_IDS.has(msg.from?.id)) {
     const text = msg.text.trim();
-    if (TRC20_RE.test(text)) {
-      try { await handleRawAddress(text, chatId); } catch (e: any) {
-        console.error("[TG ADDR]", e);
+    const session = getSession(chatId);
+    if (session) {
+      try { await handleRawMessage(text, chatId); } catch (e: any) {
+        console.error("[TG FLOW]", e);
       }
       return NextResponse.json({ ok: true });
     }
