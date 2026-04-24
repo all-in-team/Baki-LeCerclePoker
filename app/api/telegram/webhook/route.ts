@@ -26,9 +26,21 @@ function getSession(chatId: string | number): { step: Step; player_id: number; e
   ).get(String(chatId)) as any ?? null;
 }
 function setSession(chatId: string | number, step: Step, player_id: number, expected_tg_id?: number | null) {
-  getDb().prepare(
-    `INSERT OR REPLACE INTO telegram_sessions (chat_id, step, player_id, expected_tg_id, created_at) VALUES (?, ?, ?, ?, datetime('now'))`
-  ).run(String(chatId), step, player_id, expected_tg_id ?? null);
+  const db = getDb();
+  // Try with expected_tg_id column; fall back if column not yet migrated
+  try {
+    db.prepare(
+      `INSERT OR REPLACE INTO telegram_sessions (chat_id, step, player_id, expected_tg_id, created_at) VALUES (?, ?, ?, ?, datetime('now'))`
+    ).run(String(chatId), step, player_id, expected_tg_id ?? null);
+  } catch {
+    db.prepare(
+      `INSERT OR REPLACE INTO telegram_sessions (chat_id, step, player_id, created_at) VALUES (?, ?, ?, datetime('now'))`
+    ).run(String(chatId), step, player_id);
+  }
+}
+
+function mentionOf(player: { name: string; telegram_handle?: string | null }) {
+  return player.telegram_handle ? `@${player.telegram_handle}` : `<b>${player.name}</b>`;
 }
 function clearSession(chatId: string | number) {
   getDb().prepare(`DELETE FROM telegram_sessions WHERE chat_id = ?`).run(String(chatId));
@@ -49,6 +61,15 @@ function parseArgs(rawText: string): Parsed {
     .replace(/,\s*(?=\d)/g, " ")
     .replace(/\s+/g, " ")
     .trim();
+
+  // Extract @mention → use as player query directly
+  const mentionMatch = text.match(/@(\w+)/);
+  if (mentionMatch) {
+    // Remove the @mention from the text, parse the rest normally
+    text = text.replace(/@\w+/, "").replace(/\s+/g, " ").trim();
+    const rest = parseArgs(text); // parse remaining (game, amount, pct)
+    return { ...rest, playerQuery: `@${mentionMatch[1]}` };
+  }
 
   let action_pct: number | null = null;
   text = text.replace(/(\d+(?:\.\d+)?)\s*%\s*action\b/gi, (_, n) => { action_pct = parseFloat(n); return ""; });
@@ -83,9 +104,18 @@ function parseArgs(rawText: string): Parsed {
 
 // ── DB helpers ────────────────────────────────────────────
 function findPlayer(query: string) {
-  return getDb().prepare(
-    `SELECT id, name FROM players WHERE LOWER(name) LIKE LOWER(?) ORDER BY name LIMIT 5`
-  ).all(`%${query}%`) as { id: number; name: string }[];
+  const db = getDb();
+  // @handle → exact match on telegram_handle
+  if (query.startsWith("@")) {
+    const handle = query.slice(1).toLowerCase();
+    const row = db.prepare(
+      `SELECT id, name, telegram_handle FROM players WHERE LOWER(telegram_handle) = ? LIMIT 1`
+    ).get(handle) as { id: number; name: string; telegram_handle: string } | undefined;
+    return row ? [row] : [];
+  }
+  return db.prepare(
+    `SELECT id, name, telegram_handle FROM players WHERE LOWER(name) LIKE LOWER(?) ORDER BY name LIMIT 5`
+  ).all(`%${query}%`) as { id: number; name: string; telegram_handle: string | null }[];
 }
 function findGame(name: string) {
   return getDb().prepare(
@@ -93,8 +123,8 @@ function findGame(name: string) {
   ).get(name) as { id: number; name: string } | undefined;
 }
 function getPlayerFull(playerId: number) {
-  return getDb().prepare(`SELECT id, name, tron_address, tele_wallet_cashout FROM players WHERE id = ?`).get(playerId) as
-    { id: number; name: string; tron_address: string | null; tele_wallet_cashout: string | null } | undefined;
+  return getDb().prepare(`SELECT id, name, telegram_handle, telegram_id, tron_address, tele_wallet_cashout FROM players WHERE id = ?`).get(playerId) as
+    { id: number; name: string; telegram_handle: string | null; telegram_id: number | null; tron_address: string | null; tele_wallet_cashout: string | null } | undefined;
 }
 function getTeleDeal(playerId: number) {
   return getDb().prepare(`
@@ -162,12 +192,13 @@ async function handleRawMessage(text: string, chatId: number) {
     if (!teleGame) { await sendMsg(chatId, `❌ Game TELE introuvable`); return; }
     upsertPlayerGameDeal({ player_id: player.id, game_id: teleGame.id, action_pct, rakeback_pct });
 
-    setSession(chatId, "waiting_wallet_game", player.id);
+    const fullForDeal = getPlayerFull(player.id)!;
+    setSession(chatId, "waiting_wallet_game", player.id, fullForDeal.telegram_id);
     await sendMsg(chatId,
       `✅ <b>Deal enregistré</b> — <b>${player.name}</b> sur TELE\n` +
       `Action : <b>${action_pct}%</b>` + (rakeback_pct > 0 ? ` · RB : <b>${rakeback_pct}%</b>` : "") + `\n\n` +
-      `📲 <b>Étape 2/3</b> — Envoie le <b>WALLET GAME</b> de ${player.name}\n` +
-      `<i>(l'adresse TRC20 de son compte TELE — c'est là où on envoie les dépôts)</i>`
+      `📲 <b>Étape 2/3</b> — ${mentionOf(fullForDeal)}, envoie ton <b>WALLET GAME</b>\n` +
+      `<i>(l'adresse TRC20 de ton compte TELE)</i>`
     );
 
   } else if (session.step === "waiting_wallet_game") {
@@ -176,14 +207,11 @@ async function handleRawMessage(text: string, chatId: number) {
       return;
     }
     db.prepare(`UPDATE players SET tron_address = ? WHERE id = ?`).run(text, player.id);
-    // Next step: ask for cashout — player can reply themselves
-    const tgId = (db.prepare(`SELECT telegram_id FROM players WHERE id = ?`).get(player.id) as any)?.telegram_id ?? null;
-    const handle = (db.prepare(`SELECT telegram_handle FROM players WHERE id = ?`).get(player.id) as any)?.telegram_handle ?? null;
-    const mention = handle ? `@${handle}` : player.name;
-    setSession(chatId, "waiting_wallet_cashout", player.id, tgId);
+    const fullForGame = getPlayerFull(player.id)!;
+    setSession(chatId, "waiting_wallet_cashout", player.id, fullForGame.telegram_id);
     await sendMsg(chatId,
       `✅ <b>WALLET GAME enregistré</b> pour <b>${player.name}</b>\n<code>${text}</code>\n\n` +
-      `💸 <b>Étape 3/3</b> — ${mention}, envoie ton <b>WALLET CASHOUT</b>\n` +
+      `💸 <b>Étape 3/3</b> — ${mentionOf(fullForGame)}, envoie ton <b>WALLET CASHOUT</b>\n` +
       `<i>(ton adresse Binance TRC20 pour recevoir les cashouts)</i>`
     );
 
@@ -355,7 +383,7 @@ async function handleReset(rawText: string, chatId: number) {
   const hasType = ["game", "cashout", "deal"].includes(typeToken);
   const playerQuery = hasType ? parts.slice(0, -1).join(" ").trim() : parts.join(" ").trim();
 
-  if (!playerQuery) { await sendMsg(chatId, `❌ Usage : <code>/reset hugo</code> ou <code>/reset hugo game</code>`); return; }
+  if (!playerQuery) { await sendMsg(chatId, `❌ Usage : <code>/reset @hugo</code> ou <code>/reset @hugo game</code>`); return; }
 
   const players = findPlayer(playerQuery);
   if (players.length === 0) { await sendMsg(chatId, `❌ Joueur "${playerQuery}" introuvable`); return; }
@@ -363,28 +391,32 @@ async function handleReset(rawText: string, chatId: number) {
 
   const db = getDb();
   const player = players[0];
+  const full = getPlayerFull(player.id)!;
   clearSession(chatId);
 
   if (typeToken === "game") {
     db.prepare(`UPDATE players SET tron_address = NULL WHERE id = ?`).run(player.id);
-    const tgId = (db.prepare(`SELECT telegram_id FROM players WHERE id = ?`).get(player.id) as any)?.telegram_id ?? null;
-    setSession(chatId, "waiting_wallet_game", player.id, tgId);
-    const handle = (db.prepare(`SELECT telegram_handle FROM players WHERE id = ?`).get(player.id) as any)?.telegram_handle ?? null;
-    const mention = handle ? `@${handle}` : player.name;
-    await sendMsg(chatId, `🔄 WALLET GAME réinitialisé pour <b>${player.name}</b>\n\n📲 ${mention}, envoie ton <b>WALLET GAME</b> (adresse TRC20 de ton compte TELE)`);
+    setSession(chatId, "waiting_wallet_game", player.id, full.telegram_id);
+    await sendMsg(chatId,
+      `🔄 WALLET GAME réinitialisé pour <b>${player.name}</b>\n\n` +
+      `📲 ${mentionOf(full)}, envoie ton <b>WALLET GAME</b>\n<i>(adresse TRC20 de ton compte TELE)</i>`
+    );
   } else if (typeToken === "cashout") {
     db.prepare(`UPDATE players SET tele_wallet_cashout = NULL WHERE id = ?`).run(player.id);
-    const tgId = (db.prepare(`SELECT telegram_id FROM players WHERE id = ?`).get(player.id) as any)?.telegram_id ?? null;
-    setSession(chatId, "waiting_wallet_cashout", player.id, tgId);
-    const handle = (db.prepare(`SELECT telegram_handle FROM players WHERE id = ?`).get(player.id) as any)?.telegram_handle ?? null;
-    const mention = handle ? `@${handle}` : player.name;
-    await sendMsg(chatId, `🔄 WALLET CASHOUT réinitialisé pour <b>${player.name}</b>\n\n💸 ${mention}, envoie ton <b>WALLET CASHOUT</b> (adresse Binance TRC20)`);
+    setSession(chatId, "waiting_wallet_cashout", player.id, full.telegram_id);
+    await sendMsg(chatId,
+      `🔄 WALLET CASHOUT réinitialisé pour <b>${player.name}</b>\n\n` +
+      `💸 ${mentionOf(full)}, envoie ton <b>WALLET CASHOUT</b>\n<i>(adresse Binance TRC20)</i>`
+    );
   } else {
     // Full reset
     db.prepare(`UPDATE players SET tron_address = NULL, tele_wallet_cashout = NULL WHERE id = ?`).run(player.id);
     db.prepare(`DELETE FROM player_game_deals WHERE player_id = ? AND game_id = (SELECT id FROM games WHERE name='TELE')`).run(player.id);
     setSession(chatId, "waiting_action_pct", player.id);
-    await sendMsg(chatId, `🔄 <b>${player.name}</b> réinitialisé complètement.\n\n📋 <b>Étape 1/3</b> — Quel est son % action sur TELE ?`);
+    await sendMsg(chatId,
+      `🔄 <b>${player.name}</b> réinitialisé complètement.\n\n` +
+      `📋 <b>Étape 1/3</b> — Quel est son % action sur TELE ?`
+    );
   }
 }
 
