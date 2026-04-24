@@ -218,6 +218,17 @@ function initSchema(db: Database.Database) {
     );
   `);
 
+  // Telegram onboarding sessions (guided multi-step flow)
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS telegram_sessions (
+      chat_id    TEXT NOT NULL,
+      step       TEXT NOT NULL,
+      player_id  INTEGER NOT NULL REFERENCES players(id) ON DELETE CASCADE,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      PRIMARY KEY (chat_id)
+    );
+  `);
+
   // One-time: make wallet_transactions.app_id nullable (recreate table)
   const fixAppIdNullable = db.prepare(`INSERT OR IGNORE INTO _applied_fixes (name) VALUES (?)`).run("wallet_transactions_app_id_nullable_v1");
   if (fixAppIdNullable.changes > 0) {
