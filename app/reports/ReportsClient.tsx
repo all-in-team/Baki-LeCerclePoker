@@ -37,9 +37,6 @@ export default function ReportsClient({ games: initialGames, players: initialPla
   const [expanded, setExpanded] = useState<number | null>(null);
   const [expandedEntries, setExpandedEntries] = useState<any[]>([]);
   const [players, setPlayers] = useState<Player[]>(initialPlayers);
-  // Deal prompt
-  const [dealInput, setDealInput] = useState("");
-  const [savingDeal, setSavingDeal] = useState(false);
   // New player creation
   const [creatingFor, setCreatingFor] = useState<number | null>(null); // row index
   const [newPlayerName, setNewPlayerName] = useState("");
@@ -47,17 +44,6 @@ export default function ReportsClient({ games: initialGames, players: initialPla
   const fileRef = useRef<HTMLInputElement>(null);
 
   const currentGame = games.find(g => g.id === gameId);
-  const dealMissing = currentGame && currentGame.default_action_pct === null;
-
-  async function saveDeal() {
-    const pct = parseFloat(dealInput);
-    if (isNaN(pct) || pct <= 0 || pct > 100) return;
-    setSavingDeal(true);
-    await fetch("/api/games", { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id: gameId, default_action_pct: pct }) });
-    setSavingDeal(false);
-    setGames(gs => gs.map(g => g.id === gameId ? { ...g, default_action_pct: pct } : g));
-    setDealInput("");
-  }
 
   useEffect(() => { loadReports(); }, []);
 
@@ -87,14 +73,13 @@ export default function ReportsClient({ games: initialGames, players: initialPla
     const data = await res.json();
     setLoading(false);
     if (!res.ok) { setError(data.error); return; }
-    const gameDealPct = games.find(g => g.id === gameId)?.default_action_pct ?? null;
-    // Load action_pct for pre-matched players — fall back to game-level deal
+    // Load stored deal per matched player — null means first time, will prompt inline
     const rowsWithPct = await Promise.all((data.rows as ExtractedRow[]).map(async row => {
       if (row.player_id) {
         const deal = await fetchDeal(row.player_id, gameId);
-        return { ...row, action_pct: deal ?? gameDealPct };
+        return { ...row, action_pct: deal };
       }
-      return { ...row, action_pct: gameDealPct };
+      return { ...row, action_pct: null };
     }));
     setRows(rowsWithPct);
   }
@@ -111,7 +96,7 @@ export default function ReportsClient({ games: initialGames, players: initialPla
     let action_pct: number | null = null;
     if (player_id) {
       const stored = await fetchDeal(player_id, gameId);
-      action_pct = stored ?? currentGame?.default_action_pct ?? null;
+      action_pct = stored ?? null;
     }
     const player_name = players.find(p => p.id === player_id)?.name ?? null;
     setRows(r => r!.map((row, i) => i !== idx ? row : { ...row, player_id, player_name, action_pct }));
@@ -195,34 +180,6 @@ export default function ReportsClient({ games: initialGames, players: initialPla
               placeholder="Période — ex: Semaine 17, Avr 2026"
               style={{ flex: 1, fontSize: 12, padding: "7px 12px", borderRadius: 7, background: "var(--bg-elevated)", border: "1px solid var(--border)", color: "var(--text)", outline: "none" }} />
           </div>
-          {!dealMissing && currentGame && (
-            <div style={{ padding: "8px 20px", borderBottom: "1px solid var(--border)", display: "flex", alignItems: "center", gap: 8 }}>
-              <span style={{ fontSize: 11, color: "var(--text-dim)" }}>Ton deal sur {currentGame.name} :</span>
-              <span style={{ fontSize: 12, fontWeight: 700, color: "#eab308" }}>{currentGame.default_action_pct}%</span>
-              <button onClick={() => { setDealInput(String(currentGame.default_action_pct)); setGames(gs => gs.map(g => g.id === gameId ? { ...g, default_action_pct: null } : g)); }}
-                style={{ fontSize: 11, color: "var(--text-dim)", background: "none", border: "none", cursor: "pointer", marginLeft: 4 }}>modifier</button>
-            </div>
-          )}
-          {dealMissing && (
-            <div style={{ padding: "12px 20px", borderBottom: "1px solid var(--border)", background: "rgba(234,179,8,0.06)", display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-              <span style={{ fontSize: 12, color: "#eab308", fontWeight: 600 }}>
-                C'est quoi ton deal sur {currentGame?.name} ?
-              </span>
-              <span style={{ fontSize: 11, color: "var(--text-dim)" }}>Action % — saisi une fois, mémorisé pour tous les imports suivants</span>
-              <div style={{ display: "flex", gap: 8, alignItems: "center", marginLeft: "auto" }}>
-                <input type="number" min="1" max="100" step="1" value={dealInput} onChange={e => setDealInput(e.target.value)}
-                  onKeyDown={e => e.key === "Enter" && saveDeal()}
-                  placeholder="ex: 40"
-                  autoFocus
-                  style={{ width: 70, padding: "6px 10px", borderRadius: 6, fontSize: 13, fontWeight: 700, background: "var(--bg-elevated)", border: "1px solid rgba(234,179,8,0.5)", color: "#eab308", textAlign: "center", outline: "none" }} />
-                <span style={{ fontSize: 12, color: "var(--text-dim)" }}>%</span>
-                <button onClick={saveDeal} disabled={savingDeal || !dealInput}
-                  style={{ padding: "6px 14px", borderRadius: 6, fontSize: 12, fontWeight: 700, background: "rgba(234,179,8,0.15)", border: "1px solid rgba(234,179,8,0.4)", color: "#eab308", cursor: "pointer", opacity: !dealInput ? 0.5 : 1 }}>
-                  {savingDeal ? "…" : "Valider"}
-                </button>
-              </div>
-            </div>
-          )}
           <div style={{ padding: 20 }}>
             <div
               onDragOver={e => { e.preventDefault(); setDragging(true); }}
@@ -297,13 +254,21 @@ export default function ReportsClient({ games: initialGames, players: initialPla
                       <td style={{ padding: "10px 16px", fontSize: 13, fontWeight: 700, color: "var(--green)" }}>+{row.amount.toFixed(2)} {row.currency}</td>
                       <td style={{ padding: "10px 16px" }}>
                         {row.player_id ? (
-                          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                            <input type="number" min="0" max="100" step="1"
-                              value={row.action_pct ?? ""}
-                              onChange={e => setRowPct(idx, e.target.value)}
-                              placeholder="?"
-                              style={{ width: 52, padding: "4px 6px", borderRadius: 5, fontSize: 12, background: row.action_pct !== null ? "rgba(234,179,8,0.08)" : "var(--bg-elevated)", border: `1px solid ${row.action_pct !== null ? "rgba(234,179,8,0.35)" : "rgba(251,146,60,0.5)"}`, color: "var(--gold)", textAlign: "center", outline: "none" }} />
-                            <span style={{ fontSize: 11, color: "var(--text-dim)" }}>%</span>
+                          <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+                            {row.action_pct === null && (
+                              <span style={{ fontSize: 10, fontWeight: 600, color: "#fb923c", letterSpacing: "0.03em" }}>
+                                Deal avec {row.player_name} ?
+                              </span>
+                            )}
+                            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                              <input type="number" min="0" max="100" step="1"
+                                value={row.action_pct ?? ""}
+                                onChange={e => setRowPct(idx, e.target.value)}
+                                placeholder="?"
+                                autoFocus={row.action_pct === null}
+                                style={{ width: 52, padding: "4px 6px", borderRadius: 5, fontSize: 12, background: row.action_pct !== null ? "rgba(234,179,8,0.08)" : "rgba(251,146,60,0.08)", border: `1px solid ${row.action_pct !== null ? "rgba(234,179,8,0.35)" : "rgba(251,146,60,0.6)"}`, color: row.action_pct !== null ? "var(--gold)" : "#fb923c", textAlign: "center", outline: "none" }} />
+                              <span style={{ fontSize: 11, color: "var(--text-dim)" }}>%</span>
+                            </div>
                           </div>
                         ) : <span style={{ color: "var(--text-dim)", fontSize: 12 }}>—</span>}
                       </td>
