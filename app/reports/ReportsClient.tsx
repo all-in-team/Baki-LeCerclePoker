@@ -254,21 +254,13 @@ export default function ReportsClient({ games: initialGames, players: initialPla
                       <td style={{ padding: "10px 16px", fontSize: 13, fontWeight: 700, color: "var(--green)" }}>+{row.amount.toFixed(2)} {row.currency}</td>
                       <td style={{ padding: "10px 16px" }}>
                         {row.player_id ? (
-                          <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
-                            {row.action_pct === null && (
-                              <span style={{ fontSize: 10, fontWeight: 600, color: "#fb923c", letterSpacing: "0.03em" }}>
-                                Deal avec {row.player_name} ?
-                              </span>
-                            )}
-                            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                              <input type="number" min="0" max="100" step="1"
-                                value={row.action_pct ?? ""}
-                                onChange={e => setRowPct(idx, e.target.value)}
-                                placeholder="?"
-                                autoFocus={row.action_pct === null}
-                                style={{ width: 52, padding: "4px 6px", borderRadius: 5, fontSize: 12, background: row.action_pct !== null ? "rgba(234,179,8,0.08)" : "rgba(251,146,60,0.08)", border: `1px solid ${row.action_pct !== null ? "rgba(234,179,8,0.35)" : "rgba(251,146,60,0.6)"}`, color: row.action_pct !== null ? "var(--gold)" : "#fb923c", textAlign: "center", outline: "none" }} />
-                              <span style={{ fontSize: 11, color: "var(--text-dim)" }}>%</span>
-                            </div>
+                          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                            <input type="number" min="0" max="100" step="1"
+                              value={row.action_pct ?? ""}
+                              onChange={e => setRowPct(idx, e.target.value)}
+                              placeholder="—"
+                              style={{ width: 52, padding: "4px 6px", borderRadius: 5, fontSize: 12, background: "rgba(234,179,8,0.08)", border: "1px solid rgba(234,179,8,0.35)", color: "var(--gold)", textAlign: "center", outline: "none" }} />
+                            <span style={{ fontSize: 11, color: "var(--text-dim)" }}>%</span>
                           </div>
                         ) : <span style={{ color: "var(--text-dim)", fontSize: 12 }}>—</span>}
                       </td>
