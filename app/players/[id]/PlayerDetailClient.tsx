@@ -208,15 +208,15 @@ export default function PlayerDetailClient({ player, transactions, gameDeals: in
             {isTele && (
               <div style={{ marginBottom: 16, padding: "12px 14px", background: "rgba(212,175,55,0.08)", border: "1px solid rgba(212,175,55,0.25)", borderRadius: 8 }}>
                 <div style={{ fontSize: 11, fontWeight: 700, color: "var(--gold)", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 8 }}>
-                  TELE — Wallet requis pour le tracking
+                  TELE — Wallet Game
                 </div>
                 <label style={{ display: "block", fontSize: 12, fontWeight: 600, color: "var(--text-muted)", marginBottom: 6, textTransform: "uppercase", letterSpacing: "0.07em" }}>
-                  Adresse Tron (TRC20) *
+                  Adresse TRC20 du compte TELE *
                 </label>
                 <input value={tronAddress} onChange={e => setTronAddress(e.target.value.trim())} placeholder="TXxx..." autoFocus
                   style={{ width: "100%", padding: "9px 12px", background: "var(--bg-elevated)", border: "1px solid rgba(212,175,55,0.4)", borderRadius: 7, color: "var(--text)", fontSize: 13, boxSizing: "border-box" }} />
                 <div style={{ fontSize: 11, color: "var(--text-dim)", marginTop: 6 }}>
-                  Nécessaire pour le sync blockchain automatique.
+                  Le WALLET CASHOUT se configure dans la vue TELE.
                 </div>
               </div>
             )}

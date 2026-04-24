@@ -4,7 +4,7 @@ import { useState, useEffect } from "react";
 import Link from "next/link";
 import {
   MessageCircle, Phone, DollarSign, AlertTriangle,
-  StickyNote, Plus, Trash2, ExternalLink, Wallet, Clock,
+  StickyNote, Plus, Trash2, ExternalLink, Wallet, Clock, Gamepad2, X,
 } from "lucide-react";
 import Badge from "@/components/Badge";
 import Btn from "@/components/Btn";
@@ -33,6 +33,17 @@ const STATUS_COLOR: Record<string, "green" | "gray" | "red"> = {
   active: "green", inactive: "gray", churned: "red",
 };
 
+const GAME_COLOR: Record<string, string> = {
+  TELE: "#a78bfa", Wepoker: "#38bdf8", Xpoker: "#fb923c", ClubGG: "#4ade80",
+};
+
+interface GameDeal { id: number; game_id: number; game_name: string; action_pct: number; rakeback_pct: number; }
+interface Game { id: number; name: string; }
+
+const DEAL_BLANK = { action_pct: "50", rakeback_pct: "0" };
+
+function isTronAddr(v: string) { return /^T[a-zA-Z0-9]{33}$/.test(v.trim()); }
+
 function timeAgo(dateStr: string | null) {
   if (!dateStr) return null;
   const diff = Date.now() - new Date(dateStr).getTime();
@@ -59,7 +70,63 @@ export default function CRMClient({ players, recentNotes }: {
   const [noteType, setNoteType] = useState("note");
   const [saving, setSaving] = useState(false);
 
+  // Games
+  const [allGames, setAllGames] = useState<Game[]>([]);
+  const [deals, setDeals] = useState<GameDeal[]>([]);
+  const [showAddGame, setShowAddGame] = useState(false);
+  const [selectedGame, setSelectedGame] = useState("");
+  const [dealForm, setDealForm] = useState(DEAL_BLANK);
+  const [tronAddress, setTronAddress] = useState("");
+  const [dealBusy, setDealBusy] = useState(false);
+
+  useEffect(() => {
+    fetch("/api/games").then(r => r.json()).then(setAllGames).catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    if (!selected) { setDeals([]); return; }
+    fetch(`/api/games/deals?player_id=${selected.id}`)
+      .then(r => r.json()).then(setDeals).catch(() => {});
+    setShowAddGame(false);
+    setSelectedGame("");
+    setDealForm(DEAL_BLANK);
+    setTronAddress("");
+  }, [selected?.id]);
+
   const playerNotes = selected ? notes.filter(n => n.player_id === selected.id) : [];
+  const assignedGameIds = new Set(deals.map(d => d.game_id));
+  const availableGames = allGames.filter(g => !assignedGameIds.has(g.id));
+  const selectedGameObj = allGames.find(g => String(g.id) === selectedGame);
+  const isTele = selectedGameObj?.name === "TELE";
+
+  async function addDeal() {
+    if (!selected || !selectedGame) return;
+    if (isTele && !isTronAddr(tronAddress)) return;
+    setDealBusy(true);
+    await fetch("/api/games/deals", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ player_id: selected.id, game_id: Number(selectedGame), action_pct: Number(dealForm.action_pct), rakeback_pct: Number(dealForm.rakeback_pct) }),
+    });
+    if (isTele && tronAddress.trim()) {
+      await fetch(`/api/players/${selected.id}`, {
+        method: "PATCH", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ tron_address: tronAddress.trim() }),
+      });
+    }
+    const updated = await fetch(`/api/games/deals?player_id=${selected.id}`).then(r => r.json());
+    setDeals(updated);
+    setShowAddGame(false);
+    setSelectedGame("");
+    setDealForm(DEAL_BLANK);
+    setTronAddress("");
+    setDealBusy(false);
+  }
+
+  async function removeDeal(dealId: number) {
+    if (!confirm("Retirer cette game ?")) return;
+    await fetch(`/api/games/deals/${dealId}`, { method: "DELETE" });
+    setDeals(d => d.filter(x => x.id !== dealId));
+  }
 
   async function addNote() {
     if (!selected || !noteContent.trim()) return;
@@ -227,6 +294,114 @@ export default function CRMClient({ players, recentNotes }: {
               </div>
             </div>
           )}
+
+          {/* Games & Deals */}
+          <div style={{ background: "var(--bg-raised)", border: "1px solid var(--border)", borderRadius: 10, overflow: "hidden" }}>
+            <div style={{ padding: "12px 16px", borderBottom: "1px solid var(--border)", display: "flex", alignItems: "center", gap: 8 }}>
+              <Gamepad2 size={14} color="var(--gold)" />
+              <span style={{ fontSize: 13, fontWeight: 700, color: "var(--text)" }}>Games & Deals ({deals.length})</span>
+              {availableGames.length > 0 && !showAddGame && (
+                <button onClick={() => setShowAddGame(true)} style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 5, fontSize: 11, fontWeight: 600, color: "var(--green)", background: "rgba(34,197,94,0.10)", border: "none", borderRadius: 5, padding: "4px 10px", cursor: "pointer" }}>
+                  <Plus size={12} /> Ajouter
+                </button>
+              )}
+            </div>
+
+            {/* Current deals */}
+            {deals.length > 0 && (
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 8, padding: "12px 16px", borderBottom: showAddGame ? "1px solid var(--border)" : "none" }}>
+                {deals.map(d => {
+                  const gc = GAME_COLOR[d.game_name] ?? "var(--text-muted)";
+                  return (
+                    <div key={d.id} style={{ display: "flex", alignItems: "center", gap: 8, background: "var(--bg-elevated)", border: `1px solid ${gc}28`, borderRadius: 8, padding: "7px 11px" }}>
+                      <div>
+                        <div style={{ fontSize: 12, fontWeight: 700, color: gc }}>{d.game_name}</div>
+                        <div style={{ fontSize: 10, color: "var(--text-dim)", marginTop: 1 }}>
+                          {d.action_pct}% action{d.rakeback_pct > 0 ? ` · ${d.rakeback_pct}% RB` : ""}
+                        </div>
+                      </div>
+                      <button onClick={() => removeDeal(d.id)} style={{ background: "none", border: "none", cursor: "pointer", color: "var(--text-dim)", padding: 2, display: "flex", alignItems: "center" }}>
+                        <X size={11} />
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+
+            {/* Add game form */}
+            {showAddGame && (
+              <div style={{ padding: "14px 16px" }}>
+                {/* Game selector */}
+                <div style={{ marginBottom: 12 }}>
+                  <label style={{ display: "block", fontSize: 11, fontWeight: 700, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.07em", marginBottom: 6 }}>Game</label>
+                  <select value={selectedGame} onChange={e => { setSelectedGame(e.target.value); setTronAddress(""); }}
+                    style={{ width: "100%", padding: "8px 10px", background: "var(--bg-elevated)", border: "1px solid var(--border)", borderRadius: 7, color: "var(--text)", fontSize: 13 }}>
+                    <option value="">Choisir…</option>
+                    {availableGames.map(g => <option key={g.id} value={String(g.id)}>{g.name}</option>)}
+                  </select>
+                </div>
+
+                {/* Action / RB */}
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 12 }}>
+                  {[{ label: "Action %", key: "action_pct", color: "var(--gold)" }, { label: "Rakeback %", key: "rakeback_pct", color: "var(--green)" }].map(f => (
+                    <div key={f.key}>
+                      <label style={{ display: "block", fontSize: 11, fontWeight: 700, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.07em", marginBottom: 6 }}>{f.label}</label>
+                      <input type="number" min="0" max="100" step="1"
+                        value={dealForm[f.key as keyof typeof dealForm]}
+                        onChange={e => setDealForm(fm => ({ ...fm, [f.key]: e.target.value }))}
+                        style={{ width: "100%", padding: "8px 10px", background: "var(--bg-elevated)", border: "1px solid var(--border)", borderRadius: 7, color: f.color, fontSize: 14, fontWeight: 700, boxSizing: "border-box" }} />
+                    </div>
+                  ))}
+                </div>
+
+                {/* TELE wallet field */}
+                {isTele && (
+                  <div style={{ marginBottom: 12, padding: "12px", background: "rgba(167,139,250,0.07)", border: "1px solid rgba(167,139,250,0.20)", borderRadius: 8 }}>
+                    <div style={{ fontSize: 11, fontWeight: 700, color: "#a78bfa", textTransform: "uppercase", letterSpacing: "0.07em", marginBottom: 8 }}>
+                      TELE — Wallet Game (requis)
+                    </div>
+                    <div style={{ fontSize: 11, color: "var(--text-dim)", marginBottom: 8, lineHeight: 1.5 }}>
+                      Adresse TRC20 du compte TELE du joueur — les dépôts arrivent là.
+                    </div>
+                    <input
+                      value={tronAddress}
+                      onChange={e => setTronAddress(e.target.value)}
+                      placeholder="TXxxx... (34 caractères)"
+                      spellCheck={false}
+                      autoFocus
+                      style={{
+                        width: "100%", padding: "8px 10px", background: "var(--bg-elevated)", fontSize: 12, fontFamily: "monospace", boxSizing: "border-box",
+                        border: `1px solid ${tronAddress && !isTronAddr(tronAddress) ? "#f87171" : tronAddress && isTronAddr(tronAddress) ? "#a78bfa" : "rgba(167,139,250,0.3)"}`,
+                        borderRadius: 7, color: "var(--text)",
+                      }}
+                    />
+                    {tronAddress && !isTronAddr(tronAddress) && (
+                      <div style={{ fontSize: 10, color: "#f87171", marginTop: 4 }}>Adresse invalide (T + 33 caractères)</div>
+                    )}
+                    {tronAddress && isTronAddr(tronAddress) && (
+                      <div style={{ fontSize: 10, color: "#a78bfa", marginTop: 4 }}>{tronAddress.slice(0, 6)}…{tronAddress.slice(-6)} ✓</div>
+                    )}
+                  </div>
+                )}
+
+                <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+                  <Btn variant="secondary" size="sm" onClick={() => { setShowAddGame(false); setSelectedGame(""); setDealForm(DEAL_BLANK); setTronAddress(""); }}>Annuler</Btn>
+                  <Btn variant="primary" size="sm"
+                    disabled={!selectedGame || !dealForm.action_pct || (isTele && !isTronAddr(tronAddress)) || dealBusy}
+                    onClick={addDeal}>
+                    {dealBusy ? "Ajout…" : "Confirmer"}
+                  </Btn>
+                </div>
+              </div>
+            )}
+
+            {deals.length === 0 && !showAddGame && (
+              <div style={{ padding: "20px 16px", textAlign: "center", color: "var(--text-dim)", fontSize: 12 }}>
+                Pas encore sur une game
+              </div>
+            )}
+          </div>
 
           {/* Add note */}
           <div style={{ background: "var(--bg-raised)", border: "1px solid var(--border)", borderRadius: 10, padding: 16 }}>

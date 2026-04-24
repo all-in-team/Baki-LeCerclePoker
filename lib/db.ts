@@ -175,6 +175,10 @@ function initSchema(db: Database.Database) {
   try { db.exec(`ALTER TABLE wallet_transactions ADD COLUMN tron_tx_hash TEXT`); } catch {}
   try { db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_wallet_tron_hash ON wallet_transactions(tron_tx_hash) WHERE tron_tx_hash IS NOT NULL`); } catch {}
 
+  try { db.exec(`ALTER TABLE players ADD COLUMN tele_wallet_perso TEXT`); } catch {}
+  // WALLET CASHOUT : adresse fixe du joueur pour recevoir ses cashouts (Binance TRC20, wallet perso, etc.)
+  try { db.exec(`ALTER TABLE players ADD COLUMN tele_wallet_cashout TEXT`); } catch {}
+
   // telegram_id for deduplication when auto-importing from groups
   try { db.exec(`ALTER TABLE players ADD COLUMN telegram_id INTEGER`); } catch {}
   try { db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_players_telegram_id ON players(telegram_id) WHERE telegram_id IS NOT NULL`); } catch {}
@@ -205,6 +209,14 @@ function initSchema(db: Database.Database) {
       FROM players p WHERE p.tron_address IS NOT NULL AND p.tron_address != ''
     `);
   }
+
+  // Settings key-value store
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS settings (
+      key   TEXT PRIMARY KEY,
+      value TEXT NOT NULL
+    );
+  `);
 
   // One-time: make wallet_transactions.app_id nullable (recreate table)
   const fixAppIdNullable = db.prepare(`INSERT OR IGNORE INTO _applied_fixes (name) VALUES (?)`).run("wallet_transactions_app_id_nullable_v1");

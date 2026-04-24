@@ -502,6 +502,54 @@ export function insertTgMessage(data: { player_id: number | null; tg_chat_id: st
   `).run(data);
 }
 
+// ── TELE Players overview ────────────────────────────────
+export function getTelePlayers() {
+  return getDb().prepare(`
+    SELECT
+      p.id, p.name, p.tron_address AS wallet_game, p.tele_wallet_cashout AS wallet_cashout,
+      pgd.action_pct, pgd.rakeback_pct,
+      COALESCE(SUM(CASE WHEN wt.type='deposit'    THEN wt.amount ELSE 0 END), 0) AS total_deposited,
+      COALESCE(SUM(CASE WHEN wt.type='withdrawal' THEN wt.amount ELSE 0 END), 0) AS total_withdrawn,
+      COALESCE(SUM(CASE WHEN wt.type='withdrawal' THEN wt.amount ELSE -wt.amount END), 0) AS net,
+      COALESCE(SUM(CASE WHEN wt.type='withdrawal' THEN wt.amount ELSE -wt.amount END), 0) * pgd.action_pct / 100 AS my_pnl,
+      COUNT(wt.id) AS tx_count,
+      MAX(wt.tx_date) AS last_tx
+    FROM players p
+    JOIN player_game_deals pgd ON pgd.player_id = p.id
+    JOIN games g ON g.id = pgd.game_id AND g.name = 'TELE'
+    LEFT JOIN wallet_transactions wt ON wt.player_id = p.id AND wt.game_id = g.id
+    GROUP BY p.id
+    ORDER BY p.name
+  `).all() as {
+    id: number; name: string; wallet_game: string | null; wallet_cashout: string | null;
+    action_pct: number; rakeback_pct: number;
+    total_deposited: number; total_withdrawn: number; net: number; my_pnl: number;
+    tx_count: number; last_tx: string | null;
+  }[];
+}
+
+// ── Settings ──────────────────────────────────────────────
+export function getSetting(key: string): string | null {
+  const row = getDb().prepare(`SELECT value FROM settings WHERE key = ?`).get(key) as { value: string } | undefined;
+  return row?.value ?? null;
+}
+
+export function setSetting(key: string, value: string) {
+  getDb().prepare(`
+    INSERT INTO settings (key, value) VALUES (?, ?)
+    ON CONFLICT(key) DO UPDATE SET value = excluded.value
+  `).run(key, value);
+}
+
+export function deleteSetting(key: string) {
+  getDb().prepare(`DELETE FROM settings WHERE key = ?`).run(key);
+}
+
+export function getAllSettings(): Record<string, string> {
+  const rows = getDb().prepare(`SELECT key, value FROM settings`).all() as { key: string; value: string }[];
+  return Object.fromEntries(rows.map(r => [r.key, r.value]));
+}
+
 export function insertWalletTransactionByHash(data: {
   player_id: number; game_id: number; type: "deposit" | "withdrawal";
   amount: number; currency: string; tx_date: string; tron_tx_hash: string;

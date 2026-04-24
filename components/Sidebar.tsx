@@ -2,17 +2,18 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { LayoutDashboard, Users, AppWindow, FileText, MessageSquare, TrendingUp, Zap, Wallet, ContactRound } from "lucide-react";
+import { LayoutDashboard, Users, AppWindow, FileText, MessageSquare, TrendingUp, Zap, Wallet, ContactRound, Settings } from "lucide-react";
 
 const NAV = [
   { href: "/", label: "Dashboard", icon: LayoutDashboard },
   { href: "/players", label: "Players", icon: Users },
   { href: "/crm", label: "CRM", icon: ContactRound },
   { href: "/apps", label: "Apps", icon: AppWindow },
-  { href: "/wallets", label: "TELE WT", icon: Wallet },
+  { href: "/wallets", label: "Wallet Tracker", icon: Wallet },
   { href: "/reports", label: "Reports", icon: FileText },
   { href: "/ledger", label: "Telegram Ledger", icon: MessageSquare },
   { href: "/signals", label: "Weekly Signal", icon: Zap },
+  { href: "/settings", label: "Settings", icon: Settings },
 ];
 
 export default function Sidebar() {

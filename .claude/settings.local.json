@@ -57,7 +57,10 @@
       "Bash(python3 -c \"import sys,json; players=json.load\\(sys.stdin\\); [print\\(p['name'], p.get\\('telegram_handle'\\)\\) for p in players if 'Joueur' in p['name']]\")",
       "Bash(railway volume *)",
       "Bash(python3 -c \"import sys,json; players=json.load\\(sys.stdin\\); [print\\('✅ OK:', p['name']\\) for p in players if 'Persistence' in p['name']]\")",
-      "Bash(git push *)"
+      "Bash(git push *)",
+      "Bash(python3 -c \"import json,sys; d=json.load\\(sys.stdin\\); print\\(d.get\\('TELEGRAM_BOT_TOKEN',''\\)\\)\")",
+      "Bash(python3 -c \"import sys,json; players=json.load\\(sys.stdin\\); [print\\(f\\\\\"{p['id']} — {p['name']} | tron: {p.get\\('tron_address','—'\\)}\\\\\"\\) for p in players]\")",
+      "Bash(python3 -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\(json.dumps\\(d, indent=2\\)\\)\")"
     ]
   }
 }

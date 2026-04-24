@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import Link from "next/link";
-import { ArrowDownLeft, ArrowUpRight, Plus, Trash2, Wallet, TrendingUp, RefreshCw } from "lucide-react";
+import { ArrowDownLeft, ArrowUpRight, Plus, Trash2, Wallet, TrendingUp, RefreshCw, Settings2, ExternalLink, CheckCircle, AlertCircle, Save, X } from "lucide-react";
 import StatCard from "@/components/StatCard";
 import Badge from "@/components/Badge";
 import Btn from "@/components/Btn";
@@ -62,7 +62,41 @@ export default function WalletsClient({
   const [filterGame, setFilterGame] = useState("");
   const [filterType, setFilterType] = useState<"" | "deposit" | "withdrawal">("");
   const [syncing, setSyncing] = useState(false);
-  const [syncResult, setSyncResult] = useState<{ imported: number; results: { player: string; imported: number; deposits: number; withdrawals: number; error?: string }[] } | null>(null);
+  const [syncResult, setSyncResult] = useState<{ imported: number; mode?: string; results: { player: string; imported: number; deposits: number; withdrawals: number; total_fetched?: number; skipped?: number; error?: string }[] } | null>(null);
+  const [walletModal, setWalletModal] = useState(false);
+  const [teleConfig, setTeleConfig] = useState<{ id: number; name: string; wallet_game: string | null; wallet_cashout: string | null }[]>([]);
+  const [editingWallet, setEditingWallet] = useState<number | null>(null);
+  const [editWalletVals, setEditWalletVals] = useState({ wallet_game: "", wallet_cashout: "" });
+  const [walletMere, setWalletMere] = useState<string | null>(null);
+
+  async function openWalletConfig() {
+    const [playersRes, settingsRes] = await Promise.all([
+      fetch("/api/players").then(r => r.json()),
+      fetch("/api/settings").then(r => r.json()),
+    ]);
+    setTeleConfig(
+      playersRes
+        .filter((p: any) => {
+          // show all players that have TELE deals (those with tron_address set, or all)
+          return true;
+        })
+        .map((p: any) => ({ id: p.id, name: p.name, wallet_game: p.tron_address ?? null, wallet_cashout: p.tele_wallet_cashout ?? null }))
+    );
+    setWalletMere(settingsRes.tele_wallet_mere ?? null);
+    setWalletModal(true);
+  }
+
+  async function saveWallet(playerId: number) {
+    await fetch(`/api/players/${playerId}`, {
+      method: "PATCH", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ tron_address: editWalletVals.wallet_game || null, tele_wallet_cashout: editWalletVals.wallet_cashout || null }),
+    });
+    setTeleConfig(cfg => cfg.map(p => p.id === playerId
+      ? { ...p, wallet_game: editWalletVals.wallet_game || null, wallet_cashout: editWalletVals.wallet_cashout || null }
+      : p
+    ));
+    setEditingWallet(null);
+  }
 
   async function syncWallets() {
     setSyncing(true); setSyncResult(null);
@@ -118,11 +152,15 @@ export default function WalletsClient({
           <RefreshCw size={14} style={{ animation: syncing ? "spin 1s linear infinite" : "none" }} />
           {syncing ? "Sync en cours…" : "Sync TELE"}
         </Btn>
+        <Btn variant="secondary" onClick={openWalletConfig}>
+          <Settings2 size={14} /> Config Wallets
+        </Btn>
         <span style={{ fontSize: 12, color: "var(--text-dim)" }}>Scanne la blockchain pour les wallets TELE</span>
         {syncResult && (
           <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
             <span style={{ fontSize: 12, fontWeight: 600, padding: "4px 10px", borderRadius: 6, background: syncResult.imported > 0 ? "rgba(34,197,94,0.12)" : "rgba(136,136,160,0.10)", color: syncResult.imported > 0 ? "var(--green)" : "var(--text-muted)" }}>
               {syncResult.imported > 0 ? `+${syncResult.imported} importés` : "Déjà à jour"}
+              {syncResult.mode && <span style={{ fontWeight: 400, marginLeft: 6 }}>· {syncResult.mode === "3-wallet" ? "mode précis" : "mode direction"}</span>}
             </span>
             {syncResult.results.filter(r => r.error).map(r => (
               <span key={r.player} style={{ fontSize: 11, color: "#f87171" }}>{r.player}: {r.error}</span>
@@ -324,6 +362,91 @@ export default function WalletsClient({
           <Btn variant="primary" disabled={!form.player_id || !form.game_id || !form.amount || !form.tx_date || busy} onClick={addTx}>
             {busy ? "Enregistrement…" : "Ajouter"}
           </Btn>
+        </div>
+      </Modal>
+
+      {/* Config Wallets Modal */}
+      <Modal open={walletModal} onClose={() => { setWalletModal(false); setEditingWallet(null); }} title="Config Wallets TELE">
+        {/* WALLET MERE */}
+        <div style={{ marginBottom: 20 }}>
+          <div style={{ fontSize: 11, fontWeight: 700, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.07em", marginBottom: 8 }}>WALLET MÈRE (global)</div>
+          <div style={{ background: "var(--bg-surface)", border: "1px solid rgba(74,222,128,0.3)", borderRadius: 8, padding: "10px 14px", display: "flex", alignItems: "center", gap: 10 }}>
+            <span style={{ fontSize: 11, fontFamily: "monospace", color: walletMere ? "#4ade80" : "var(--text-dim)", flex: 1 }}>
+              {walletMere ? `${walletMere.slice(0, 8)}…${walletMere.slice(-8)}` : "Non configurée — aller dans Settings"}
+            </span>
+            {walletMere && (
+              <a href={`https://tronscan.org/#/address/${walletMere}`} target="_blank" rel="noopener noreferrer" style={{ color: "#4ade80", display: "flex", alignItems: "center" }}>
+                <ExternalLink size={13} />
+              </a>
+            )}
+          </div>
+        </div>
+
+        {/* Per-player wallets */}
+        <div style={{ fontSize: 11, fontWeight: 700, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.07em", marginBottom: 10 }}>Wallets par joueur</div>
+        <div style={{ display: "flex", flexDirection: "column", gap: 10, maxHeight: 400, overflowY: "auto" }}>
+          {teleConfig.map(p => {
+            const isEditing = editingWallet === p.id;
+            return (
+              <div key={p.id} style={{ background: "var(--bg-surface)", border: "1px solid var(--border)", borderRadius: 8, padding: "12px 14px" }}>
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: isEditing ? 12 : 0 }}>
+                  <span style={{ fontSize: 13, fontWeight: 600, color: "var(--text)" }}>{p.name}</span>
+                  {!isEditing && (
+                    <button onClick={() => { setEditingWallet(p.id); setEditWalletVals({ wallet_game: p.wallet_game ?? "", wallet_cashout: p.wallet_cashout ?? "" }); }}
+                      style={{ fontSize: 11, fontWeight: 600, color: "var(--text-muted)", background: "var(--bg-elevated)", border: "1px solid var(--border)", borderRadius: 5, padding: "4px 10px", cursor: "pointer" }}>
+                      Modifier
+                    </button>
+                  )}
+                </div>
+                {!isEditing && (
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginTop: 8 }}>
+                    <div>
+                      <div style={{ fontSize: 10, fontWeight: 700, color: "#38bdf8", marginBottom: 3, textTransform: "uppercase" }}>WALLET GAME</div>
+                      {p.wallet_game ? (
+                        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                          <span style={{ fontSize: 11, fontFamily: "monospace", color: "var(--text-muted)" }}>{p.wallet_game.slice(0, 6)}…{p.wallet_game.slice(-6)}</span>
+                          <a href={`https://tronscan.org/#/address/${p.wallet_game}`} target="_blank" rel="noopener noreferrer" style={{ color: "#38bdf8" }}><ExternalLink size={11} /></a>
+                        </div>
+                      ) : <span style={{ fontSize: 11, color: "var(--text-dim)" }}>—</span>}
+                    </div>
+                    <div>
+                      <div style={{ fontSize: 10, fontWeight: 700, color: "#fb923c", marginBottom: 3, textTransform: "uppercase" }}>WALLET CASHOUT</div>
+                      {p.wallet_cashout ? (
+                        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                          <span style={{ fontSize: 11, fontFamily: "monospace", color: "var(--text-muted)" }}>{p.wallet_cashout.slice(0, 6)}…{p.wallet_cashout.slice(-6)}</span>
+                          <a href={`https://tronscan.org/#/address/${p.wallet_cashout}`} target="_blank" rel="noopener noreferrer" style={{ color: "#fb923c" }}><ExternalLink size={11} /></a>
+                        </div>
+                      ) : <span style={{ fontSize: 11, color: "#f87171" }}>Manquant</span>}
+                    </div>
+                  </div>
+                )}
+                {isEditing && (
+                  <div>
+                    <div style={{ marginBottom: 10 }}>
+                      <label style={{ fontSize: 10, fontWeight: 700, color: "#38bdf8", textTransform: "uppercase", display: "block", marginBottom: 4 }}>WALLET GAME</label>
+                      <input value={editWalletVals.wallet_game} onChange={e => setEditWalletVals(v => ({ ...v, wallet_game: e.target.value }))}
+                        placeholder="TXxxx… (adresse TRC20)" spellCheck={false}
+                        style={{ width: "100%", padding: "8px 10px", borderRadius: 6, fontSize: 12, fontFamily: "monospace", background: "var(--bg-elevated)", color: "var(--text)", border: "1px solid #38bdf840", outline: "none", boxSizing: "border-box" }} />
+                    </div>
+                    <div style={{ marginBottom: 12 }}>
+                      <label style={{ fontSize: 10, fontWeight: 700, color: "#fb923c", textTransform: "uppercase", display: "block", marginBottom: 4 }}>WALLET CASHOUT</label>
+                      <input value={editWalletVals.wallet_cashout} onChange={e => setEditWalletVals(v => ({ ...v, wallet_cashout: e.target.value }))}
+                        placeholder="TXxxx… (Binance TRC20 ou perso)" spellCheck={false}
+                        style={{ width: "100%", padding: "8px 10px", borderRadius: 6, fontSize: 12, fontFamily: "monospace", background: "var(--bg-elevated)", color: "var(--text)", border: "1px solid #fb923c40", outline: "none", boxSizing: "border-box" }} />
+                    </div>
+                    <div style={{ display: "flex", gap: 8 }}>
+                      <button onClick={() => saveWallet(p.id)} style={{ display: "flex", alignItems: "center", gap: 5, padding: "7px 14px", borderRadius: 6, fontSize: 12, fontWeight: 600, background: "rgba(34,197,94,0.12)", color: "var(--green)", border: "1px solid rgba(34,197,94,0.3)", cursor: "pointer" }}>
+                        <Save size={13} /> Enregistrer
+                      </button>
+                      <button onClick={() => setEditingWallet(null)} style={{ display: "flex", alignItems: "center", gap: 5, padding: "7px 14px", borderRadius: 6, fontSize: 12, fontWeight: 600, background: "var(--bg-elevated)", color: "var(--text-muted)", border: "1px solid var(--border)", cursor: "pointer" }}>
+                        <X size={13} /> Annuler
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            );
+          })}
         </div>
       </Modal>
     </>
