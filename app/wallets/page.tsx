@@ -1,3 +1,4 @@
+export const dynamic = "force-dynamic";
 import { getWalletSummaryByPlayer, getWalletKPIs, getWalletTransactions, getPlayers, getApps } from "@/lib/queries";
 import PageHeader from "@/components/PageHeader";
 import WalletsClient from "./WalletsClient";

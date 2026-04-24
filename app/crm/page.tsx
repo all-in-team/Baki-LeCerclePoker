@@ -1,3 +1,4 @@
+export const dynamic = "force-dynamic";
 import { getCrmOverview, getCrmNotes } from "@/lib/queries";
 import PageHeader from "@/components/PageHeader";
 import CRMClient from "./CRMClient";

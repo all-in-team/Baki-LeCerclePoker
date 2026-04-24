@@ -1,3 +1,4 @@
+export const dynamic = "force-dynamic";
 import { getPlayers, getApps } from "@/lib/queries";
 import PageHeader from "@/components/PageHeader";
 import PlayersClient from "./PlayersClient";

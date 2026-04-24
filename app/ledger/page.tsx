@@ -1,3 +1,4 @@
+export const dynamic = "force-dynamic";
 import { getLedger, getPlayers } from "@/lib/queries";
 import PageHeader from "@/components/PageHeader";
 import LedgerClient from "./LedgerClient";

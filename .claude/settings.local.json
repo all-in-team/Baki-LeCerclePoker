@@ -51,7 +51,8 @@
       "Bash(railway status *)",
       "Bash(railway domain *)",
       "Bash(railway logs *)",
-      "Bash(git rm *)"
+      "Bash(git rm *)",
+      "Bash(npm run *)"
     ]
   }
 }

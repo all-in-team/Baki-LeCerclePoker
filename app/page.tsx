@@ -1,3 +1,4 @@
+export const dynamic = "force-dynamic";
 import { getNetByApp, getNetByPlayer, getNetByMonth, getNetByWeek, getPeriods, getWalletKPIs, getWalletSummaryByPlayer } from "@/lib/queries";
 import PageHeader from "@/components/PageHeader";
 import StatCard from "@/components/StatCard";
