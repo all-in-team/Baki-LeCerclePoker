@@ -39,8 +39,10 @@ function setSession(chatId: string | number, step: Step, player_id: number, expe
   }
 }
 
-function mentionOf(player: { name: string; telegram_handle?: string | null }) {
-  return player.telegram_handle ? `@${player.telegram_handle}` : `<b>${player.name}</b>`;
+function mentionOf(player: { name: string; telegram_handle?: string | null; telegram_id?: number | null }) {
+  if (player.telegram_id) return `<a href="tg://user?id=${player.telegram_id}">${player.name}</a>`;
+  if (player.telegram_handle) return `@${player.telegram_handle}`;
+  return `<b>${player.name}</b>`;
 }
 function clearSession(chatId: string | number) {
   getDb().prepare(`DELETE FROM telegram_sessions WHERE chat_id = ?`).run(String(chatId));
