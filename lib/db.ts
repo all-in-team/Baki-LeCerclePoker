@@ -205,4 +205,32 @@ function initSchema(db: Database.Database) {
       FROM players p WHERE p.tron_address IS NOT NULL AND p.tron_address != ''
     `);
   }
+
+  // One-time: make wallet_transactions.app_id nullable (recreate table)
+  const fixAppIdNullable = db.prepare(`INSERT OR IGNORE INTO _applied_fixes (name) VALUES (?)`).run("wallet_transactions_app_id_nullable_v1");
+  if (fixAppIdNullable.changes > 0) {
+    db.pragma("foreign_keys = OFF");
+    db.exec(`
+      CREATE TABLE wallet_transactions_new (
+        id         INTEGER PRIMARY KEY AUTOINCREMENT,
+        player_id  INTEGER NOT NULL REFERENCES players(id) ON DELETE CASCADE,
+        app_id     INTEGER REFERENCES poker_apps(id) ON DELETE SET NULL,
+        game_id    INTEGER REFERENCES games(id) ON DELETE SET NULL,
+        type       TEXT NOT NULL CHECK(type IN ('deposit','withdrawal')),
+        amount     REAL NOT NULL,
+        currency   TEXT NOT NULL DEFAULT 'USDT',
+        note       TEXT,
+        tron_tx_hash TEXT,
+        tx_date    TEXT NOT NULL,
+        created_at TEXT NOT NULL DEFAULT (datetime('now'))
+      );
+      INSERT INTO wallet_transactions_new
+        SELECT id, player_id, app_id, game_id, type, amount, currency, note, tron_tx_hash, tx_date, created_at
+        FROM wallet_transactions;
+      DROP TABLE wallet_transactions;
+      ALTER TABLE wallet_transactions_new RENAME TO wallet_transactions;
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_wallet_tron_hash ON wallet_transactions(tron_tx_hash) WHERE tron_tx_hash IS NOT NULL;
+    `);
+    db.pragma("foreign_keys = ON");
+  }
 }
