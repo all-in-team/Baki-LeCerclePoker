@@ -17,31 +17,24 @@ async function sendMsg(chatId: number | string, text: string) {
   });
 }
 
-async function sendPhoto(chatId: number | string, photoUrl: string, caption: string) {
-  const token = process.env.TELEGRAM_BOT_TOKEN;
-  if (!token) return;
-  await fetch(`https://api.telegram.org/bot${token}/sendPhoto`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ chat_id: chatId, photo: photoUrl, caption, parse_mode: "HTML" }),
-  });
-}
-
-function walletGameGuideUrl() {
-  const base = process.env.NEXT_PUBLIC_APP_URL ?? process.env.RAILWAY_PUBLIC_DOMAIN
-    ? `https://${process.env.RAILWAY_PUBLIC_DOMAIN}`
-    : null;
-  return base ? `${base}/tele-wallet-guide.jpg` : null;
-}
+const WALLET_GAME_PHOTO_URL = "https://lecerclepoker-production.up.railway.app/tele-wallet-guide.jpg";
 
 async function askWalletGame(chatId: number | string, mention: string) {
-  const url = walletGameGuideUrl();
+  const token = process.env.TELEGRAM_BOT_TOKEN;
+  if (!token) return;
+
   const caption =
     `📲 <b>Étape 2/3</b> — ${mention}, envoie ton <b>WALLET GAME</b>\n` +
-    `<i>C'est la "Deposit Address" TRON dans l'app TELE (voir capture)</i>`;
-  if (url) {
-    await sendPhoto(chatId, url, caption);
-  } else {
+    `<i>C'est la "Deposit Address" TRON dans l'app TELE (voir capture ci-dessus)</i>`;
+
+  const res = await fetch(`https://api.telegram.org/bot${token}/sendPhoto`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ chat_id: chatId, photo: WALLET_GAME_PHOTO_URL, caption, parse_mode: "HTML" }),
+  });
+
+  // Fallback to text if photo fails
+  if (!res.ok) {
     await sendMsg(chatId, caption);
   }
 }
