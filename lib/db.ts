@@ -20,6 +20,22 @@ export function getDb(): Database.Database {
 
 function initSchema(db: Database.Database) {
   db.exec(`
+    CREATE TABLE IF NOT EXISTS games (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL UNIQUE CHECK(name IN ('TELE','Wepoker','Xpoker','ClubGG'))
+    );
+    INSERT OR IGNORE INTO games (name) VALUES ('TELE'),('Wepoker'),('Xpoker'),('ClubGG');
+
+    CREATE TABLE IF NOT EXISTS player_game_deals (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      player_id INTEGER NOT NULL REFERENCES players(id) ON DELETE CASCADE,
+      game_id INTEGER NOT NULL REFERENCES games(id) ON DELETE CASCADE,
+      action_pct REAL NOT NULL DEFAULT 50,
+      rakeback_pct REAL NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      UNIQUE(player_id, game_id)
+    );
+
     CREATE TABLE IF NOT EXISTS poker_apps (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       name TEXT NOT NULL,
@@ -163,10 +179,30 @@ function initSchema(db: Database.Database) {
   try { db.exec(`ALTER TABLE players ADD COLUMN telegram_id INTEGER`); } catch {}
   try { db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_players_telegram_id ON players(telegram_id) WHERE telegram_id IS NOT NULL`); } catch {}
 
+  // Add game_id to wallet_transactions
+  try { db.exec(`ALTER TABLE wallet_transactions ADD COLUMN game_id INTEGER REFERENCES games(id) ON DELETE SET NULL`); } catch {}
+
   // One-time fix: flip deposit/withdrawal directions (to=player means deposit, from=player means withdrawal)
   db.exec(`CREATE TABLE IF NOT EXISTS _applied_fixes (name TEXT PRIMARY KEY)`);
   const fixFlip = db.prepare(`INSERT OR IGNORE INTO _applied_fixes (name) VALUES (?)`).run("flip_wallet_directions_v2");
   if (fixFlip.changes > 0) {
     db.exec(`UPDATE wallet_transactions SET type = CASE WHEN type='deposit' THEN 'withdrawal' ELSE 'deposit' END`);
+  }
+
+  // One-time: migrate existing wallet_transactions to game_id
+  const fixGameId = db.prepare(`INSERT OR IGNORE INTO _applied_fixes (name) VALUES (?)`).run("wallet_transactions_game_id_v1");
+  if (fixGameId.changes > 0) {
+    db.exec(`UPDATE wallet_transactions SET game_id = (SELECT id FROM games WHERE name='TELE') WHERE app_id = 1 AND game_id IS NULL`);
+    db.exec(`UPDATE wallet_transactions SET game_id = (SELECT id FROM games WHERE name='Wepoker') WHERE app_id IN (2,3,4) AND game_id IS NULL`);
+  }
+
+  // One-time: create TELE game deals for players who already have a tron_address
+  const fixTeleDeals = db.prepare(`INSERT OR IGNORE INTO _applied_fixes (name) VALUES (?)`).run("create_tele_game_deals_v1");
+  if (fixTeleDeals.changes > 0) {
+    db.exec(`
+      INSERT OR IGNORE INTO player_game_deals (player_id, game_id, action_pct, rakeback_pct)
+      SELECT p.id, (SELECT id FROM games WHERE name='TELE'), COALESCE(p.action_pct, 40), 0
+      FROM players p WHERE p.tron_address IS NOT NULL AND p.tron_address != ''
+    `);
   }
 }

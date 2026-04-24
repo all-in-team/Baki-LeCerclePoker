@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
-import { getPlayersWithTronAddress, insertWalletTransactionByHash } from "@/lib/queries";
+import { getDb } from "@/lib/db";
+import { insertWalletTransactionByHash } from "@/lib/queries";
 
 const USDT_CONTRACT = "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t";
 
@@ -12,10 +13,6 @@ const USDT_CONTRACT = "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t";
 //   USDT leaves   FROM  tron_address  →  player is cashing out             →  WITHDRAWAL
 //
 // Net P&L = sum(WITHDRAWAL) − sum(DEPOSIT)
-//   → net < 0 : more was deposited than withdrawn (capital at risk / lost)
-//   → net > 0 : player cashed out more than deposited (profitable)
-//
-// Example: Romain receives 300 USDT on his game wallet → DEPOSIT → net = −300
 //
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -27,9 +24,9 @@ function classifyTronTx(
   const toAddr = (tx.to   ?? "").toLowerCase();
   const frAddr = (tx.from ?? "").toLowerCase();
 
-  if (toAddr === addr) return "deposit";    // USDT arrived  → deposit
-  if (frAddr === addr) return "withdrawal"; // USDT left     → withdrawal
-  return null; // tx doesn't involve this wallet — skip
+  if (toAddr === addr) return "deposit";
+  if (frAddr === addr) return "withdrawal";
+  return null;
 }
 
 async function fetchTronTxs(address: string): Promise<any[]> {
@@ -47,8 +44,27 @@ async function fetchTronTxs(address: string): Promise<any[]> {
   return json.data ?? [];
 }
 
+function getTeleGameId(): number | null {
+  const row = getDb().prepare(`SELECT id FROM games WHERE name = 'TELE'`).get() as { id: number } | undefined;
+  return row?.id ?? null;
+}
+
+function getPlayersOnTele() {
+  return getDb().prepare(`
+    SELECT p.id, p.name, p.tron_address
+    FROM players p
+    JOIN player_game_deals pgd ON pgd.player_id = p.id
+    JOIN games g ON g.id = pgd.game_id AND g.name = 'TELE'
+    WHERE p.tron_address IS NOT NULL AND p.tron_address != ''
+  `).all() as { id: number; name: string; tron_address: string }[];
+}
+
 export async function POST() {
-  const players = getPlayersWithTronAddress();
+  const teleGameId = getTeleGameId();
+  if (!teleGameId)
+    return NextResponse.json({ ok: true, imported: 0, message: "TELE game not found." });
+
+  const players = getPlayersOnTele();
 
   if (players.length === 0)
     return NextResponse.json({ ok: true, imported: 0, message: "No players have a Tron address configured." });
@@ -59,11 +75,6 @@ export async function POST() {
   for (let i = 0; i < players.length; i++) {
     const player = players[i];
     if (i > 0) await new Promise(r => setTimeout(r, 300));
-
-    if (!player.tron_app_id) {
-      results.push({ player: player.name, imported: 0, deposits: 0, withdrawals: 0, error: "No app linked — edit player to set one." });
-      continue;
-    }
 
     try {
       const txs = await fetchTronTxs(player.tron_address);
@@ -81,7 +92,7 @@ export async function POST() {
 
         const changed = insertWalletTransactionByHash({
           player_id: player.id,
-          app_id: player.tron_app_id,
+          game_id: teleGameId,
           type,
           amount,
           currency: "USDT",

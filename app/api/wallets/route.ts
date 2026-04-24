@@ -7,11 +7,11 @@ export async function GET() {
 
 export async function POST(req: NextRequest) {
   const body = await req.json();
-  if (!body.player_id || !body.app_id || !body.type || !body.amount || !body.tx_date)
+  if (!body.player_id || !body.game_id || !body.type || !body.amount || !body.tx_date)
     return NextResponse.json({ error: "Missing required fields" }, { status: 400 });
   const id = insertWalletTransaction({
     player_id: Number(body.player_id),
-    app_id: Number(body.app_id),
+    game_id: Number(body.game_id),
     type: body.type,
     amount: Number(body.amount),
     currency: body.currency || "USDT",

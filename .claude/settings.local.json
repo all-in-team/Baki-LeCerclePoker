@@ -53,7 +53,11 @@
       "Bash(railway logs *)",
       "Bash(git rm *)",
       "Bash(npm run *)",
-      "Bash(python3 -c \"import sys,json; players=json.load\\(sys.stdin\\); [print\\(p['name'], p.get\\('telegram_handle'\\)\\) for p in players if 'Test' in p['name']]\")"
+      "Bash(python3 -c \"import sys,json; players=json.load\\(sys.stdin\\); [print\\(p['name'], p.get\\('telegram_handle'\\)\\) for p in players if 'Test' in p['name']]\")",
+      "Bash(python3 -c \"import sys,json; players=json.load\\(sys.stdin\\); [print\\(p['name'], p.get\\('telegram_handle'\\)\\) for p in players if 'Joueur' in p['name']]\")",
+      "Bash(railway volume *)",
+      "Bash(python3 -c \"import sys,json; players=json.load\\(sys.stdin\\); [print\\('✅ OK:', p['name']\\) for p in players if 'Persistence' in p['name']]\")",
+      "Bash(git push *)"
     ]
   }
 }

@@ -68,6 +68,37 @@ export function upsertPlayerFromTelegram(data: {
   return { id: Number(r.lastInsertRowid), isNew: true };
 }
 
+// ── Games ─────────────────────────────────────────────────
+export function getGames() {
+  return getDb().prepare(`SELECT * FROM games ORDER BY id`).all() as { id: number; name: string }[];
+}
+
+export function getPlayerGameDeals(playerId: number) {
+  return getDb().prepare(`
+    SELECT pgd.*, g.name AS game_name
+    FROM player_game_deals pgd
+    JOIN games g ON g.id = pgd.game_id
+    WHERE pgd.player_id = ?
+    ORDER BY g.id
+  `).all(playerId);
+}
+
+export function upsertPlayerGameDeal(data: { player_id: number; game_id: number; action_pct: number; rakeback_pct: number }) {
+  const db = getDb();
+  const r = db.prepare(`
+    INSERT INTO player_game_deals (player_id, game_id, action_pct, rakeback_pct)
+    VALUES (@player_id, @game_id, @action_pct, @rakeback_pct)
+    ON CONFLICT(player_id, game_id) DO UPDATE SET
+      action_pct = excluded.action_pct,
+      rakeback_pct = excluded.rakeback_pct
+  `).run(data);
+  return r.lastInsertRowid;
+}
+
+export function deletePlayerGameDeal(id: number) {
+  getDb().prepare(`DELETE FROM player_game_deals WHERE id = ?`).run(id);
+}
+
 // ── Apps ─────────────────────────────────────────────────
 export function getApps() {
   const db = getDb();
@@ -309,20 +340,22 @@ export function getPeriods() {
 }
 
 // ── Wallet Transactions ───────────────────────────────────
-export function getWalletTransactions(filters?: { player_id?: number; app_id?: number; limit?: number }) {
+export function getWalletTransactions(filters?: { player_id?: number; game_id?: number; limit?: number }) {
   const db = getDb();
   let q = `
-    SELECT wt.*, p.name AS player_name, pa.name AS app_name
+    SELECT wt.*, p.name AS player_name,
+      COALESCE(g.name, pa.name, 'Unknown') AS game_name
     FROM wallet_transactions wt
     JOIN players p ON p.id = wt.player_id
-    JOIN poker_apps pa ON pa.id = wt.app_id
+    LEFT JOIN games g ON g.id = wt.game_id
+    LEFT JOIN poker_apps pa ON pa.id = wt.app_id
     WHERE 1=1
   `;
   const params: Record<string, unknown> = {};
   if (filters?.player_id) { q += ` AND wt.player_id = @player_id`; params.player_id = filters.player_id; }
-  if (filters?.app_id)    { q += ` AND wt.app_id = @app_id`;    params.app_id = filters.app_id; }
+  if (filters?.game_id)   { q += ` AND wt.game_id = @game_id`;    params.game_id = filters.game_id; }
   q += ` ORDER BY wt.tx_date DESC, wt.created_at DESC`;
-  if (filters?.limit)     { q += ` LIMIT @limit`;               params.limit = filters.limit; }
+  if (filters?.limit)     { q += ` LIMIT @limit`;                  params.limit = filters.limit; }
   return db.prepare(q).all(params);
 }
 
@@ -330,15 +363,18 @@ export function getWalletSummaryByPlayer() {
   const db = getDb();
   return db.prepare(`
     SELECT
-      p.id, p.name, p.action_pct,
+      p.id AS player_id, p.name AS player_name,
+      g.id AS game_id, g.name AS game_name,
+      pgd.action_pct, pgd.rakeback_pct,
       COALESCE(SUM(CASE WHEN wt.type='deposit'    THEN wt.amount ELSE 0 END), 0) AS total_deposited,
       COALESCE(SUM(CASE WHEN wt.type='withdrawal' THEN wt.amount ELSE 0 END), 0) AS total_withdrawn,
       COALESCE(SUM(CASE WHEN wt.type='withdrawal' THEN wt.amount ELSE -wt.amount END), 0) AS net,
-      COALESCE(SUM(CASE WHEN wt.type='withdrawal' THEN wt.amount ELSE -wt.amount END), 0) * p.action_pct / 100 AS my_pnl
+      COALESCE(SUM(CASE WHEN wt.type='withdrawal' THEN wt.amount ELSE -wt.amount END), 0) * pgd.action_pct / 100 AS my_pnl
     FROM players p
-    LEFT JOIN wallet_transactions wt ON wt.player_id = p.id
-    WHERE p.tron_app_id IS NOT NULL
-    GROUP BY p.id
+    JOIN player_game_deals pgd ON pgd.player_id = p.id
+    JOIN games g ON g.id = pgd.game_id
+    LEFT JOIN wallet_transactions wt ON wt.player_id = p.id AND wt.game_id = pgd.game_id
+    GROUP BY p.id, pgd.game_id
     ORDER BY my_pnl DESC
   `).all();
 }
@@ -356,23 +392,40 @@ export function getWalletKPIs() {
         COALESCE(SUM(CASE WHEN wt.type='deposit'    THEN wt.amount ELSE 0 END), 0) AS total_deposited,
         COALESCE(SUM(CASE WHEN wt.type='withdrawal' THEN wt.amount ELSE 0 END), 0) AS total_withdrawn,
         COALESCE(SUM(CASE WHEN wt.type='withdrawal' THEN wt.amount ELSE -wt.amount END), 0) AS net,
-        COALESCE(SUM(CASE WHEN wt.type='withdrawal' THEN wt.amount ELSE -wt.amount END), 0) * p.action_pct / 100 AS my_pnl
+        COALESCE(SUM(CASE WHEN wt.type='withdrawal' THEN wt.amount ELSE -wt.amount END), 0) * pgd.action_pct / 100 AS my_pnl
       FROM players p
-      LEFT JOIN wallet_transactions wt ON wt.player_id = p.id
-      WHERE p.tron_app_id IS NOT NULL
-      GROUP BY p.id
+      JOIN player_game_deals pgd ON pgd.player_id = p.id
+      JOIN games g ON g.id = pgd.game_id
+      LEFT JOIN wallet_transactions wt ON wt.player_id = p.id AND wt.game_id = pgd.game_id
+      GROUP BY p.id, pgd.game_id
     )
   `).get() as { total_deposited: number; total_withdrawn: number; total_net: number; my_total_pnl: number };
 }
 
+export function getPlayerWalletStats(playerId: number) {
+  const db = getDb();
+  return db.prepare(`
+    SELECT
+      COALESCE(SUM(CASE WHEN wt.type='deposit' THEN wt.amount ELSE 0 END), 0) AS deposited,
+      COALESCE(SUM(CASE WHEN wt.type='withdrawal' THEN wt.amount ELSE 0 END), 0) AS withdrawn,
+      COALESCE(SUM(CASE WHEN wt.type='withdrawal' THEN wt.amount ELSE -wt.amount END), 0) AS net,
+      COALESCE(SUM(CASE WHEN wt.type='withdrawal'
+        THEN wt.amount * pgd.action_pct / 100
+        ELSE -wt.amount * pgd.action_pct / 100 END), 0) AS my_pnl
+    FROM wallet_transactions wt
+    JOIN player_game_deals pgd ON pgd.player_id = wt.player_id AND pgd.game_id = wt.game_id
+    WHERE wt.player_id = ?
+  `).get(playerId) as { deposited: number; withdrawn: number; net: number; my_pnl: number } | undefined;
+}
+
 export function insertWalletTransaction(data: {
-  player_id: number; app_id: number; type: "deposit" | "withdrawal";
+  player_id: number; game_id: number; type: "deposit" | "withdrawal";
   amount: number; currency?: string; note?: string; tx_date: string;
 }) {
   const db = getDb();
   const r = db.prepare(`
-    INSERT INTO wallet_transactions (player_id, app_id, type, amount, currency, note, tx_date)
-    VALUES (@player_id, @app_id, @type, @amount, @currency, @note, @tx_date)
+    INSERT INTO wallet_transactions (player_id, game_id, type, amount, currency, note, tx_date)
+    VALUES (@player_id, @game_id, @type, @amount, @currency, @note, @tx_date)
   `).run({ currency: "USDT", note: null, ...data });
   return r.lastInsertRowid;
 }
@@ -450,13 +503,13 @@ export function insertTgMessage(data: { player_id: number | null; tg_chat_id: st
 }
 
 export function insertWalletTransactionByHash(data: {
-  player_id: number; app_id: number; type: "deposit" | "withdrawal";
+  player_id: number; game_id: number; type: "deposit" | "withdrawal";
   amount: number; currency: string; tx_date: string; tron_tx_hash: string;
 }) {
   const db = getDb();
   const r = db.prepare(`
-    INSERT OR IGNORE INTO wallet_transactions (player_id, app_id, type, amount, currency, tx_date, tron_tx_hash, note)
-    VALUES (@player_id, @app_id, @type, @amount, @currency, @tx_date, @tron_tx_hash, @note)
+    INSERT OR IGNORE INTO wallet_transactions (player_id, game_id, type, amount, currency, tx_date, tron_tx_hash, note)
+    VALUES (@player_id, @game_id, @type, @amount, @currency, @tx_date, @tron_tx_hash, @note)
   `).run({ note: "auto-sync", ...data });
-  return r.changes; // 1 if inserted, 0 if ignored (duplicate hash)
+  return r.changes;
 }
