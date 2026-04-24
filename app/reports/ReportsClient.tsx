@@ -5,7 +5,7 @@ import { Upload, FileImage, CheckCircle, Trash2, ChevronDown, ChevronUp, Loader,
 import Btn from "@/components/Btn";
 import Badge from "@/components/Badge";
 
-interface Game { id: number; name: string; }
+interface Game { id: number; name: string; default_action_pct: number | null; }
 interface Player { id: number; name: string; }
 interface ExtractedRow {
   external_id: string; amount: number; currency: string;
@@ -21,8 +21,9 @@ const GAME_COLOR: Record<string, string> = {
   TELE: "#a78bfa", Wepoker: "#38bdf8", Xpoker: "#fb923c", ClubGG: "#4ade80",
 };
 
-export default function ReportsClient({ games, players: initialPlayers }: { games: Game[]; players: Player[] }) {
-  const [gameId, setGameId] = useState(games[0]?.id ?? 0);
+export default function ReportsClient({ games: initialGames, players: initialPlayers }: { games: Game[]; players: Player[] }) {
+  const [games, setGames] = useState<Game[]>(initialGames);
+  const [gameId, setGameId] = useState(initialGames[0]?.id ?? 0);
   const [period, setPeriod] = useState("");
   const [file, setFile] = useState<File | null>(null);
   const [preview, setPreview] = useState<string | null>(null);
@@ -36,11 +37,27 @@ export default function ReportsClient({ games, players: initialPlayers }: { game
   const [expanded, setExpanded] = useState<number | null>(null);
   const [expandedEntries, setExpandedEntries] = useState<any[]>([]);
   const [players, setPlayers] = useState<Player[]>(initialPlayers);
+  // Deal prompt
+  const [dealInput, setDealInput] = useState("");
+  const [savingDeal, setSavingDeal] = useState(false);
   // New player creation
   const [creatingFor, setCreatingFor] = useState<number | null>(null); // row index
   const [newPlayerName, setNewPlayerName] = useState("");
   const [creatingBusy, setCreatingBusy] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
+
+  const currentGame = games.find(g => g.id === gameId);
+  const dealMissing = currentGame && currentGame.default_action_pct === null;
+
+  async function saveDeal() {
+    const pct = parseFloat(dealInput);
+    if (isNaN(pct) || pct <= 0 || pct > 100) return;
+    setSavingDeal(true);
+    await fetch("/api/games", { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id: gameId, default_action_pct: pct }) });
+    setSavingDeal(false);
+    setGames(gs => gs.map(g => g.id === gameId ? { ...g, default_action_pct: pct } : g));
+    setDealInput("");
+  }
 
   useEffect(() => { loadReports(); }, []);
 
@@ -70,13 +87,14 @@ export default function ReportsClient({ games, players: initialPlayers }: { game
     const data = await res.json();
     setLoading(false);
     if (!res.ok) { setError(data.error); return; }
-    // Load action_pct for pre-matched players
+    const gameDealPct = games.find(g => g.id === gameId)?.default_action_pct ?? null;
+    // Load action_pct for pre-matched players — fall back to game-level deal
     const rowsWithPct = await Promise.all((data.rows as ExtractedRow[]).map(async row => {
       if (row.player_id) {
         const deal = await fetchDeal(row.player_id, gameId);
-        return { ...row, action_pct: deal };
+        return { ...row, action_pct: deal ?? gameDealPct };
       }
-      return { ...row, action_pct: null };
+      return { ...row, action_pct: gameDealPct };
     }));
     setRows(rowsWithPct);
   }
@@ -91,7 +109,10 @@ export default function ReportsClient({ games, players: initialPlayers }: { game
 
   async function setRowPlayer(idx: number, player_id: number | null) {
     let action_pct: number | null = null;
-    if (player_id) action_pct = await fetchDeal(player_id, gameId);
+    if (player_id) {
+      const stored = await fetchDeal(player_id, gameId);
+      action_pct = stored ?? currentGame?.default_action_pct ?? null;
+    }
     const player_name = players.find(p => p.id === player_id)?.name ?? null;
     setRows(r => r!.map((row, i) => i !== idx ? row : { ...row, player_id, player_name, action_pct }));
   }
@@ -174,6 +195,34 @@ export default function ReportsClient({ games, players: initialPlayers }: { game
               placeholder="Période — ex: Semaine 17, Avr 2026"
               style={{ flex: 1, fontSize: 12, padding: "7px 12px", borderRadius: 7, background: "var(--bg-elevated)", border: "1px solid var(--border)", color: "var(--text)", outline: "none" }} />
           </div>
+          {!dealMissing && currentGame && (
+            <div style={{ padding: "8px 20px", borderBottom: "1px solid var(--border)", display: "flex", alignItems: "center", gap: 8 }}>
+              <span style={{ fontSize: 11, color: "var(--text-dim)" }}>Ton deal sur {currentGame.name} :</span>
+              <span style={{ fontSize: 12, fontWeight: 700, color: "#eab308" }}>{currentGame.default_action_pct}%</span>
+              <button onClick={() => { setDealInput(String(currentGame.default_action_pct)); setGames(gs => gs.map(g => g.id === gameId ? { ...g, default_action_pct: null } : g)); }}
+                style={{ fontSize: 11, color: "var(--text-dim)", background: "none", border: "none", cursor: "pointer", marginLeft: 4 }}>modifier</button>
+            </div>
+          )}
+          {dealMissing && (
+            <div style={{ padding: "12px 20px", borderBottom: "1px solid var(--border)", background: "rgba(234,179,8,0.06)", display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+              <span style={{ fontSize: 12, color: "#eab308", fontWeight: 600 }}>
+                C'est quoi ton deal sur {currentGame?.name} ?
+              </span>
+              <span style={{ fontSize: 11, color: "var(--text-dim)" }}>Action % — saisi une fois, mémorisé pour tous les imports suivants</span>
+              <div style={{ display: "flex", gap: 8, alignItems: "center", marginLeft: "auto" }}>
+                <input type="number" min="1" max="100" step="1" value={dealInput} onChange={e => setDealInput(e.target.value)}
+                  onKeyDown={e => e.key === "Enter" && saveDeal()}
+                  placeholder="ex: 40"
+                  autoFocus
+                  style={{ width: 70, padding: "6px 10px", borderRadius: 6, fontSize: 13, fontWeight: 700, background: "var(--bg-elevated)", border: "1px solid rgba(234,179,8,0.5)", color: "#eab308", textAlign: "center", outline: "none" }} />
+                <span style={{ fontSize: 12, color: "var(--text-dim)" }}>%</span>
+                <button onClick={saveDeal} disabled={savingDeal || !dealInput}
+                  style={{ padding: "6px 14px", borderRadius: 6, fontSize: 12, fontWeight: 700, background: "rgba(234,179,8,0.15)", border: "1px solid rgba(234,179,8,0.4)", color: "#eab308", cursor: "pointer", opacity: !dealInput ? 0.5 : 1 }}>
+                  {savingDeal ? "…" : "Valider"}
+                </button>
+              </div>
+            </div>
+          )}
           <div style={{ padding: 20 }}>
             <div
               onDragOver={e => { e.preventDefault(); setDragging(true); }}

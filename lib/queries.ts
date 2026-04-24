@@ -70,7 +70,7 @@ export function upsertPlayerFromTelegram(data: {
 
 // ── Games ─────────────────────────────────────────────────
 export function getGames() {
-  return getDb().prepare(`SELECT * FROM games ORDER BY id`).all() as { id: number; name: string }[];
+  return getDb().prepare(`SELECT * FROM games ORDER BY id`).all() as { id: number; name: string; default_action_pct: number | null }[];
 }
 
 export function getPlayerGameDeals(playerId: number) {

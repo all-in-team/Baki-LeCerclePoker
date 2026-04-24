@@ -168,6 +168,7 @@ function initSchema(db: Database.Database) {
     db.pragma("foreign_keys = ON");
   }
   try { db.exec(`ALTER TABLE players ADD COLUMN action_pct REAL NOT NULL DEFAULT 40`); } catch {}
+  try { db.exec(`ALTER TABLE games ADD COLUMN default_action_pct REAL`); } catch {}
   try { db.exec(`ALTER TABLE players ADD COLUMN tier TEXT DEFAULT 'A' CHECK(tier IN ('S','A','B'))`); } catch {}
   try { db.exec(`ALTER TABLE players ADD COLUMN telegram_phone TEXT`); } catch {}
   try { db.exec(`ALTER TABLE players ADD COLUMN tron_address TEXT`); } catch {}

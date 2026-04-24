@@ -4,7 +4,7 @@ import ReportsClient from "./ReportsClient";
 
 export default function ReportsPage() {
   const db = getDb();
-  const games = db.prepare(`SELECT id, name FROM games ORDER BY name`).all() as { id: number; name: string }[];
+  const games = db.prepare(`SELECT id, name, default_action_pct FROM games ORDER BY name`).all() as { id: number; name: string; default_action_pct: number | null }[];
   const players = db.prepare(`SELECT id, name FROM players WHERE status = 'active' ORDER BY name`).all() as { id: number; name: string }[];
 
   return (
