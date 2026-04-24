@@ -5,7 +5,7 @@ export async function POST(req: NextRequest) {
   const { game_id, period_label, rows } = await req.json() as {
     game_id: number;
     period_label: string;
-    rows: { external_id: string; amount: number; currency: string; player_id: number | null }[];
+    rows: { external_id: string; amount: number; currency: string; player_id: number | null; action_pct: number | null }[];
   };
 
   if (!game_id || !period_label || !rows?.length) {
@@ -27,6 +27,17 @@ export async function POST(req: NextRequest) {
         db.prepare(`INSERT OR IGNORE INTO player_game_ids (player_id, game_id, external_id) VALUES (?, ?, ?)`)
           .run(row.player_id, game_id, row.external_id);
       } catch {}
+
+      // Remember the deal (action %) for this player on this game — auto-fills next time
+      if (row.action_pct !== null && row.action_pct !== undefined) {
+        try {
+          db.prepare(`
+            INSERT INTO player_game_deals (player_id, game_id, action_pct, rakeback_pct)
+            VALUES (?, ?, ?, 0)
+            ON CONFLICT(player_id, game_id) DO UPDATE SET action_pct = excluded.action_pct
+          `).run(row.player_id, game_id, row.action_pct);
+        } catch {}
+      }
     }
   }
 

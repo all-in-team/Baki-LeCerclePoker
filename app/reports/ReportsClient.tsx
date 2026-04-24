@@ -153,6 +153,7 @@ export default function ReportsClient({ games, players: initialPlayers }: { game
 
   const matchedCount = rows?.filter(r => r.player_id).length ?? 0;
   const unmatchedCount = rows ? rows.length - matchedCount : 0;
+  const missingPct = rows?.filter(r => r.player_id && r.action_pct === null).length ?? 0;
   const myTotalCost = rows?.reduce((sum, r) => {
     if (!r.player_id || r.action_pct === null) return sum;
     return sum + r.amount * r.action_pct / 100;
@@ -224,7 +225,7 @@ export default function ReportsClient({ games, players: initialPlayers }: { game
               )}
               <div style={{ marginLeft: "auto", display: "flex", gap: 8, alignItems: "center" }}>
                 {saved && <span style={{ fontSize: 12, color: "var(--green)", display: "flex", alignItems: "center", gap: 4 }}><CheckCircle size={13} /> Sauvegardé</span>}
-                <Btn variant="primary" onClick={save} disabled={saving || unmatchedCount > 0}>
+                <Btn variant="primary" onClick={save} disabled={saving || unmatchedCount > 0 || missingPct > 0}>
                   {saving ? "Sauvegarde…" : "Valider & sauvegarder"}
                 </Btn>
               </div>
@@ -251,8 +252,8 @@ export default function ReportsClient({ games, players: initialPlayers }: { game
                             <input type="number" min="0" max="100" step="1"
                               value={row.action_pct ?? ""}
                               onChange={e => setRowPct(idx, e.target.value)}
-                              placeholder="—"
-                              style={{ width: 52, padding: "4px 6px", borderRadius: 5, fontSize: 12, background: "var(--bg-elevated)", border: "1px solid var(--border)", color: "var(--gold)", textAlign: "center", outline: "none" }} />
+                              placeholder="?"
+                              style={{ width: 52, padding: "4px 6px", borderRadius: 5, fontSize: 12, background: row.action_pct !== null ? "rgba(234,179,8,0.08)" : "var(--bg-elevated)", border: `1px solid ${row.action_pct !== null ? "rgba(234,179,8,0.35)" : "rgba(251,146,60,0.5)"}`, color: "var(--gold)", textAlign: "center", outline: "none" }} />
                             <span style={{ fontSize: 11, color: "var(--text-dim)" }}>%</span>
                           </div>
                         ) : <span style={{ color: "var(--text-dim)", fontSize: 12 }}>—</span>}
@@ -296,9 +297,11 @@ export default function ReportsClient({ games, players: initialPlayers }: { game
                 })}
               </tbody>
             </table>
-            {unmatchedCount > 0 && (
+            {(unmatchedCount > 0 || missingPct > 0) && (
               <div style={{ padding: "10px 16px", fontSize: 11, color: "#fb923c", borderTop: "1px solid var(--border)" }}>
-                ⚠️ Identifie tous les joueurs avant de valider — leur ID sera mémorisé pour les prochains rapports
+                {unmatchedCount > 0 && `⚠️ ${unmatchedCount} joueur(s) non identifié(s) — leur ID sera mémorisé pour les prochains rapports`}
+                {unmatchedCount > 0 && missingPct > 0 && <br />}
+                {missingPct > 0 && `⚠️ ${missingPct} joueur(s) sans action % — remplis-le une fois, il sera mémorisé`}
               </div>
             )}
           </div>
