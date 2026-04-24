@@ -18,6 +18,9 @@
     "react-dom": "^19.0.0",
     "recharts": "^2.15.3"
   },
+  "engines": {
+    "node": ">=20"
+  },
   "devDependencies": {
     "@tailwindcss/postcss": "^4",
     "@types/better-sqlite3": "^7.6.13",
