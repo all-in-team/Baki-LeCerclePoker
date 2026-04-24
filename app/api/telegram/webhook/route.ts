@@ -105,13 +105,17 @@ function parseArgs(rawText: string): Parsed {
 // ── DB helpers ────────────────────────────────────────────
 function findPlayer(query: string) {
   const db = getDb();
-  // @handle → exact match on telegram_handle
   if (query.startsWith("@")) {
     const handle = query.slice(1).toLowerCase();
-    const row = db.prepare(
+    // 1. Exact telegram_handle match
+    const byHandle = db.prepare(
       `SELECT id, name, telegram_handle FROM players WHERE LOWER(telegram_handle) = ? LIMIT 1`
-    ).get(handle) as { id: number; name: string; telegram_handle: string } | undefined;
-    return row ? [row] : [];
+    ).get(handle) as { id: number; name: string; telegram_handle: string | null } | undefined;
+    if (byHandle) return [byHandle];
+    // 2. Fallback: name search with the text after @
+    return db.prepare(
+      `SELECT id, name, telegram_handle FROM players WHERE LOWER(name) LIKE LOWER(?) ORDER BY name LIMIT 5`
+    ).all(`%${handle}%`) as { id: number; name: string; telegram_handle: string | null }[];
   }
   return db.prepare(
     `SELECT id, name, telegram_handle FROM players WHERE LOWER(name) LIKE LOWER(?) ORDER BY name LIMIT 5`
