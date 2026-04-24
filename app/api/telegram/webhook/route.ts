@@ -17,6 +17,35 @@ async function sendMsg(chatId: number | string, text: string) {
   });
 }
 
+async function sendPhoto(chatId: number | string, photoUrl: string, caption: string) {
+  const token = process.env.TELEGRAM_BOT_TOKEN;
+  if (!token) return;
+  await fetch(`https://api.telegram.org/bot${token}/sendPhoto`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ chat_id: chatId, photo: photoUrl, caption, parse_mode: "HTML" }),
+  });
+}
+
+function walletGameGuideUrl() {
+  const base = process.env.NEXT_PUBLIC_APP_URL ?? process.env.RAILWAY_PUBLIC_DOMAIN
+    ? `https://${process.env.RAILWAY_PUBLIC_DOMAIN}`
+    : null;
+  return base ? `${base}/tele-wallet-guide.jpg` : null;
+}
+
+async function askWalletGame(chatId: number | string, mention: string) {
+  const url = walletGameGuideUrl();
+  const caption =
+    `📲 <b>Étape 2/3</b> — ${mention}, envoie ton <b>WALLET GAME</b>\n` +
+    `<i>C'est la "Deposit Address" TRON dans l'app TELE (voir capture)</i>`;
+  if (url) {
+    await sendPhoto(chatId, url, caption);
+  } else {
+    await sendMsg(chatId, caption);
+  }
+}
+
 // ── Session helpers ───────────────────────────────────────
 type Step = "waiting_action_pct" | "waiting_wallet_game" | "waiting_wallet_cashout";
 
@@ -202,10 +231,9 @@ async function handleRawMessage(text: string, chatId: number) {
     setSession(chatId, "waiting_wallet_game", player.id, fullForDeal.telegram_id);
     await sendMsg(chatId,
       `✅ <b>Deal enregistré</b> — <b>${player.name}</b> sur TELE\n` +
-      `Action : <b>${action_pct}%</b>` + (rakeback_pct > 0 ? ` · RB : <b>${rakeback_pct}%</b>` : "") + `\n\n` +
-      `📲 <b>Étape 2/3</b> — ${mentionOf(fullForDeal)}, envoie ton <b>WALLET GAME</b>\n` +
-      `<i>(l'adresse TRC20 de ton compte TELE)</i>`
+      `Action : <b>${action_pct}%</b>` + (rakeback_pct > 0 ? ` · RB : <b>${rakeback_pct}%</b>` : "")
     );
+    await askWalletGame(chatId, mentionOf(fullForDeal));
 
   } else if (session.step === "waiting_wallet_game") {
     if (!TRC20_RE.test(text)) {
@@ -279,11 +307,8 @@ async function handleDeal(rawText: string, chatId: number) {
     const hasGame = !!(player.tron_address && TRC20_RE.test(player.tron_address));
     const hasCashout = !!(player.tele_wallet_cashout && TRC20_RE.test(player.tele_wallet_cashout));
     if (!hasGame) {
-      setSession(chatId, "waiting_wallet_game", player.id);
-      await sendMsg(chatId,
-        `📲 <b>Étape 2/3</b> — Envoie le <b>WALLET GAME</b> de ${player.name}\n` +
-        `<i>(l'adresse TRC20 de son compte TELE)</i>`
-      );
+      setSession(chatId, "waiting_wallet_game", player.id, player.telegram_id);
+      await askWalletGame(chatId, mentionOf(player));
     } else if (!hasCashout) {
       setSession(chatId, "waiting_wallet_cashout", player.id);
       await sendMsg(chatId,
@@ -403,10 +428,8 @@ async function handleReset(rawText: string, chatId: number) {
   if (typeToken === "game") {
     db.prepare(`UPDATE players SET tron_address = NULL WHERE id = ?`).run(player.id);
     setSession(chatId, "waiting_wallet_game", player.id, full.telegram_id);
-    await sendMsg(chatId,
-      `🔄 WALLET GAME réinitialisé pour <b>${player.name}</b>\n\n` +
-      `📲 ${mentionOf(full)}, envoie ton <b>WALLET GAME</b>\n<i>(adresse TRC20 de ton compte TELE)</i>`
-    );
+    await sendMsg(chatId, `🔄 WALLET GAME réinitialisé pour <b>${player.name}</b>`);
+    await askWalletGame(chatId, mentionOf(full));
   } else if (typeToken === "cashout") {
     db.prepare(`UPDATE players SET tele_wallet_cashout = NULL WHERE id = ?`).run(player.id);
     setSession(chatId, "waiting_wallet_cashout", player.id, full.telegram_id);
