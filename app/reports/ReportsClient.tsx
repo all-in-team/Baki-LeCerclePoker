@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useRef, useCallback, useEffect } from "react";
-import { Upload, FileImage, CheckCircle, Trash2, ChevronDown, ChevronUp, Loader } from "lucide-react";
+import { Upload, FileImage, CheckCircle, Trash2, ChevronDown, ChevronUp, Loader, Plus } from "lucide-react";
 import Btn from "@/components/Btn";
 import Badge from "@/components/Badge";
 
@@ -10,6 +10,7 @@ interface Player { id: number; name: string; }
 interface ExtractedRow {
   external_id: string; amount: number; currency: string;
   player_id: number | null; player_name: string | null;
+  action_pct: number | null;
 }
 interface Report {
   id: number; game_name: string; period_label: string; created_at: string;
@@ -20,7 +21,7 @@ const GAME_COLOR: Record<string, string> = {
   TELE: "#a78bfa", Wepoker: "#38bdf8", Xpoker: "#fb923c", ClubGG: "#4ade80",
 };
 
-export default function ReportsClient({ games, players }: { games: Game[]; players: Player[] }) {
+export default function ReportsClient({ games, players: initialPlayers }: { games: Game[]; players: Player[] }) {
   const [gameId, setGameId] = useState(games[0]?.id ?? 0);
   const [period, setPeriod] = useState("");
   const [file, setFile] = useState<File | null>(null);
@@ -34,6 +35,11 @@ export default function ReportsClient({ games, players }: { games: Game[]; playe
   const [reports, setReports] = useState<Report[]>([]);
   const [expanded, setExpanded] = useState<number | null>(null);
   const [expandedEntries, setExpandedEntries] = useState<any[]>([]);
+  const [players, setPlayers] = useState<Player[]>(initialPlayers);
+  // New player creation
+  const [creatingFor, setCreatingFor] = useState<number | null>(null); // row index
+  const [newPlayerName, setNewPlayerName] = useState("");
+  const [creatingBusy, setCreatingBusy] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => { loadReports(); }, []);
@@ -64,13 +70,52 @@ export default function ReportsClient({ games, players }: { games: Game[]; playe
     const data = await res.json();
     setLoading(false);
     if (!res.ok) { setError(data.error); return; }
-    setRows(data.rows);
+    // Load action_pct for pre-matched players
+    const rowsWithPct = await Promise.all((data.rows as ExtractedRow[]).map(async row => {
+      if (row.player_id) {
+        const deal = await fetchDeal(row.player_id, gameId);
+        return { ...row, action_pct: deal };
+      }
+      return { ...row, action_pct: null };
+    }));
+    setRows(rowsWithPct);
   }
 
-  function setRowPlayer(idx: number, player_id: number | null) {
-    setRows(r => r!.map((row, i) => i !== idx ? row : {
-      ...row, player_id, player_name: players.find(p => p.id === player_id)?.name ?? null,
-    }));
+  async function fetchDeal(playerId: number, gId: number): Promise<number | null> {
+    try {
+      const res = await fetch(`/api/games/deals?player_id=${playerId}`).then(r => r.json());
+      const deal = res.find((d: any) => d.game_id === gId);
+      return deal?.action_pct ?? null;
+    } catch { return null; }
+  }
+
+  async function setRowPlayer(idx: number, player_id: number | null) {
+    let action_pct: number | null = null;
+    if (player_id) action_pct = await fetchDeal(player_id, gameId);
+    const player_name = players.find(p => p.id === player_id)?.name ?? null;
+    setRows(r => r!.map((row, i) => i !== idx ? row : { ...row, player_id, player_name, action_pct }));
+  }
+
+  function setRowPct(idx: number, pct: string) {
+    const v = parseFloat(pct);
+    setRows(r => r!.map((row, i) => i !== idx ? row : { ...row, action_pct: isNaN(v) ? null : v }));
+  }
+
+  async function createPlayer(idx: number) {
+    if (!newPlayerName.trim()) return;
+    setCreatingBusy(true);
+    const res = await fetch("/api/players", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: newPlayerName.trim(), status: "active", tier: "B" }),
+    });
+    const data = await res.json();
+    setCreatingBusy(false);
+    if (!res.ok) return;
+    const newPlayer = { id: data.id, name: newPlayerName.trim() };
+    setPlayers(p => [...p, newPlayer].sort((a, b) => a.name.localeCompare(b.name)));
+    setCreatingFor(null);
+    setNewPlayerName("");
+    setRows(r => r!.map((row, i) => i !== idx ? row : { ...row, player_id: newPlayer.id, player_name: newPlayer.name, action_pct: null }));
   }
 
   async function save() {
@@ -108,6 +153,10 @@ export default function ReportsClient({ games, players }: { games: Game[]; playe
 
   const matchedCount = rows?.filter(r => r.player_id).length ?? 0;
   const unmatchedCount = rows ? rows.length - matchedCount : 0;
+  const myTotalCost = rows?.reduce((sum, r) => {
+    if (!r.player_id || r.action_pct === null) return sum;
+    return sum + r.amount * r.action_pct / 100;
+  }, 0) ?? 0;
 
   return (
     <div style={{ display: "grid", gridTemplateColumns: "1fr 360px", gap: 24, alignItems: "start" }}>
@@ -148,25 +197,16 @@ export default function ReportsClient({ games, players }: { games: Game[]; playe
             </div>
             <input ref={fileRef} type="file" accept="image/*" style={{ display: "none" }}
               onChange={e => { const f = e.target.files?.[0]; if (f) onFile(f); }} />
-
             {file && (
               <div style={{ marginTop: 14, display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
                 <Btn variant="primary" onClick={extract} disabled={loading || !period.trim()}>
-                  {loading
-                    ? <><Loader size={14} style={{ animation: "spin 1s linear infinite" }} /> Analyse en cours…</>
-                    : <><Upload size={14} /> Extraire avec Claude</>}
+                  {loading ? <><Loader size={14} style={{ animation: "spin 1s linear infinite" }} /> Analyse…</> : <><Upload size={14} /> Extraire avec Claude</>}
                 </Btn>
-                <Btn variant="secondary" onClick={() => { setFile(null); setPreview(null); setRows(null); setError(null); }}>
-                  Changer
-                </Btn>
+                <Btn variant="secondary" onClick={() => { setFile(null); setPreview(null); setRows(null); setError(null); }}>Changer</Btn>
                 {!period.trim() && <span style={{ fontSize: 11, color: "#f87171" }}>Remplis la période d'abord</span>}
               </div>
             )}
-            {error && (
-              <div style={{ marginTop: 12, padding: "10px 14px", background: "rgba(248,113,113,0.10)", border: "1px solid rgba(248,113,113,0.25)", borderRadius: 7, fontSize: 12, color: "#f87171" }}>
-                {error}
-              </div>
-            )}
+            {error && <div style={{ marginTop: 12, padding: "10px 14px", background: "rgba(248,113,113,0.10)", border: "1px solid rgba(248,113,113,0.25)", borderRadius: 7, fontSize: 12, color: "#f87171" }}>{error}</div>}
           </div>
         </div>
 
@@ -174,9 +214,14 @@ export default function ReportsClient({ games, players }: { games: Game[]; playe
         {rows && (
           <div style={{ background: "var(--bg-raised)", border: "1px solid var(--border)", borderRadius: 10 }}>
             <div style={{ padding: "14px 20px", borderBottom: "1px solid var(--border)", display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-              <span style={{ fontSize: 13, fontWeight: 700, color: "var(--text)" }}>{rows.length} joueurs détectés</span>
-              <span style={{ fontSize: 12, color: "var(--green)" }}>{matchedCount} matchés ✓</span>
+              <span style={{ fontSize: 13, fontWeight: 700, color: "var(--text)" }}>{rows.length} joueurs</span>
+              <span style={{ fontSize: 12, color: "var(--green)" }}>{matchedCount} matchés</span>
               {unmatchedCount > 0 && <span style={{ fontSize: 12, color: "#fb923c" }}>{unmatchedCount} à identifier</span>}
+              {myTotalCost > 0 && (
+                <span style={{ fontSize: 12, fontWeight: 700, color: "#f87171", marginLeft: 4 }}>
+                  Mon coût total : −{myTotalCost.toFixed(2)} USDT
+                </span>
+              )}
               <div style={{ marginLeft: "auto", display: "flex", gap: 8, alignItems: "center" }}>
                 {saved && <span style={{ fontSize: 12, color: "var(--green)", display: "flex", alignItems: "center", gap: 4 }}><CheckCircle size={13} /> Sauvegardé</span>}
                 <Btn variant="primary" onClick={save} disabled={saving || unmatchedCount > 0}>
@@ -187,32 +232,68 @@ export default function ReportsClient({ games, players }: { games: Game[]; playe
             <table style={{ width: "100%", borderCollapse: "collapse" }}>
               <thead>
                 <tr style={{ borderBottom: "1px solid var(--border)" }}>
-                  {["ID App", "Rakeback", "Joueur CRM"].map(h => (
+                  {["ID App", "Rakeback", "Action %", "Mon coût", "Joueur CRM"].map(h => (
                     <th key={h} style={{ padding: "9px 16px", textAlign: "left", fontSize: 11, fontWeight: 600, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.07em" }}>{h}</th>
                   ))}
                 </tr>
               </thead>
               <tbody>
-                {rows.map((row, idx) => (
-                  <tr key={idx} style={{ borderBottom: "1px solid var(--border)" }}>
-                    <td style={{ padding: "10px 16px", fontSize: 12, fontFamily: "monospace", color: "var(--text-muted)" }}>{row.external_id}</td>
-                    <td style={{ padding: "10px 16px", fontSize: 13, fontWeight: 700, color: "var(--green)" }}>+{row.amount.toFixed(2)} {row.currency}</td>
-                    <td style={{ padding: "10px 16px" }}>
-                      {row.player_id ? (
-                        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                          <Badge label={row.player_name!} color="green" />
-                          <button onClick={() => setRowPlayer(idx, null)} style={{ fontSize: 11, color: "var(--text-dim)", background: "none", border: "none", cursor: "pointer" }}>✕</button>
-                        </div>
-                      ) : (
-                        <select onChange={e => setRowPlayer(idx, Number(e.target.value))} defaultValue=""
-                          style={{ fontSize: 12, padding: "5px 10px", borderRadius: 6, background: "rgba(251,146,60,0.10)", border: "1px solid rgba(251,146,60,0.3)", color: "#fb923c", cursor: "pointer" }}>
-                          <option value="" disabled>— Identifier le joueur —</option>
-                          {players.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
-                        </select>
-                      )}
-                    </td>
-                  </tr>
-                ))}
+                {rows.map((row, idx) => {
+                  const myCost = row.player_id && row.action_pct !== null ? row.amount * row.action_pct / 100 : null;
+                  const isCreating = creatingFor === idx;
+                  return (
+                    <tr key={idx} style={{ borderBottom: "1px solid var(--border)" }}>
+                      <td style={{ padding: "10px 16px", fontSize: 12, fontFamily: "monospace", color: "var(--text-muted)" }}>{row.external_id}</td>
+                      <td style={{ padding: "10px 16px", fontSize: 13, fontWeight: 700, color: "var(--green)" }}>+{row.amount.toFixed(2)} {row.currency}</td>
+                      <td style={{ padding: "10px 16px" }}>
+                        {row.player_id ? (
+                          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                            <input type="number" min="0" max="100" step="1"
+                              value={row.action_pct ?? ""}
+                              onChange={e => setRowPct(idx, e.target.value)}
+                              placeholder="—"
+                              style={{ width: 52, padding: "4px 6px", borderRadius: 5, fontSize: 12, background: "var(--bg-elevated)", border: "1px solid var(--border)", color: "var(--gold)", textAlign: "center", outline: "none" }} />
+                            <span style={{ fontSize: 11, color: "var(--text-dim)" }}>%</span>
+                          </div>
+                        ) : <span style={{ color: "var(--text-dim)", fontSize: 12 }}>—</span>}
+                      </td>
+                      <td style={{ padding: "10px 16px", fontSize: 13, fontWeight: 700, color: myCost !== null ? "#f87171" : "var(--text-dim)" }}>
+                        {myCost !== null ? `−${myCost.toFixed(2)}` : "—"}
+                      </td>
+                      <td style={{ padding: "10px 16px", minWidth: 200 }}>
+                        {row.player_id && !isCreating ? (
+                          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                            <Badge label={row.player_name!} color="green" />
+                            <button onClick={() => setRowPlayer(idx, null)} style={{ fontSize: 11, color: "var(--text-dim)", background: "none", border: "none", cursor: "pointer" }}>✕</button>
+                          </div>
+                        ) : isCreating ? (
+                          <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                            <input autoFocus value={newPlayerName} onChange={e => setNewPlayerName(e.target.value)}
+                              onKeyDown={e => e.key === "Enter" && createPlayer(idx)}
+                              placeholder="Nom du joueur"
+                              style={{ flex: 1, padding: "5px 8px", borderRadius: 6, fontSize: 12, background: "var(--bg-elevated)", border: "1px solid var(--green)", color: "var(--text)", outline: "none" }} />
+                            <button onClick={() => createPlayer(idx)} disabled={creatingBusy}
+                              style={{ padding: "5px 10px", borderRadius: 6, fontSize: 12, fontWeight: 600, background: "rgba(34,197,94,0.12)", border: "1px solid rgba(34,197,94,0.3)", color: "var(--green)", cursor: "pointer" }}>
+                              {creatingBusy ? "…" : "Créer"}
+                            </button>
+                            <button onClick={() => { setCreatingFor(null); setNewPlayerName(""); }}
+                              style={{ fontSize: 12, color: "var(--text-dim)", background: "none", border: "none", cursor: "pointer" }}>✕</button>
+                          </div>
+                        ) : (
+                          <select onChange={e => {
+                            if (e.target.value === "__new__") { setCreatingFor(idx); setNewPlayerName(""); }
+                            else setRowPlayer(idx, Number(e.target.value));
+                          }} defaultValue=""
+                            style={{ fontSize: 12, padding: "5px 10px", borderRadius: 6, background: "rgba(251,146,60,0.10)", border: "1px solid rgba(251,146,60,0.3)", color: "#fb923c", cursor: "pointer", width: "100%" }}>
+                            <option value="" disabled>— Identifier le joueur —</option>
+                            <option value="__new__">+ Créer un nouveau joueur</option>
+                            {players.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+                          </select>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
             {unmatchedCount > 0 && (
