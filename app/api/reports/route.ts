@@ -1,36 +1,18 @@
-import { NextRequest, NextResponse } from "next/server";
-import { getReports, insertReport, insertEntry, getApps } from "@/lib/queries";
+import { NextResponse } from "next/server";
+import { getDb } from "@/lib/db";
 
 export async function GET() {
-  return NextResponse.json(getReports());
-}
-
-export async function POST(req: NextRequest) {
-  const body = await req.json();
-  const { app_id, period_label, period_start, period_end, raw_content, entries } = body;
-
-  if (!app_id || !period_label || !period_start || !period_end) {
-    return NextResponse.json({ error: "app_id, period_label, period_start, period_end required" }, { status: 400 });
-  }
-
-  const reportId = insertReport({ app_id: Number(app_id), period_label, period_start, period_end, raw_content });
-
-  if (entries && Array.isArray(entries)) {
-    for (const e of entries) {
-      insertEntry({
-        report_id: Number(reportId),
-        player_id: e.player_id || null,
-        app_id: Number(app_id),
-        period_label,
-        period_start,
-        period_end,
-        gross_amount: Number(e.gross_amount),
-        player_cut: Number(e.player_cut ?? 0),
-        my_net: Number(e.my_net),
-        notes: e.notes || null,
-      });
-    }
-  }
-
-  return NextResponse.json({ id: reportId }, { status: 201 });
+  const db = getDb();
+  const reports = db.prepare(`
+    SELECT rr.id, rr.period_label, rr.created_at, g.name AS game_name,
+      COUNT(re.id) AS entry_count,
+      COALESCE(SUM(re.amount), 0) AS total_amount,
+      SUM(CASE WHEN re.player_id IS NULL THEN 1 ELSE 0 END) AS unmatched_count
+    FROM rakeback_reports rr
+    JOIN games g ON g.id = rr.game_id
+    LEFT JOIN rakeback_entries re ON re.report_id = rr.id
+    GROUP BY rr.id
+    ORDER BY rr.created_at DESC
+  `).all();
+  return NextResponse.json(reports);
 }

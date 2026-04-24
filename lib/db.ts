@@ -218,6 +218,35 @@ function initSchema(db: Database.Database) {
     );
   `);
 
+  // Rakeback reports system
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS rakeback_reports (
+      id           INTEGER PRIMARY KEY AUTOINCREMENT,
+      game_id      INTEGER NOT NULL REFERENCES games(id) ON DELETE CASCADE,
+      period_label TEXT NOT NULL,
+      raw_extraction TEXT,
+      created_at   TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS rakeback_entries (
+      id         INTEGER PRIMARY KEY AUTOINCREMENT,
+      report_id  INTEGER NOT NULL REFERENCES rakeback_reports(id) ON DELETE CASCADE,
+      player_id  INTEGER REFERENCES players(id) ON DELETE SET NULL,
+      external_id TEXT NOT NULL,
+      amount     REAL NOT NULL,
+      currency   TEXT NOT NULL DEFAULT 'USDT',
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS player_game_ids (
+      id          INTEGER PRIMARY KEY AUTOINCREMENT,
+      player_id   INTEGER NOT NULL REFERENCES players(id) ON DELETE CASCADE,
+      game_id     INTEGER NOT NULL REFERENCES games(id) ON DELETE CASCADE,
+      external_id TEXT NOT NULL,
+      UNIQUE(game_id, external_id)
+    );
+  `);
+
   // Telegram onboarding sessions (guided multi-step flow)
   db.exec(`
     CREATE TABLE IF NOT EXISTS telegram_sessions (

@@ -1,20 +1,21 @@
 export const dynamic = "force-dynamic";
-import { getReports, getApps, getPlayers } from "@/lib/queries";
-import PageHeader from "@/components/PageHeader";
+import { getDb } from "@/lib/db";
 import ReportsClient from "./ReportsClient";
 
 export default function ReportsPage() {
-  const reports = getReports();
-  const apps = getApps();
-  const players = getPlayers();
+  const db = getDb();
+  const games = db.prepare(`SELECT id, name FROM games ORDER BY name`).all() as { id: number; name: string }[];
+  const players = db.prepare(`SELECT id, name FROM players WHERE status = 'active' ORDER BY name`).all() as { id: number; name: string }[];
+
   return (
-    <div>
-      <PageHeader title="Report Importer" subtitle="Upload or paste reports from apps, create accounting entries" />
-      <ReportsClient
-        initialReports={reports as Parameters<typeof ReportsClient>[0]["initialReports"]}
-        apps={apps as Parameters<typeof ReportsClient>[0]["apps"]}
-        players={players as Parameters<typeof ReportsClient>[0]["players"]}
-      />
+    <div style={{ padding: "32px 32px 32px 252px" }}>
+      <div style={{ marginBottom: 28 }}>
+        <h1 style={{ fontSize: 22, fontWeight: 700, color: "var(--text)", margin: 0 }}>Rakeback Reports</h1>
+        <p style={{ fontSize: 13, color: "var(--text-muted)", marginTop: 4 }}>
+          Uploade un screenshot — Claude extrait les joueurs et montants automatiquement
+        </p>
+      </div>
+      <ReportsClient games={games} players={players} />
     </div>
   );
 }

@@ -1,215 +1,277 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useRef, useCallback, useEffect } from "react";
+import { Upload, FileImage, CheckCircle, Trash2, ChevronDown, ChevronUp, Loader } from "lucide-react";
 import Btn from "@/components/Btn";
 import Badge from "@/components/Badge";
-import Modal from "@/components/Modal";
-import { Plus, FileText, ChevronDown, ChevronUp } from "lucide-react";
 
+interface Game { id: number; name: string; }
+interface Player { id: number; name: string; }
+interface ExtractedRow {
+  external_id: string; amount: number; currency: string;
+  player_id: number | null; player_name: string | null;
+}
 interface Report {
-  id: number;
-  app_id: number;
-  app_name: string;
-  period_label: string;
-  period_start: string;
-  period_end: string;
-  entry_count: number;
-  total_net: number;
-  imported_at: string;
+  id: number; game_name: string; period_label: string; created_at: string;
+  entry_count: number; total_amount: number; unmatched_count: number;
 }
 
-interface App { id: number; name: string; deal_type: string; deal_value: number; currency: string }
-interface Player { id: number; name: string }
-
-interface Entry {
-  player_id: string;
-  gross_amount: string;
-  player_cut: string;
-  my_net: string;
-  notes: string;
-}
-
-const BLANK_REPORT = {
-  app_id: "",
-  period_label: "",
-  period_start: "",
-  period_end: "",
-  raw_content: "",
+const GAME_COLOR: Record<string, string> = {
+  TELE: "#a78bfa", Wepoker: "#38bdf8", Xpoker: "#fb923c", ClubGG: "#4ade80",
 };
 
-const BLANK_ENTRY: Entry = { player_id: "", gross_amount: "", player_cut: "", my_net: "", notes: "" };
-
-function fmt(n: number) { return `€${n >= 0 ? "" : "-"}${Math.abs(n).toFixed(2)}`; }
-
-export default function ReportsClient({
-  initialReports, apps, players,
-}: {
-  initialReports: Report[];
-  apps: App[];
-  players: Player[];
-}) {
-  const [reports, setReports] = useState(initialReports);
-  const [modal, setModal] = useState(false);
-  const [form, setForm] = useState(BLANK_REPORT);
-  const [entries, setEntries] = useState<Entry[]>([{ ...BLANK_ENTRY }]);
-  const [busy, setBusy] = useState(false);
+export default function ReportsClient({ games, players }: { games: Game[]; players: Player[] }) {
+  const [gameId, setGameId] = useState(games[0]?.id ?? 0);
+  const [period, setPeriod] = useState("");
+  const [file, setFile] = useState<File | null>(null);
+  const [preview, setPreview] = useState<string | null>(null);
+  const [dragging, setDragging] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [rows, setRows] = useState<ExtractedRow[] | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [reports, setReports] = useState<Report[]>([]);
   const [expanded, setExpanded] = useState<number | null>(null);
+  const [expandedEntries, setExpandedEntries] = useState<any[]>([]);
+  const fileRef = useRef<HTMLInputElement>(null);
 
-  function addEntry() { setEntries(e => [...e, { ...BLANK_ENTRY }]); }
-  function removeEntry(i: number) { setEntries(e => e.filter((_, j) => j !== i)); }
-  function updateEntry(i: number, field: keyof Entry, value: string) {
-    setEntries(e => e.map((row, j) => j === i ? { ...row, [field]: value } : row));
+  useEffect(() => { loadReports(); }, []);
+
+  async function loadReports() {
+    const res = await fetch("/api/reports").then(r => r.json());
+    setReports(res);
   }
 
-  function autoNet(i: number, field: "gross_amount" | "player_cut", value: string) {
-    updateEntry(i, field, value);
-    const entry = entries[i];
-    const gross = field === "gross_amount" ? Number(value) : Number(entry.gross_amount);
-    const cut = field === "player_cut" ? Number(value) : Number(entry.player_cut);
-    if (!isNaN(gross) && !isNaN(cut)) {
-      updateEntry(i, "my_net", String((gross - cut).toFixed(2)));
-    }
+  function onFile(f: File) {
+    setFile(f); setRows(null); setSaved(false); setError(null);
+    setPreview(URL.createObjectURL(f));
   }
 
-  async function submit() {
-    setBusy(true);
-    const payload = {
-      ...form,
-      app_id: Number(form.app_id),
-      entries: entries.filter(e => e.gross_amount).map(e => ({
-        player_id: e.player_id ? Number(e.player_id) : null,
-        gross_amount: Number(e.gross_amount),
-        player_cut: Number(e.player_cut || 0),
-        my_net: Number(e.my_net),
-        notes: e.notes || null,
-      })),
-    };
-    const res = await fetch("/api/reports", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
-    if (res.ok) { window.location.reload(); }
-    setBusy(false);
+  const onDrop = useCallback((e: React.DragEvent) => {
+    e.preventDefault(); setDragging(false);
+    const f = e.dataTransfer.files[0];
+    if (f && f.type.startsWith("image/")) onFile(f);
+  }, []);
+
+  async function extract() {
+    if (!file || !gameId) return;
+    setLoading(true); setError(null); setRows(null);
+    const fd = new FormData();
+    fd.append("file", file);
+    fd.append("game_id", String(gameId));
+    const res = await fetch("/api/reports/upload", { method: "POST", body: fd });
+    const data = await res.json();
+    setLoading(false);
+    if (!res.ok) { setError(data.error); return; }
+    setRows(data.rows);
   }
 
-  const selectedApp = apps.find(a => a.id === Number(form.app_id));
+  function setRowPlayer(idx: number, player_id: number | null) {
+    setRows(r => r!.map((row, i) => i !== idx ? row : {
+      ...row, player_id, player_name: players.find(p => p.id === player_id)?.name ?? null,
+    }));
+  }
+
+  async function save() {
+    if (!rows || !period.trim()) return;
+    setSaving(true);
+    const res = await fetch("/api/reports/save", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ game_id: gameId, period_label: period.trim(), rows }),
+    });
+    setSaving(false);
+    if (res.ok) { setSaved(true); setFile(null); setPreview(null); setRows(null); setPeriod(""); loadReports(); }
+  }
+
+  async function deleteReport(id: number) {
+    if (!confirm("Supprimer ce rapport ?")) return;
+    await fetch(`/api/reports/${id}`, { method: "DELETE" });
+    setReports(r => r.filter(x => x.id !== id));
+    if (expanded === id) setExpanded(null);
+  }
+
+  async function toggleExpand(id: number) {
+    if (expanded === id) { setExpanded(null); return; }
+    setExpanded(id);
+    setExpandedEntries(await fetch(`/api/reports/${id}`).then(r => r.json()));
+  }
+
+  async function matchEntry(reportId: number, entryId: number, playerId: number) {
+    await fetch(`/api/reports/${reportId}`, {
+      method: "PATCH", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ entry_id: entryId, player_id: playerId }),
+    });
+    setExpandedEntries(await fetch(`/api/reports/${reportId}`).then(r => r.json()));
+    loadReports();
+  }
+
+  const matchedCount = rows?.filter(r => r.player_id).length ?? 0;
+  const unmatchedCount = rows ? rows.length - matchedCount : 0;
 
   return (
-    <>
-      <div style={{ marginBottom: 20 }}>
-        <Btn variant="primary" onClick={() => { setForm(BLANK_REPORT); setEntries([{ ...BLANK_ENTRY }]); setModal(true); }}>
-          <Plus size={15} /> Import Report
-        </Btn>
-      </div>
+    <div style={{ display: "grid", gridTemplateColumns: "1fr 360px", gap: 24, alignItems: "start" }}>
 
-      {reports.length === 0 ? (
-        <div style={{ textAlign: "center", color: "var(--text-dim)", padding: 64, background: "var(--bg-raised)", border: "1px solid var(--border)", borderRadius: 10, fontSize: 13 }}>
-          No reports imported yet. Import your first affiliate report.
+      {/* Upload + extraction */}
+      <div>
+        <div style={{ background: "var(--bg-raised)", border: "1px solid var(--border)", borderRadius: 10, marginBottom: 20 }}>
+          <div style={{ padding: "14px 20px", borderBottom: "1px solid var(--border)", display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
+            <select value={gameId} onChange={e => setGameId(Number(e.target.value))}
+              style={{ fontSize: 13, fontWeight: 700, padding: "7px 12px", borderRadius: 7, background: "var(--bg-elevated)", border: "1px solid var(--border)", color: GAME_COLOR[games.find(g => g.id === gameId)?.name ?? ""] ?? "var(--text)", cursor: "pointer" }}>
+              {games.map(g => <option key={g.id} value={g.id}>{g.name}</option>)}
+            </select>
+            <input value={period} onChange={e => setPeriod(e.target.value)}
+              placeholder="Période — ex: Semaine 17, Avr 2026"
+              style={{ flex: 1, fontSize: 12, padding: "7px 12px", borderRadius: 7, background: "var(--bg-elevated)", border: "1px solid var(--border)", color: "var(--text)", outline: "none" }} />
+          </div>
+          <div style={{ padding: 20 }}>
+            <div
+              onDragOver={e => { e.preventDefault(); setDragging(true); }}
+              onDragLeave={() => setDragging(false)}
+              onDrop={onDrop}
+              onClick={() => !preview && fileRef.current?.click()}
+              style={{
+                border: `2px dashed ${dragging ? "var(--green)" : "var(--border)"}`,
+                borderRadius: 10, cursor: preview ? "default" : "pointer",
+                background: dragging ? "rgba(34,197,94,0.05)" : "var(--bg-surface)",
+                overflow: "hidden", transition: "all 0.15s",
+                padding: preview ? 0 : "44px 20px", textAlign: "center",
+              }}>
+              {preview
+                ? <img src={preview} alt="" style={{ width: "100%", display: "block", borderRadius: 8 }} />
+                : <>
+                  <FileImage size={36} color="var(--text-dim)" style={{ marginBottom: 12 }} />
+                  <div style={{ fontSize: 13, fontWeight: 600, color: "var(--text-muted)", marginBottom: 4 }}>Glisse le screenshot ici</div>
+                  <div style={{ fontSize: 12, color: "var(--text-dim)" }}>ou clique pour choisir — JPG, PNG</div>
+                </>
+              }
+            </div>
+            <input ref={fileRef} type="file" accept="image/*" style={{ display: "none" }}
+              onChange={e => { const f = e.target.files?.[0]; if (f) onFile(f); }} />
+
+            {file && (
+              <div style={{ marginTop: 14, display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+                <Btn variant="primary" onClick={extract} disabled={loading || !period.trim()}>
+                  {loading
+                    ? <><Loader size={14} style={{ animation: "spin 1s linear infinite" }} /> Analyse en cours…</>
+                    : <><Upload size={14} /> Extraire avec Claude</>}
+                </Btn>
+                <Btn variant="secondary" onClick={() => { setFile(null); setPreview(null); setRows(null); setError(null); }}>
+                  Changer
+                </Btn>
+                {!period.trim() && <span style={{ fontSize: 11, color: "#f87171" }}>Remplis la période d'abord</span>}
+              </div>
+            )}
+            {error && (
+              <div style={{ marginTop: 12, padding: "10px 14px", background: "rgba(248,113,113,0.10)", border: "1px solid rgba(248,113,113,0.25)", borderRadius: 7, fontSize: 12, color: "#f87171" }}>
+                {error}
+              </div>
+            )}
+          </div>
         </div>
-      ) : (
-        <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-          {reports.map(r => (
-            <div key={r.id} style={{ background: "var(--bg-raised)", border: "1px solid var(--border)", borderRadius: 10, overflow: "hidden" }}>
-              <div
-                style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "14px 18px", cursor: "pointer" }}
-                onClick={() => setExpanded(expanded === r.id ? null : r.id)}
-              >
-                <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
-                  <FileText size={16} style={{ color: "var(--text-muted)" }} />
-                  <div>
-                    <div style={{ fontWeight: 600, fontSize: 14 }}>{r.app_name} — {r.period_label}</div>
-                    <div style={{ fontSize: 11, color: "var(--text-muted)", marginTop: 2 }}>
-                      {r.period_start} → {r.period_end} · Imported {r.imported_at.slice(0, 10)}
-                    </div>
-                  </div>
-                </div>
-                <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
-                  <div style={{ textAlign: "right" }}>
-                    <div style={{ color: r.total_net >= 0 ? "var(--green)" : "#f87171", fontWeight: 700 }}>{fmt(r.total_net)}</div>
-                    <div style={{ fontSize: 11, color: "var(--text-dim)" }}>{r.entry_count} entries</div>
-                  </div>
-                  {expanded === r.id ? <ChevronUp size={16} style={{ color: "var(--text-dim)" }} /> : <ChevronDown size={16} style={{ color: "var(--text-dim)" }} />}
-                </div>
+
+        {/* Extracted rows */}
+        {rows && (
+          <div style={{ background: "var(--bg-raised)", border: "1px solid var(--border)", borderRadius: 10 }}>
+            <div style={{ padding: "14px 20px", borderBottom: "1px solid var(--border)", display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+              <span style={{ fontSize: 13, fontWeight: 700, color: "var(--text)" }}>{rows.length} joueurs détectés</span>
+              <span style={{ fontSize: 12, color: "var(--green)" }}>{matchedCount} matchés ✓</span>
+              {unmatchedCount > 0 && <span style={{ fontSize: 12, color: "#fb923c" }}>{unmatchedCount} à identifier</span>}
+              <div style={{ marginLeft: "auto", display: "flex", gap: 8, alignItems: "center" }}>
+                {saved && <span style={{ fontSize: 12, color: "var(--green)", display: "flex", alignItems: "center", gap: 4 }}><CheckCircle size={13} /> Sauvegardé</span>}
+                <Btn variant="primary" onClick={save} disabled={saving || unmatchedCount > 0}>
+                  {saving ? "Sauvegarde…" : "Valider & sauvegarder"}
+                </Btn>
               </div>
             </div>
-          ))}
-        </div>
-      )}
-
-      <Modal open={modal} onClose={() => setModal(false)} title="Import Report" width={680}>
-        <Field label="App *">
-          <select value={form.app_id} onChange={e => setForm(f => ({ ...f, app_id: e.target.value }))}>
-            <option value="">Select app…</option>
-            {apps.map(a => <option key={a.id} value={a.id}>{a.name}</option>)}
-          </select>
-        </Field>
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12, marginBottom: 16 }}>
-          <Field label="Period Label *">
-            <input value={form.period_label} onChange={e => setForm(f => ({ ...f, period_label: e.target.value }))} placeholder="e.g. May 2025 W1" />
-          </Field>
-          <Field label="Period Start *">
-            <input type="date" value={form.period_start} onChange={e => setForm(f => ({ ...f, period_start: e.target.value }))} />
-          </Field>
-          <Field label="Period End *">
-            <input type="date" value={form.period_end} onChange={e => setForm(f => ({ ...f, period_end: e.target.value }))} />
-          </Field>
-        </div>
-
-        <Field label="Raw Report Content (optional)">
-          <textarea value={form.raw_content} onChange={e => setForm(f => ({ ...f, raw_content: e.target.value }))} rows={4} placeholder="Paste raw CSV or text from the app report…" style={{ resize: "vertical", fontFamily: "monospace", fontSize: 12 }} />
-        </Field>
-
-        {/* Accounting entries */}
-        <div style={{ borderTop: "1px solid var(--border)", paddingTop: 16, marginTop: 4 }}>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
-            <span style={{ fontSize: 12, fontWeight: 700, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.08em" }}>
-              Accounting Entries
-            </span>
-            <Btn size="sm" variant="secondary" onClick={addEntry}><Plus size={12} /> Row</Btn>
+            <table style={{ width: "100%", borderCollapse: "collapse" }}>
+              <thead>
+                <tr style={{ borderBottom: "1px solid var(--border)" }}>
+                  {["ID App", "Rakeback", "Joueur CRM"].map(h => (
+                    <th key={h} style={{ padding: "9px 16px", textAlign: "left", fontSize: 11, fontWeight: 600, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.07em" }}>{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((row, idx) => (
+                  <tr key={idx} style={{ borderBottom: "1px solid var(--border)" }}>
+                    <td style={{ padding: "10px 16px", fontSize: 12, fontFamily: "monospace", color: "var(--text-muted)" }}>{row.external_id}</td>
+                    <td style={{ padding: "10px 16px", fontSize: 13, fontWeight: 700, color: "var(--green)" }}>+{row.amount.toFixed(2)} {row.currency}</td>
+                    <td style={{ padding: "10px 16px" }}>
+                      {row.player_id ? (
+                        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                          <Badge label={row.player_name!} color="green" />
+                          <button onClick={() => setRowPlayer(idx, null)} style={{ fontSize: 11, color: "var(--text-dim)", background: "none", border: "none", cursor: "pointer" }}>✕</button>
+                        </div>
+                      ) : (
+                        <select onChange={e => setRowPlayer(idx, Number(e.target.value))} defaultValue=""
+                          style={{ fontSize: 12, padding: "5px 10px", borderRadius: 6, background: "rgba(251,146,60,0.10)", border: "1px solid rgba(251,146,60,0.3)", color: "#fb923c", cursor: "pointer" }}>
+                          <option value="" disabled>— Identifier le joueur —</option>
+                          {players.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+                        </select>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            {unmatchedCount > 0 && (
+              <div style={{ padding: "10px 16px", fontSize: 11, color: "#fb923c", borderTop: "1px solid var(--border)" }}>
+                ⚠️ Identifie tous les joueurs avant de valider — leur ID sera mémorisé pour les prochains rapports
+              </div>
+            )}
           </div>
+        )}
+      </div>
 
-          {entries.map((entry, i) => (
-            <div key={i} style={{ display: "grid", gridTemplateColumns: "2fr 1fr 1fr 1fr auto", gap: 8, marginBottom: 8, alignItems: "center" }}>
-              <select value={entry.player_id} onChange={e => updateEntry(i, "player_id", e.target.value)}>
-                <option value="">No player / aggregate</option>
-                {players.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
-              </select>
-              <input type="number" step="0.01" placeholder="Gross" value={entry.gross_amount}
-                onChange={e => autoNet(i, "gross_amount", e.target.value)} />
-              <input type="number" step="0.01" placeholder="Player cut" value={entry.player_cut}
-                onChange={e => autoNet(i, "player_cut", e.target.value)} />
-              <input type="number" step="0.01" placeholder="My net" value={entry.my_net}
-                onChange={e => updateEntry(i, "my_net", e.target.value)}
-                style={{ color: "var(--green)", fontWeight: 600 }} />
-              <Btn size="sm" variant="danger" onClick={() => removeEntry(i)} disabled={entries.length === 1}>×</Btn>
-            </div>
-          ))}
-
-          {selectedApp && (
-            <div style={{ fontSize: 11, color: "var(--text-muted)", marginTop: 8 }}>
-              Deal: {selectedApp.deal_type} {selectedApp.deal_type !== "flat" ? `${selectedApp.deal_value}%` : `${selectedApp.currency} ${selectedApp.deal_value}`}
-              {" — "}My net = gross − player cut
-            </div>
-          )}
+      {/* History */}
+      <div style={{ background: "var(--bg-raised)", border: "1px solid var(--border)", borderRadius: 10, position: "sticky", top: 24 }}>
+        <div style={{ padding: "14px 20px", borderBottom: "1px solid var(--border)" }}>
+          <span style={{ fontSize: 13, fontWeight: 700, color: "var(--text)" }}>Historique</span>
         </div>
+        {reports.length === 0
+          ? <div style={{ padding: 28, textAlign: "center", fontSize: 12, color: "var(--text-dim)" }}>Aucun rapport encore</div>
+          : reports.map(r => {
+            const gc = GAME_COLOR[r.game_name] ?? "var(--text-muted)";
+            const isOpen = expanded === r.id;
+            return (
+              <div key={r.id} style={{ borderBottom: "1px solid var(--border)" }}>
+                <div style={{ padding: "12px 16px", display: "flex", alignItems: "center", gap: 8 }}>
+                  <span style={{ fontSize: 10, fontWeight: 700, color: gc, background: gc + "18", padding: "2px 6px", borderRadius: 4, flexShrink: 0 }}>{r.game_name}</span>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontSize: 12, fontWeight: 600, color: "var(--text)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.period_label}</div>
+                    <div style={{ fontSize: 11, color: "var(--text-dim)", marginTop: 1 }}>
+                      {r.entry_count} joueurs · <span style={{ color: "var(--green)" }}>+{r.total_amount.toFixed(2)} USDT</span>
+                      {r.unmatched_count > 0 && <span style={{ color: "#fb923c" }}> · {r.unmatched_count} non matchés</span>}
+                    </div>
+                  </div>
+                  <button onClick={() => toggleExpand(r.id)} style={{ background: "none", border: "none", cursor: "pointer", color: "var(--text-dim)", padding: 4 }}>
+                    {isOpen ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
+                  </button>
+                  <button onClick={() => deleteReport(r.id)} style={{ background: "none", border: "none", cursor: "pointer", color: "#f87171", padding: 4 }}>
+                    <Trash2 size={12} />
+                  </button>
+                </div>
+                {isOpen && expandedEntries.map((e: any) => (
+                  <div key={e.id} style={{ padding: "7px 16px", display: "flex", alignItems: "center", gap: 8, borderTop: "1px solid var(--border)", background: "var(--bg-surface)" }}>
+                    <span style={{ fontSize: 11, fontFamily: "monospace", color: "var(--text-dim)", flex: 1, overflow: "hidden", textOverflow: "ellipsis" }}>{e.external_id}</span>
+                    <span style={{ fontSize: 12, fontWeight: 600, color: "var(--green)", flexShrink: 0 }}>+{e.amount.toFixed(2)}</span>
+                    {e.player_id
+                      ? <span style={{ fontSize: 11, fontWeight: 600, color: "var(--green)", flexShrink: 0 }}>{e.player_name}</span>
+                      : <select onChange={ev => matchEntry(r.id, e.id, Number(ev.target.value))} defaultValue=""
+                          style={{ fontSize: 11, padding: "2px 6px", borderRadius: 5, background: "rgba(251,146,60,0.10)", border: "1px solid rgba(251,146,60,0.3)", color: "#fb923c" }}>
+                          <option value="" disabled>Matcher</option>
+                          {players.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+                        </select>
+                    }
+                  </div>
+                ))}
+              </div>
+            );
+          })}
+      </div>
 
-        <div style={{ display: "flex", gap: 10, justifyContent: "flex-end", marginTop: 16, borderTop: "1px solid var(--border)", paddingTop: 16 }}>
-          <Btn variant="secondary" onClick={() => setModal(false)}>Cancel</Btn>
-          <Btn variant="primary"
-            disabled={!form.app_id || !form.period_label || !form.period_start || !form.period_end || busy}
-            onClick={submit}>
-            {busy ? "Importing…" : "Import Report"}
-          </Btn>
-        </div>
-      </Modal>
-    </>
-  );
-}
-
-function Field({ label, children }: { label: string; children: React.ReactNode }) {
-  return (
-    <div style={{ marginBottom: 16 }}>
-      <label style={{ display: "block", fontSize: 11, fontWeight: 600, color: "var(--text-muted)", marginBottom: 6, textTransform: "uppercase", letterSpacing: "0.07em" }}>
-        {label}
-      </label>
-      {children}
+      <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
     </div>
   );
 }
