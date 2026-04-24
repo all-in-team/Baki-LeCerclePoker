@@ -52,7 +52,8 @@
       "Bash(railway domain *)",
       "Bash(railway logs *)",
       "Bash(git rm *)",
-      "Bash(npm run *)"
+      "Bash(npm run *)",
+      "Bash(python3 -c \"import sys,json; players=json.load\\(sys.stdin\\); [print\\(p['name'], p.get\\('telegram_handle'\\)\\) for p in players if 'Test' in p['name']]\")"
     ]
   }
 }
