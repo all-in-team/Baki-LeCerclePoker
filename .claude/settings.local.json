@@ -43,7 +43,14 @@
       "Bash(python3 -m json.tool)",
       "Bash(git init *)",
       "Bash(git add *)",
-      "Bash(git commit *)"
+      "Bash(git commit *)",
+      "Bash(railway init *)",
+      "Bash(railway up *)",
+      "Bash(railway variables *)",
+      "Bash(railway service *)",
+      "Bash(railway status *)",
+      "Bash(railway domain *)",
+      "Bash(railway logs *)"
     ]
   }
 }
