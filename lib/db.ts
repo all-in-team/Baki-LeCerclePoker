@@ -301,4 +301,18 @@ function initSchema(db: Database.Database) {
   // Club tracking on reports
   try { db.exec(`ALTER TABLE rakeback_reports ADD COLUMN club_id TEXT`); } catch {}
   try { db.exec(`ALTER TABLE rakeback_reports ADD COLUMN club_name TEXT`); } catch {}
+
+  // Clubs table — identifies a game by club ID, stores its deal rates
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS clubs (
+      id               INTEGER PRIMARY KEY AUTOINCREMENT,
+      game_id          INTEGER NOT NULL REFERENCES games(id) ON DELETE CASCADE,
+      external_club_id TEXT NOT NULL,
+      club_name        TEXT,
+      rb_pct           REAL,
+      ins_pct          REAL,
+      created_at       TEXT NOT NULL DEFAULT (datetime('now')),
+      UNIQUE(game_id, external_club_id)
+    );
+  `);
 }

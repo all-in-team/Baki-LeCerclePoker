@@ -92,9 +92,10 @@ export default function ReportsClient({ games, players: initialPlayers }: { game
   const [period, setPeriod] = useState("");
   const [clubId, setClubId] = useState("");
   const [clubName, setClubName] = useState("");
-  // Report-level rakeback rates (same for all players in this game/club)
+  // Club deal rates — looked up by club ID, prompted if unknown
   const [rbPct, setRbPct] = useState("");
   const [insPct, setInsPct] = useState("");
+  const [clubKnown, setClubKnown] = useState<boolean | null>(null); // null=not looked up yet
   const [file, setFile] = useState<File | null>(null);
   const [preview, setPreview] = useState<string | null>(null);
   const [dragging, setDragging] = useState(false);
@@ -114,6 +115,19 @@ export default function ReportsClient({ games, players: initialPlayers }: { game
   const fileRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => { loadReports(); }, []);
+
+  async function lookupClub(cId: string) {
+    if (!cId.trim()) { setClubKnown(null); setRbPct(""); setInsPct(""); return; }
+    const club = await fetch(`/api/clubs?game_id=${gameId}&club_id=${encodeURIComponent(cId.trim())}`).then(r => r.json());
+    if (club) {
+      setClubName(club.club_name ?? clubName);
+      setRbPct(club.rb_pct !== null ? String(club.rb_pct) : "");
+      setInsPct(club.ins_pct !== null ? String(club.ins_pct) : "");
+      setClubKnown(true);
+    } else {
+      setClubKnown(false);
+    }
+  }
 
   async function loadReports() {
     const res = await fetch("/api/reports").then(r => r.json());
@@ -205,13 +219,13 @@ export default function ReportsClient({ games, players: initialPlayers }: { game
         period_label: period.trim(),
         club_id: clubId.trim() || null,
         club_name: clubName.trim() || null,
-        rakeback_pct: parseFloat(rbPct) || null,
-        insurance_pct: parseFloat(insPct) || null,
+        rb_pct: parseFloat(rbPct) || null,
+        ins_pct: parseFloat(insPct) || null,
         rows,
       }),
     });
     setSaving(false);
-    if (res.ok) { setSaved(true); setFile(null); setPreview(null); setRows(null); setPeriod(""); setClubId(""); setClubName(""); setRbPct(""); setInsPct(""); loadReports(); }
+    if (res.ok) { setSaved(true); setFile(null); setPreview(null); setRows(null); setPeriod(""); setClubId(""); setClubName(""); setRbPct(""); setInsPct(""); setClubKnown(null); loadReports(); }
   }
 
   async function deleteReport(id: number) {
@@ -262,25 +276,40 @@ export default function ReportsClient({ games, players: initialPlayers }: { game
               style={{ fontSize: 13, fontWeight: 700, padding: "7px 12px", borderRadius: 7, background: "var(--bg-elevated)", border: "1px solid var(--border)", color: GAME_COLOR[games.find(g => g.id === gameId)?.name ?? ""] ?? "var(--text)", cursor: "pointer" }}>
               {games.map(g => <option key={g.id} value={g.id}>{g.name}</option>)}
             </select>
-            <input value={clubId} onChange={e => setClubId(e.target.value)} placeholder="Club ID"
-              style={{ width: 90, fontSize: 12, padding: "7px 10px", borderRadius: 7, background: "var(--bg-elevated)", border: "1px solid var(--border)", color: "var(--text)", outline: "none", fontFamily: "monospace" }} />
+            <input value={clubId}
+              onChange={e => { setClubId(e.target.value); setClubKnown(null); setRbPct(""); setInsPct(""); }}
+              onBlur={e => lookupClub(e.target.value)}
+              placeholder="Club ID"
+              style={{ width: 90, fontSize: 12, padding: "7px 10px", borderRadius: 7, background: "var(--bg-elevated)", border: `1px solid ${clubKnown === true ? "var(--green)" : clubKnown === false ? "#eab308" : "var(--border)"}`, color: "var(--text)", outline: "none", fontFamily: "monospace" }} />
             <input value={clubName} onChange={e => setClubName(e.target.value)} placeholder="Club Name"
               style={{ width: 130, fontSize: 12, padding: "7px 10px", borderRadius: 7, background: "var(--bg-elevated)", border: "1px solid var(--border)", color: "var(--text)", outline: "none" }} />
             <input value={period} onChange={e => setPeriod(e.target.value)} placeholder="Période — ex: Avr 2026"
               style={{ flex: 1, minWidth: 140, fontSize: 12, padding: "7px 12px", borderRadius: 7, background: "var(--bg-elevated)", border: "1px solid var(--border)", color: "var(--text)", outline: "none" }} />
           </div>
-          {/* Report-level rakeback rates */}
-          <div style={{ padding: "10px 20px", borderBottom: "1px solid var(--border)", display: "flex", gap: 20, alignItems: "center", background: "rgba(56,189,248,0.03)" }}>
-            <span style={{ fontSize: 11, fontWeight: 600, color: "var(--text-dim)" }}>Taux de la game</span>
-            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-              <span style={{ fontSize: 11, color: "#38bdf8" }}>% RB Rake</span>
-              <SmallPct value={rbPct} onChange={setRbPct} color="#38bdf8" />
+          {/* Club deal rates — shown once club ID is entered */}
+          {clubId.trim() && (
+            <div style={{ padding: "10px 20px", borderBottom: "1px solid var(--border)", display: "flex", gap: 16, alignItems: "center", flexWrap: "wrap", background: clubKnown === false ? "rgba(234,179,8,0.05)" : "rgba(56,189,248,0.03)" }}>
+              {clubKnown === false && (
+                <span style={{ fontSize: 11, fontWeight: 700, color: "#eab308" }}>
+                  Nouveau club — quel est le deal ?
+                </span>
+              )}
+              {clubKnown === true && (
+                <span style={{ fontSize: 11, color: "var(--green)", fontWeight: 600 }}>✓ Club connu</span>
+              )}
+              {clubKnown === null && (
+                <span style={{ fontSize: 11, color: "var(--text-dim)" }}>Recherche…</span>
+              )}
+              <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                <span style={{ fontSize: 11, color: "#38bdf8" }}>% RB Rake</span>
+                <SmallPct value={rbPct} onChange={setRbPct} color="#38bdf8" />
+              </div>
+              <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                <span style={{ fontSize: 11, color: "#a78bfa" }}>% RB Insurance</span>
+                <SmallPct value={insPct} onChange={setInsPct} color="#a78bfa" />
+              </div>
             </div>
-            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-              <span style={{ fontSize: 11, color: "#a78bfa" }}>% RB Insurance</span>
-              <SmallPct value={insPct} onChange={setInsPct} color="#a78bfa" />
-            </div>
-          </div>
+          )}
 
           <div style={{ padding: 20 }}>
             <div
