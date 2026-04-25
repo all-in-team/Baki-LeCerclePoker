@@ -96,6 +96,8 @@ export default function CRMClient({ players: initialPlayers, recentNotes }: {
   const [gameIds, setGameIds] = useState<GameId[]>([]);
   const [expandedGame, setExpandedGame] = useState<number | null>(null);
   const [newIdDraft, setNewIdDraft] = useState("");
+  const [editingDeal, setEditingDeal] = useState<number | null>(null); // deal row id
+  const [dealDraft, setDealDraft] = useState({ action_pct: "", rakeback_pct: "" });
   const [showAddGame, setShowAddGame] = useState(false);
   const [selectedGame, setSelectedGame] = useState("");
   const [dealForm, setDealForm] = useState(DEAL_BLANK);
@@ -226,6 +228,24 @@ export default function CRMClient({ players: initialPlayers, recentNotes }: {
     const gameName = allGames.find(g => g.id === gameId)?.name ?? "";
     setGameIds(ids => [...ids, { id: data.id, game_id: gameId, game_name: gameName, external_id: val }]);
     setNewIdDraft("");
+  }
+
+  async function saveDeal(dealId: number) {
+    const res = await fetch(`/api/games/deals/${dealId}`, {
+      method: "PATCH", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        action_pct: dealDraft.action_pct !== "" ? Number(dealDraft.action_pct) : null,
+        rakeback_pct: dealDraft.rakeback_pct !== "" ? Number(dealDraft.rakeback_pct) : null,
+      }),
+    });
+    if (res.ok) {
+      setDeals(ds => ds.map(d => d.id !== dealId ? d : {
+        ...d,
+        action_pct: dealDraft.action_pct !== "" ? Number(dealDraft.action_pct) : d.action_pct,
+        rakeback_pct: dealDraft.rakeback_pct !== "" ? Number(dealDraft.rakeback_pct) : d.rakeback_pct,
+      }));
+      setEditingDeal(null);
+    }
   }
 
   async function removeGameId(rowId: number) {
@@ -436,22 +456,53 @@ export default function CRMClient({ players: initialPlayers, recentNotes }: {
               return (
                 <div key={d.id} style={{ borderBottom: "1px solid var(--border)" }}>
                   <div
-                    onClick={() => { setExpandedGame(isOpen ? null : d.game_id); setNewIdDraft(""); }}
-                    style={{ padding: "11px 16px", display: "flex", alignItems: "center", gap: 10, cursor: "pointer", userSelect: "none", background: isOpen ? `${gc}09` : "transparent", transition: "background 0.1s" }}
-                    onMouseEnter={e => { if (!isOpen) e.currentTarget.style.background = `${gc}09`; }}
+                    onClick={() => { if (editingDeal === d.id) return; setExpandedGame(isOpen ? null : d.game_id); setNewIdDraft(""); setEditingDeal(null); }}
+                    style={{ padding: "11px 16px", display: "flex", alignItems: "center", gap: 10, cursor: editingDeal === d.id ? "default" : "pointer", userSelect: "none", background: isOpen ? `${gc}09` : "transparent", transition: "background 0.1s" }}
+                    onMouseEnter={e => { if (editingDeal !== d.id && !isOpen) e.currentTarget.style.background = `${gc}09`; }}
                     onMouseLeave={e => { if (!isOpen) e.currentTarget.style.background = "transparent"; }}
                   >
                     <div style={{ width: 7, height: 7, borderRadius: "50%", background: gc, flexShrink: 0 }} />
                     <span style={{ fontSize: 12, fontWeight: 700, color: gc, minWidth: 60 }}>{d.game_name}</span>
-                    <span style={{ fontSize: 11, color: "var(--text-dim)" }}>
-                      {d.action_pct}% action{d.rakeback_pct > 0 ? ` · ${d.rakeback_pct}% RB` : ""}
-                    </span>
-                    <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 8 }}>
+
+                    {/* Inline deal edit or display */}
+                    {editingDeal === d.id ? (
+                      <div style={{ display: "flex", alignItems: "center", gap: 6 }} onClick={e => e.stopPropagation()}>
+                        <input type="number" min="0" max="100" autoFocus
+                          value={dealDraft.action_pct}
+                          onChange={e => setDealDraft(f => ({ ...f, action_pct: e.target.value }))}
+                          placeholder={String(d.action_pct)}
+                          style={{ width: 52, padding: "3px 6px", borderRadius: 5, fontSize: 12, fontWeight: 700, background: "rgba(234,179,8,0.1)", border: "1px solid #eab30855", color: "var(--gold)", textAlign: "center", outline: "none" }} />
+                        <span style={{ fontSize: 10, color: "var(--text-dim)" }}>% action</span>
+                        <input type="number" min="0" max="100"
+                          value={dealDraft.rakeback_pct}
+                          onChange={e => setDealDraft(f => ({ ...f, rakeback_pct: e.target.value }))}
+                          placeholder={String(d.rakeback_pct)}
+                          style={{ width: 52, padding: "3px 6px", borderRadius: 5, fontSize: 12, fontWeight: 700, background: "rgba(34,197,94,0.08)", border: "1px solid rgba(34,197,94,0.25)", color: "var(--green)", textAlign: "center", outline: "none" }} />
+                        <span style={{ fontSize: 10, color: "var(--text-dim)" }}>% RB</span>
+                        <button onClick={() => saveDeal(d.id)}
+                          style={{ padding: "3px 10px", borderRadius: 5, fontSize: 11, fontWeight: 700, background: "rgba(34,197,94,0.15)", border: "1px solid rgba(34,197,94,0.3)", color: "var(--green)", cursor: "pointer" }}>✓</button>
+                        <button onClick={() => setEditingDeal(null)}
+                          style={{ fontSize: 12, background: "none", border: "none", color: "var(--text-dim)", cursor: "pointer" }}>✕</button>
+                      </div>
+                    ) : (
+                      <span style={{ fontSize: 11, color: "var(--text-dim)" }}>
+                        <span style={{ color: "var(--gold)", fontWeight: 600 }}>{d.action_pct}%</span> action
+                        {d.rakeback_pct > 0 && <> · <span style={{ color: "var(--green)", fontWeight: 600 }}>{d.rakeback_pct}%</span> RB</>}
+                      </span>
+                    )}
+
+                    <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 6 }}>
+                      {editingDeal !== d.id && (
+                        <button onClick={e => { e.stopPropagation(); setEditingDeal(d.id); setDealDraft({ action_pct: String(d.action_pct), rakeback_pct: String(d.rakeback_pct) }); setExpandedGame(null); }}
+                          style={{ display: "flex", alignItems: "center", gap: 3, fontSize: 10, padding: "2px 7px", borderRadius: 4, background: "none", border: "1px solid var(--border)", color: "var(--text-dim)", cursor: "pointer" }}>
+                          <Pencil size={9} /> Edit
+                        </button>
+                      )}
                       {ids.length > 0
                         ? <span style={{ fontSize: 10, fontWeight: 600, color: gc, background: `${gc}18`, padding: "2px 6px", borderRadius: 8 }}>{ids.length} ID{ids.length > 1 ? "s" : ""}</span>
                         : <span style={{ fontSize: 10, color: "var(--text-dim)" }}>0 ID</span>
                       }
-                      <span style={{ fontSize: 10, color: "var(--text-dim)" }}>{isOpen ? "▲" : "▼"}</span>
+                      {editingDeal !== d.id && <span style={{ fontSize: 10, color: "var(--text-dim)" }}>{isOpen ? "▲" : "▼"}</span>}
                       <button onClick={e => { e.stopPropagation(); removeDeal(d.id); }}
                         style={{ background: "none", border: "none", cursor: "pointer", color: "var(--text-dim)", padding: 2, display: "flex", alignItems: "center" }}>
                         <X size={11} />
