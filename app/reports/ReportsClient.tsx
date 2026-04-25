@@ -15,112 +15,72 @@ interface ExtractedRow {
   currency: string;
   player_id: number | null;
   player_name: string | null;
-  rb_pct: number | null;
-  ins_pct: number | null;
-  action_pct: number | null;
+  action_pct: number | null; // per player
 }
 interface Report {
   id: number; game_name: string; period_label: string; created_at: string;
   club_id: string | null; club_name: string | null;
   entry_count: number; total_amount: number; unmatched_count: number;
 }
-interface DealDraft { rb_pct: string; ins_pct: string; action_pct: string; }
 
 const GAME_COLOR: Record<string, string> = {
   TELE: "#a78bfa", Wepoker: "#38bdf8", Xpoker: "#fb923c", ClubGG: "#4ade80",
 };
 
-function PctCell({ value, onChange, color = "#eab308" }: { value: number | null; onChange: (v: number | null) => void; color?: string }) {
+function SmallPct({ value, onChange, color, placeholder = "—" }: { value: string; onChange: (v: string) => void; color: string; placeholder?: string }) {
   return (
-    <div style={{ display: "flex", alignItems: "center", gap: 3 }}>
-      <input type="number" min="0" max="100" step="1"
-        value={value ?? ""}
-        onChange={e => { const v = parseFloat(e.target.value); onChange(isNaN(v) ? null : v); }}
-        placeholder="—"
-        style={{ width: 44, padding: "3px 5px", borderRadius: 5, fontSize: 12, background: value !== null ? `${color}14` : "var(--bg-elevated)", border: `1px solid ${value !== null ? color + "55" : "var(--border)"}`, color, textAlign: "center", outline: "none" }} />
-      <span style={{ fontSize: 10, color: "var(--text-dim)" }}>%</span>
+    <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+      <input type="number" min="0" max="100" step="1" value={value} onChange={e => onChange(e.target.value)} placeholder={placeholder}
+        style={{ width: 52, padding: "5px 7px", borderRadius: 6, fontSize: 12, fontWeight: 600, background: value ? `${color}12` : "var(--bg-elevated)", border: `1px solid ${value ? color + "55" : "var(--border)"}`, color: value ? color : "var(--text-dim)", textAlign: "center", outline: "none" }} />
+      <span style={{ fontSize: 11, color: "var(--text-dim)" }}>%</span>
     </div>
   );
 }
 
-// Modal: configure deals for newly matched players with no stored deal
-function DealSetupModal({
-  rows, onConfirm, onSkip,
-}: {
+// Modal: ask % Action per player (rakeback rates are report-level, not per player)
+function ActionModal({ rows, onConfirm, onSkip }: {
   rows: ExtractedRow[];
-  onConfirm: (drafts: Record<number, DealDraft>) => void;
+  onConfirm: (actions: Record<number, string>) => void;
   onSkip: () => void;
 }) {
-  // Only matched players missing at least one %
-  const needsDeal = rows.filter(r => r.player_id && (r.rb_pct === null || r.ins_pct === null || r.action_pct === null));
-  const [drafts, setDrafts] = useState<Record<number, DealDraft>>(() =>
-    Object.fromEntries(needsDeal.map((r, i) => [i, {
-      rb_pct: r.rb_pct !== null ? String(r.rb_pct) : "",
-      ins_pct: r.ins_pct !== null ? String(r.ins_pct) : "",
-      action_pct: r.action_pct !== null ? String(r.action_pct) : "",
-    }]))
+  const needsAction = rows.filter(r => r.player_id && r.action_pct === null);
+  const [drafts, setDrafts] = useState<Record<number, string>>(() =>
+    Object.fromEntries(needsAction.map((_, i) => [i, ""]))
   );
 
-  if (!needsDeal.length) { onSkip(); return null; }
-
-  function set(i: number, field: keyof DealDraft, val: string) {
-    setDrafts(d => ({ ...d, [i]: { ...d[i], [field]: val } }));
-  }
-
-  const inputStyle = (color: string, val: string): React.CSSProperties => ({
-    width: 56, padding: "6px 8px", borderRadius: 6, fontSize: 13, fontWeight: 600,
-    background: val ? `${color}14` : "var(--bg-surface)",
-    border: `1px solid ${val ? color + "66" : "var(--border)"}`,
-    color: val ? color : "var(--text-dim)", textAlign: "center", outline: "none",
-  });
+  if (!needsAction.length) { onSkip(); return null; }
 
   return (
     <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.7)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 999 }}>
-      <div style={{ background: "var(--bg-raised)", border: "1px solid var(--border)", borderRadius: 14, width: 520, maxHeight: "80vh", overflow: "auto", boxShadow: "0 24px 64px rgba(0,0,0,0.5)" }}>
+      <div style={{ background: "var(--bg-raised)", border: "1px solid var(--border)", borderRadius: 14, width: 460, maxHeight: "80vh", overflow: "auto", boxShadow: "0 24px 64px rgba(0,0,0,0.5)" }}>
         <div style={{ padding: "20px 24px", borderBottom: "1px solid var(--border)" }}>
-          <div style={{ fontSize: 15, fontWeight: 700, color: "var(--text)", marginBottom: 4 }}>Configurer les deals</div>
+          <div style={{ fontSize: 15, fontWeight: 700, color: "var(--text)", marginBottom: 4 }}>% Action par joueur</div>
           <div style={{ fontSize: 12, color: "var(--text-muted)" }}>
-            {needsDeal.length} joueur{needsDeal.length > 1 ? "s" : ""} — remplis les % une fois, mémorisés pour les prochains imports
+            {needsAction.length} joueur{needsAction.length > 1 ? "s" : ""} sans % action — saisi une fois, mémorisé
           </div>
         </div>
 
-        {/* Column headers */}
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 80px 80px 80px", gap: 12, padding: "10px 24px", borderBottom: "1px solid var(--border)" }}>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 100px", gap: 12, padding: "10px 24px", borderBottom: "1px solid var(--border)" }}>
           <span style={{ fontSize: 10, fontWeight: 600, color: "var(--text-dim)", textTransform: "uppercase" }}>Joueur</span>
-          <span style={{ fontSize: 10, fontWeight: 600, color: "#38bdf8", textTransform: "uppercase", textAlign: "center" }}>% RB Rake</span>
-          <span style={{ fontSize: 10, fontWeight: 600, color: "#a78bfa", textTransform: "uppercase", textAlign: "center" }}>% RB Ins.</span>
           <span style={{ fontSize: 10, fontWeight: 600, color: "#eab308", textTransform: "uppercase", textAlign: "center" }}>% Action</span>
         </div>
 
-        {needsDeal.map((row, i) => (
-          <div key={i} style={{ display: "grid", gridTemplateColumns: "1fr 80px 80px 80px", gap: 12, padding: "14px 24px", borderBottom: "1px solid var(--border)", alignItems: "center" }}>
+        {needsAction.map((row, i) => (
+          <div key={i} style={{ display: "grid", gridTemplateColumns: "1fr 100px", gap: 12, padding: "14px 24px", borderBottom: "1px solid var(--border)", alignItems: "center" }}>
             <div>
               <div style={{ fontSize: 13, fontWeight: 600, color: "var(--text)" }}>{row.player_name}</div>
               <div style={{ fontSize: 11, fontFamily: "monospace", color: "var(--text-dim)", marginTop: 2 }}>{row.external_id}</div>
             </div>
-            <input type="number" min="0" max="100" step="1" placeholder="—"
-              value={drafts[i]?.rb_pct ?? ""}
-              onChange={e => set(i, "rb_pct", e.target.value)}
-              style={inputStyle("#38bdf8", drafts[i]?.rb_pct ?? "")} />
-            <input type="number" min="0" max="100" step="1" placeholder="—"
-              value={drafts[i]?.ins_pct ?? ""}
-              onChange={e => set(i, "ins_pct", e.target.value)}
-              style={inputStyle("#a78bfa", drafts[i]?.ins_pct ?? "")} />
-            <input type="number" min="0" max="100" step="1" placeholder="—"
-              value={drafts[i]?.action_pct ?? ""}
-              onChange={e => set(i, "action_pct", e.target.value)}
-              style={inputStyle("#eab308", drafts[i]?.action_pct ?? "")} />
+            <input type="number" min="0" max="100" step="1" placeholder="ex: 40" autoFocus={i === 0}
+              value={drafts[i] ?? ""}
+              onChange={e => setDrafts(d => ({ ...d, [i]: e.target.value }))}
+              style={{ padding: "7px 10px", borderRadius: 6, fontSize: 14, fontWeight: 700, background: drafts[i] ? "rgba(234,179,8,0.1)" : "var(--bg-surface)", border: `1px solid ${drafts[i] ? "#eab30866" : "var(--border)"}`, color: "#eab308", textAlign: "center", outline: "none", width: "100%" }} />
           </div>
         ))}
 
         <div style={{ padding: "16px 24px", display: "flex", gap: 10, justifyContent: "flex-end" }}>
-          <button onClick={onSkip} style={{ padding: "8px 16px", borderRadius: 7, fontSize: 13, background: "none", border: "1px solid var(--border)", color: "var(--text-muted)", cursor: "pointer" }}>
-            Passer
-          </button>
-          <button onClick={() => onConfirm(drafts)}
-            style={{ padding: "8px 20px", borderRadius: 7, fontSize: 13, fontWeight: 700, background: "var(--green)", border: "none", color: "#000", cursor: "pointer" }}>
-            Confirmer
-          </button>
+          <button onClick={onSkip} style={{ padding: "8px 16px", borderRadius: 7, fontSize: 13, background: "none", border: "1px solid var(--border)", color: "var(--text-muted)", cursor: "pointer" }}>Passer</button>
+          <button onClick={() => onConfirm(drafts)} style={{ padding: "8px 20px", borderRadius: 7, fontSize: 13, fontWeight: 700, background: "var(--green)", border: "none", color: "#000", cursor: "pointer" }}>Confirmer</button>
         </div>
       </div>
     </div>
@@ -132,12 +92,15 @@ export default function ReportsClient({ games, players: initialPlayers }: { game
   const [period, setPeriod] = useState("");
   const [clubId, setClubId] = useState("");
   const [clubName, setClubName] = useState("");
+  // Report-level rakeback rates (same for all players in this game/club)
+  const [rbPct, setRbPct] = useState("");
+  const [insPct, setInsPct] = useState("");
   const [file, setFile] = useState<File | null>(null);
   const [preview, setPreview] = useState<string | null>(null);
   const [dragging, setDragging] = useState(false);
   const [loading, setLoading] = useState(false);
   const [rows, setRows] = useState<ExtractedRow[] | null>(null);
-  const [showDealModal, setShowDealModal] = useState(false);
+  const [showActionModal, setShowActionModal] = useState(false);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -168,12 +131,12 @@ export default function ReportsClient({ games, players: initialPlayers }: { game
     if (f && f.type.startsWith("image/")) onFile(f);
   }, []);
 
-  async function fetchDeal(playerId: number, gId: number) {
+  async function fetchActionPct(playerId: number, gId: number): Promise<number | null> {
     try {
       const deals = await fetch(`/api/games/deals?player_id=${playerId}`).then(r => r.json());
       const d = deals.find((x: any) => x.game_id === gId);
-      return { rb_pct: d?.rakeback_pct ?? null, ins_pct: d?.insurance_pct ?? null, action_pct: d?.action_pct ?? null };
-    } catch { return { rb_pct: null, ins_pct: null, action_pct: null }; }
+      return d?.action_pct ?? null;
+    } catch { return null; }
   }
 
   async function extract() {
@@ -186,38 +149,30 @@ export default function ReportsClient({ games, players: initialPlayers }: { game
     const data = await res.json();
     setLoading(false);
     if (!res.ok) { setError(data.error); return; }
-    const rowsWithDeals = await Promise.all((data.rows as any[]).map(async row => {
-      const deal = row.player_id ? await fetchDeal(row.player_id, gameId) : { rb_pct: null, ins_pct: null, action_pct: null };
-      return { ...row, ...deal };
+    const rowsWithAction = await Promise.all((data.rows as any[]).map(async row => {
+      const action_pct = row.player_id ? await fetchActionPct(row.player_id, gameId) : null;
+      return { ...row, action_pct };
     }));
-    setRows(rowsWithDeals);
-    // Open deal modal if any matched player is missing a %
-    const needsSetup = rowsWithDeals.some(r => r.player_id && (r.rb_pct === null || r.ins_pct === null || r.action_pct === null));
-    if (needsSetup) setShowDealModal(true);
+    setRows(rowsWithAction);
+    const needsAction = rowsWithAction.some(r => r.player_id && r.action_pct === null);
+    if (needsAction) setShowActionModal(true);
   }
 
-  function applyDealDrafts(drafts: Record<number, DealDraft>) {
+  function applyActionDrafts(drafts: Record<number, string>) {
     if (!rows) return;
-    const needsDeal = rows.filter(r => r.player_id && (r.rb_pct === null || r.ins_pct === null || r.action_pct === null));
-    let draftIdx = 0;
+    let i = 0;
     setRows(rows.map(row => {
-      if (!row.player_id || (row.rb_pct !== null && row.ins_pct !== null && row.action_pct !== null)) return row;
-      const d = drafts[draftIdx++];
-      if (!d) return row;
-      return {
-        ...row,
-        rb_pct: d.rb_pct !== "" ? parseFloat(d.rb_pct) : row.rb_pct,
-        ins_pct: d.ins_pct !== "" ? parseFloat(d.ins_pct) : row.ins_pct,
-        action_pct: d.action_pct !== "" ? parseFloat(d.action_pct) : row.action_pct,
-      };
+      if (!row.player_id || row.action_pct !== null) return row;
+      const v = parseFloat(drafts[i++] ?? "");
+      return { ...row, action_pct: isNaN(v) ? null : v };
     }));
-    setShowDealModal(false);
+    setShowActionModal(false);
   }
 
   async function setRowPlayer(idx: number, player_id: number | null) {
     const player_name = players.find(p => p.id === player_id)?.name ?? null;
-    const deal = player_id ? await fetchDeal(player_id, gameId) : { rb_pct: null, ins_pct: null, action_pct: null };
-    setRows(r => r!.map((row, i) => i !== idx ? row : { ...row, player_id, player_name, ...deal }));
+    const action_pct = player_id ? await fetchActionPct(player_id, gameId) : null;
+    setRows(r => r!.map((row, i) => i !== idx ? row : { ...row, player_id, player_name, action_pct }));
   }
 
   function setRowField(idx: number, field: keyof ExtractedRow, value: any) {
@@ -236,9 +191,8 @@ export default function ReportsClient({ games, players: initialPlayers }: { game
     if (!res.ok) return;
     const newPlayer = { id: data.id, name: newPlayerName.trim() };
     setPlayers(p => [...p, newPlayer].sort((a, b) => a.name.localeCompare(b.name)));
-    setCreatingFor(null);
-    setNewPlayerName("");
-    setRows(r => r!.map((row, i) => i !== idx ? row : { ...row, player_id: newPlayer.id, player_name: newPlayer.name, rb_pct: null, ins_pct: null, action_pct: null }));
+    setCreatingFor(null); setNewPlayerName("");
+    setRows(r => r!.map((row, i) => i !== idx ? row : { ...row, player_id: newPlayer.id, player_name: newPlayer.name, action_pct: null }));
   }
 
   async function save() {
@@ -246,10 +200,18 @@ export default function ReportsClient({ games, players: initialPlayers }: { game
     setSaving(true);
     const res = await fetch("/api/reports/save", {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ game_id: gameId, period_label: period.trim(), club_id: clubId.trim() || null, club_name: clubName.trim() || null, rows }),
+      body: JSON.stringify({
+        game_id: gameId,
+        period_label: period.trim(),
+        club_id: clubId.trim() || null,
+        club_name: clubName.trim() || null,
+        rakeback_pct: parseFloat(rbPct) || null,
+        insurance_pct: parseFloat(insPct) || null,
+        rows,
+      }),
     });
     setSaving(false);
-    if (res.ok) { setSaved(true); setFile(null); setPreview(null); setRows(null); setPeriod(""); setClubId(""); setClubName(""); loadReports(); }
+    if (res.ok) { setSaved(true); setFile(null); setPreview(null); setRows(null); setPeriod(""); setClubId(""); setClubName(""); setRbPct(""); setInsPct(""); loadReports(); }
   }
 
   async function deleteReport(id: number) {
@@ -288,32 +250,38 @@ export default function ReportsClient({ games, players: initialPlayers }: { game
   return (
     <div style={{ display: "grid", gridTemplateColumns: "1fr 360px", gap: 24, alignItems: "start" }}>
 
-      {/* Deal setup modal */}
-      {showDealModal && rows && (
-        <DealSetupModal
-          rows={rows}
-          onConfirm={applyDealDrafts}
-          onSkip={() => setShowDealModal(false)}
-        />
+      {showActionModal && rows && (
+        <ActionModal rows={rows} onConfirm={applyActionDrafts} onSkip={() => setShowActionModal(false)} />
       )}
 
       <div>
         <div style={{ background: "var(--bg-raised)", border: "1px solid var(--border)", borderRadius: 10, marginBottom: 20 }}>
+          {/* Game + Club + Period */}
           <div style={{ padding: "14px 20px", borderBottom: "1px solid var(--border)", display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
             <select value={gameId} onChange={e => setGameId(Number(e.target.value))}
               style={{ fontSize: 13, fontWeight: 700, padding: "7px 12px", borderRadius: 7, background: "var(--bg-elevated)", border: "1px solid var(--border)", color: GAME_COLOR[games.find(g => g.id === gameId)?.name ?? ""] ?? "var(--text)", cursor: "pointer" }}>
               {games.map(g => <option key={g.id} value={g.id}>{g.name}</option>)}
             </select>
-            <input value={clubId} onChange={e => setClubId(e.target.value)}
-              placeholder="Club ID"
+            <input value={clubId} onChange={e => setClubId(e.target.value)} placeholder="Club ID"
               style={{ width: 90, fontSize: 12, padding: "7px 10px", borderRadius: 7, background: "var(--bg-elevated)", border: "1px solid var(--border)", color: "var(--text)", outline: "none", fontFamily: "monospace" }} />
-            <input value={clubName} onChange={e => setClubName(e.target.value)}
-              placeholder="Club Name"
+            <input value={clubName} onChange={e => setClubName(e.target.value)} placeholder="Club Name"
               style={{ width: 130, fontSize: 12, padding: "7px 10px", borderRadius: 7, background: "var(--bg-elevated)", border: "1px solid var(--border)", color: "var(--text)", outline: "none" }} />
-            <input value={period} onChange={e => setPeriod(e.target.value)}
-              placeholder="Période — ex: Semaine 17, Avr 2026"
-              style={{ flex: 1, minWidth: 160, fontSize: 12, padding: "7px 12px", borderRadius: 7, background: "var(--bg-elevated)", border: "1px solid var(--border)", color: "var(--text)", outline: "none" }} />
+            <input value={period} onChange={e => setPeriod(e.target.value)} placeholder="Période — ex: Avr 2026"
+              style={{ flex: 1, minWidth: 140, fontSize: 12, padding: "7px 12px", borderRadius: 7, background: "var(--bg-elevated)", border: "1px solid var(--border)", color: "var(--text)", outline: "none" }} />
           </div>
+          {/* Report-level rakeback rates */}
+          <div style={{ padding: "10px 20px", borderBottom: "1px solid var(--border)", display: "flex", gap: 20, alignItems: "center", background: "rgba(56,189,248,0.03)" }}>
+            <span style={{ fontSize: 11, fontWeight: 600, color: "var(--text-dim)" }}>Taux de la game</span>
+            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+              <span style={{ fontSize: 11, color: "#38bdf8" }}>% RB Rake</span>
+              <SmallPct value={rbPct} onChange={setRbPct} color="#38bdf8" />
+            </div>
+            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+              <span style={{ fontSize: 11, color: "#a78bfa" }}>% RB Insurance</span>
+              <SmallPct value={insPct} onChange={setInsPct} color="#a78bfa" />
+            </div>
+          </div>
+
           <div style={{ padding: 20 }}>
             <div
               onDragOver={e => { e.preventDefault(); setDragging(true); }}
@@ -339,7 +307,7 @@ export default function ReportsClient({ games, players: initialPlayers }: { game
             <input ref={fileRef} type="file" accept="image/*" style={{ display: "none" }}
               onChange={e => { const f = e.target.files?.[0]; if (f) onFile(f); }} />
             {file && (
-              <div style={{ marginTop: 14, display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+              <div style={{ marginTop: 14, display: "flex", gap: 10, alignItems: "center" }}>
                 <Btn variant="primary" onClick={extract} disabled={loading}>
                   {loading ? <><Loader size={14} style={{ animation: "spin 1s linear infinite" }} /> Analyse en cours…</> : <><Upload size={14} /> Extraire avec Claude</>}
                 </Btn>
@@ -369,9 +337,7 @@ export default function ReportsClient({ games, players: initialPlayers }: { game
                   <tr style={{ borderBottom: "1px solid var(--border)" }}>
                     <th style={thStyle}>ID App</th>
                     <th style={{ ...thStyle, color: "#38bdf8" }}>Rakeback</th>
-                    <th style={{ ...thStyle, color: "#38bdf8", opacity: 0.7 }}>% RB Rake</th>
                     <th style={{ ...thStyle, color: "#a78bfa" }}>Insurance</th>
-                    <th style={{ ...thStyle, color: "#a78bfa", opacity: 0.7 }}>% RB Ins.</th>
                     <th style={{ ...thStyle, color: "#4ade80" }}>Winnings / Pertes</th>
                     <th style={{ ...thStyle, color: "#eab308" }}>% Action</th>
                     <th style={thStyle}>Joueur CRM</th>
@@ -384,16 +350,19 @@ export default function ReportsClient({ games, players: initialPlayers }: { game
                       <tr key={idx} style={{ borderBottom: "1px solid var(--border)" }}>
                         <td style={{ ...tdStyle, fontFamily: "monospace", color: "var(--text-muted)", fontSize: 11 }}>{row.external_id}</td>
                         <td style={tdStyle}>{fmtAmount(row.rakeback_amount, "#38bdf8")}</td>
-                        <td style={tdStyle}>
-                          <PctCell value={row.rb_pct} onChange={v => setRowField(idx, "rb_pct", v)} color="#38bdf8" />
-                        </td>
                         <td style={tdStyle}>{fmtAmount(row.insurance_amount, "#a78bfa")}</td>
-                        <td style={tdStyle}>
-                          <PctCell value={row.ins_pct} onChange={v => setRowField(idx, "ins_pct", v)} color="#a78bfa" />
-                        </td>
                         <td style={tdStyle}>{fmtAmount(row.winnings_amount, "#4ade80")}</td>
                         <td style={tdStyle}>
-                          <PctCell value={row.action_pct} onChange={v => setRowField(idx, "action_pct", v)} color="#eab308" />
+                          {row.player_id ? (
+                            <div style={{ display: "flex", alignItems: "center", gap: 3 }}>
+                              <input type="number" min="0" max="100" step="1"
+                                value={row.action_pct ?? ""}
+                                onChange={e => { const v = parseFloat(e.target.value); setRowField(idx, "action_pct", isNaN(v) ? null : v); }}
+                                placeholder="—"
+                                style={{ width: 48, padding: "3px 5px", borderRadius: 5, fontSize: 12, background: row.action_pct !== null ? "rgba(234,179,8,0.1)" : "var(--bg-elevated)", border: `1px solid ${row.action_pct !== null ? "#eab30855" : "var(--border)"}`, color: "#eab308", textAlign: "center", outline: "none" }} />
+                              <span style={{ fontSize: 10, color: "var(--text-dim)" }}>%</span>
+                            </div>
+                          ) : <span style={{ color: "var(--text-dim)", fontSize: 12 }}>—</span>}
                         </td>
                         <td style={{ ...tdStyle, minWidth: 180 }}>
                           {row.player_id && !isCreating ? (

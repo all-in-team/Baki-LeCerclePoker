@@ -14,9 +14,7 @@ export async function POST(req: NextRequest) {
       winnings_amount: number;
       currency: string;
       player_id: number | null;
-      rb_pct: number | null;
-      ins_pct: number | null;
-      action_pct: number | null;
+      action_pct: number | null; // per player — stored in player_game_deals
     }[];
   };
 
@@ -43,18 +41,14 @@ export async function POST(req: NextRequest) {
           .run(row.player_id, game_id, row.external_id);
       } catch {}
 
-      // Save/update the deal % for this player × game — auto-fills on next import
-      const hasDeal = row.rb_pct !== null || row.ins_pct !== null || row.action_pct !== null;
-      if (hasDeal) {
+      // Save action % per player per game — auto-fills on next import
+      if (row.action_pct !== null) {
         try {
           db.prepare(`
-            INSERT INTO player_game_deals (player_id, game_id, rakeback_pct, insurance_pct, action_pct)
-            VALUES (?, ?, ?, ?, ?)
-            ON CONFLICT(player_id, game_id) DO UPDATE SET
-              rakeback_pct  = COALESCE(excluded.rakeback_pct,  rakeback_pct),
-              insurance_pct = COALESCE(excluded.insurance_pct, insurance_pct),
-              action_pct    = COALESCE(excluded.action_pct,    action_pct)
-          `).run(row.player_id, game_id, row.rb_pct ?? null, row.ins_pct ?? null, row.action_pct ?? null);
+            INSERT INTO player_game_deals (player_id, game_id, action_pct, rakeback_pct)
+            VALUES (?, ?, ?, 0)
+            ON CONFLICT(player_id, game_id) DO UPDATE SET action_pct = excluded.action_pct
+          `).run(row.player_id, game_id, row.action_pct);
         } catch {}
       }
     }
