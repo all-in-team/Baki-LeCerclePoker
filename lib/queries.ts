@@ -474,7 +474,7 @@ export function getCrmOverview() {
   const db = getDb();
   return db.prepare(`
     SELECT
-      p.id, p.name, p.telegram_handle, p.status, p.action_pct,
+      p.id, p.name, p.telegram_handle, p.telegram_phone, p.status, p.tier, p.action_pct, p.notes,
       (SELECT content FROM crm_notes WHERE player_id = p.id ORDER BY created_at DESC LIMIT 1) AS last_note,
       (SELECT created_at FROM crm_notes WHERE player_id = p.id ORDER BY created_at DESC LIMIT 1) AS last_activity,
       (SELECT COUNT(*) FROM crm_notes WHERE player_id = p.id) AS note_count,
