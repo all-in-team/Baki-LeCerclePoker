@@ -39,6 +39,7 @@ const GAME_COLOR: Record<string, string> = {
 
 interface GameDeal { id: number; game_id: number; game_name: string; action_pct: number; rakeback_pct: number; }
 interface Game { id: number; name: string; }
+interface GameId { id: number; game_id: number; game_name: string; external_id: string; }
 
 const DEAL_BLANK = { action_pct: "50", rakeback_pct: "0" };
 
@@ -73,6 +74,9 @@ export default function CRMClient({ players, recentNotes }: {
   // Games
   const [allGames, setAllGames] = useState<Game[]>([]);
   const [deals, setDeals] = useState<GameDeal[]>([]);
+  const [gameIds, setGameIds] = useState<GameId[]>([]);
+  const [expandedGame, setExpandedGame] = useState<number | null>(null);
+  const [newIdDraft, setNewIdDraft] = useState("");
   const [showAddGame, setShowAddGame] = useState(false);
   const [selectedGame, setSelectedGame] = useState("");
   const [dealForm, setDealForm] = useState(DEAL_BLANK);
@@ -84,13 +88,17 @@ export default function CRMClient({ players, recentNotes }: {
   }, []);
 
   useEffect(() => {
-    if (!selected) { setDeals([]); return; }
+    if (!selected) { setDeals([]); setGameIds([]); return; }
     fetch(`/api/games/deals?player_id=${selected.id}`)
       .then(r => r.json()).then(setDeals).catch(() => {});
+    fetch(`/api/players/${selected.id}/game-ids`)
+      .then(r => r.json()).then(setGameIds).catch(() => {});
     setShowAddGame(false);
     setSelectedGame("");
     setDealForm(DEAL_BLANK);
     setTronAddress("");
+    setExpandedGame(null);
+    setNewIdDraft("");
   }, [selected?.id]);
 
   const playerNotes = selected ? notes.filter(n => n.player_id === selected.id) : [];
@@ -126,6 +134,30 @@ export default function CRMClient({ players, recentNotes }: {
     if (!confirm("Retirer cette game ?")) return;
     await fetch(`/api/games/deals/${dealId}`, { method: "DELETE" });
     setDeals(d => d.filter(x => x.id !== dealId));
+  }
+
+  async function addGameId(gameId: number) {
+    if (!selected) return;
+    const val = newIdDraft.trim();
+    if (!val) return;
+    const res = await fetch(`/api/players/${selected.id}/game-ids`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ game_id: gameId, external_id: val }),
+    });
+    if (!res.ok) return;
+    const data = await res.json();
+    const gameName = allGames.find(g => g.id === gameId)?.name ?? "";
+    setGameIds(ids => [...ids, { id: data.id, game_id: gameId, game_name: gameName, external_id: val }]);
+    setNewIdDraft("");
+  }
+
+  async function removeGameId(rowId: number) {
+    if (!selected) return;
+    await fetch(`/api/players/${selected.id}/game-ids`, {
+      method: "DELETE", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ game_id_row_id: rowId }),
+    });
+    setGameIds(ids => ids.filter(x => x.id !== rowId));
   }
 
   async function addNote() {
@@ -248,9 +280,6 @@ export default function CRMClient({ players, recentNotes }: {
                       <ExternalLink size={11} />
                     </a>
                   )}
-                  <Link href={`/players/${selected.id}`} style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 13, color: "var(--text-muted)", textDecoration: "none" }}>
-                    <ExternalLink size={13} /> Profil complet
-                  </Link>
                 </div>
               </div>
               {/* Mini P&L */}
@@ -307,27 +336,70 @@ export default function CRMClient({ players, recentNotes }: {
               )}
             </div>
 
-            {/* Current deals */}
-            {deals.length > 0 && (
-              <div style={{ display: "flex", flexWrap: "wrap", gap: 8, padding: "12px 16px", borderBottom: showAddGame ? "1px solid var(--border)" : "none" }}>
-                {deals.map(d => {
-                  const gc = GAME_COLOR[d.game_name] ?? "var(--text-muted)";
-                  return (
-                    <div key={d.id} style={{ display: "flex", alignItems: "center", gap: 8, background: "var(--bg-elevated)", border: `1px solid ${gc}28`, borderRadius: 8, padding: "7px 11px" }}>
-                      <div>
-                        <div style={{ fontSize: 12, fontWeight: 700, color: gc }}>{d.game_name}</div>
-                        <div style={{ fontSize: 10, color: "var(--text-dim)", marginTop: 1 }}>
-                          {d.action_pct}% action{d.rakeback_pct > 0 ? ` · ${d.rakeback_pct}% RB` : ""}
-                        </div>
-                      </div>
-                      <button onClick={() => removeDeal(d.id)} style={{ background: "none", border: "none", cursor: "pointer", color: "var(--text-dim)", padding: 2, display: "flex", alignItems: "center" }}>
+            {/* Current deals — clickable, expand IDs */}
+            {deals.map(d => {
+              const gc = GAME_COLOR[d.game_name] ?? "var(--text-muted)";
+              const ids = gameIds.filter(gi => gi.game_id === d.game_id);
+              const isOpen = expandedGame === d.game_id;
+              return (
+                <div key={d.id} style={{ borderBottom: "1px solid var(--border)" }}>
+                  <div
+                    onClick={() => { setExpandedGame(isOpen ? null : d.game_id); setNewIdDraft(""); }}
+                    style={{ padding: "11px 16px", display: "flex", alignItems: "center", gap: 10, cursor: "pointer", userSelect: "none", background: isOpen ? `${gc}09` : "transparent", transition: "background 0.1s" }}
+                    onMouseEnter={e => { if (!isOpen) e.currentTarget.style.background = `${gc}09`; }}
+                    onMouseLeave={e => { if (!isOpen) e.currentTarget.style.background = "transparent"; }}
+                  >
+                    <div style={{ width: 7, height: 7, borderRadius: "50%", background: gc, flexShrink: 0 }} />
+                    <span style={{ fontSize: 12, fontWeight: 700, color: gc, minWidth: 60 }}>{d.game_name}</span>
+                    <span style={{ fontSize: 11, color: "var(--text-dim)" }}>
+                      {d.action_pct}% action{d.rakeback_pct > 0 ? ` · ${d.rakeback_pct}% RB` : ""}
+                    </span>
+                    <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 8 }}>
+                      {ids.length > 0
+                        ? <span style={{ fontSize: 10, fontWeight: 600, color: gc, background: `${gc}18`, padding: "2px 6px", borderRadius: 8 }}>{ids.length} ID{ids.length > 1 ? "s" : ""}</span>
+                        : <span style={{ fontSize: 10, color: "var(--text-dim)" }}>0 ID</span>
+                      }
+                      <span style={{ fontSize: 10, color: "var(--text-dim)" }}>{isOpen ? "▲" : "▼"}</span>
+                      <button onClick={e => { e.stopPropagation(); removeDeal(d.id); }}
+                        style={{ background: "none", border: "none", cursor: "pointer", color: "var(--text-dim)", padding: 2, display: "flex", alignItems: "center" }}>
                         <X size={11} />
                       </button>
                     </div>
-                  );
-                })}
-              </div>
-            )}
+                  </div>
+
+                  {isOpen && (
+                    <div style={{ padding: "10px 16px 14px 28px", background: "var(--bg-surface)", borderTop: `1px solid ${gc}20` }}>
+                      <div style={{ display: "flex", flexWrap: "wrap", gap: 5, marginBottom: 10 }}>
+                        {ids.length === 0 && (
+                          <span style={{ fontSize: 11, color: "var(--text-dim)", fontStyle: "italic" }}>Aucun compte enregistré</span>
+                        )}
+                        {ids.map(gi => (
+                          <div key={gi.id} style={{ display: "flex", alignItems: "center", gap: 5, background: `${gc}12`, border: `1px solid ${gc}30`, borderRadius: 6, padding: "4px 9px" }}>
+                            <span style={{ fontSize: 12, fontFamily: "monospace", color: gc, fontWeight: 600 }}>{gi.external_id}</span>
+                            <button onClick={() => removeGameId(gi.id)}
+                              style={{ background: "none", border: "none", cursor: "pointer", padding: 0, color: "var(--text-dim)", display: "flex", lineHeight: 1 }}>
+                              <X size={10} />
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                      <div style={{ display: "flex", gap: 6 }}>
+                        <input autoFocus
+                          value={newIdDraft}
+                          onChange={e => setNewIdDraft(e.target.value)}
+                          onKeyDown={e => e.key === "Enter" && addGameId(d.game_id)}
+                          placeholder={`ID ${d.game_name}…`}
+                          style={{ flex: 1, padding: "6px 9px", borderRadius: 6, fontSize: 12, fontFamily: "monospace", background: "var(--bg-elevated)", border: `1px solid ${gc}40`, color: "var(--text)", outline: "none" }} />
+                        <button onClick={() => addGameId(d.game_id)}
+                          style={{ padding: "6px 12px", borderRadius: 6, fontSize: 11, fontWeight: 700, background: `${gc}20`, border: `1px solid ${gc}45`, color: gc, cursor: "pointer", whiteSpace: "nowrap" }}>
+                          + Ajouter
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
 
             {/* Add game form */}
             {showAddGame && (
