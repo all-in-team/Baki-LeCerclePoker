@@ -114,7 +114,17 @@ export default function ReportsClient({ games, players: initialPlayers }: { game
   const [creatingBusy, setCreatingBusy] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
 
-  useEffect(() => { loadReports(); }, []);
+  useEffect(() => {
+    loadReports();
+    // Prevent browser from navigating to dropped files when dropped outside the zone
+    const stop = (e: DragEvent) => e.preventDefault();
+    document.addEventListener("dragover", stop);
+    document.addEventListener("drop", stop);
+    return () => {
+      document.removeEventListener("dragover", stop);
+      document.removeEventListener("drop", stop);
+    };
+  }, []);
 
   async function lookupClub(cId: string) {
     if (!cId.trim()) { setClubKnown(null); setRbPct(""); setInsPct(""); return; }
