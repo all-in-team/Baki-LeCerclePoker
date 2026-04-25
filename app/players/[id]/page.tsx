@@ -1,6 +1,7 @@
 export const dynamic = "force-dynamic";
 import { notFound } from "next/navigation";
 import { getPlayerById, getWalletTransactions, getPlayerGameDeals, getGames, getPlayerWalletStats } from "@/lib/queries";
+import { getDb } from "@/lib/db";
 import PageHeader from "@/components/PageHeader";
 import PlayerDetailClient from "./PlayerDetailClient";
 
@@ -15,6 +16,14 @@ export default async function PlayerDetailPage({ params }: { params: Promise<{ i
   const rawStats = getPlayerWalletStats(Number(id));
   const stats = rawStats ?? { deposited: 0, withdrawn: 0, net: 0, my_pnl: 0 };
 
+  const gameIds = getDb().prepare(`
+    SELECT pgi.id, pgi.game_id, g.name AS game_name, pgi.external_id
+    FROM player_game_ids pgi
+    JOIN games g ON g.id = pgi.game_id
+    WHERE pgi.player_id = ?
+    ORDER BY g.name, pgi.external_id
+  `).all(Number(id)) as { id: number; game_id: number; game_name: string; external_id: string }[];
+
   return (
     <>
       <PageHeader
@@ -27,6 +36,7 @@ export default async function PlayerDetailPage({ params }: { params: Promise<{ i
         gameDeals={gameDeals}
         allGames={allGames}
         stats={stats}
+        gameIds={gameIds}
       />
     </>
   );

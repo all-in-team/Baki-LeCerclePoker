@@ -26,6 +26,7 @@ interface GameDeal {
 
 interface Game { id: number; name: string; }
 interface Stats { deposited: number; withdrawn: number; net: number; my_pnl: number; }
+interface GameId { id: number; game_id: number; game_name: string; external_id: string; }
 
 const GAME_COLOR: Record<string, string> = {
   TELE: "#a78bfa", Wepoker: "#38bdf8", Xpoker: "#fb923c", ClubGG: "#4ade80",
@@ -43,17 +44,22 @@ const STATUS_COLOR: Record<string, "green" | "gray" | "red"> = {
 
 const DEAL_DEFAULTS = { action_pct: "50", rakeback_pct: "0" };
 
-export default function PlayerDetailClient({ player, transactions, gameDeals: initialDeals, allGames, stats }: {
+export default function PlayerDetailClient({ player, transactions, gameDeals: initialDeals, allGames, stats, gameIds: initialGameIds }: {
   player: Player; transactions: Tx[]; gameDeals: GameDeal[]; allGames: Game[]; stats: Stats;
+  gameIds: GameId[];
 }) {
   const netAccent = stats.net > 0 ? "green" : stats.net < 0 ? "red" : "neutral";
   const myAccent = stats.my_pnl > 0 ? "green" : stats.my_pnl < 0 ? "red" : "neutral";
   const [deals, setDeals] = useState(initialDeals);
+  const [gameIds, setGameIds] = useState(initialGameIds);
   const [addModal, setAddModal] = useState(false);
   const [selectedGame, setSelectedGame] = useState("");
   const [dealForm, setDealForm] = useState(DEAL_DEFAULTS);
   const [tronAddress, setTronAddress] = useState("");
   const [busy, setBusy] = useState(false);
+  // Per-game new ID drafts: { [game_id]: string }
+  const [newIdDrafts, setNewIdDrafts] = useState<Record<number, string>>({});
+  const [addingIdFor, setAddingIdFor] = useState<number | null>(null);
 
   const assignedGameIds = new Set(deals.map(d => d.game_id));
   const availableGames = allGames.filter(g => !assignedGameIds.has(g.id));
@@ -89,6 +95,29 @@ export default function PlayerDetailClient({ player, transactions, gameDeals: in
     if (!confirm("Retirer cette game ?")) return;
     await fetch(`/api/games/deals/${dealId}`, { method: "DELETE" });
     setDeals(d => d.filter(x => x.id !== dealId));
+  }
+
+  async function addGameId(gameId: number) {
+    const val = newIdDrafts[gameId]?.trim();
+    if (!val) return;
+    const res = await fetch(`/api/players/${player.id}/game-ids`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ game_id: gameId, external_id: val }),
+    });
+    if (!res.ok) return;
+    const data = await res.json();
+    const gameName = allGames.find(g => g.id === gameId)?.name ?? "";
+    setGameIds(ids => [...ids, { id: data.id, game_id: gameId, game_name: gameName, external_id: val }]);
+    setNewIdDrafts(d => ({ ...d, [gameId]: "" }));
+    setAddingIdFor(null);
+  }
+
+  async function removeGameId(rowId: number) {
+    await fetch(`/api/players/${player.id}/game-ids`, {
+      method: "DELETE", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ game_id_row_id: rowId }),
+    });
+    setGameIds(ids => ids.filter(x => x.id !== rowId));
   }
 
   async function deleteTx(id: number) {
@@ -151,21 +180,70 @@ export default function PlayerDetailClient({ player, transactions, gameDeals: in
             Pas encore sur une game
           </div>
         ) : (
-          <div style={{ display: "flex", flexWrap: "wrap", gap: 10, padding: 16 }}>
+          <div style={{ display: "flex", flexDirection: "column", gap: 0 }}>
             {deals.map(d => {
               const gc = GAME_COLOR[d.game_name] ?? "var(--text-muted)";
+              const ids = gameIds.filter(gi => gi.game_id === d.game_id);
+              const isAdding = addingIdFor === d.game_id;
               return (
-                <div key={d.id} style={{ display: "flex", alignItems: "center", gap: 10, background: "var(--bg-elevated)", border: `1px solid ${gc}30`, borderRadius: 10, padding: "10px 14px" }}>
-                  <div>
-                    <div style={{ fontSize: 13, fontWeight: 700, color: gc }}>{d.game_name}</div>
-                    <div style={{ fontSize: 11, color: "var(--text-dim)", marginTop: 2 }}>
+                <div key={d.id} style={{ borderBottom: "1px solid var(--border)", padding: "14px 20px" }}>
+                  {/* Game header */}
+                  <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: ids.length > 0 || isAdding ? 10 : 0 }}>
+                    <span style={{ fontSize: 13, fontWeight: 700, color: gc, minWidth: 70 }}>{d.game_name}</span>
+                    <span style={{ fontSize: 12, color: "var(--text-dim)" }}>
                       Action <span style={{ color: "var(--gold)", fontWeight: 600 }}>{d.action_pct}%</span>
                       {d.rakeback_pct > 0 && <> · RB <span style={{ color: "var(--green)", fontWeight: 600 }}>{d.rakeback_pct}%</span></>}
+                    </span>
+                    <div style={{ marginLeft: "auto", display: "flex", gap: 6, alignItems: "center" }}>
+                      <button onClick={() => setAddingIdFor(isAdding ? null : d.game_id)}
+                        style={{ fontSize: 11, padding: "3px 8px", borderRadius: 5, background: isAdding ? `${gc}20` : "none", border: `1px solid ${isAdding ? gc + "60" : "var(--border)"}`, color: isAdding ? gc : "var(--text-dim)", cursor: "pointer" }}>
+                        + ID
+                      </button>
+                      <button onClick={() => removeDeal(d.id)} style={{ background: "none", border: "none", cursor: "pointer", padding: 2, color: "var(--text-dim)", display: "flex", alignItems: "center" }}>
+                        <X size={12} />
+                      </button>
                     </div>
                   </div>
-                  <button onClick={() => removeDeal(d.id)} style={{ background: "none", border: "none", cursor: "pointer", padding: 2, color: "var(--text-dim)", display: "flex", alignItems: "center" }}>
-                    <X size={12} />
-                  </button>
+
+                  {/* Existing IDs */}
+                  {ids.length > 0 && (
+                    <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: isAdding ? 8 : 0 }}>
+                      {ids.map(gi => (
+                        <div key={gi.id} style={{ display: "flex", alignItems: "center", gap: 5, background: `${gc}12`, border: `1px solid ${gc}30`, borderRadius: 6, padding: "3px 8px" }}>
+                          <span style={{ fontSize: 12, fontFamily: "monospace", color: gc }}>{gi.external_id}</span>
+                          <button onClick={() => removeGameId(gi.id)}
+                            style={{ background: "none", border: "none", cursor: "pointer", padding: 0, color: "var(--text-dim)", display: "flex", lineHeight: 1 }}>
+                            <X size={10} />
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  {/* Add ID inline */}
+                  {isAdding && (
+                    <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                      <input autoFocus
+                        value={newIdDrafts[d.game_id] ?? ""}
+                        onChange={e => setNewIdDrafts(dr => ({ ...dr, [d.game_id]: e.target.value }))}
+                        onKeyDown={e => e.key === "Enter" && addGameId(d.game_id)}
+                        placeholder={`ID ${d.game_name}…`}
+                        style={{ flex: 1, padding: "5px 9px", borderRadius: 6, fontSize: 12, fontFamily: "monospace", background: "var(--bg-elevated)", border: `1px solid ${gc}50`, color: "var(--text)", outline: "none" }} />
+                      <button onClick={() => addGameId(d.game_id)}
+                        style={{ padding: "5px 12px", borderRadius: 6, fontSize: 12, fontWeight: 600, background: `${gc}20`, border: `1px solid ${gc}50`, color: gc, cursor: "pointer" }}>
+                        Ajouter
+                      </button>
+                      <button onClick={() => setAddingIdFor(null)}
+                        style={{ fontSize: 12, color: "var(--text-dim)", background: "none", border: "none", cursor: "pointer" }}>✕</button>
+                    </div>
+                  )}
+
+                  {/* Empty state */}
+                  {ids.length === 0 && !isAdding && (
+                    <div style={{ fontSize: 11, color: "var(--text-dim)", fontStyle: "italic" }}>
+                      Aucun ID enregistré — clique "+ ID" pour ajouter
+                    </div>
+                  )}
                 </div>
               );
             })}
