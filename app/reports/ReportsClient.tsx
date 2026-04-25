@@ -15,6 +15,10 @@ interface ExtractedRow {
   currency: string;
   player_id: number | null;
   player_name: string | null;
+  // deal % per player — stored in player_game_deals, auto-filled when matched
+  rb_pct: number | null;       // % rakeback sur le rake
+  ins_pct: number | null;      // % rakeback sur l'insurance
+  action_pct: number | null;   // % d'action sur le joueur
 }
 interface Report {
   id: number; game_name: string; period_label: string; created_at: string;
@@ -24,6 +28,19 @@ interface Report {
 const GAME_COLOR: Record<string, string> = {
   TELE: "#a78bfa", Wepoker: "#38bdf8", Xpoker: "#fb923c", ClubGG: "#4ade80",
 };
+
+function PctCell({ value, onChange, color = "#eab308" }: { value: number | null; onChange: (v: number | null) => void; color?: string }) {
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 3 }}>
+      <input type="number" min="0" max="100" step="1"
+        value={value ?? ""}
+        onChange={e => { const v = parseFloat(e.target.value); onChange(isNaN(v) ? null : v); }}
+        placeholder="—"
+        style={{ width: 44, padding: "3px 5px", borderRadius: 5, fontSize: 12, background: value !== null ? `${color}14` : "var(--bg-elevated)", border: `1px solid ${value !== null ? color + "55" : "var(--border)"}`, color, textAlign: "center", outline: "none" }} />
+      <span style={{ fontSize: 10, color: "var(--text-dim)" }}>%</span>
+    </div>
+  );
+}
 
 export default function ReportsClient({ games, players: initialPlayers }: { games: Game[]; players: Player[] }) {
   const [gameId, setGameId] = useState(games[0]?.id ?? 0);
@@ -63,6 +80,14 @@ export default function ReportsClient({ games, players: initialPlayers }: { game
     if (f && f.type.startsWith("image/")) onFile(f);
   }, []);
 
+  async function fetchDeal(playerId: number, gId: number) {
+    try {
+      const deals = await fetch(`/api/games/deals?player_id=${playerId}`).then(r => r.json());
+      const d = deals.find((x: any) => x.game_id === gId);
+      return { rb_pct: d?.rakeback_pct ?? null, ins_pct: d?.insurance_pct ?? null, action_pct: d?.action_pct ?? null };
+    } catch { return { rb_pct: null, ins_pct: null, action_pct: null }; }
+  }
+
   async function extract() {
     if (!file || !gameId) return;
     setLoading(true); setError(null); setRows(null);
@@ -73,12 +98,21 @@ export default function ReportsClient({ games, players: initialPlayers }: { game
     const data = await res.json();
     setLoading(false);
     if (!res.ok) { setError(data.error); return; }
-    setRows(data.rows as ExtractedRow[]);
+    const rowsWithDeals = await Promise.all((data.rows as any[]).map(async row => {
+      const deal = row.player_id ? await fetchDeal(row.player_id, gameId) : { rb_pct: null, ins_pct: null, action_pct: null };
+      return { ...row, ...deal };
+    }));
+    setRows(rowsWithDeals);
   }
 
-  function setRowPlayer(idx: number, player_id: number | null) {
+  async function setRowPlayer(idx: number, player_id: number | null) {
     const player_name = players.find(p => p.id === player_id)?.name ?? null;
-    setRows(r => r!.map((row, i) => i !== idx ? row : { ...row, player_id, player_name }));
+    const deal = player_id ? await fetchDeal(player_id, gameId) : { rb_pct: null, ins_pct: null, action_pct: null };
+    setRows(r => r!.map((row, i) => i !== idx ? row : { ...row, player_id, player_name, ...deal }));
+  }
+
+  function setRowField(idx: number, field: keyof ExtractedRow, value: any) {
+    setRows(r => r!.map((row, i) => i !== idx ? row : { ...row, [field]: value }));
   }
 
   async function createPlayer(idx: number) {
@@ -95,7 +129,7 @@ export default function ReportsClient({ games, players: initialPlayers }: { game
     setPlayers(p => [...p, newPlayer].sort((a, b) => a.name.localeCompare(b.name)));
     setCreatingFor(null);
     setNewPlayerName("");
-    setRows(r => r!.map((row, i) => i !== idx ? row : { ...row, player_id: newPlayer.id, player_name: newPlayer.name }));
+    setRows(r => r!.map((row, i) => i !== idx ? row : { ...row, player_id: newPlayer.id, player_name: newPlayer.name, rb_pct: null, ins_pct: null, action_pct: null }));
   }
 
   async function save() {
@@ -134,13 +168,12 @@ export default function ReportsClient({ games, players: initialPlayers }: { game
   const matchedCount = rows?.filter(r => r.player_id).length ?? 0;
   const unmatchedCount = rows ? rows.length - matchedCount : 0;
 
-  const thStyle: React.CSSProperties = { padding: "9px 12px", textAlign: "left", fontSize: 10, fontWeight: 600, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.06em", whiteSpace: "nowrap" };
-  const tdStyle: React.CSSProperties = { padding: "10px 12px", fontSize: 12 };
+  const thStyle: React.CSSProperties = { padding: "9px 10px", textAlign: "left", fontSize: 10, fontWeight: 600, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.06em", whiteSpace: "nowrap" };
+  const tdStyle: React.CSSProperties = { padding: "10px 10px", fontSize: 12 };
 
   function fmtAmount(v: number, positiveColor: string) {
     if (v === 0) return <span style={{ color: "var(--text-dim)" }}>—</span>;
-    const color = v > 0 ? positiveColor : "#f87171";
-    return <span style={{ fontWeight: 700, color }}>{v > 0 ? "+" : ""}{v.toFixed(2)}</span>;
+    return <span style={{ fontWeight: 700, color: v > 0 ? positiveColor : "#f87171" }}>{v > 0 ? "+" : ""}{v.toFixed(2)}</span>;
   }
 
   return (
@@ -213,9 +246,11 @@ export default function ReportsClient({ games, players: initialPlayers }: { game
                   <tr style={{ borderBottom: "1px solid var(--border)" }}>
                     <th style={thStyle}>ID App</th>
                     <th style={{ ...thStyle, color: "#38bdf8" }}>Rakeback</th>
+                    <th style={{ ...thStyle, color: "#38bdf8", opacity: 0.7 }}>% RB Rake</th>
                     <th style={{ ...thStyle, color: "#a78bfa" }}>Insurance</th>
+                    <th style={{ ...thStyle, color: "#a78bfa", opacity: 0.7 }}>% RB Ins.</th>
                     <th style={{ ...thStyle, color: "#4ade80" }}>Winnings / Pertes</th>
-                    <th style={thStyle}>Devise</th>
+                    <th style={{ ...thStyle, color: "#eab308" }}>% Action</th>
                     <th style={thStyle}>Joueur CRM</th>
                   </tr>
                 </thead>
@@ -224,12 +259,20 @@ export default function ReportsClient({ games, players: initialPlayers }: { game
                     const isCreating = creatingFor === idx;
                     return (
                       <tr key={idx} style={{ borderBottom: "1px solid var(--border)" }}>
-                        <td style={{ ...tdStyle, fontFamily: "monospace", color: "var(--text-muted)" }}>{row.external_id}</td>
+                        <td style={{ ...tdStyle, fontFamily: "monospace", color: "var(--text-muted)", fontSize: 11 }}>{row.external_id}</td>
                         <td style={tdStyle}>{fmtAmount(row.rakeback_amount, "#38bdf8")}</td>
+                        <td style={tdStyle}>
+                          <PctCell value={row.rb_pct} onChange={v => setRowField(idx, "rb_pct", v)} color="#38bdf8" />
+                        </td>
                         <td style={tdStyle}>{fmtAmount(row.insurance_amount, "#a78bfa")}</td>
+                        <td style={tdStyle}>
+                          <PctCell value={row.ins_pct} onChange={v => setRowField(idx, "ins_pct", v)} color="#a78bfa" />
+                        </td>
                         <td style={tdStyle}>{fmtAmount(row.winnings_amount, "#4ade80")}</td>
-                        <td style={{ ...tdStyle, color: "var(--text-dim)", fontSize: 11 }}>{row.currency}</td>
-                        <td style={{ ...tdStyle, minWidth: 190 }}>
+                        <td style={tdStyle}>
+                          <PctCell value={row.action_pct} onChange={v => setRowField(idx, "action_pct", v)} color="#eab308" />
+                        </td>
+                        <td style={{ ...tdStyle, minWidth: 180 }}>
                           {row.player_id && !isCreating ? (
                             <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                               <Badge label={row.player_name!} color="green" />
@@ -254,8 +297,8 @@ export default function ReportsClient({ games, players: initialPlayers }: { game
                               else setRowPlayer(idx, Number(e.target.value));
                             }} defaultValue=""
                               style={{ fontSize: 12, padding: "5px 10px", borderRadius: 6, background: "rgba(251,146,60,0.10)", border: "1px solid rgba(251,146,60,0.3)", color: "#fb923c", cursor: "pointer", width: "100%" }}>
-                              <option value="" disabled>— Identifier le joueur —</option>
-                              <option value="__new__">+ Créer un nouveau joueur</option>
+                              <option value="" disabled>— Identifier —</option>
+                              <option value="__new__">+ Créer un joueur</option>
                               {players.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
                             </select>
                           )}
@@ -292,7 +335,7 @@ export default function ReportsClient({ games, players: initialPlayers }: { game
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <div style={{ fontSize: 12, fontWeight: 600, color: "var(--text)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.period_label}</div>
                     <div style={{ fontSize: 11, color: "var(--text-dim)", marginTop: 1 }}>
-                      {r.entry_count} joueurs · <span style={{ color: "var(--green)" }}>+{r.total_amount.toFixed(2)} USDT</span>
+                      {r.entry_count} joueurs · <span style={{ color: "var(--green)" }}>+{r.total_amount.toFixed(2)}</span>
                       {r.unmatched_count > 0 && <span style={{ color: "#fb923c" }}> · {r.unmatched_count} non matchés</span>}
                     </div>
                   </div>

@@ -12,6 +12,9 @@ export async function POST(req: NextRequest) {
       winnings_amount: number;
       currency: string;
       player_id: number | null;
+      rb_pct: number | null;
+      ins_pct: number | null;
+      action_pct: number | null;
     }[];
   };
 
@@ -32,10 +35,26 @@ export async function POST(req: NextRequest) {
       row.currency || "USDT");
 
     if (row.player_id) {
+      // Remember the external ID mapping
       try {
         db.prepare(`INSERT OR IGNORE INTO player_game_ids (player_id, game_id, external_id) VALUES (?, ?, ?)`)
           .run(row.player_id, game_id, row.external_id);
       } catch {}
+
+      // Save/update the deal % for this player × game — auto-fills on next import
+      const hasDeal = row.rb_pct !== null || row.ins_pct !== null || row.action_pct !== null;
+      if (hasDeal) {
+        try {
+          db.prepare(`
+            INSERT INTO player_game_deals (player_id, game_id, rakeback_pct, insurance_pct, action_pct)
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(player_id, game_id) DO UPDATE SET
+              rakeback_pct  = COALESCE(excluded.rakeback_pct,  rakeback_pct),
+              insurance_pct = COALESCE(excluded.insurance_pct, insurance_pct),
+              action_pct    = COALESCE(excluded.action_pct,    action_pct)
+          `).run(row.player_id, game_id, row.rb_pct ?? null, row.ins_pct ?? null, row.action_pct ?? null);
+        } catch {}
+      }
     }
   }
 
