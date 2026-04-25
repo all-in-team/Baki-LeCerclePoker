@@ -340,11 +340,10 @@ export default function ReportsClient({ games, players: initialPlayers }: { game
               onChange={e => { const f = e.target.files?.[0]; if (f) onFile(f); }} />
             {file && (
               <div style={{ marginTop: 14, display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
-                <Btn variant="primary" onClick={extract} disabled={loading || !period.trim()}>
-                  {loading ? <><Loader size={14} style={{ animation: "spin 1s linear infinite" }} /> Analyse…</> : <><Upload size={14} /> Extraire avec Claude</>}
+                <Btn variant="primary" onClick={extract} disabled={loading}>
+                  {loading ? <><Loader size={14} style={{ animation: "spin 1s linear infinite" }} /> Analyse en cours…</> : <><Upload size={14} /> Extraire avec Claude</>}
                 </Btn>
                 <Btn variant="secondary" onClick={() => { setFile(null); setPreview(null); setRows(null); setError(null); }}>Changer</Btn>
-                {!period.trim() && <span style={{ fontSize: 11, color: "#f87171" }}>Remplis la période d'abord</span>}
               </div>
             )}
             {error && <div style={{ marginTop: 12, padding: "10px 14px", background: "rgba(248,113,113,0.10)", border: "1px solid rgba(248,113,113,0.25)", borderRadius: 7, fontSize: 12, color: "#f87171" }}>{error}</div>}
@@ -359,8 +358,8 @@ export default function ReportsClient({ games, players: initialPlayers }: { game
               {unmatchedCount > 0 && <span style={{ fontSize: 12, color: "#fb923c" }}>{unmatchedCount} à identifier</span>}
               <div style={{ marginLeft: "auto", display: "flex", gap: 8, alignItems: "center" }}>
                 {saved && <span style={{ fontSize: 12, color: "var(--green)", display: "flex", alignItems: "center", gap: 4 }}><CheckCircle size={13} /> Sauvegardé</span>}
-                <Btn variant="primary" onClick={save} disabled={saving || unmatchedCount > 0}>
-                  {saving ? "Sauvegarde…" : "Valider & sauvegarder"}
+                <Btn variant="primary" onClick={save} disabled={saving || unmatchedCount > 0 || !period.trim()}>
+                  {saving ? "Sauvegarde…" : !period.trim() ? "Remplis la période ↑" : "Valider & sauvegarder"}
                 </Btn>
               </div>
             </div>
