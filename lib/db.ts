@@ -288,4 +288,12 @@ function initSchema(db: Database.Database) {
     `);
     db.pragma("foreign_keys = ON");
   }
+
+  // Multi-amount rakeback entries
+  try { db.exec(`ALTER TABLE rakeback_entries ADD COLUMN insurance_amount REAL NOT NULL DEFAULT 0`); } catch {}
+  try { db.exec(`ALTER TABLE rakeback_entries ADD COLUMN winnings_amount REAL NOT NULL DEFAULT 0`); } catch {}
+  // Per-report action percentages per type
+  try { db.exec(`ALTER TABLE rakeback_reports ADD COLUMN rakeback_pct REAL`); } catch {}
+  try { db.exec(`ALTER TABLE rakeback_reports ADD COLUMN insurance_pct REAL`); } catch {}
+  try { db.exec(`ALTER TABLE rakeback_reports ADD COLUMN winnings_pct REAL`); } catch {}
 }

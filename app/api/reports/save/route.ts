@@ -2,10 +2,20 @@ import { NextRequest, NextResponse } from "next/server";
 import { getDb } from "@/lib/db";
 
 export async function POST(req: NextRequest) {
-  const { game_id, period_label, rows } = await req.json() as {
+  const { game_id, period_label, rakeback_pct, insurance_pct, winnings_pct, rows } = await req.json() as {
     game_id: number;
     period_label: string;
-    rows: { external_id: string; amount: number; currency: string; player_id: number | null; action_pct: number | null }[];
+    rakeback_pct: number | null;
+    insurance_pct: number | null;
+    winnings_pct: number | null;
+    rows: {
+      external_id: string;
+      rakeback_amount: number;
+      insurance_amount: number;
+      winnings_amount: number;
+      currency: string;
+      player_id: number | null;
+    }[];
   };
 
   if (!game_id || !period_label || !rows?.length) {
@@ -13,31 +23,25 @@ export async function POST(req: NextRequest) {
   }
 
   const db = getDb();
-  const rpt = db.prepare(`INSERT INTO rakeback_reports (game_id, period_label) VALUES (?, ?)`).run(game_id, period_label);
+  const rpt = db.prepare(`
+    INSERT INTO rakeback_reports (game_id, period_label, rakeback_pct, insurance_pct, winnings_pct)
+    VALUES (?, ?, ?, ?, ?)
+  `).run(game_id, period_label, rakeback_pct ?? null, insurance_pct ?? null, winnings_pct ?? null);
   const report_id = Number(rpt.lastInsertRowid);
 
   for (const row of rows) {
     db.prepare(`
-      INSERT INTO rakeback_entries (report_id, player_id, external_id, amount, currency)
-      VALUES (?, ?, ?, ?, ?)
-    `).run(report_id, row.player_id ?? null, row.external_id, row.amount, row.currency || "USDT");
+      INSERT INTO rakeback_entries (report_id, player_id, external_id, amount, insurance_amount, winnings_amount, currency)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `).run(report_id, row.player_id ?? null, row.external_id,
+      row.rakeback_amount ?? 0, row.insurance_amount ?? 0, row.winnings_amount ?? 0,
+      row.currency || "USDT");
 
     if (row.player_id) {
       try {
         db.prepare(`INSERT OR IGNORE INTO player_game_ids (player_id, game_id, external_id) VALUES (?, ?, ?)`)
           .run(row.player_id, game_id, row.external_id);
       } catch {}
-
-      // Remember the deal (action %) for this player on this game — auto-fills next time
-      if (row.action_pct !== null && row.action_pct !== undefined) {
-        try {
-          db.prepare(`
-            INSERT INTO player_game_deals (player_id, game_id, action_pct, rakeback_pct)
-            VALUES (?, ?, ?, 0)
-            ON CONFLICT(player_id, game_id) DO UPDATE SET action_pct = excluded.action_pct
-          `).run(row.player_id, game_id, row.action_pct);
-        } catch {}
-      }
     }
   }
 

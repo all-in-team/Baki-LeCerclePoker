@@ -1,16 +1,20 @@
 "use client";
 
 import { useState, useRef, useCallback, useEffect } from "react";
-import { Upload, FileImage, CheckCircle, Trash2, ChevronDown, ChevronUp, Loader, Plus } from "lucide-react";
+import { Upload, FileImage, CheckCircle, Trash2, ChevronDown, ChevronUp, Loader } from "lucide-react";
 import Btn from "@/components/Btn";
 import Badge from "@/components/Badge";
 
 interface Game { id: number; name: string; default_action_pct: number | null; }
 interface Player { id: number; name: string; }
 interface ExtractedRow {
-  external_id: string; amount: number; currency: string;
-  player_id: number | null; player_name: string | null;
-  action_pct: number | null;
+  external_id: string;
+  rakeback_amount: number;
+  insurance_amount: number;
+  winnings_amount: number;
+  currency: string;
+  player_id: number | null;
+  player_name: string | null;
 }
 interface Report {
   id: number; game_name: string; period_label: string; created_at: string;
@@ -21,8 +25,19 @@ const GAME_COLOR: Record<string, string> = {
   TELE: "#a78bfa", Wepoker: "#38bdf8", Xpoker: "#fb923c", ClubGG: "#4ade80",
 };
 
+function PctInput({ value, onChange }: { value: string; onChange: (v: string) => void }) {
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+      <input type="number" min="0" max="100" step="1" value={value} onChange={e => onChange(e.target.value)}
+        placeholder="—"
+        style={{ width: 48, padding: "3px 6px", borderRadius: 5, fontSize: 12, background: "rgba(234,179,8,0.08)", border: "1px solid rgba(234,179,8,0.3)", color: "#eab308", textAlign: "center", outline: "none" }} />
+      <span style={{ fontSize: 11, color: "var(--text-dim)" }}>%</span>
+    </div>
+  );
+}
+
 export default function ReportsClient({ games: initialGames, players: initialPlayers }: { games: Game[]; players: Player[] }) {
-  const [games, setGames] = useState<Game[]>(initialGames);
+  const [games] = useState<Game[]>(initialGames);
   const [gameId, setGameId] = useState(initialGames[0]?.id ?? 0);
   const [period, setPeriod] = useState("");
   const [file, setFile] = useState<File | null>(null);
@@ -37,13 +52,15 @@ export default function ReportsClient({ games: initialGames, players: initialPla
   const [expanded, setExpanded] = useState<number | null>(null);
   const [expandedEntries, setExpandedEntries] = useState<any[]>([]);
   const [players, setPlayers] = useState<Player[]>(initialPlayers);
+  // Per-type action percentages (report-level)
+  const [rakebackPct, setRakebackPct] = useState("");
+  const [insurancePct, setInsurancePct] = useState("");
+  const [winningsPct, setWinningsPct] = useState("");
   // New player creation
-  const [creatingFor, setCreatingFor] = useState<number | null>(null); // row index
+  const [creatingFor, setCreatingFor] = useState<number | null>(null);
   const [newPlayerName, setNewPlayerName] = useState("");
   const [creatingBusy, setCreatingBusy] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
-
-  const currentGame = games.find(g => g.id === gameId);
 
   useEffect(() => { loadReports(); }, []);
 
@@ -73,38 +90,12 @@ export default function ReportsClient({ games: initialGames, players: initialPla
     const data = await res.json();
     setLoading(false);
     if (!res.ok) { setError(data.error); return; }
-    // Load stored deal per matched player — null means first time, will prompt inline
-    const rowsWithPct = await Promise.all((data.rows as ExtractedRow[]).map(async row => {
-      if (row.player_id) {
-        const deal = await fetchDeal(row.player_id, gameId);
-        return { ...row, action_pct: deal };
-      }
-      return { ...row, action_pct: null };
-    }));
-    setRows(rowsWithPct);
-  }
-
-  async function fetchDeal(playerId: number, gId: number): Promise<number | null> {
-    try {
-      const res = await fetch(`/api/games/deals?player_id=${playerId}`).then(r => r.json());
-      const deal = res.find((d: any) => d.game_id === gId);
-      return deal?.action_pct ?? null;
-    } catch { return null; }
+    setRows(data.rows as ExtractedRow[]);
   }
 
   async function setRowPlayer(idx: number, player_id: number | null) {
-    let action_pct: number | null = null;
-    if (player_id) {
-      const stored = await fetchDeal(player_id, gameId);
-      action_pct = stored ?? null;
-    }
     const player_name = players.find(p => p.id === player_id)?.name ?? null;
-    setRows(r => r!.map((row, i) => i !== idx ? row : { ...row, player_id, player_name, action_pct }));
-  }
-
-  function setRowPct(idx: number, pct: string) {
-    const v = parseFloat(pct);
-    setRows(r => r!.map((row, i) => i !== idx ? row : { ...row, action_pct: isNaN(v) ? null : v }));
+    setRows(r => r!.map((row, i) => i !== idx ? row : { ...row, player_id, player_name }));
   }
 
   async function createPlayer(idx: number) {
@@ -121,7 +112,7 @@ export default function ReportsClient({ games: initialGames, players: initialPla
     setPlayers(p => [...p, newPlayer].sort((a, b) => a.name.localeCompare(b.name)));
     setCreatingFor(null);
     setNewPlayerName("");
-    setRows(r => r!.map((row, i) => i !== idx ? row : { ...row, player_id: newPlayer.id, player_name: newPlayer.name, action_pct: null }));
+    setRows(r => r!.map((row, i) => i !== idx ? row : { ...row, player_id: newPlayer.id, player_name: newPlayer.name }));
   }
 
   async function save() {
@@ -129,7 +120,14 @@ export default function ReportsClient({ games: initialGames, players: initialPla
     setSaving(true);
     const res = await fetch("/api/reports/save", {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ game_id: gameId, period_label: period.trim(), rows }),
+      body: JSON.stringify({
+        game_id: gameId,
+        period_label: period.trim(),
+        rakeback_pct: parseFloat(rakebackPct) || null,
+        insurance_pct: parseFloat(insurancePct) || null,
+        winnings_pct: parseFloat(winningsPct) || null,
+        rows,
+      }),
     });
     setSaving(false);
     if (res.ok) { setSaved(true); setFile(null); setPreview(null); setRows(null); setPeriod(""); loadReports(); }
@@ -157,13 +155,25 @@ export default function ReportsClient({ games: initialGames, players: initialPla
     loadReports();
   }
 
+  const rkPct = parseFloat(rakebackPct) || 0;
+  const insPct = parseFloat(insurancePct) || 0;
+  const winPct = parseFloat(winningsPct) || 0;
+
   const matchedCount = rows?.filter(r => r.player_id).length ?? 0;
   const unmatchedCount = rows ? rows.length - matchedCount : 0;
-  const missingPct = rows?.filter(r => r.player_id && r.action_pct === null).length ?? 0;
-  const myTotalCost = rows?.reduce((sum, r) => {
-    if (!r.player_id || r.action_pct === null) return sum;
-    return sum + r.amount * r.action_pct / 100;
-  }, 0) ?? 0;
+
+  function rowCost(row: ExtractedRow) {
+    if (!row.player_id) return null;
+    const v = row.rakeback_amount * rkPct / 100
+            + row.insurance_amount * insPct / 100
+            + row.winnings_amount * winPct / 100;
+    return v > 0 ? v : null;
+  }
+
+  const myTotalCost = rows?.reduce((s, r) => s + (rowCost(r) ?? 0), 0) ?? 0;
+
+  const thStyle: React.CSSProperties = { padding: "9px 12px", textAlign: "left", fontSize: 10, fontWeight: 600, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.06em", whiteSpace: "nowrap" };
+  const tdStyle: React.CSSProperties = { padding: "10px 12px", fontSize: 12 };
 
   return (
     <div style={{ display: "grid", gridTemplateColumns: "1fr 360px", gap: 24, alignItems: "start" }}>
@@ -180,6 +190,24 @@ export default function ReportsClient({ games: initialGames, players: initialPla
               placeholder="Période — ex: Semaine 17, Avr 2026"
               style={{ flex: 1, fontSize: 12, padding: "7px 12px", borderRadius: 7, background: "var(--bg-elevated)", border: "1px solid var(--border)", color: "var(--text)", outline: "none" }} />
           </div>
+
+          {/* Action % per type */}
+          <div style={{ padding: "10px 20px", borderBottom: "1px solid var(--border)", display: "flex", gap: 20, alignItems: "center", flexWrap: "wrap", background: "rgba(234,179,8,0.03)" }}>
+            <span style={{ fontSize: 11, fontWeight: 600, color: "var(--text-dim)", marginRight: 4 }}>Mon action %</span>
+            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+              <span style={{ fontSize: 11, color: "#38bdf8" }}>Rakeback</span>
+              <PctInput value={rakebackPct} onChange={setRakebackPct} />
+            </div>
+            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+              <span style={{ fontSize: 11, color: "#a78bfa" }}>Insurance</span>
+              <PctInput value={insurancePct} onChange={setInsurancePct} />
+            </div>
+            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+              <span style={{ fontSize: 11, color: "#4ade80" }}>Winnings</span>
+              <PctInput value={winningsPct} onChange={setWinningsPct} />
+            </div>
+          </div>
+
           <div style={{ padding: 20 }}>
             <div
               onDragOver={e => { e.preventDefault(); setDragging(true); }}
@@ -231,83 +259,82 @@ export default function ReportsClient({ games: initialGames, players: initialPla
               )}
               <div style={{ marginLeft: "auto", display: "flex", gap: 8, alignItems: "center" }}>
                 {saved && <span style={{ fontSize: 12, color: "var(--green)", display: "flex", alignItems: "center", gap: 4 }}><CheckCircle size={13} /> Sauvegardé</span>}
-                <Btn variant="primary" onClick={save} disabled={saving || unmatchedCount > 0 || missingPct > 0}>
+                <Btn variant="primary" onClick={save} disabled={saving || unmatchedCount > 0}>
                   {saving ? "Sauvegarde…" : "Valider & sauvegarder"}
                 </Btn>
               </div>
             </div>
-            <table style={{ width: "100%", borderCollapse: "collapse" }}>
-              <thead>
-                <tr style={{ borderBottom: "1px solid var(--border)" }}>
-                  {["ID App", "Rakeback", "Action %", "Mon coût", "Joueur CRM"].map(h => (
-                    <th key={h} style={{ padding: "9px 16px", textAlign: "left", fontSize: 11, fontWeight: 600, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.07em" }}>{h}</th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {rows.map((row, idx) => {
-                  const myCost = row.player_id && row.action_pct !== null ? row.amount * row.action_pct / 100 : null;
-                  const isCreating = creatingFor === idx;
-                  return (
-                    <tr key={idx} style={{ borderBottom: "1px solid var(--border)" }}>
-                      <td style={{ padding: "10px 16px", fontSize: 12, fontFamily: "monospace", color: "var(--text-muted)" }}>{row.external_id}</td>
-                      <td style={{ padding: "10px 16px", fontSize: 13, fontWeight: 700, color: "var(--green)" }}>+{row.amount.toFixed(2)} {row.currency}</td>
-                      <td style={{ padding: "10px 16px" }}>
-                        {row.player_id ? (
-                          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                            <input type="number" min="0" max="100" step="1"
-                              value={row.action_pct ?? ""}
-                              onChange={e => setRowPct(idx, e.target.value)}
-                              placeholder="—"
-                              style={{ width: 52, padding: "4px 6px", borderRadius: 5, fontSize: 12, background: "rgba(234,179,8,0.08)", border: "1px solid rgba(234,179,8,0.35)", color: "var(--gold)", textAlign: "center", outline: "none" }} />
-                            <span style={{ fontSize: 11, color: "var(--text-dim)" }}>%</span>
-                          </div>
-                        ) : <span style={{ color: "var(--text-dim)", fontSize: 12 }}>—</span>}
-                      </td>
-                      <td style={{ padding: "10px 16px", fontSize: 13, fontWeight: 700, color: myCost !== null ? "#f87171" : "var(--text-dim)" }}>
-                        {myCost !== null ? `−${myCost.toFixed(2)}` : "—"}
-                      </td>
-                      <td style={{ padding: "10px 16px", minWidth: 200 }}>
-                        {row.player_id && !isCreating ? (
-                          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                            <Badge label={row.player_name!} color="green" />
-                            <button onClick={() => setRowPlayer(idx, null)} style={{ fontSize: 11, color: "var(--text-dim)", background: "none", border: "none", cursor: "pointer" }}>✕</button>
-                          </div>
-                        ) : isCreating ? (
-                          <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
-                            <input autoFocus value={newPlayerName} onChange={e => setNewPlayerName(e.target.value)}
-                              onKeyDown={e => e.key === "Enter" && createPlayer(idx)}
-                              placeholder="Nom du joueur"
-                              style={{ flex: 1, padding: "5px 8px", borderRadius: 6, fontSize: 12, background: "var(--bg-elevated)", border: "1px solid var(--green)", color: "var(--text)", outline: "none" }} />
-                            <button onClick={() => createPlayer(idx)} disabled={creatingBusy}
-                              style={{ padding: "5px 10px", borderRadius: 6, fontSize: 12, fontWeight: 600, background: "rgba(34,197,94,0.12)", border: "1px solid rgba(34,197,94,0.3)", color: "var(--green)", cursor: "pointer" }}>
-                              {creatingBusy ? "…" : "Créer"}
-                            </button>
-                            <button onClick={() => { setCreatingFor(null); setNewPlayerName(""); }}
-                              style={{ fontSize: 12, color: "var(--text-dim)", background: "none", border: "none", cursor: "pointer" }}>✕</button>
-                          </div>
-                        ) : (
-                          <select onChange={e => {
-                            if (e.target.value === "__new__") { setCreatingFor(idx); setNewPlayerName(""); }
-                            else setRowPlayer(idx, Number(e.target.value));
-                          }} defaultValue=""
-                            style={{ fontSize: 12, padding: "5px 10px", borderRadius: 6, background: "rgba(251,146,60,0.10)", border: "1px solid rgba(251,146,60,0.3)", color: "#fb923c", cursor: "pointer", width: "100%" }}>
-                            <option value="" disabled>— Identifier le joueur —</option>
-                            <option value="__new__">+ Créer un nouveau joueur</option>
-                            {players.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
-                          </select>
-                        )}
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-            {(unmatchedCount > 0 || missingPct > 0) && (
+            <div style={{ overflowX: "auto" }}>
+              <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                <thead>
+                  <tr style={{ borderBottom: "1px solid var(--border)" }}>
+                    <th style={thStyle}>ID App</th>
+                    <th style={{ ...thStyle, color: "#38bdf8" }}>Rakeback</th>
+                    <th style={{ ...thStyle, color: "#a78bfa" }}>Insurance</th>
+                    <th style={{ ...thStyle, color: "#4ade80" }}>Winnings</th>
+                    <th style={{ ...thStyle, color: "#f87171" }}>Mon coût</th>
+                    <th style={thStyle}>Joueur CRM</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {rows.map((row, idx) => {
+                    const cost = rowCost(row);
+                    const isCreating = creatingFor === idx;
+                    return (
+                      <tr key={idx} style={{ borderBottom: "1px solid var(--border)" }}>
+                        <td style={{ ...tdStyle, fontFamily: "monospace", color: "var(--text-muted)" }}>{row.external_id}</td>
+                        <td style={{ ...tdStyle, fontWeight: 700, color: "#38bdf8" }}>
+                          {row.rakeback_amount > 0 ? `+${row.rakeback_amount.toFixed(2)}` : <span style={{ color: "var(--text-dim)" }}>—</span>}
+                        </td>
+                        <td style={{ ...tdStyle, fontWeight: 700, color: "#a78bfa" }}>
+                          {row.insurance_amount > 0 ? `+${row.insurance_amount.toFixed(2)}` : <span style={{ color: "var(--text-dim)" }}>—</span>}
+                        </td>
+                        <td style={{ ...tdStyle, fontWeight: 700, color: "#4ade80" }}>
+                          {row.winnings_amount > 0 ? `+${row.winnings_amount.toFixed(2)}` : <span style={{ color: "var(--text-dim)" }}>—</span>}
+                        </td>
+                        <td style={{ ...tdStyle, fontWeight: 700, color: cost !== null ? "#f87171" : "var(--text-dim)" }}>
+                          {cost !== null ? `−${cost.toFixed(2)} ${row.currency}` : "—"}
+                        </td>
+                        <td style={{ ...tdStyle, minWidth: 190 }}>
+                          {row.player_id && !isCreating ? (
+                            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                              <Badge label={row.player_name!} color="green" />
+                              <button onClick={() => setRowPlayer(idx, null)} style={{ fontSize: 11, color: "var(--text-dim)", background: "none", border: "none", cursor: "pointer" }}>✕</button>
+                            </div>
+                          ) : isCreating ? (
+                            <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                              <input autoFocus value={newPlayerName} onChange={e => setNewPlayerName(e.target.value)}
+                                onKeyDown={e => e.key === "Enter" && createPlayer(idx)}
+                                placeholder="Nom du joueur"
+                                style={{ flex: 1, padding: "5px 8px", borderRadius: 6, fontSize: 12, background: "var(--bg-elevated)", border: "1px solid var(--green)", color: "var(--text)", outline: "none" }} />
+                              <button onClick={() => createPlayer(idx)} disabled={creatingBusy}
+                                style={{ padding: "5px 10px", borderRadius: 6, fontSize: 12, fontWeight: 600, background: "rgba(34,197,94,0.12)", border: "1px solid rgba(34,197,94,0.3)", color: "var(--green)", cursor: "pointer" }}>
+                                {creatingBusy ? "…" : "Créer"}
+                              </button>
+                              <button onClick={() => { setCreatingFor(null); setNewPlayerName(""); }}
+                                style={{ fontSize: 12, color: "var(--text-dim)", background: "none", border: "none", cursor: "pointer" }}>✕</button>
+                            </div>
+                          ) : (
+                            <select onChange={e => {
+                              if (e.target.value === "__new__") { setCreatingFor(idx); setNewPlayerName(""); }
+                              else setRowPlayer(idx, Number(e.target.value));
+                            }} defaultValue=""
+                              style={{ fontSize: 12, padding: "5px 10px", borderRadius: 6, background: "rgba(251,146,60,0.10)", border: "1px solid rgba(251,146,60,0.3)", color: "#fb923c", cursor: "pointer", width: "100%" }}>
+                              <option value="" disabled>— Identifier le joueur —</option>
+                              <option value="__new__">+ Créer un nouveau joueur</option>
+                              {players.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+                            </select>
+                          )}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+            {unmatchedCount > 0 && (
               <div style={{ padding: "10px 16px", fontSize: 11, color: "#fb923c", borderTop: "1px solid var(--border)" }}>
-                {unmatchedCount > 0 && `⚠️ ${unmatchedCount} joueur(s) non identifié(s) — leur ID sera mémorisé pour les prochains rapports`}
-                {unmatchedCount > 0 && missingPct > 0 && <br />}
-                {missingPct > 0 && `⚠️ ${missingPct} joueur(s) sans action % — remplis-le une fois, il sera mémorisé`}
+                ⚠️ {unmatchedCount} joueur(s) non identifié(s) — leur ID sera mémorisé pour les prochains rapports
               </div>
             )}
           </div>
@@ -345,7 +372,7 @@ export default function ReportsClient({ games: initialGames, players: initialPla
                 {isOpen && expandedEntries.map((e: any) => (
                   <div key={e.id} style={{ padding: "7px 16px", display: "flex", alignItems: "center", gap: 8, borderTop: "1px solid var(--border)", background: "var(--bg-surface)" }}>
                     <span style={{ fontSize: 11, fontFamily: "monospace", color: "var(--text-dim)", flex: 1, overflow: "hidden", textOverflow: "ellipsis" }}>{e.external_id}</span>
-                    <span style={{ fontSize: 12, fontWeight: 600, color: "var(--green)", flexShrink: 0 }}>+{e.amount.toFixed(2)}</span>
+                    <span style={{ fontSize: 11, color: "#38bdf8", flexShrink: 0 }}>rb:{e.amount?.toFixed(2)}</span>
                     {e.player_id
                       ? <span style={{ fontSize: 11, fontWeight: 600, color: "var(--green)", flexShrink: 0 }}>{e.player_name}</span>
                       : <select onChange={ev => matchEntry(r.id, e.id, Number(ev.target.value))} defaultValue=""
