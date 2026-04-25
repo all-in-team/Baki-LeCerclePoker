@@ -15,15 +15,15 @@ interface ExtractedRow {
   currency: string;
   player_id: number | null;
   player_name: string | null;
-  // deal % per player — stored in player_game_deals, auto-filled when matched
-  rb_pct: number | null;       // % rakeback sur le rake
-  ins_pct: number | null;      // % rakeback sur l'insurance
-  action_pct: number | null;   // % d'action sur le joueur
+  rb_pct: number | null;
+  ins_pct: number | null;
+  action_pct: number | null;
 }
 interface Report {
   id: number; game_name: string; period_label: string; created_at: string;
   entry_count: number; total_amount: number; unmatched_count: number;
 }
+interface DealDraft { rb_pct: string; ins_pct: string; action_pct: string; }
 
 const GAME_COLOR: Record<string, string> = {
   TELE: "#a78bfa", Wepoker: "#38bdf8", Xpoker: "#fb923c", ClubGG: "#4ade80",
@@ -42,6 +42,90 @@ function PctCell({ value, onChange, color = "#eab308" }: { value: number | null;
   );
 }
 
+// Modal: configure deals for newly matched players with no stored deal
+function DealSetupModal({
+  rows, onConfirm, onSkip,
+}: {
+  rows: ExtractedRow[];
+  onConfirm: (drafts: Record<number, DealDraft>) => void;
+  onSkip: () => void;
+}) {
+  // Only matched players missing at least one %
+  const needsDeal = rows.filter(r => r.player_id && (r.rb_pct === null || r.ins_pct === null || r.action_pct === null));
+  const [drafts, setDrafts] = useState<Record<number, DealDraft>>(() =>
+    Object.fromEntries(needsDeal.map((r, i) => [i, {
+      rb_pct: r.rb_pct !== null ? String(r.rb_pct) : "",
+      ins_pct: r.ins_pct !== null ? String(r.ins_pct) : "",
+      action_pct: r.action_pct !== null ? String(r.action_pct) : "",
+    }]))
+  );
+
+  if (!needsDeal.length) { onSkip(); return null; }
+
+  function set(i: number, field: keyof DealDraft, val: string) {
+    setDrafts(d => ({ ...d, [i]: { ...d[i], [field]: val } }));
+  }
+
+  const inputStyle = (color: string, val: string): React.CSSProperties => ({
+    width: 56, padding: "6px 8px", borderRadius: 6, fontSize: 13, fontWeight: 600,
+    background: val ? `${color}14` : "var(--bg-surface)",
+    border: `1px solid ${val ? color + "66" : "var(--border)"}`,
+    color: val ? color : "var(--text-dim)", textAlign: "center", outline: "none",
+  });
+
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.7)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 999 }}>
+      <div style={{ background: "var(--bg-raised)", border: "1px solid var(--border)", borderRadius: 14, width: 520, maxHeight: "80vh", overflow: "auto", boxShadow: "0 24px 64px rgba(0,0,0,0.5)" }}>
+        <div style={{ padding: "20px 24px", borderBottom: "1px solid var(--border)" }}>
+          <div style={{ fontSize: 15, fontWeight: 700, color: "var(--text)", marginBottom: 4 }}>Configurer les deals</div>
+          <div style={{ fontSize: 12, color: "var(--text-muted)" }}>
+            {needsDeal.length} joueur{needsDeal.length > 1 ? "s" : ""} — remplis les % une fois, mémorisés pour les prochains imports
+          </div>
+        </div>
+
+        {/* Column headers */}
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 80px 80px 80px", gap: 12, padding: "10px 24px", borderBottom: "1px solid var(--border)" }}>
+          <span style={{ fontSize: 10, fontWeight: 600, color: "var(--text-dim)", textTransform: "uppercase" }}>Joueur</span>
+          <span style={{ fontSize: 10, fontWeight: 600, color: "#38bdf8", textTransform: "uppercase", textAlign: "center" }}>% RB Rake</span>
+          <span style={{ fontSize: 10, fontWeight: 600, color: "#a78bfa", textTransform: "uppercase", textAlign: "center" }}>% RB Ins.</span>
+          <span style={{ fontSize: 10, fontWeight: 600, color: "#eab308", textTransform: "uppercase", textAlign: "center" }}>% Action</span>
+        </div>
+
+        {needsDeal.map((row, i) => (
+          <div key={i} style={{ display: "grid", gridTemplateColumns: "1fr 80px 80px 80px", gap: 12, padding: "14px 24px", borderBottom: "1px solid var(--border)", alignItems: "center" }}>
+            <div>
+              <div style={{ fontSize: 13, fontWeight: 600, color: "var(--text)" }}>{row.player_name}</div>
+              <div style={{ fontSize: 11, fontFamily: "monospace", color: "var(--text-dim)", marginTop: 2 }}>{row.external_id}</div>
+            </div>
+            <input type="number" min="0" max="100" step="1" placeholder="—"
+              value={drafts[i]?.rb_pct ?? ""}
+              onChange={e => set(i, "rb_pct", e.target.value)}
+              style={inputStyle("#38bdf8", drafts[i]?.rb_pct ?? "")} />
+            <input type="number" min="0" max="100" step="1" placeholder="—"
+              value={drafts[i]?.ins_pct ?? ""}
+              onChange={e => set(i, "ins_pct", e.target.value)}
+              style={inputStyle("#a78bfa", drafts[i]?.ins_pct ?? "")} />
+            <input type="number" min="0" max="100" step="1" placeholder="—"
+              value={drafts[i]?.action_pct ?? ""}
+              onChange={e => set(i, "action_pct", e.target.value)}
+              style={inputStyle("#eab308", drafts[i]?.action_pct ?? "")} />
+          </div>
+        ))}
+
+        <div style={{ padding: "16px 24px", display: "flex", gap: 10, justifyContent: "flex-end" }}>
+          <button onClick={onSkip} style={{ padding: "8px 16px", borderRadius: 7, fontSize: 13, background: "none", border: "1px solid var(--border)", color: "var(--text-muted)", cursor: "pointer" }}>
+            Passer
+          </button>
+          <button onClick={() => onConfirm(drafts)}
+            style={{ padding: "8px 20px", borderRadius: 7, fontSize: 13, fontWeight: 700, background: "var(--green)", border: "none", color: "#000", cursor: "pointer" }}>
+            Confirmer
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function ReportsClient({ games, players: initialPlayers }: { games: Game[]; players: Player[] }) {
   const [gameId, setGameId] = useState(games[0]?.id ?? 0);
   const [period, setPeriod] = useState("");
@@ -50,6 +134,7 @@ export default function ReportsClient({ games, players: initialPlayers }: { game
   const [dragging, setDragging] = useState(false);
   const [loading, setLoading] = useState(false);
   const [rows, setRows] = useState<ExtractedRow[] | null>(null);
+  const [showDealModal, setShowDealModal] = useState(false);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -103,6 +188,27 @@ export default function ReportsClient({ games, players: initialPlayers }: { game
       return { ...row, ...deal };
     }));
     setRows(rowsWithDeals);
+    // Open deal modal if any matched player is missing a %
+    const needsSetup = rowsWithDeals.some(r => r.player_id && (r.rb_pct === null || r.ins_pct === null || r.action_pct === null));
+    if (needsSetup) setShowDealModal(true);
+  }
+
+  function applyDealDrafts(drafts: Record<number, DealDraft>) {
+    if (!rows) return;
+    const needsDeal = rows.filter(r => r.player_id && (r.rb_pct === null || r.ins_pct === null || r.action_pct === null));
+    let draftIdx = 0;
+    setRows(rows.map(row => {
+      if (!row.player_id || (row.rb_pct !== null && row.ins_pct !== null && row.action_pct !== null)) return row;
+      const d = drafts[draftIdx++];
+      if (!d) return row;
+      return {
+        ...row,
+        rb_pct: d.rb_pct !== "" ? parseFloat(d.rb_pct) : row.rb_pct,
+        ins_pct: d.ins_pct !== "" ? parseFloat(d.ins_pct) : row.ins_pct,
+        action_pct: d.action_pct !== "" ? parseFloat(d.action_pct) : row.action_pct,
+      };
+    }));
+    setShowDealModal(false);
   }
 
   async function setRowPlayer(idx: number, player_id: number | null) {
@@ -178,6 +284,15 @@ export default function ReportsClient({ games, players: initialPlayers }: { game
 
   return (
     <div style={{ display: "grid", gridTemplateColumns: "1fr 360px", gap: 24, alignItems: "start" }}>
+
+      {/* Deal setup modal */}
+      {showDealModal && rows && (
+        <DealSetupModal
+          rows={rows}
+          onConfirm={applyDealDrafts}
+          onSkip={() => setShowDealModal(false)}
+        />
+      )}
 
       <div>
         <div style={{ background: "var(--bg-raised)", border: "1px solid var(--border)", borderRadius: 10, marginBottom: 20 }}>
