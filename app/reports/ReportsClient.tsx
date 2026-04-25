@@ -21,6 +21,7 @@ interface ExtractedRow {
 }
 interface Report {
   id: number; game_name: string; period_label: string; created_at: string;
+  club_id: string | null; club_name: string | null;
   entry_count: number; total_amount: number; unmatched_count: number;
 }
 interface DealDraft { rb_pct: string; ins_pct: string; action_pct: string; }
@@ -129,6 +130,8 @@ function DealSetupModal({
 export default function ReportsClient({ games, players: initialPlayers }: { games: Game[]; players: Player[] }) {
   const [gameId, setGameId] = useState(games[0]?.id ?? 0);
   const [period, setPeriod] = useState("");
+  const [clubId, setClubId] = useState("");
+  const [clubName, setClubName] = useState("");
   const [file, setFile] = useState<File | null>(null);
   const [preview, setPreview] = useState<string | null>(null);
   const [dragging, setDragging] = useState(false);
@@ -243,10 +246,10 @@ export default function ReportsClient({ games, players: initialPlayers }: { game
     setSaving(true);
     const res = await fetch("/api/reports/save", {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ game_id: gameId, period_label: period.trim(), rows }),
+      body: JSON.stringify({ game_id: gameId, period_label: period.trim(), club_id: clubId.trim() || null, club_name: clubName.trim() || null, rows }),
     });
     setSaving(false);
-    if (res.ok) { setSaved(true); setFile(null); setPreview(null); setRows(null); setPeriod(""); loadReports(); }
+    if (res.ok) { setSaved(true); setFile(null); setPreview(null); setRows(null); setPeriod(""); setClubId(""); setClubName(""); loadReports(); }
   }
 
   async function deleteReport(id: number) {
@@ -296,14 +299,20 @@ export default function ReportsClient({ games, players: initialPlayers }: { game
 
       <div>
         <div style={{ background: "var(--bg-raised)", border: "1px solid var(--border)", borderRadius: 10, marginBottom: 20 }}>
-          <div style={{ padding: "14px 20px", borderBottom: "1px solid var(--border)", display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
+          <div style={{ padding: "14px 20px", borderBottom: "1px solid var(--border)", display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
             <select value={gameId} onChange={e => setGameId(Number(e.target.value))}
               style={{ fontSize: 13, fontWeight: 700, padding: "7px 12px", borderRadius: 7, background: "var(--bg-elevated)", border: "1px solid var(--border)", color: GAME_COLOR[games.find(g => g.id === gameId)?.name ?? ""] ?? "var(--text)", cursor: "pointer" }}>
               {games.map(g => <option key={g.id} value={g.id}>{g.name}</option>)}
             </select>
+            <input value={clubId} onChange={e => setClubId(e.target.value)}
+              placeholder="Club ID"
+              style={{ width: 90, fontSize: 12, padding: "7px 10px", borderRadius: 7, background: "var(--bg-elevated)", border: "1px solid var(--border)", color: "var(--text)", outline: "none", fontFamily: "monospace" }} />
+            <input value={clubName} onChange={e => setClubName(e.target.value)}
+              placeholder="Club Name"
+              style={{ width: 130, fontSize: 12, padding: "7px 10px", borderRadius: 7, background: "var(--bg-elevated)", border: "1px solid var(--border)", color: "var(--text)", outline: "none" }} />
             <input value={period} onChange={e => setPeriod(e.target.value)}
               placeholder="Période — ex: Semaine 17, Avr 2026"
-              style={{ flex: 1, fontSize: 12, padding: "7px 12px", borderRadius: 7, background: "var(--bg-elevated)", border: "1px solid var(--border)", color: "var(--text)", outline: "none" }} />
+              style={{ flex: 1, minWidth: 160, fontSize: 12, padding: "7px 12px", borderRadius: 7, background: "var(--bg-elevated)", border: "1px solid var(--border)", color: "var(--text)", outline: "none" }} />
           </div>
           <div style={{ padding: 20 }}>
             <div
@@ -448,7 +457,10 @@ export default function ReportsClient({ games, players: initialPlayers }: { game
                 <div style={{ padding: "12px 16px", display: "flex", alignItems: "center", gap: 8 }}>
                   <span style={{ fontSize: 10, fontWeight: 700, color: gc, background: gc + "18", padding: "2px 6px", borderRadius: 4, flexShrink: 0 }}>{r.game_name}</span>
                   <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{ fontSize: 12, fontWeight: 600, color: "var(--text)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.period_label}</div>
+                    <div style={{ fontSize: 12, fontWeight: 600, color: "var(--text)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                      {r.period_label}
+                      {r.club_name && <span style={{ fontSize: 11, fontWeight: 400, color: "var(--text-muted)", marginLeft: 6 }}>· {r.club_name}{r.club_id ? ` #${r.club_id}` : ""}</span>}
+                    </div>
                     <div style={{ fontSize: 11, color: "var(--text-dim)", marginTop: 1 }}>
                       {r.entry_count} joueurs · <span style={{ color: "var(--green)" }}>+{r.total_amount.toFixed(2)}</span>
                       {r.unmatched_count > 0 && <span style={{ color: "#fb923c" }}> · {r.unmatched_count} non matchés</span>}

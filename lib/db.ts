@@ -298,4 +298,7 @@ function initSchema(db: Database.Database) {
   try { db.exec(`ALTER TABLE rakeback_reports ADD COLUMN winnings_pct REAL`); } catch {}
   // Per-player insurance rakeback %
   try { db.exec(`ALTER TABLE player_game_deals ADD COLUMN insurance_pct REAL`); } catch {}
+  // Club tracking on reports
+  try { db.exec(`ALTER TABLE rakeback_reports ADD COLUMN club_id TEXT`); } catch {}
+  try { db.exec(`ALTER TABLE rakeback_reports ADD COLUMN club_name TEXT`); } catch {}
 }
