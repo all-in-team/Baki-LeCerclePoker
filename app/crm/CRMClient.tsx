@@ -4,17 +4,28 @@ import { useState, useEffect } from "react";
 import Link from "next/link";
 import {
   MessageCircle, Phone, DollarSign, AlertTriangle,
-  StickyNote, Plus, Trash2, ExternalLink, Wallet, Clock, Gamepad2, X,
+  StickyNote, Plus, Trash2, ExternalLink, Wallet, Clock, Gamepad2, X, Pencil, UserPlus,
 } from "lucide-react";
 import Badge from "@/components/Badge";
 import Btn from "@/components/Btn";
+import Modal from "@/components/Modal";
 
 interface PlayerCRM {
   id: number; name: string; telegram_handle: string | null; status: string;
+  tier: "S" | "A" | "B" | null;
   action_pct: number; last_note: string | null; last_activity: string | null;
   note_count: number; wallet_net: number; my_pnl: number;
   msg_count: number; last_msg_date: string | null;
 }
+
+const TIER_STYLE: Record<string, { color: string; bg: string }> = {
+  S: { color: "#000", bg: "var(--gold)" },
+  A: { color: "var(--green)", bg: "rgba(34,197,94,0.15)" },
+  B: { color: "var(--text-muted)", bg: "rgba(136,136,160,0.15)" },
+};
+
+const BLANK_ADD = { name: "", telegram_handle: "", telegram_phone: "", tier: "A" as "S" | "A" | "B" };
+const BLANK_EDIT = { name: "", telegram_handle: "", telegram_phone: "", tier: "A" as "S" | "A" | "B", status: "active" as "active" | "inactive" | "churned", notes: "" };
 
 interface CrmNote {
   id: number; player_id: number; player_name: string;
@@ -61,12 +72,20 @@ function NoteTypeIcon({ type, size = 13 }: { type: string; size?: number }) {
   return <t.icon size={size} color={t.color} />;
 }
 
-export default function CRMClient({ players, recentNotes }: {
+export default function CRMClient({ players: initialPlayers, recentNotes }: {
   players: PlayerCRM[];
   recentNotes: CrmNote[];
 }) {
+  const [playerList, setPlayerList] = useState<PlayerCRM[]>(initialPlayers);
   const [selected, setSelected] = useState<PlayerCRM | null>(null);
   const [notes, setNotes] = useState<CrmNote[]>(recentNotes);
+
+  // Add / Edit player modals
+  const [addModal, setAddModal] = useState(false);
+  const [editModal, setEditModal] = useState(false);
+  const [addForm, setAddForm] = useState(BLANK_ADD);
+  const [editForm, setEditForm] = useState(BLANK_EDIT);
+  const [playerBusy, setPlayerBusy] = useState(false);
   const [noteContent, setNoteContent] = useState("");
   const [noteType, setNoteType] = useState("note");
   const [saving, setSaving] = useState(false);
@@ -103,9 +122,67 @@ export default function CRMClient({ players, recentNotes }: {
 
   const playerNotes = selected ? notes.filter(n => n.player_id === selected.id) : [];
   const assignedGameIds = new Set(deals.map(d => d.game_id));
+  const selectedTier = selected?.tier ?? "A";
   const availableGames = allGames.filter(g => !assignedGameIds.has(g.id));
   const selectedGameObj = allGames.find(g => String(g.id) === selectedGame);
   const isTele = selectedGameObj?.name === "TELE";
+
+  function openAdd() { setAddForm(BLANK_ADD); setAddModal(true); }
+  function openEdit() {
+    if (!selected) return;
+    setEditForm({
+      name: selected.name,
+      telegram_handle: selected.telegram_handle ?? "",
+      telegram_phone: (selected as any).telegram_phone ?? "",
+      tier: selected.tier ?? "A",
+      status: selected.status as any,
+      notes: (selected as any).notes ?? "",
+    });
+    setEditModal(true);
+  }
+
+  async function submitAdd() {
+    setPlayerBusy(true);
+    const res = await fetch("/api/players", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(addForm),
+    });
+    if (res.ok) {
+      const data = await res.json();
+      const newP: PlayerCRM = {
+        id: data.id, name: addForm.name, telegram_handle: addForm.telegram_handle || null,
+        tier: addForm.tier, status: "active", action_pct: 0,
+        last_note: null, last_activity: null, note_count: 0,
+        wallet_net: 0, my_pnl: 0, msg_count: 0, last_msg_date: null,
+      };
+      setPlayerList(l => [...l, newP].sort((a, b) => a.name.localeCompare(b.name)));
+      setAddModal(false);
+    }
+    setPlayerBusy(false);
+  }
+
+  async function submitEdit() {
+    if (!selected) return;
+    setPlayerBusy(true);
+    const res = await fetch(`/api/players/${selected.id}`, {
+      method: "PATCH", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(editForm),
+    });
+    if (res.ok) {
+      const updated = { ...selected, ...editForm, telegram_handle: editForm.telegram_handle || null };
+      setPlayerList(l => l.map(p => p.id === selected.id ? updated : p));
+      setSelected(updated);
+      setEditModal(false);
+    }
+    setPlayerBusy(false);
+  }
+
+  async function deletePlayer() {
+    if (!selected || !confirm(`Supprimer ${selected.name} ? Irréversible.`)) return;
+    await fetch(`/api/players/${selected.id}`, { method: "DELETE" });
+    setPlayerList(l => l.filter(p => p.id !== selected.id));
+    setSelected(null);
+  }
 
   async function addDeal() {
     if (!selected || !selectedGame) return;
@@ -191,10 +268,15 @@ export default function CRMClient({ players, recentNotes }: {
 
       {/* Player list */}
       <div style={{ background: "var(--bg-raised)", border: "1px solid var(--border)", borderRadius: 10, overflow: "hidden" }}>
-        <div style={{ padding: "14px 16px", borderBottom: "1px solid var(--border)", fontSize: 12, fontWeight: 700, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.08em" }}>
-          {players.length} joueur{players.length !== 1 ? "s" : ""}
+        <div style={{ padding: "12px 16px", borderBottom: "1px solid var(--border)", display: "flex", alignItems: "center" }}>
+          <span style={{ fontSize: 12, fontWeight: 700, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.08em", flex: 1 }}>
+            {playerList.length} joueur{playerList.length !== 1 ? "s" : ""}
+          </span>
+          <button onClick={openAdd} style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 11, fontWeight: 700, color: "var(--green)", background: "rgba(34,197,94,0.10)", border: "1px solid rgba(34,197,94,0.25)", borderRadius: 6, padding: "5px 10px", cursor: "pointer" }}>
+            <UserPlus size={12} /> Ajouter
+          </button>
         </div>
-        {players.map(p => {
+        {playerList.map(p => {
           const isSelected = selected?.id === p.id;
           const pnlColor = p.my_pnl > 0 ? "var(--green)" : p.my_pnl < 0 ? "#f87171" : "var(--text-dim)";
           return (
@@ -265,17 +347,27 @@ export default function CRMClient({ players, recentNotes }: {
                 {selected.name.slice(0, 2).toUpperCase()}
               </div>
               <div style={{ flex: 1 }}>
-                <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 4 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6, flexWrap: "wrap" }}>
                   <span style={{ fontSize: 18, fontWeight: 700, color: "var(--text)" }}>{selected.name}</span>
                   <Badge label={selected.status} color={STATUS_COLOR[selected.status] ?? "gray"} />
+                  {selected.tier && (
+                    <span style={{ fontSize: 11, fontWeight: 700, padding: "2px 7px", borderRadius: 5, background: TIER_STYLE[selected.tier]?.bg, color: TIER_STYLE[selected.tier]?.color }}>
+                      {selected.tier}
+                    </span>
+                  )}
+                  <div style={{ marginLeft: "auto", display: "flex", gap: 6 }}>
+                    <button onClick={openEdit} style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 11, padding: "5px 10px", borderRadius: 6, background: "var(--bg-elevated)", border: "1px solid var(--border)", color: "var(--text-muted)", cursor: "pointer" }}>
+                      <Pencil size={12} /> Éditer
+                    </button>
+                    <button onClick={deletePlayer} style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 11, padding: "5px 10px", borderRadius: 6, background: "rgba(248,113,113,0.08)", border: "1px solid rgba(248,113,113,0.25)", color: "#f87171", cursor: "pointer" }}>
+                      <Trash2 size={12} />
+                    </button>
+                  </div>
                 </div>
                 <div style={{ display: "flex", gap: 16, flexWrap: "wrap" }}>
                   {selected.telegram_handle && (
-                    <a
-                      href={`https://t.me/${selected.telegram_handle.replace(/^@/, "")}`}
-                      target="_blank" rel="noreferrer"
-                      style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 13, color: "#60a5fa", textDecoration: "none" }}
-                    >
+                    <a href={`https://t.me/${selected.telegram_handle.replace(/^@/, "")}`} target="_blank" rel="noreferrer"
+                      style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 13, color: "#60a5fa", textDecoration: "none" }}>
                       <MessageCircle size={13} /> @{selected.telegram_handle.replace(/^@/, "")}
                       <ExternalLink size={11} />
                     </a>
@@ -570,6 +662,87 @@ export default function CRMClient({ players, recentNotes }: {
 
         </div>
       )}
+      {/* Add Player Modal */}
+      <Modal open={addModal} onClose={() => setAddModal(false)} title="Ajouter un joueur">
+        <CrmFormField label="Nom *">
+          <input value={addForm.name} onChange={e => setAddForm(f => ({ ...f, name: e.target.value }))} placeholder="Nom du joueur" autoFocus />
+        </CrmFormField>
+        <CrmFormField label="Telegram Handle">
+          <input value={addForm.telegram_handle} onChange={e => setAddForm(f => ({ ...f, telegram_handle: e.target.value }))} placeholder="@handle" />
+        </CrmFormField>
+        <CrmFormField label="Numéro Telegram (si pas de handle)">
+          <input value={addForm.telegram_phone} onChange={e => setAddForm(f => ({ ...f, telegram_phone: e.target.value }))} placeholder="+33 6 12 34 56 78" />
+        </CrmFormField>
+        <CrmFormField label="Tier">
+          <div style={{ display: "flex", gap: 8 }}>
+            {(["S", "A", "B"] as const).map(t => {
+              const ts = TIER_STYLE[t]; const active = addForm.tier === t;
+              return (
+                <button key={t} onClick={() => setAddForm(f => ({ ...f, tier: t }))} style={{ flex: 1, padding: "9px", borderRadius: 7, cursor: "pointer", fontWeight: 700, fontSize: 14, border: active ? `2px solid ${ts.color === "#000" ? "var(--gold)" : ts.color}` : "1px solid var(--border)", background: active ? ts.bg : "var(--bg-elevated)", color: active ? ts.color : "var(--text-dim)" }}>
+                  {t}
+                </button>
+              );
+            })}
+          </div>
+        </CrmFormField>
+        <div style={{ display: "flex", gap: 10, justifyContent: "flex-end", marginTop: 8 }}>
+          <Btn variant="secondary" onClick={() => setAddModal(false)}>Annuler</Btn>
+          <Btn variant="primary" disabled={!addForm.name.trim() || playerBusy} onClick={submitAdd}>
+            {playerBusy ? "Ajout…" : "Ajouter"}
+          </Btn>
+        </div>
+      </Modal>
+
+      {/* Edit Player Modal */}
+      <Modal open={editModal} onClose={() => setEditModal(false)} title={`Éditer — ${selected?.name}`}>
+        <CrmFormField label="Nom *">
+          <input value={editForm.name} onChange={e => setEditForm(f => ({ ...f, name: e.target.value }))} placeholder="Nom du joueur" autoFocus />
+        </CrmFormField>
+        <CrmFormField label="Telegram Handle">
+          <input value={editForm.telegram_handle} onChange={e => setEditForm(f => ({ ...f, telegram_handle: e.target.value }))} placeholder="@handle" />
+        </CrmFormField>
+        <CrmFormField label="Numéro Telegram (si pas de handle)">
+          <input value={editForm.telegram_phone} onChange={e => setEditForm(f => ({ ...f, telegram_phone: e.target.value }))} placeholder="+33 6 12 34 56 78" />
+        </CrmFormField>
+        <CrmFormField label="Tier">
+          <div style={{ display: "flex", gap: 8 }}>
+            {(["S", "A", "B"] as const).map(t => {
+              const ts = TIER_STYLE[t]; const active = editForm.tier === t;
+              return (
+                <button key={t} onClick={() => setEditForm(f => ({ ...f, tier: t }))} style={{ flex: 1, padding: "9px", borderRadius: 7, cursor: "pointer", fontWeight: 700, fontSize: 14, border: active ? `2px solid ${ts.color === "#000" ? "var(--gold)" : ts.color}` : "1px solid var(--border)", background: active ? ts.bg : "var(--bg-elevated)", color: active ? ts.color : "var(--text-dim)" }}>
+                  {t}
+                </button>
+              );
+            })}
+          </div>
+        </CrmFormField>
+        <CrmFormField label="Statut">
+          <select value={editForm.status} onChange={e => setEditForm(f => ({ ...f, status: e.target.value as any }))}>
+            <option value="active">Actif</option>
+            <option value="inactive">Inactif</option>
+            <option value="churned">Churned</option>
+          </select>
+        </CrmFormField>
+        <CrmFormField label="Notes">
+          <textarea value={editForm.notes} onChange={e => setEditForm(f => ({ ...f, notes: e.target.value }))} rows={2} style={{ resize: "vertical" }} placeholder="Notes internes…" />
+        </CrmFormField>
+        <div style={{ display: "flex", gap: 10, justifyContent: "flex-end", marginTop: 8 }}>
+          <Btn variant="secondary" onClick={() => setEditModal(false)}>Annuler</Btn>
+          <Btn variant="primary" disabled={!editForm.name.trim() || playerBusy} onClick={submitEdit}>
+            {playerBusy ? "Sauvegarde…" : "Sauvegarder"}
+          </Btn>
+        </div>
+      </Modal>
+
+    </div>
+  );
+}
+
+function CrmFormField({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div style={{ marginBottom: 14 }}>
+      <label style={{ display: "block", fontSize: 11, fontWeight: 600, color: "var(--text-muted)", marginBottom: 5, textTransform: "uppercase", letterSpacing: "0.07em" }}>{label}</label>
+      {children}
     </div>
   );
 }

@@ -2,12 +2,11 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { LayoutDashboard, Users, AppWindow, FileText, MessageSquare, TrendingUp, Zap, Wallet, ContactRound, Settings } from "lucide-react";
+import { LayoutDashboard, AppWindow, FileText, MessageSquare, TrendingUp, Zap, Wallet, ContactRound, Settings } from "lucide-react";
 
 const NAV = [
   { href: "/", label: "Dashboard", icon: LayoutDashboard },
-  { href: "/players", label: "Players", icon: Users },
-  { href: "/crm", label: "CRM", icon: ContactRound },
+  { href: "/crm", label: "CRM Joueurs", icon: ContactRound },
   { href: "/apps", label: "Apps", icon: AppWindow },
   { href: "/wallets", label: "Wallet Tracker", icon: Wallet },
   { href: "/reports", label: "Reports", icon: FileText },
