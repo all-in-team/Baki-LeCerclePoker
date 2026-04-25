@@ -25,20 +25,8 @@ const GAME_COLOR: Record<string, string> = {
   TELE: "#a78bfa", Wepoker: "#38bdf8", Xpoker: "#fb923c", ClubGG: "#4ade80",
 };
 
-function PctInput({ value, onChange }: { value: string; onChange: (v: string) => void }) {
-  return (
-    <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
-      <input type="number" min="0" max="100" step="1" value={value} onChange={e => onChange(e.target.value)}
-        placeholder="—"
-        style={{ width: 48, padding: "3px 6px", borderRadius: 5, fontSize: 12, background: "rgba(234,179,8,0.08)", border: "1px solid rgba(234,179,8,0.3)", color: "#eab308", textAlign: "center", outline: "none" }} />
-      <span style={{ fontSize: 11, color: "var(--text-dim)" }}>%</span>
-    </div>
-  );
-}
-
-export default function ReportsClient({ games: initialGames, players: initialPlayers }: { games: Game[]; players: Player[] }) {
-  const [games] = useState<Game[]>(initialGames);
-  const [gameId, setGameId] = useState(initialGames[0]?.id ?? 0);
+export default function ReportsClient({ games, players: initialPlayers }: { games: Game[]; players: Player[] }) {
+  const [gameId, setGameId] = useState(games[0]?.id ?? 0);
   const [period, setPeriod] = useState("");
   const [file, setFile] = useState<File | null>(null);
   const [preview, setPreview] = useState<string | null>(null);
@@ -52,11 +40,6 @@ export default function ReportsClient({ games: initialGames, players: initialPla
   const [expanded, setExpanded] = useState<number | null>(null);
   const [expandedEntries, setExpandedEntries] = useState<any[]>([]);
   const [players, setPlayers] = useState<Player[]>(initialPlayers);
-  // Per-type action percentages (report-level)
-  const [rakebackPct, setRakebackPct] = useState("");
-  const [insurancePct, setInsurancePct] = useState("");
-  const [winningsPct, setWinningsPct] = useState("");
-  // New player creation
   const [creatingFor, setCreatingFor] = useState<number | null>(null);
   const [newPlayerName, setNewPlayerName] = useState("");
   const [creatingBusy, setCreatingBusy] = useState(false);
@@ -93,7 +76,7 @@ export default function ReportsClient({ games: initialGames, players: initialPla
     setRows(data.rows as ExtractedRow[]);
   }
 
-  async function setRowPlayer(idx: number, player_id: number | null) {
+  function setRowPlayer(idx: number, player_id: number | null) {
     const player_name = players.find(p => p.id === player_id)?.name ?? null;
     setRows(r => r!.map((row, i) => i !== idx ? row : { ...row, player_id, player_name }));
   }
@@ -120,14 +103,7 @@ export default function ReportsClient({ games: initialGames, players: initialPla
     setSaving(true);
     const res = await fetch("/api/reports/save", {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        game_id: gameId,
-        period_label: period.trim(),
-        rakeback_pct: parseFloat(rakebackPct) || null,
-        insurance_pct: parseFloat(insurancePct) || null,
-        winnings_pct: parseFloat(winningsPct) || null,
-        rows,
-      }),
+      body: JSON.stringify({ game_id: gameId, period_label: period.trim(), rows }),
     });
     setSaving(false);
     if (res.ok) { setSaved(true); setFile(null); setPreview(null); setRows(null); setPeriod(""); loadReports(); }
@@ -155,30 +131,21 @@ export default function ReportsClient({ games: initialGames, players: initialPla
     loadReports();
   }
 
-  const rkPct = parseFloat(rakebackPct) || 0;
-  const insPct = parseFloat(insurancePct) || 0;
-  const winPct = parseFloat(winningsPct) || 0;
-
   const matchedCount = rows?.filter(r => r.player_id).length ?? 0;
   const unmatchedCount = rows ? rows.length - matchedCount : 0;
-
-  function rowCost(row: ExtractedRow) {
-    if (!row.player_id) return null;
-    const v = row.rakeback_amount * rkPct / 100
-            + row.insurance_amount * insPct / 100
-            + row.winnings_amount * winPct / 100;
-    return v > 0 ? v : null;
-  }
-
-  const myTotalCost = rows?.reduce((s, r) => s + (rowCost(r) ?? 0), 0) ?? 0;
 
   const thStyle: React.CSSProperties = { padding: "9px 12px", textAlign: "left", fontSize: 10, fontWeight: 600, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.06em", whiteSpace: "nowrap" };
   const tdStyle: React.CSSProperties = { padding: "10px 12px", fontSize: 12 };
 
+  function fmtAmount(v: number, positiveColor: string) {
+    if (v === 0) return <span style={{ color: "var(--text-dim)" }}>—</span>;
+    const color = v > 0 ? positiveColor : "#f87171";
+    return <span style={{ fontWeight: 700, color }}>{v > 0 ? "+" : ""}{v.toFixed(2)}</span>;
+  }
+
   return (
     <div style={{ display: "grid", gridTemplateColumns: "1fr 360px", gap: 24, alignItems: "start" }}>
 
-      {/* Upload + extraction */}
       <div>
         <div style={{ background: "var(--bg-raised)", border: "1px solid var(--border)", borderRadius: 10, marginBottom: 20 }}>
           <div style={{ padding: "14px 20px", borderBottom: "1px solid var(--border)", display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
@@ -190,24 +157,6 @@ export default function ReportsClient({ games: initialGames, players: initialPla
               placeholder="Période — ex: Semaine 17, Avr 2026"
               style={{ flex: 1, fontSize: 12, padding: "7px 12px", borderRadius: 7, background: "var(--bg-elevated)", border: "1px solid var(--border)", color: "var(--text)", outline: "none" }} />
           </div>
-
-          {/* Action % per type */}
-          <div style={{ padding: "10px 20px", borderBottom: "1px solid var(--border)", display: "flex", gap: 20, alignItems: "center", flexWrap: "wrap", background: "rgba(234,179,8,0.03)" }}>
-            <span style={{ fontSize: 11, fontWeight: 600, color: "var(--text-dim)", marginRight: 4 }}>Mon action %</span>
-            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-              <span style={{ fontSize: 11, color: "#38bdf8" }}>Rakeback</span>
-              <PctInput value={rakebackPct} onChange={setRakebackPct} />
-            </div>
-            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-              <span style={{ fontSize: 11, color: "#a78bfa" }}>Insurance</span>
-              <PctInput value={insurancePct} onChange={setInsurancePct} />
-            </div>
-            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-              <span style={{ fontSize: 11, color: "#4ade80" }}>Winnings</span>
-              <PctInput value={winningsPct} onChange={setWinningsPct} />
-            </div>
-          </div>
-
           <div style={{ padding: 20 }}>
             <div
               onDragOver={e => { e.preventDefault(); setDragging(true); }}
@@ -245,18 +194,12 @@ export default function ReportsClient({ games: initialGames, players: initialPla
           </div>
         </div>
 
-        {/* Extracted rows */}
         {rows && (
           <div style={{ background: "var(--bg-raised)", border: "1px solid var(--border)", borderRadius: 10 }}>
             <div style={{ padding: "14px 20px", borderBottom: "1px solid var(--border)", display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
               <span style={{ fontSize: 13, fontWeight: 700, color: "var(--text)" }}>{rows.length} joueurs</span>
               <span style={{ fontSize: 12, color: "var(--green)" }}>{matchedCount} matchés</span>
               {unmatchedCount > 0 && <span style={{ fontSize: 12, color: "#fb923c" }}>{unmatchedCount} à identifier</span>}
-              {myTotalCost > 0 && (
-                <span style={{ fontSize: 12, fontWeight: 700, color: "#f87171", marginLeft: 4 }}>
-                  Mon coût total : −{myTotalCost.toFixed(2)} USDT
-                </span>
-              )}
               <div style={{ marginLeft: "auto", display: "flex", gap: 8, alignItems: "center" }}>
                 {saved && <span style={{ fontSize: 12, color: "var(--green)", display: "flex", alignItems: "center", gap: 4 }}><CheckCircle size={13} /> Sauvegardé</span>}
                 <Btn variant="primary" onClick={save} disabled={saving || unmatchedCount > 0}>
@@ -271,30 +214,21 @@ export default function ReportsClient({ games: initialGames, players: initialPla
                     <th style={thStyle}>ID App</th>
                     <th style={{ ...thStyle, color: "#38bdf8" }}>Rakeback</th>
                     <th style={{ ...thStyle, color: "#a78bfa" }}>Insurance</th>
-                    <th style={{ ...thStyle, color: "#4ade80" }}>Winnings</th>
-                    <th style={{ ...thStyle, color: "#f87171" }}>Mon coût</th>
+                    <th style={{ ...thStyle, color: "#4ade80" }}>Winnings / Pertes</th>
+                    <th style={thStyle}>Devise</th>
                     <th style={thStyle}>Joueur CRM</th>
                   </tr>
                 </thead>
                 <tbody>
                   {rows.map((row, idx) => {
-                    const cost = rowCost(row);
                     const isCreating = creatingFor === idx;
                     return (
                       <tr key={idx} style={{ borderBottom: "1px solid var(--border)" }}>
                         <td style={{ ...tdStyle, fontFamily: "monospace", color: "var(--text-muted)" }}>{row.external_id}</td>
-                        <td style={{ ...tdStyle, fontWeight: 700, color: "#38bdf8" }}>
-                          {row.rakeback_amount > 0 ? `+${row.rakeback_amount.toFixed(2)}` : <span style={{ color: "var(--text-dim)" }}>—</span>}
-                        </td>
-                        <td style={{ ...tdStyle, fontWeight: 700, color: "#a78bfa" }}>
-                          {row.insurance_amount > 0 ? `+${row.insurance_amount.toFixed(2)}` : <span style={{ color: "var(--text-dim)" }}>—</span>}
-                        </td>
-                        <td style={{ ...tdStyle, fontWeight: 700, color: "#4ade80" }}>
-                          {row.winnings_amount > 0 ? `+${row.winnings_amount.toFixed(2)}` : <span style={{ color: "var(--text-dim)" }}>—</span>}
-                        </td>
-                        <td style={{ ...tdStyle, fontWeight: 700, color: cost !== null ? "#f87171" : "var(--text-dim)" }}>
-                          {cost !== null ? `−${cost.toFixed(2)} ${row.currency}` : "—"}
-                        </td>
+                        <td style={tdStyle}>{fmtAmount(row.rakeback_amount, "#38bdf8")}</td>
+                        <td style={tdStyle}>{fmtAmount(row.insurance_amount, "#a78bfa")}</td>
+                        <td style={tdStyle}>{fmtAmount(row.winnings_amount, "#4ade80")}</td>
+                        <td style={{ ...tdStyle, color: "var(--text-dim)", fontSize: 11 }}>{row.currency}</td>
                         <td style={{ ...tdStyle, minWidth: 190 }}>
                           {row.player_id && !isCreating ? (
                             <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
@@ -372,7 +306,7 @@ export default function ReportsClient({ games: initialGames, players: initialPla
                 {isOpen && expandedEntries.map((e: any) => (
                   <div key={e.id} style={{ padding: "7px 16px", display: "flex", alignItems: "center", gap: 8, borderTop: "1px solid var(--border)", background: "var(--bg-surface)" }}>
                     <span style={{ fontSize: 11, fontFamily: "monospace", color: "var(--text-dim)", flex: 1, overflow: "hidden", textOverflow: "ellipsis" }}>{e.external_id}</span>
-                    <span style={{ fontSize: 11, color: "#38bdf8", flexShrink: 0 }}>rb:{e.amount?.toFixed(2)}</span>
+                    <span style={{ fontSize: 11, color: "#38bdf8", flexShrink: 0 }}>rb:{(e.amount ?? 0).toFixed(2)}</span>
                     {e.player_id
                       ? <span style={{ fontSize: 11, fontWeight: 600, color: "var(--green)", flexShrink: 0 }}>{e.player_name}</span>
                       : <select onChange={ev => matchEntry(r.id, e.id, Number(ev.target.value))} defaultValue=""

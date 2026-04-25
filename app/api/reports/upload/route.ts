@@ -33,13 +33,13 @@ export async function POST(req: NextRequest) {
             type: "text",
             text: `This is a poker app report screenshot. Extract ALL player entries with their amounts per category.
 Return ONLY a valid JSON array, no markdown, no explanation:
-[{"external_id":"player ID or username","rakeback":123.45,"insurance":45.67,"winnings":200.00,"currency":"USDT"}]
+[{"external_id":"player ID or username","rakeback":123.45,"insurance":45.67,"winnings":-200.00,"currency":"USDT"}]
 
 Rules:
 - external_id: the player's ID or username as shown
-- rakeback: rakeback/rake amount (0 if not shown)
-- insurance: insurance amount (0 if not shown)
-- winnings: winnings/profit amount (0 if not shown)
+- rakeback: rakeback/rake amount for this player (0 if not shown)
+- insurance: insurance payout for this player (0 if not shown)
+- winnings: net winnings or losses for this player — positive if winning, NEGATIVE if losing (0 if not shown)
 - currency: USDT/USD/CNY/EUR as shown, default USDT if unclear
 - Use 0 for any category not present in the screenshot
 - Include every row visible`,
