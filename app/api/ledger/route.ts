@@ -1,7 +1,20 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getLedger, insertTransaction } from "@/lib/queries";
 
-export async function GET() {
+export async function GET(req: NextRequest) {
+  const player_id = req.nextUrl.searchParams.get("player_id");
+  if (player_id) {
+    const { getDb } = await import("@/lib/db");
+    const rows = getDb().prepare(`
+      SELECT tt.*, p.name AS player_name
+      FROM telegram_transactions tt
+      LEFT JOIN players p ON p.id = tt.player_id
+      WHERE tt.player_id = ?
+      ORDER BY tt.tx_date DESC, tt.created_at DESC
+      LIMIT 50
+    `).all(Number(player_id));
+    return NextResponse.json(rows);
+  }
   return NextResponse.json(getLedger());
 }
 

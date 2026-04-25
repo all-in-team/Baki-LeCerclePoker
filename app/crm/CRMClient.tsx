@@ -16,6 +16,12 @@ interface PlayerCRM {
   action_pct: number; last_note: string | null; last_activity: string | null;
   note_count: number; wallet_net: number; my_pnl: number;
   msg_count: number; last_msg_date: string | null;
+  balance_du: number;
+}
+
+interface LedgerTx {
+  id: number; direction: "in" | "out"; amount: number; currency: string;
+  note: string | null; tx_date: string;
 }
 
 const TIER_STYLE: Record<string, { color: string; bg: string }> = {
@@ -96,8 +102,14 @@ export default function CRMClient({ players: initialPlayers, recentNotes }: {
   const [gameIds, setGameIds] = useState<GameId[]>([]);
   const [expandedGame, setExpandedGame] = useState<number | null>(null);
   const [newIdDraft, setNewIdDraft] = useState("");
-  const [editingDeal, setEditingDeal] = useState<number | null>(null); // deal row id
+  const [editingDeal, setEditingDeal] = useState<number | null>(null);
   const [dealDraft, setDealDraft] = useState({ action_pct: "", rakeback_pct: "" });
+
+  // Compte / solde dû
+  const [ledgerTxs, setLedgerTxs] = useState<LedgerTx[]>([]);
+  const [txForm, setTxForm] = useState({ direction: "out" as "in" | "out", amount: "", currency: "USDT", note: "", tx_date: new Date().toISOString().slice(0, 10) });
+  const [showTxForm, setShowTxForm] = useState(false);
+  const [txBusy, setTxBusy] = useState(false);
   const [showAddGame, setShowAddGame] = useState(false);
   const [selectedGame, setSelectedGame] = useState("");
   const [dealForm, setDealForm] = useState(DEAL_BLANK);
@@ -114,12 +126,16 @@ export default function CRMClient({ players: initialPlayers, recentNotes }: {
       .then(r => r.json()).then(setDeals).catch(() => {});
     fetch(`/api/players/${selected.id}/game-ids`)
       .then(r => r.json()).then(setGameIds).catch(() => {});
+    fetch(`/api/ledger?player_id=${selected.id}`)
+      .then(r => r.json()).then(setLedgerTxs).catch(() => {});
     setShowAddGame(false);
     setSelectedGame("");
     setDealForm(DEAL_BLANK);
     setTronAddress("");
     setExpandedGame(null);
     setNewIdDraft("");
+    setShowTxForm(false);
+    setTxForm({ direction: "out", amount: "", currency: "USDT", note: "", tx_date: new Date().toISOString().slice(0, 10) });
   }, [selected?.id]);
 
   const playerNotes = selected ? notes.filter(n => n.player_id === selected.id) : [];
@@ -155,7 +171,7 @@ export default function CRMClient({ players: initialPlayers, recentNotes }: {
         id: data.id, name: addForm.name, telegram_handle: addForm.telegram_handle || null,
         tier: addForm.tier, status: "active", action_pct: 0,
         last_note: null, last_activity: null, note_count: 0,
-        wallet_net: 0, my_pnl: 0, msg_count: 0, last_msg_date: null,
+        wallet_net: 0, my_pnl: 0, msg_count: 0, last_msg_date: null, balance_du: 0,
       };
       setPlayerList(l => [...l, newP].sort((a, b) => a.name.localeCompare(b.name)));
       setAddModal(false);
@@ -228,6 +244,36 @@ export default function CRMClient({ players: initialPlayers, recentNotes }: {
     const gameName = allGames.find(g => g.id === gameId)?.name ?? "";
     setGameIds(ids => [...ids, { id: data.id, game_id: gameId, game_name: gameName, external_id: val }]);
     setNewIdDraft("");
+  }
+
+  async function addTx() {
+    if (!selected || !txForm.amount) return;
+    setTxBusy(true);
+    const res = await fetch("/api/ledger", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ player_id: selected.id, direction: txForm.direction, amount: Number(txForm.amount), currency: txForm.currency, note: txForm.note || null, tx_date: txForm.tx_date }),
+    });
+    if (res.ok) {
+      const { id } = await res.json();
+      const newTx: LedgerTx = { id, direction: txForm.direction, amount: Number(txForm.amount), currency: txForm.currency, note: txForm.note || null, tx_date: txForm.tx_date };
+      setLedgerTxs(txs => [newTx, ...txs]);
+      const delta = txForm.direction === "in" ? Number(txForm.amount) : -Number(txForm.amount);
+      setPlayerList(l => l.map(p => p.id === selected.id ? { ...p, balance_du: p.balance_du + delta } : p));
+      setSelected(s => s ? { ...s, balance_du: s.balance_du + delta } : s);
+      setTxForm(f => ({ ...f, amount: "", note: "" }));
+      setShowTxForm(false);
+    }
+    setTxBusy(false);
+  }
+
+  async function deleteTx(id: number) {
+    const tx = ledgerTxs.find(t => t.id === id);
+    if (!tx || !selected) return;
+    await fetch(`/api/ledger/${id}`, { method: "DELETE" });
+    const delta = tx.direction === "in" ? -tx.amount : tx.amount;
+    setLedgerTxs(txs => txs.filter(t => t.id !== id));
+    setPlayerList(l => l.map(p => p.id === selected.id ? { ...p, balance_du: p.balance_du + delta } : p));
+    setSelected(s => s ? { ...s, balance_du: s.balance_du + delta } : s);
   }
 
   async function saveDeal(dealId: number) {
@@ -330,11 +376,15 @@ export default function CRMClient({ players: initialPlayers, recentNotes }: {
               </div>
 
               {/* Stats row */}
-              <div style={{ display: "flex", gap: 12, fontSize: 11 }}>
+              <div style={{ display: "flex", gap: 10, fontSize: 11, flexWrap: "wrap" }}>
                 <span style={{ color: pnlColor, fontWeight: 600 }}>
-                  {p.my_pnl >= 0 ? "+" : ""}{p.my_pnl.toFixed(0)} USDT
+                  P&L {p.my_pnl >= 0 ? "+" : ""}{p.my_pnl.toFixed(0)}
                 </span>
-                <span style={{ color: "var(--text-dim)" }}>{p.note_count} note{p.note_count !== 1 ? "s" : ""}</span>
+                {p.balance_du !== 0 && (
+                  <span style={{ fontWeight: 700, color: p.balance_du > 0 ? "#f87171" : "var(--green)" }}>
+                    · Dû {p.balance_du > 0 ? `−${p.balance_du.toFixed(0)}` : `+${Math.abs(p.balance_du).toFixed(0)}`}
+                  </span>
+                )}
                 {p.last_activity && (
                   <span style={{ color: "var(--text-dim)", marginLeft: "auto" }}>{timeAgo(p.last_activity)}</span>
                 )}
@@ -614,6 +664,84 @@ export default function CRMClient({ players: initialPlayers, recentNotes }: {
             {deals.length === 0 && !showAddGame && (
               <div style={{ padding: "20px 16px", textAlign: "center", color: "var(--text-dim)", fontSize: 12 }}>
                 Pas encore sur une game
+              </div>
+            )}
+          </div>
+
+          {/* Compte — Solde dû */}
+          <div style={{ background: "var(--bg-raised)", border: "1px solid var(--border)", borderRadius: 10, overflow: "hidden" }}>
+            <div style={{ padding: "12px 16px", borderBottom: "1px solid var(--border)", display: "flex", alignItems: "center", gap: 8 }}>
+              <DollarSign size={14} color="var(--gold)" />
+              <span style={{ fontSize: 13, fontWeight: 700, color: "var(--text)", flex: 1 }}>Compte</span>
+              {/* Big balance */}
+              <span style={{ fontSize: 18, fontWeight: 800, color: selected.balance_du > 0 ? "#f87171" : selected.balance_du < 0 ? "var(--green)" : "var(--text-dim)" }}>
+                {selected.balance_du > 0 ? `On doit −${selected.balance_du.toFixed(2)}` : selected.balance_du < 0 ? `Ils doivent +${Math.abs(selected.balance_du).toFixed(2)}` : "Solde nul"}
+              </span>
+              <span style={{ fontSize: 10, color: "var(--text-dim)" }}>USDT</span>
+              <button onClick={() => setShowTxForm(f => !f)}
+                style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 11, fontWeight: 700, padding: "5px 10px", borderRadius: 6, background: "rgba(34,197,94,0.10)", border: "1px solid rgba(34,197,94,0.25)", color: "var(--green)", cursor: "pointer", marginLeft: 8 }}>
+                <Plus size={12} /> Transaction
+              </button>
+            </div>
+
+            {/* Add transaction form */}
+            {showTxForm && (
+              <div style={{ padding: "12px 16px", borderBottom: "1px solid var(--border)", background: "var(--bg-surface)" }}>
+                <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+                  {/* Direction toggle */}
+                  <div style={{ display: "flex", borderRadius: 7, overflow: "hidden", border: "1px solid var(--border)" }}>
+                    {(["in", "out"] as const).map(dir => (
+                      <button key={dir} onClick={() => setTxForm(f => ({ ...f, direction: dir }))}
+                        style={{ padding: "6px 14px", fontSize: 12, fontWeight: 700, border: "none", cursor: "pointer",
+                          background: txForm.direction === dir ? (dir === "in" ? "rgba(34,197,94,0.2)" : "rgba(248,113,113,0.2)") : "var(--bg-elevated)",
+                          color: txForm.direction === dir ? (dir === "in" ? "var(--green)" : "#f87171") : "var(--text-dim)" }}>
+                        {dir === "in" ? "↓ Reçu" : "↑ Payé"}
+                      </button>
+                    ))}
+                  </div>
+                  <input type="number" min="0" step="0.01" placeholder="Montant" value={txForm.amount}
+                    onChange={e => setTxForm(f => ({ ...f, amount: e.target.value }))}
+                    style={{ width: 110, padding: "6px 9px", borderRadius: 6, fontSize: 13, fontWeight: 700, background: "var(--bg-elevated)", border: "1px solid var(--border)", color: "var(--text)", outline: "none" }} />
+                  <select value={txForm.currency} onChange={e => setTxForm(f => ({ ...f, currency: e.target.value }))}
+                    style={{ padding: "6px 8px", borderRadius: 6, fontSize: 12, background: "var(--bg-elevated)", border: "1px solid var(--border)", color: "var(--text-muted)" }}>
+                    {["USDT","EUR","USD"].map(c => <option key={c} value={c}>{c}</option>)}
+                  </select>
+                  <input type="date" value={txForm.tx_date} onChange={e => setTxForm(f => ({ ...f, tx_date: e.target.value }))}
+                    style={{ padding: "6px 8px", borderRadius: 6, fontSize: 12, background: "var(--bg-elevated)", border: "1px solid var(--border)", color: "var(--text-muted)" }} />
+                  <input placeholder="Note (optionnel)" value={txForm.note} onChange={e => setTxForm(f => ({ ...f, note: e.target.value }))}
+                    style={{ flex: 1, minWidth: 120, padding: "6px 9px", borderRadius: 6, fontSize: 12, background: "var(--bg-elevated)", border: "1px solid var(--border)", color: "var(--text)", outline: "none" }} />
+                  <button onClick={addTx} disabled={!txForm.amount || txBusy}
+                    style={{ padding: "6px 14px", borderRadius: 6, fontSize: 12, fontWeight: 700, background: "var(--green)", border: "none", color: "#000", cursor: "pointer" }}>
+                    {txBusy ? "…" : "OK"}
+                  </button>
+                  <button onClick={() => setShowTxForm(false)} style={{ fontSize: 13, background: "none", border: "none", color: "var(--text-dim)", cursor: "pointer" }}>✕</button>
+                </div>
+              </div>
+            )}
+
+            {/* Transaction history */}
+            {ledgerTxs.length === 0 ? (
+              <div style={{ padding: "16px", textAlign: "center", fontSize: 12, color: "var(--text-dim)" }}>Aucune transaction</div>
+            ) : (
+              <div>
+                {ledgerTxs.map(tx => {
+                  const isIn = tx.direction === "in";
+                  return (
+                    <div key={tx.id} style={{ padding: "9px 16px", display: "flex", alignItems: "center", gap: 10, borderBottom: "1px solid var(--border)" }}>
+                      <span style={{ fontSize: 11, fontWeight: 700, padding: "2px 7px", borderRadius: 5, background: isIn ? "rgba(34,197,94,0.12)" : "rgba(248,113,113,0.12)", color: isIn ? "var(--green)" : "#f87171" }}>
+                        {isIn ? "↓ Reçu" : "↑ Payé"}
+                      </span>
+                      <span style={{ fontSize: 13, fontWeight: 700, color: isIn ? "var(--green)" : "#f87171" }}>
+                        {isIn ? "+" : "−"}{tx.amount.toFixed(2)} {tx.currency}
+                      </span>
+                      <span style={{ fontSize: 11, color: "var(--text-dim)" }}>{tx.tx_date}</span>
+                      {tx.note && <span style={{ fontSize: 11, color: "var(--text-muted)", flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{tx.note}</span>}
+                      <button onClick={() => deleteTx(tx.id)} style={{ background: "none", border: "none", cursor: "pointer", color: "var(--text-dim)", padding: 2, marginLeft: "auto", display: "flex" }}>
+                        <Trash2 size={12} />
+                      </button>
+                    </div>
+                  );
+                })}
               </div>
             )}
           </div>
