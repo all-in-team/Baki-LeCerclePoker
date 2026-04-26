@@ -42,7 +42,7 @@ export default function FinanceClient() {
 
   useEffect(() => {
     const url = range !== "all" ? `/api/finance?range=${range}` : "/api/finance";
-    fetch(url).then(r => r.json()).then(setData);
+    fetch(url, { cache: "no-store" }).then(r => r.json()).then(setData);
   }, [range]);
 
   useEffect(() => {
@@ -56,7 +56,7 @@ export default function FinanceClient() {
     if (playerDetail[playerId]) return;
     setLoadingDetail(playerId);
     const url = `/api/finance/player?player_id=${playerId}${range !== "all" ? `&range=${range}` : ""}`;
-    const entries: EntryRow[] = await fetch(url).then(r => r.json());
+    const entries: EntryRow[] = await fetch(url, { cache: "no-store" }).then(r => r.json());
     setPlayerDetail(prev => ({ ...prev, [playerId]: entries }));
     setLoadingDetail(null);
   }, [expandedPlayer, playerDetail, range]);
