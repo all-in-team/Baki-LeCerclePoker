@@ -55,7 +55,7 @@ export async function GET(req: NextRequest) {
     ORDER BY ABS(player_rb + wl_player) DESC
   `).all();
 
-  // Period history always shows all reports (the range filter is on the KPIs/players above)
+  // Per-report history (always unfiltered — shows full log)
   const byPeriod = db.prepare(`
     SELECT
       rr.id AS report_id,
@@ -76,5 +76,24 @@ export async function GET(req: NextRequest) {
     ORDER BY latest_date DESC
   `).all();
 
-  return NextResponse.json({ kpis, byPlayer, byPeriod });
+  // Daily aggregation (groups all reports on the same date)
+  const byDay = db.prepare(`
+    SELECT
+      COALESCE(rr.report_date, substr(rr.created_at, 1, 10)) AS day,
+      re.currency,
+      COALESCE(SUM(${AGENCY_RB}), 0) AS agency_rb,
+      COALESCE(SUM(${PLAYER_RB}), 0) AS player_rb,
+      COALESCE(SUM(${WL_AGENCY}),  0) AS wl_agency,
+      COALESCE(SUM(${WL_PLAYER}),  0) AS wl_player,
+      COUNT(DISTINCT re.player_id) AS player_count,
+      COUNT(DISTINCT rr.id)        AS report_count
+    FROM rakeback_entries re
+    JOIN rakeback_reports rr ON rr.id = re.report_id
+    LEFT JOIN player_game_deals pgd ON pgd.player_id = re.player_id AND pgd.game_id = rr.game_id
+    WHERE re.player_id IS NOT NULL
+    GROUP BY day, re.currency
+    ORDER BY day DESC
+  `).all();
+
+  return NextResponse.json({ kpis, byPlayer, byPeriod, byDay });
 }

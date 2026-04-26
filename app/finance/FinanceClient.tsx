@@ -6,8 +6,9 @@ import { TrendingUp, Users, ArrowDownCircle, ArrowUpCircle, DollarSign, ChevronD
 type KPI = { currency: string; agency_rb: number; player_rb: number; wl_agency: number; wl_player: number; player_count: number; report_count: number; };
 type PlayerRow = { player_id: number; player_name: string; currency: string; agency_rb: number; player_rb: number; wl_agency: number; wl_player: number; report_count: number; };
 type PeriodRow = { report_id: number; report_date: string | null; period_label: string; currency: string; agency_rb: number; player_rb: number; wl_agency: number; wl_player: number; player_count: number; };
+type DayRow = { day: string; currency: string; agency_rb: number; player_rb: number; wl_agency: number; wl_player: number; player_count: number; report_count: number; };
 type EntryRow = { report_id: number; date: string | null; period_label: string; club_name: string | null; currency: string; rake: number; insurance: number; winnings: number; player_rb: number; wl_player: number; };
-type Data = { kpis: KPI[]; byPlayer: PlayerRow[]; byPeriod: PeriodRow[]; };
+type Data = { kpis: KPI[]; byPlayer: PlayerRow[]; byPeriod: PeriodRow[]; byDay: DayRow[]; };
 type Range = "all" | "48h" | "week" | "month";
 
 const FR_MONTHS = ["janv", "févr", "mars", "avr", "mai", "juin", "juil", "août", "sept", "oct", "nov", "déc"];
@@ -36,6 +37,7 @@ const RANGES: { key: Range; label: string }[] = [
 export default function FinanceClient() {
   const [data, setData] = useState<Data | null>(null);
   const [range, setRange] = useState<Range>("all");
+  const [histView, setHistView] = useState<"day" | "report">("day");
   const [expandedPlayer, setExpandedPlayer] = useState<number | null>(null);
   const [playerDetail, setPlayerDetail] = useState<Record<number, EntryRow[]>>({});
   const [loadingDetail, setLoadingDetail] = useState<number | null>(null);
@@ -239,49 +241,100 @@ export default function FinanceClient() {
         )}
       </div>
 
-      {/* Period history */}
-      {data.byPeriod.length > 0 && (
+      {/* History — day view or per-report view */}
+      {(data.byDay.length > 0 || data.byPeriod.length > 0) && (
         <div style={{ background: "var(--bg-raised)", border: "1px solid var(--border)", borderRadius: 10, overflow: "hidden" }}>
-          <div style={{ padding: "14px 20px", borderBottom: "1px solid var(--border)" }}>
-            <span style={{ fontSize: 14, fontWeight: 800, color: "var(--text)" }}>Historique par rapport</span>
-            <span style={{ fontSize: 12, color: "var(--text-muted)", marginLeft: 10 }}>{data.byPeriod.length} rapport{data.byPeriod.length !== 1 ? "s" : ""}</span>
+          <div style={{ padding: "12px 20px", borderBottom: "1px solid var(--border)", display: "flex", alignItems: "center", gap: 12 }}>
+            <span style={{ fontSize: 14, fontWeight: 800, color: "var(--text)" }}>Historique</span>
+            <div style={{ display: "flex", gap: 2, background: "var(--bg-surface)", borderRadius: 6, padding: 3, border: "1px solid var(--border)" }}>
+              {(["day", "report"] as const).map(v => (
+                <button key={v} onClick={() => setHistView(v)} style={{
+                  padding: "4px 12px", borderRadius: 4, border: "none", cursor: "pointer",
+                  fontSize: 11, fontWeight: 700,
+                  background: histView === v ? "var(--bg-elevated)" : "transparent",
+                  color: histView === v ? "var(--text)" : "var(--text-muted)",
+                }}>
+                  {v === "day" ? "Par jour" : "Par rapport"}
+                </button>
+              ))}
+            </div>
           </div>
-          <div style={{ overflowX: "auto" }}>
-            <table style={{ width: "100%", borderCollapse: "collapse" }}>
-              <thead>
-                <tr>
-                  <th style={thS}>Date</th>
-                  <th style={thS}>Période</th>
-                  <th style={{ ...thS, textAlign: "right" }}>Agency RB</th>
-                  <th style={{ ...thS, textAlign: "right" }}>Players RB</th>
-                  <th style={{ ...thS, textAlign: "right" }}>W/L Agence</th>
-                  <th style={{ ...thS, textAlign: "right" }}>P/L Agence</th>
-                  <th style={{ ...thS, textAlign: "right" }}>P/L Joueurs</th>
-                  <th style={thS}>Devise</th>
-                  <th style={{ ...thS, textAlign: "right" }}>Joueurs</th>
-                </tr>
-              </thead>
-              <tbody>
-                {data.byPeriod.map((row, i) => {
-                  const plA = (row.agency_rb - row.player_rb) + row.wl_agency;
-                  const plP = row.player_rb + row.wl_player;
-                  return (
-                    <tr key={`${row.report_id}-${row.currency}`} style={{ background: i % 2 === 1 ? "rgba(255,255,255,0.015)" : "transparent" }}>
-                      <td style={{ ...tdS, fontSize: 12, color: "var(--text-muted)" }}>{row.report_date ? fmtDate(row.report_date) : "—"}</td>
-                      <td style={{ ...tdS, fontWeight: 700, color: "var(--green)" }}>{row.period_label}</td>
-                      <td style={{ ...rTd, color: "#60a5fa" }}>{pos(row.agency_rb)}</td>
-                      <td style={{ ...rTd, color: "#f97316" }}>-{Math.abs(row.player_rb).toFixed(2)}</td>
-                      <td style={{ ...rTd, ...col(row.wl_agency) }}>{pos(row.wl_agency)}</td>
-                      <td style={{ ...rTd, fontWeight: 800, fontSize: 14, ...col(plA) }}>{pos(plA)}</td>
-                      <td style={{ ...rTd, ...col(plP) }}>{pos(plP)}</td>
-                      <td style={{ ...tdS, fontSize: 11, color: "var(--text-muted)", fontWeight: 600 }}>{row.currency}</td>
-                      <td style={{ ...rTd, color: "var(--text-muted)" }}>{row.player_count}</td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
+
+          {histView === "day" ? (
+            <div style={{ overflowX: "auto" }}>
+              <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                <thead>
+                  <tr>
+                    <th style={thS}>Jour</th>
+                    <th style={{ ...thS, textAlign: "right" }}>Rapports</th>
+                    <th style={{ ...thS, textAlign: "right" }}>Agency RB</th>
+                    <th style={{ ...thS, textAlign: "right" }}>Players RB</th>
+                    <th style={{ ...thS, textAlign: "right" }}>W/L Agence</th>
+                    <th style={{ ...thS, textAlign: "right" }}>P/L Agence</th>
+                    <th style={{ ...thS, textAlign: "right" }}>P/L Joueurs</th>
+                    <th style={thS}>Devise</th>
+                    <th style={{ ...thS, textAlign: "right" }}>Joueurs</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {data.byDay.map((row, i) => {
+                    const plA = (row.agency_rb - row.player_rb) + row.wl_agency;
+                    const plP = row.player_rb + row.wl_player;
+                    return (
+                      <tr key={`${row.day}-${row.currency}`} style={{ background: i % 2 === 1 ? "rgba(255,255,255,0.015)" : "transparent" }}>
+                        <td style={{ ...tdS, fontWeight: 700, color: "var(--text)" }}>{fmtDate(row.day)}</td>
+                        <td style={{ ...rTd, color: "var(--text-muted)", fontSize: 12 }}>{row.report_count}</td>
+                        <td style={{ ...rTd, color: "#60a5fa" }}>{pos(row.agency_rb)}</td>
+                        <td style={{ ...rTd, color: "#f97316" }}>-{Math.abs(row.player_rb).toFixed(2)}</td>
+                        <td style={{ ...rTd, ...col(row.wl_agency) }}>{pos(row.wl_agency)}</td>
+                        <td style={{ ...rTd, fontWeight: 800, fontSize: 15, ...col(plA) }}>{pos(plA)}</td>
+                        <td style={{ ...rTd, ...col(plP) }}>{pos(plP)}</td>
+                        <td style={{ ...tdS, fontSize: 11, color: "var(--text-muted)", fontWeight: 600 }}>{row.currency}</td>
+                        <td style={{ ...rTd, color: "var(--text-muted)" }}>{row.player_count}</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          ) : (
+            <div style={{ overflowX: "auto" }}>
+              <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                <thead>
+                  <tr>
+                    <th style={thS}>Date</th>
+                    <th style={thS}>Période</th>
+                    <th style={{ ...thS, textAlign: "right" }}>Agency RB</th>
+                    <th style={{ ...thS, textAlign: "right" }}>Players RB</th>
+                    <th style={{ ...thS, textAlign: "right" }}>W/L Agence</th>
+                    <th style={{ ...thS, textAlign: "right" }}>P/L Agence</th>
+                    <th style={{ ...thS, textAlign: "right" }}>P/L Joueurs</th>
+                    <th style={thS}>Devise</th>
+                    <th style={{ ...thS, textAlign: "right" }}>Joueurs</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {data.byPeriod.map((row, i) => {
+                    const plA = (row.agency_rb - row.player_rb) + row.wl_agency;
+                    const plP = row.player_rb + row.wl_player;
+                    return (
+                      <tr key={`${row.report_id}-${row.currency}`} style={{ background: i % 2 === 1 ? "rgba(255,255,255,0.015)" : "transparent" }}>
+                        <td style={{ ...tdS, fontSize: 12, color: "var(--text-muted)" }}>{row.report_date ? fmtDate(row.report_date) : "—"}</td>
+                        <td style={{ ...tdS, fontWeight: 700, color: "var(--green)" }}>{row.period_label}</td>
+                        <td style={{ ...rTd, color: "#60a5fa" }}>{pos(row.agency_rb)}</td>
+                        <td style={{ ...rTd, color: "#f97316" }}>-{Math.abs(row.player_rb).toFixed(2)}</td>
+                        <td style={{ ...rTd, ...col(row.wl_agency) }}>{pos(row.wl_agency)}</td>
+                        <td style={{ ...rTd, fontWeight: 800, fontSize: 14, ...col(plA) }}>{pos(plA)}</td>
+                        <td style={{ ...rTd, ...col(plP) }}>{pos(plP)}</td>
+                        <td style={{ ...tdS, fontSize: 11, color: "var(--text-muted)", fontWeight: 600 }}>{row.currency}</td>
+                        <td style={{ ...rTd, color: "var(--text-muted)" }}>{row.player_count}</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
         </div>
       )}
     </div>
