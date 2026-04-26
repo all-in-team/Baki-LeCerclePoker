@@ -99,13 +99,17 @@ Column mapping:
 - winnings     → 盈亏 (net win/loss — last column before 备注名). NEVER use 鱿鱼盈亏.
 - currency     → CNY when headers are Chinese, otherwise USDT
 
-CRITICAL:
+CRITICAL column rules:
 - 保险总投保 = insurance buy-in premium — IGNORE IT
 - 保险总赔付 = insurance payout — IGNORE IT
 - 鱿鱼盈亏 = squid side-game P&L — IGNORE IT
-- Skip all summary/total rows (rows with 总局数, 总组局, 人数, 合计, etc.)
-- Skip the header row itself
-- Include every actual player row`;
+
+CRITICAL row rules:
+- Only include rows where 玩家ID is a standalone 7-9 digit number (e.g. 71828947, 58219629)
+- SKIP the header row (contains column names, not numbers)
+- SKIP summary rows at the top (contain 总局数, 人数, 总组局, etc.)
+- SKIP any total/annotation rows at the bottom — these appear after the last player and often contain sums like "36+106+377=519", partial numbers, or formulas. They do NOT have a valid numeric 玩家ID.
+- When in doubt whether a row is a player or a total: check if 玩家ID is a 7-9 digit number. If not, skip it.`;
 
 const EXTRACTION_RULES = `Return ONLY a valid JSON array, one object per player:
 [{"external_id":"玩家ID value","rakeback":组局基金 value,"insurance":保险盈利 value,"winnings":盈亏 value,"currency":"CNY or USDT"}]
