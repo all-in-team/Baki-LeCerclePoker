@@ -2,6 +2,10 @@
 
 import React, { useState, useEffect, useCallback } from "react";
 import { TrendingUp, Users, ArrowDownCircle, ArrowUpCircle, DollarSign, ChevronDown, ChevronRight } from "lucide-react";
+import {
+  ComposedChart, Bar, Line, XAxis, YAxis, Tooltip, ResponsiveContainer,
+  CartesianGrid, ReferenceLine, Cell, Legend,
+} from "recharts";
 
 type KPI = { currency: string; agency_rb: number; player_rb: number; wl_agency: number; wl_player: number; player_count: number; report_count: number; };
 type PlayerRow = { player_id: number; player_name: string; currency: string; agency_rb: number; player_rb: number; wl_agency: number; wl_player: number; report_count: number; };
@@ -240,6 +244,60 @@ export default function FinanceClient() {
           </div>
         )}
       </div>
+
+      {/* P/L chart */}
+      {data.byDay.length > 0 && (() => {
+        // Use primary currency (first KPI)
+        const cur = data.kpis[0]?.currency ?? "CNY";
+        const days = data.byDay.filter(r => r.currency === cur).slice().reverse();
+        let running = 0;
+        const chartData = days.map(r => {
+          const pl = (r.agency_rb - r.player_rb) + r.wl_agency;
+          running += pl;
+          return { label: fmtDate(r.day), daily: pl, cumul: running };
+        });
+        const maxAbs = Math.max(...chartData.map(d => Math.abs(d.daily)), 1);
+        const fmtY = (v: number) => Math.abs(v) >= 1000 ? (v / 1000).toFixed(1) + "k" : String(Math.round(v));
+        const CustomTooltip = ({ active, payload, label }: any) => {
+          if (!active || !payload?.length) return null;
+          const daily = payload.find((p: any) => p.dataKey === "daily")?.value ?? 0;
+          const cumul = payload.find((p: any) => p.dataKey === "cumul")?.value ?? 0;
+          return (
+            <div style={{ background: "var(--bg-elevated)", border: "1px solid var(--border)", borderRadius: 8, padding: "10px 14px", fontSize: 12 }}>
+              <div style={{ fontWeight: 700, color: "var(--text)", marginBottom: 6 }}>{label}</div>
+              <div style={{ color: daily >= 0 ? "#22c55e" : "#f87171", fontWeight: 700 }}>Jour : {daily >= 0 ? "+" : ""}{daily.toFixed(2)} {cur}</div>
+              <div style={{ color: "#60a5fa", fontWeight: 600 }}>Cumulé : {cumul >= 0 ? "+" : ""}{cumul.toFixed(2)} {cur}</div>
+            </div>
+          );
+        };
+        return (
+          <div style={{ background: "var(--bg-raised)", border: "1px solid var(--border)", borderRadius: 10, padding: "18px 20px", marginBottom: 24 }}>
+            <div style={{ display: "flex", alignItems: "baseline", gap: 10, marginBottom: 16 }}>
+              <span style={{ fontSize: 14, fontWeight: 800, color: "var(--text)" }}>Évolution du P/L</span>
+              <span style={{ fontSize: 11, color: "var(--text-muted)" }}>barres = profit du jour · ligne = cumulé</span>
+              <span style={{ marginLeft: "auto", fontSize: 12, color: running >= 0 ? "#22c55e" : "#f87171", fontWeight: 800 }}>
+                Total {running >= 0 ? "+" : ""}{running.toFixed(2)} {cur}
+              </span>
+            </div>
+            <ResponsiveContainer width="100%" height={220}>
+              <ComposedChart data={chartData} margin={{ top: 4, right: 12, left: 0, bottom: 0 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.06)" vertical={false} />
+                <XAxis dataKey="label" tick={{ fill: "var(--text-muted)", fontSize: 11 }} axisLine={false} tickLine={false} />
+                <YAxis yAxisId="bar" tickFormatter={fmtY} tick={{ fill: "var(--text-muted)", fontSize: 11 }} axisLine={false} tickLine={false} width={40} domain={[-maxAbs * 1.1, maxAbs * 1.1]} />
+                <YAxis yAxisId="line" orientation="right" tickFormatter={fmtY} tick={{ fill: "#60a5fa", fontSize: 11 }} axisLine={false} tickLine={false} width={44} />
+                <Tooltip content={<CustomTooltip />} />
+                <ReferenceLine yAxisId="bar" y={0} stroke="rgba(255,255,255,0.15)" />
+                <Bar yAxisId="bar" dataKey="daily" radius={[4, 4, 0, 0]} maxBarSize={48}>
+                  {chartData.map((entry, i) => (
+                    <Cell key={i} fill={entry.daily >= 0 ? "#22c55e" : "#f87171"} fillOpacity={0.85} />
+                  ))}
+                </Bar>
+                <Line yAxisId="line" dataKey="cumul" type="monotone" stroke="#60a5fa" strokeWidth={2.5} dot={{ r: 4, fill: "#60a5fa", strokeWidth: 0 }} activeDot={{ r: 6 }} />
+              </ComposedChart>
+            </ResponsiveContainer>
+          </div>
+        );
+      })()}
 
       {/* History — day view or per-report view */}
       {(data.byDay.length > 0 || data.byPeriod.length > 0) && (
