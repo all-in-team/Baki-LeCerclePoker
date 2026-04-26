@@ -435,10 +435,10 @@ export default function ReportsClient({ games, players: initialPlayers }: { game
             <div style={{ padding: "14px 20px", borderBottom: "1px solid var(--border)", display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
               <span style={{ fontSize: 13, fontWeight: 700, color: "var(--text)" }}>{rows.length} joueurs</span>
               <span style={{ fontSize: 12, color: "var(--green)" }}>{matchedCount} matchés</span>
-              {unmatchedCount > 0 && <span style={{ fontSize: 12, color: "#fb923c" }}>{unmatchedCount} à identifier</span>}
+              {unmatchedCount > 0 && <span style={{ fontSize: 12, color: "#fb923c" }}>{unmatchedCount} non identifiés (ignorés)</span>}
               <div style={{ marginLeft: "auto", display: "flex", gap: 8, alignItems: "center" }}>
                 {saved && <span style={{ fontSize: 12, color: "var(--green)", display: "flex", alignItems: "center", gap: 4 }}><CheckCircle size={13} /> Sauvegardé</span>}
-                <Btn variant="primary" onClick={save} disabled={saving || unmatchedCount > 0 || !period.trim()}>
+                <Btn variant="primary" onClick={save} disabled={saving || !period.trim()}>
                   {saving ? "Sauvegarde…" : !period.trim() ? "Remplis la période ↑" : "Valider & sauvegarder"}
                 </Btn>
               </div>
@@ -565,7 +565,7 @@ export default function ReportsClient({ games, players: initialPlayers }: { game
             </div>
             {unmatchedCount > 0 && (
               <div style={{ padding: "10px 16px", fontSize: 11, color: "#fb923c", borderTop: "1px solid var(--border)" }}>
-                ⚠️ {unmatchedCount} joueur(s) non identifié(s) — leur ID sera mémorisé pour les prochains rapports
+                {unmatchedCount} joueur(s) non identifié(s) — ils seront ignorés et n'apparaîtront plus dans les prochains imports
               </div>
             )}
           </div>

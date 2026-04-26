@@ -246,6 +246,12 @@ function initSchema(db: Database.Database) {
       external_id TEXT NOT NULL,
       UNIQUE(game_id, external_id)
     );
+
+    CREATE TABLE IF NOT EXISTS game_ignored_ids (
+      game_id     INTEGER NOT NULL REFERENCES games(id) ON DELETE CASCADE,
+      external_id TEXT NOT NULL,
+      PRIMARY KEY (game_id, external_id)
+    );
   `);
 
   // Telegram onboarding sessions (guided multi-step flow)
@@ -260,6 +266,28 @@ function initSchema(db: Database.Database) {
     );
   `);
   try { db.exec(`ALTER TABLE telegram_sessions ADD COLUMN expected_tg_id INTEGER`); } catch {}
+  try { db.exec(`ALTER TABLE telegram_sessions ADD COLUMN pending_cmd TEXT`); } catch {}
+  // Migration: make player_id nullable (needed for waiting_game step which has no player context)
+  const fixSessionsNullablePlayer = db.prepare(`INSERT OR IGNORE INTO _applied_fixes (name) VALUES (?)`).run("telegram_sessions_nullable_player_id_v1");
+  if (fixSessionsNullablePlayer.changes > 0) {
+    db.pragma("foreign_keys = OFF");
+    db.exec(`
+      ALTER TABLE telegram_sessions RENAME TO telegram_sessions_old;
+      CREATE TABLE telegram_sessions (
+        chat_id        TEXT NOT NULL PRIMARY KEY,
+        step           TEXT NOT NULL,
+        player_id      INTEGER REFERENCES players(id) ON DELETE CASCADE,
+        expected_tg_id INTEGER,
+        pending_cmd    TEXT,
+        created_at     TEXT NOT NULL DEFAULT (datetime('now'))
+      );
+      INSERT OR IGNORE INTO telegram_sessions
+        SELECT chat_id, step, player_id, expected_tg_id, NULL, created_at
+        FROM telegram_sessions_old;
+      DROP TABLE telegram_sessions_old;
+    `);
+    db.pragma("foreign_keys = ON");
+  }
 
   // One-time: make wallet_transactions.app_id nullable (recreate table)
   const fixAppIdNullable = db.prepare(`INSERT OR IGNORE INTO _applied_fixes (name) VALUES (?)`).run("wallet_transactions_app_id_nullable_v1");

@@ -172,7 +172,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Aucun joueur détecté dans le fichier" }, { status: 422 });
   }
 
-  // Auto-match against known player_game_ids
+  // Auto-match against known player_game_ids; filter out IDs confirmed as "not our players"
   const db = getDb();
   const knownIds = db.prepare(`
     SELECT pgi.external_id, pgi.player_id, p.name
@@ -180,20 +180,27 @@ export async function POST(req: NextRequest) {
     WHERE pgi.game_id = ?
   `).all(gameId) as { external_id: string; player_id: number; name: string }[];
 
-  const knownMap = new Map(knownIds.map(r => [r.external_id.toLowerCase(), r]));
+  const ignoredIds = db.prepare(`
+    SELECT external_id FROM game_ignored_ids WHERE game_id = ?
+  `).all(gameId) as { external_id: string }[];
 
-  const rows = extracted.map(e => {
-    const known = knownMap.get(String(e.external_id).toLowerCase());
-    return {
-      external_id: e.external_id,
-      rakeback_amount: e.rakeback ?? 0,
-      insurance_amount: e.insurance ?? 0,
-      winnings_amount: e.winnings ?? 0,
-      currency: e.currency || "USDT",
-      player_id: known?.player_id ?? null,
-      player_name: known?.name ?? null,
-    };
-  });
+  const knownMap = new Map(knownIds.map(r => [r.external_id.toLowerCase(), r]));
+  const ignoredSet = new Set(ignoredIds.map(r => r.external_id.toLowerCase()));
+
+  const rows = extracted
+    .filter(e => !ignoredSet.has(String(e.external_id).toLowerCase()))
+    .map(e => {
+      const known = knownMap.get(String(e.external_id).toLowerCase());
+      return {
+        external_id: e.external_id,
+        rakeback_amount: e.rakeback ?? 0,
+        insurance_amount: e.insurance ?? 0,
+        winnings_amount: e.winnings ?? 0,
+        currency: e.currency || "USDT",
+        player_id: known?.player_id ?? null,
+        player_name: known?.name ?? null,
+      };
+    });
 
   return NextResponse.json({ rows });
 }

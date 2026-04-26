@@ -70,6 +70,12 @@ export async function POST(req: NextRequest) {
           `).run(row.player_id, game_id, row.action_pct ?? null, row.rakeback_pct ?? null);
         } catch {}
       }
+    } else {
+      // Mark unidentified IDs as ignored — won't appear on future imports for this game
+      try {
+        db.prepare(`INSERT OR IGNORE INTO game_ignored_ids (game_id, external_id) VALUES (?, ?)`)
+          .run(game_id, row.external_id);
+      } catch {}
     }
   }
 
