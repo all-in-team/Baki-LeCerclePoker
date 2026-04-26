@@ -118,9 +118,13 @@ function parseArgs(rawText: string): Parsed {
   let amount: number | null = null;
   const playerParts: string[] = [];
   for (const tok of nonGameTokens) {
-    const n = parseFloat(tok);
-    if (!isNaN(n) && amount === null && tok.match(/^\d/)) { amount = n; }
-    else { playerParts.push(tok); }
+    const kMatch = tok.match(/^(\d+(?:\.\d+)?)[kK]$/);
+    if (kMatch && amount === null) { amount = parseFloat(kMatch[1]) * 1000; }
+    else {
+      const n = parseFloat(tok);
+      if (!isNaN(n) && amount === null && tok.match(/^\d/)) { amount = n; }
+      else { playerParts.push(tok); }
+    }
   }
 
   return { playerQuery: playerParts.join(" ").trim(), gameName, amount, action_pct, rakeback_pct };
@@ -258,6 +262,71 @@ async function handleRawMessage(text: string, chatId: number) {
       `Lance un <b>Sync TELE</b> sur le dashboard pour capturer ses transactions automatiquement.`
     );
   }
+}
+
+// ── Command: /transfer ───────────────────────────────────
+function parseTransferArgs(rawText: string): { playerQuery: string; amount: number | null; fromGame: string | null; toGame: string | null } {
+  let text = rawText.replace(/\$|€/g, "").replace(/,\s*(?=\d)/g, " ").replace(/\s+/g, " ").trim();
+
+  let playerQuery = "";
+  const mentionMatch = text.match(/@(\w+)/);
+  if (mentionMatch) {
+    playerQuery = `@${mentionMatch[1]}`;
+    text = text.replace(/@\w+/, "").trim();
+  }
+
+  const canonical: Record<string, string> = { tele: "TELE", wepoker: "Wepoker", xpoker: "Xpoker", clubgg: "ClubGG" };
+  const tokens = text.split(/\s+/);
+  const games: string[] = [];
+  let amount: number | null = null;
+  const playerParts: string[] = [];
+
+  for (const tok of tokens) {
+    const gameMatch = GAME_NAMES.find(g => g === tok.toLowerCase());
+    if (gameMatch && games.length < 2) { games.push(canonical[gameMatch]); continue; }
+    const kMatch = tok.match(/^(\d+(?:\.\d+)?)[kK]$/);
+    if (kMatch && amount === null) { amount = parseFloat(kMatch[1]) * 1000; continue; }
+    const n = parseFloat(tok);
+    if (!isNaN(n) && amount === null && tok.match(/^\d/)) { amount = n; continue; }
+    if (!mentionMatch) playerParts.push(tok);
+  }
+
+  if (!mentionMatch) playerQuery = playerParts.join(" ").trim();
+  return { playerQuery, amount, fromGame: games[0] ?? null, toGame: games[1] ?? null };
+}
+
+async function handleTransfer(rawText: string, chatId: number) {
+  const p = parseTransferArgs(rawText);
+
+  if (!p.playerQuery) {
+    await sendMsg(chatId, `❌ Usage : <code>/transfer hugo 1k tele wepoker</code>`);
+    return;
+  }
+  if (!p.fromGame || !p.toGame) {
+    await sendMsg(chatId, `❌ Spécifie les deux games : <code>/transfer hugo 1k tele wepoker</code>`);
+    return;
+  }
+  if (!p.amount || p.amount <= 0) {
+    await sendMsg(chatId, `❌ Montant invalide`);
+    return;
+  }
+
+  const players = findPlayer(p.playerQuery);
+  if (players.length === 0) { await sendMsg(chatId, `❌ Joueur "${p.playerQuery}" introuvable`); return; }
+  if (players.length > 1) { await sendMsg(chatId, `❌ Plusieurs joueurs :\n${players.map(x => `• ${x.name}`).join("\n")}`); return; }
+
+  const fromGame = findGame(p.fromGame);
+  if (!fromGame) { await sendMsg(chatId, `❌ Game "${p.fromGame}" inconnue`); return; }
+  const toGame = findGame(p.toGame);
+  if (!toGame) { await sendMsg(chatId, `❌ Game "${p.toGame}" inconnue`); return; }
+
+  const today = new Date().toISOString().slice(0, 10);
+  insertWalletTransaction({ player_id: players[0].id, game_id: fromGame.id, type: "withdrawal", amount: p.amount, currency: "USDT", tx_date: today });
+  insertWalletTransaction({ player_id: players[0].id, game_id: toGame.id, type: "deposit", amount: p.amount, currency: "USDT", tx_date: today });
+
+  await sendMsg(chatId,
+    `🔄 <b>Transfer enregistré</b>\n<b>${players[0].name}</b>\n<b>${p.amount.toFixed(2)} USDT</b> : ${fromGame.name} → ${toGame.name} · ${today}`
+  );
 }
 
 // ── Command: /deal ────────────────────────────────────────
@@ -511,7 +580,9 @@ Quand un joueur rejoint → auto-créé. Puis :
 
 <b>— Transactions manuelles —</b>
 <code>/depot hugo 2000$ wepoker</code>
+<code>/depot hugo 2k wepoker</code>
 <code>/retrait hugo 500$ wepoker</code>
+<code>/transfer hugo 1k tele wepoker</code>
 
 <b>— Deal seul —</b>
 <code>/deal hugo wepoker 55% action 5% RB</code>
@@ -574,6 +645,7 @@ export async function POST(req: NextRequest) {
       if (cmd === "/deal")              await handleDeal(rawArgs, chatId);
       else if (cmd === "/depot")        await handleTx("deposit", rawArgs, chatId);
       else if (cmd === "/retrait")      await handleTx("withdrawal", rawArgs, chatId);
+      else if (cmd === "/transfer")     await handleTransfer(rawArgs, chatId);
       else if (cmd === "/wallet")       await handleWallet(rawArgs, chatId);
       else if (cmd === "/reset")        await handleReset(rawArgs, chatId);
       else if (cmd === "/check")        await handleCheck(rawArgs, chatId);
