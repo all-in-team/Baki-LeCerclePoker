@@ -19,9 +19,17 @@ interface ExtractedRow {
   rakeback_pct: number | null; // player's individual rakeback % from their deal
 }
 interface Report {
-  id: number; game_name: string; period_label: string; created_at: string;
+  id: number; game_name: string; period_label: string; report_date: string | null; created_at: string;
   club_id: string | null; club_name: string | null;
   entry_count: number; total_amount: number; unmatched_count: number;
+}
+
+const FR_MONTHS = ["janvier","février","mars","avril","mai","juin","juillet","août","septembre","octobre","novembre","décembre"];
+function todayISO() { return new Date().toISOString().split("T")[0]; }
+function formatDateFr(iso: string | null): string {
+  if (!iso) return "";
+  const [y, m, d] = iso.split("-");
+  return `${parseInt(d)} ${FR_MONTHS[parseInt(m) - 1]} ${y}`;
 }
 interface Club {
   id: number; game_id: number; external_club_id: string;
@@ -95,6 +103,8 @@ function ActionModal({ rows, onConfirm, onSkip }: {
 export default function ReportsClient({ games, players: initialPlayers }: { games: Game[]; players: Player[] }) {
   const [gameId, setGameId] = useState(games[0]?.id ?? 0);
   const [period, setPeriod] = useState("");
+  const [reportDate, setReportDate] = useState(todayISO());
+  const [editingDateFor, setEditingDateFor] = useState<number | null>(null);
   const [clubId, setClubId] = useState("");
   const [clubName, setClubName] = useState("");
   const [rbPct, setRbPct] = useState("");
@@ -269,13 +279,14 @@ export default function ReportsClient({ games, players: initialPlayers }: { game
   }
 
   async function save() {
-    if (!rows || !period.trim()) return;
+    if (!rows || !reportDate) return;
     setSaving(true);
     const res = await fetch("/api/reports/save", {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         game_id: gameId,
-        period_label: period.trim(),
+        period_label: period.trim() || formatDateFr(reportDate),
+        report_date: reportDate,
         club_id: clubId.trim() || null,
         club_name: clubName.trim() || null,
         rb_pct: rbPct !== "" ? parseFloat(rbPct) : null,
@@ -284,7 +295,16 @@ export default function ReportsClient({ games, players: initialPlayers }: { game
       }),
     });
     setSaving(false);
-    if (res.ok) { setSaved(true); setFile(null); setPreview(null); setRows(null); setPeriod(""); setClubId(""); setClubName(""); setRbPct(""); setInsPct(""); setClubMode("pick"); loadReports(); }
+    if (res.ok) { setSaved(true); setFile(null); setPreview(null); setRows(null); setPeriod(""); setReportDate(todayISO()); setClubId(""); setClubName(""); setRbPct(""); setInsPct(""); setClubMode("pick"); loadReports(); }
+  }
+
+  async function updateReportDate(id: number, date: string) {
+    await fetch(`/api/reports/${id}`, {
+      method: "PATCH", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ report_date: date }),
+    });
+    setReports(r => r.map(x => x.id === id ? { ...x, report_date: date } : x));
+    setEditingDateFor(null);
   }
 
   async function deleteReport(id: number) {
@@ -364,8 +384,16 @@ export default function ReportsClient({ games, players: initialPlayers }: { game
               </div>
             )}
 
-            <input value={period} onChange={e => setPeriod(e.target.value)} placeholder="Période — ex: Avr 2026"
-              style={{ flex: 1, minWidth: 140, fontSize: 12, padding: "7px 12px", borderRadius: 7, background: "var(--bg-elevated)", border: "1px solid var(--border)", color: "var(--text)", outline: "none" }} />
+            {/* Date picker — auto-today, editable */}
+            <div style={{ display: "flex", alignItems: "center", gap: 6, padding: "6px 12px", borderRadius: 7, background: "var(--bg-elevated)", border: "1px solid var(--green)", flexShrink: 0 }}>
+              <span style={{ fontSize: 12, fontWeight: 700, color: "var(--green)", whiteSpace: "nowrap" }}>
+                📅 {formatDateFr(reportDate)}
+              </span>
+              <input type="date" value={reportDate} onChange={e => setReportDate(e.target.value)}
+                style={{ fontSize: 11, background: "transparent", border: "none", color: "var(--text-dim)", outline: "none", width: 110, cursor: "pointer" }} />
+            </div>
+            <input value={period} onChange={e => setPeriod(e.target.value)} placeholder="Label optionnel — ex: Avr 2026"
+              style={{ flex: 1, minWidth: 120, fontSize: 12, padding: "7px 12px", borderRadius: 7, background: "var(--bg-elevated)", border: "1px solid var(--border)", color: "var(--text)", outline: "none" }} />
           </div>
           {/* Club deal rates — shown when a club is selected or being created */}
           {(clubId.trim() || clubMode === "new") && (
@@ -438,8 +466,8 @@ export default function ReportsClient({ games, players: initialPlayers }: { game
               {unmatchedCount > 0 && <span style={{ fontSize: 12, color: "#fb923c" }}>{unmatchedCount} non identifiés (ignorés)</span>}
               <div style={{ marginLeft: "auto", display: "flex", gap: 8, alignItems: "center" }}>
                 {saved && <span style={{ fontSize: 12, color: "var(--green)", display: "flex", alignItems: "center", gap: 4 }}><CheckCircle size={13} /> Sauvegardé</span>}
-                <Btn variant="primary" onClick={save} disabled={saving || !period.trim()}>
-                  {saving ? "Sauvegarde…" : !period.trim() ? "Remplis la période ↑" : "Valider & sauvegarder"}
+                <Btn variant="primary" onClick={save} disabled={saving || !reportDate}>
+                  {saving ? "Sauvegarde…" : "Valider & sauvegarder"}
                 </Btn>
               </div>
             </div>
@@ -588,14 +616,27 @@ export default function ReportsClient({ games, players: initialPlayers }: { game
                   <span style={{ fontSize: 10, fontWeight: 700, color: gc, background: gc + "18", padding: "2px 6px", borderRadius: 4, flexShrink: 0 }}>{r.game_name}</span>
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <div style={{ fontSize: 12, fontWeight: 600, color: "var(--text)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                      {r.period_label}
+                      {r.report_date ? formatDateFr(r.report_date) : r.period_label}
                       {r.club_name && <span style={{ fontSize: 11, fontWeight: 400, color: "var(--text-muted)", marginLeft: 6 }}>· {r.club_name}{r.club_id ? ` #${r.club_id}` : ""}</span>}
                     </div>
                     <div style={{ fontSize: 11, color: "var(--text-dim)", marginTop: 1 }}>
                       {r.entry_count} joueurs · <span style={{ color: "var(--green)" }}>+{r.total_amount.toFixed(2)}</span>
                       {r.unmatched_count > 0 && <span style={{ color: "#fb923c" }}> · {r.unmatched_count} non matchés</span>}
                     </div>
+                    {editingDateFor === r.id && (
+                      <div style={{ marginTop: 6, display: "flex", alignItems: "center", gap: 6 }}>
+                        <input type="date" defaultValue={r.report_date ?? ""} autoFocus
+                          onBlur={e => { if (e.target.value) updateReportDate(r.id, e.target.value); else setEditingDateFor(null); }}
+                          onKeyDown={e => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); if (e.key === "Escape") setEditingDateFor(null); }}
+                          style={{ fontSize: 12, padding: "4px 8px", borderRadius: 6, background: "var(--bg-elevated)", border: "1px solid var(--green)", color: "var(--text)", outline: "none" }} />
+                        <span style={{ fontSize: 11, color: "var(--text-dim)" }}>↵ confirmer</span>
+                      </div>
+                    )}
                   </div>
+                  <button onClick={() => setEditingDateFor(editingDateFor === r.id ? null : r.id)}
+                    title="Modifier la date" style={{ background: "none", border: "none", cursor: "pointer", color: r.report_date ? "var(--green)" : "#fb923c", padding: 4, fontSize: 12 }}>
+                    📅
+                  </button>
                   <button onClick={() => toggleExpand(r.id)} style={{ background: "none", border: "none", cursor: "pointer", color: "var(--text-dim)", padding: 4 }}>
                     {isOpen ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
                   </button>

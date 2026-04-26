@@ -329,6 +329,8 @@ function initSchema(db: Database.Database) {
   // Club tracking on reports
   try { db.exec(`ALTER TABLE rakeback_reports ADD COLUMN club_id TEXT`); } catch {}
   try { db.exec(`ALTER TABLE rakeback_reports ADD COLUMN club_name TEXT`); } catch {}
+  // Actual game date (separate from upload timestamp)
+  try { db.exec(`ALTER TABLE rakeback_reports ADD COLUMN report_date TEXT`); } catch {}
 
   // Clubs table — identifies a game by club ID, stores its deal rates
   db.exec(`

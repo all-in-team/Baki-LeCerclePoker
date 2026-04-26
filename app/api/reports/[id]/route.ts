@@ -23,8 +23,17 @@ export async function DELETE(_: NextRequest, { params }: { params: Promise<{ id:
 
 export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-  const { entry_id, player_id } = await req.json();
+  const body = await req.json();
   const db = getDb();
+
+  // Update report date
+  if (body.report_date !== undefined) {
+    db.prepare(`UPDATE rakeback_reports SET report_date = ? WHERE id = ?`).run(body.report_date || null, Number(id));
+    return NextResponse.json({ ok: true });
+  }
+
+  // Match an entry to a player
+  const { entry_id, player_id } = body;
   const report = db.prepare(`SELECT game_id FROM rakeback_reports WHERE id = ?`).get(Number(id)) as any;
   db.prepare(`UPDATE rakeback_entries SET player_id = ? WHERE id = ?`).run(player_id, entry_id);
   if (player_id && report) {

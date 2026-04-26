@@ -2,9 +2,10 @@ import { NextRequest, NextResponse } from "next/server";
 import { getDb } from "@/lib/db";
 
 export async function POST(req: NextRequest) {
-  const { game_id, period_label, club_id, club_name, rb_pct, ins_pct, rows } = await req.json() as {
+  const { game_id, period_label, report_date, club_id, club_name, rb_pct, ins_pct, rows } = await req.json() as {
     game_id: number;
     period_label: string;
+    report_date: string | null;
     club_id: string | null;
     club_name: string | null;
     rb_pct: number | null;
@@ -40,7 +41,7 @@ export async function POST(req: NextRequest) {
     } catch {}
   }
 
-  const rpt = db.prepare(`INSERT INTO rakeback_reports (game_id, period_label, club_id, club_name, rakeback_pct, insurance_pct) VALUES (?, ?, ?, ?, ?, ?)`).run(game_id, period_label, club_id ?? null, club_name ?? null, rb_pct ?? null, ins_pct ?? null);
+  const rpt = db.prepare(`INSERT INTO rakeback_reports (game_id, period_label, report_date, club_id, club_name, rakeback_pct, insurance_pct) VALUES (?, ?, ?, ?, ?, ?, ?)`).run(game_id, period_label, report_date ?? null, club_id ?? null, club_name ?? null, rb_pct ?? null, ins_pct ?? null);
   const report_id = Number(rpt.lastInsertRowid);
 
   for (const row of rows) {
