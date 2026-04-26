@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useRef, useCallback, useEffect } from "react";
-import { Upload, FileImage, CheckCircle, Trash2, ChevronDown, ChevronUp, Loader } from "lucide-react";
+import { Upload, FileImage, FileSpreadsheet, CheckCircle, Trash2, ChevronDown, ChevronUp, Loader } from "lucide-react";
 import Btn from "@/components/Btn";
 import Badge from "@/components/Badge";
 
@@ -15,12 +15,17 @@ interface ExtractedRow {
   currency: string;
   player_id: number | null;
   player_name: string | null;
-  action_pct: number | null; // per player
+  action_pct: number | null;
+  rakeback_pct: number | null; // player's individual rakeback % from their deal
 }
 interface Report {
   id: number; game_name: string; period_label: string; created_at: string;
   club_id: string | null; club_name: string | null;
   entry_count: number; total_amount: number; unmatched_count: number;
+}
+interface Club {
+  id: number; game_id: number; external_club_id: string;
+  club_name: string | null; rb_pct: number | null; ins_pct: number | null;
 }
 
 const GAME_COLOR: Record<string, string> = {
@@ -92,10 +97,10 @@ export default function ReportsClient({ games, players: initialPlayers }: { game
   const [period, setPeriod] = useState("");
   const [clubId, setClubId] = useState("");
   const [clubName, setClubName] = useState("");
-  // Club deal rates — looked up by club ID, prompted if unknown
   const [rbPct, setRbPct] = useState("");
   const [insPct, setInsPct] = useState("");
-  const [clubKnown, setClubKnown] = useState<boolean | null>(null); // null=not looked up yet
+  const [clubs, setClubs] = useState<Club[]>([]);
+  const [clubMode, setClubMode] = useState<"pick" | "new">("pick"); // "pick"=dropdown, "new"=manual inputs
   const [file, setFile] = useState<File | null>(null);
   const [preview, setPreview] = useState<string | null>(null);
   const [dragging, setDragging] = useState(false);
@@ -112,11 +117,13 @@ export default function ReportsClient({ games, players: initialPlayers }: { game
   const [creatingFor, setCreatingFor] = useState<number | null>(null);
   const [newPlayerName, setNewPlayerName] = useState("");
   const [creatingBusy, setCreatingBusy] = useState(false);
+  const [savingClub, setSavingClub] = useState(false);
+  const [clubSaved, setClubSaved] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     loadReports();
-    // Prevent browser from navigating to dropped files when dropped outside the zone
+    loadClubs(gameId);
     const stop = (e: DragEvent) => e.preventDefault();
     document.addEventListener("dragover", stop);
     document.addEventListener("drop", stop);
@@ -126,17 +133,49 @@ export default function ReportsClient({ games, players: initialPlayers }: { game
     };
   }, []);
 
-  async function lookupClub(cId: string) {
-    if (!cId.trim()) { setClubKnown(null); setRbPct(""); setInsPct(""); return; }
-    const club = await fetch(`/api/clubs?game_id=${gameId}&club_id=${encodeURIComponent(cId.trim())}`).then(r => r.json());
+  async function loadClubs(gId: number) {
+    const data = await fetch(`/api/clubs?game_id=${gId}`).then(r => r.json());
+    setClubs(Array.isArray(data) ? data : []);
+  }
+
+  function selectClub(externalId: string) {
+    if (externalId === "__new__") {
+      setClubMode("new");
+      setClubId(""); setClubName(""); setRbPct(""); setInsPct("");
+      return;
+    }
+    if (!externalId) {
+      setClubMode("pick");
+      setClubId(""); setClubName(""); setRbPct(""); setInsPct("");
+      return;
+    }
+    const club = clubs.find(c => c.external_club_id === externalId);
     if (club) {
-      setClubName(club.club_name ?? clubName);
+      setClubMode("pick");
+      setClubId(club.external_club_id);
+      setClubName(club.club_name ?? "");
       setRbPct(club.rb_pct !== null ? String(club.rb_pct) : "");
       setInsPct(club.ins_pct !== null ? String(club.ins_pct) : "");
-      setClubKnown(true);
-    } else {
-      setClubKnown(false);
     }
+  }
+
+  async function saveClub() {
+    if (!clubId.trim()) return;
+    setSavingClub(true); setClubSaved(false);
+    await fetch("/api/clubs", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        game_id: gameId,
+        external_club_id: clubId.trim(),
+        club_name: clubName.trim() || null,
+        rb_pct: rbPct !== "" ? parseFloat(rbPct) : null,
+        ins_pct: insPct !== "" ? parseFloat(insPct) : null,
+      }),
+    });
+    setSavingClub(false); setClubSaved(true);
+    await loadClubs(gameId);
+    setClubMode("pick");
+    setTimeout(() => setClubSaved(false), 3000);
   }
 
   async function loadReports() {
@@ -144,23 +183,33 @@ export default function ReportsClient({ games, players: initialPlayers }: { game
     setReports(res);
   }
 
+  function isAcceptedFile(f: File) {
+    return f.type.startsWith("image/") ||
+      f.type.includes("spreadsheet") || f.type.includes("excel") ||
+      f.name.toLowerCase().endsWith(".xls") || f.name.toLowerCase().endsWith(".xlsx");
+  }
+  function isXls(f: File) {
+    return f.type.includes("spreadsheet") || f.type.includes("excel") ||
+      f.name.toLowerCase().endsWith(".xls") || f.name.toLowerCase().endsWith(".xlsx");
+  }
+
   function onFile(f: File) {
     setFile(f); setRows(null); setSaved(false); setError(null);
-    setPreview(URL.createObjectURL(f));
+    setPreview(f.type.startsWith("image/") ? URL.createObjectURL(f) : null);
   }
 
   const onDrop = useCallback((e: React.DragEvent) => {
     e.preventDefault(); setDragging(false);
     const f = e.dataTransfer.files[0];
-    if (f && f.type.startsWith("image/")) onFile(f);
+    if (f && isAcceptedFile(f)) onFile(f);
   }, []);
 
-  async function fetchActionPct(playerId: number, gId: number): Promise<number | null> {
+  async function fetchPlayerDeal(playerId: number, gId: number): Promise<{ action_pct: number | null; rakeback_pct: number | null }> {
     try {
       const deals = await fetch(`/api/games/deals?player_id=${playerId}`).then(r => r.json());
       const d = deals.find((x: any) => x.game_id === gId);
-      return d?.action_pct ?? null;
-    } catch { return null; }
+      return { action_pct: d?.action_pct ?? null, rakeback_pct: d?.rakeback_pct ?? null };
+    } catch { return { action_pct: null, rakeback_pct: null }; }
   }
 
   async function extract() {
@@ -173,12 +222,12 @@ export default function ReportsClient({ games, players: initialPlayers }: { game
     const data = await res.json();
     setLoading(false);
     if (!res.ok) { setError(data.error); return; }
-    const rowsWithAction = await Promise.all((data.rows as any[]).map(async row => {
-      const action_pct = row.player_id ? await fetchActionPct(row.player_id, gameId) : null;
-      return { ...row, action_pct };
+    const rowsWithDeal = await Promise.all((data.rows as any[]).map(async row => {
+      const deal = row.player_id ? await fetchPlayerDeal(row.player_id, gameId) : { action_pct: null, rakeback_pct: null };
+      return { ...row, action_pct: deal.action_pct, rakeback_pct: deal.rakeback_pct };
     }));
-    setRows(rowsWithAction);
-    const needsAction = rowsWithAction.some(r => r.player_id && r.action_pct === null);
+    setRows(rowsWithDeal);
+    const needsAction = rowsWithDeal.some(r => r.player_id && r.action_pct === null);
     if (needsAction) setShowActionModal(true);
   }
 
@@ -195,8 +244,8 @@ export default function ReportsClient({ games, players: initialPlayers }: { game
 
   async function setRowPlayer(idx: number, player_id: number | null) {
     const player_name = players.find(p => p.id === player_id)?.name ?? null;
-    const action_pct = player_id ? await fetchActionPct(player_id, gameId) : null;
-    setRows(r => r!.map((row, i) => i !== idx ? row : { ...row, player_id, player_name, action_pct }));
+    const deal = player_id ? await fetchPlayerDeal(player_id, gameId) : { action_pct: null, rakeback_pct: null };
+    setRows(r => r!.map((row, i) => i !== idx ? row : { ...row, player_id, player_name, action_pct: deal.action_pct, rakeback_pct: deal.rakeback_pct }));
   }
 
   function setRowField(idx: number, field: keyof ExtractedRow, value: any) {
@@ -216,7 +265,7 @@ export default function ReportsClient({ games, players: initialPlayers }: { game
     const newPlayer = { id: data.id, name: newPlayerName.trim() };
     setPlayers(p => [...p, newPlayer].sort((a, b) => a.name.localeCompare(b.name)));
     setCreatingFor(null); setNewPlayerName("");
-    setRows(r => r!.map((row, i) => i !== idx ? row : { ...row, player_id: newPlayer.id, player_name: newPlayer.name, action_pct: null }));
+    setRows(r => r!.map((row, i) => i !== idx ? row : { ...row, player_id: newPlayer.id, player_name: newPlayer.name, action_pct: null, rakeback_pct: null }));
   }
 
   async function save() {
@@ -229,13 +278,13 @@ export default function ReportsClient({ games, players: initialPlayers }: { game
         period_label: period.trim(),
         club_id: clubId.trim() || null,
         club_name: clubName.trim() || null,
-        rb_pct: parseFloat(rbPct) || null,
-        ins_pct: parseFloat(insPct) || null,
+        rb_pct: rbPct !== "" ? parseFloat(rbPct) : null,
+        ins_pct: insPct !== "" ? parseFloat(insPct) : null,
         rows,
       }),
     });
     setSaving(false);
-    if (res.ok) { setSaved(true); setFile(null); setPreview(null); setRows(null); setPeriod(""); setClubId(""); setClubName(""); setRbPct(""); setInsPct(""); setClubKnown(null); loadReports(); }
+    if (res.ok) { setSaved(true); setFile(null); setPreview(null); setRows(null); setPeriod(""); setClubId(""); setClubName(""); setRbPct(""); setInsPct(""); setClubMode("pick"); loadReports(); }
   }
 
   async function deleteReport(id: number) {
@@ -282,33 +331,47 @@ export default function ReportsClient({ games, players: initialPlayers }: { game
         <div style={{ background: "var(--bg-raised)", border: "1px solid var(--border)", borderRadius: 10, marginBottom: 20 }}>
           {/* Game + Club + Period */}
           <div style={{ padding: "14px 20px", borderBottom: "1px solid var(--border)", display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
-            <select value={gameId} onChange={e => setGameId(Number(e.target.value))}
+            <select value={gameId} onChange={e => {
+              const gId = Number(e.target.value);
+              setGameId(gId);
+              setClubId(""); setClubName(""); setRbPct(""); setInsPct(""); setClubMode("pick");
+              loadClubs(gId);
+            }}
               style={{ fontSize: 13, fontWeight: 700, padding: "7px 12px", borderRadius: 7, background: "var(--bg-elevated)", border: "1px solid var(--border)", color: GAME_COLOR[games.find(g => g.id === gameId)?.name ?? ""] ?? "var(--text)", cursor: "pointer" }}>
               {games.map(g => <option key={g.id} value={g.id}>{g.name}</option>)}
             </select>
-            <input value={clubId}
-              onChange={e => { setClubId(e.target.value); setClubKnown(null); setRbPct(""); setInsPct(""); }}
-              onBlur={e => lookupClub(e.target.value)}
-              placeholder="Club ID"
-              style={{ width: 90, fontSize: 12, padding: "7px 10px", borderRadius: 7, background: "var(--bg-elevated)", border: `1px solid ${clubKnown === true ? "var(--green)" : clubKnown === false ? "#eab308" : "var(--border)"}`, color: "var(--text)", outline: "none", fontFamily: "monospace" }} />
-            <input value={clubName} onChange={e => setClubName(e.target.value)} placeholder="Club Name"
-              style={{ width: 130, fontSize: 12, padding: "7px 10px", borderRadius: 7, background: "var(--bg-elevated)", border: "1px solid var(--border)", color: "var(--text)", outline: "none" }} />
+
+            {/* Club selector */}
+            {clubMode === "pick" ? (
+              <select value={clubId} onChange={e => selectClub(e.target.value)}
+                style={{ fontSize: 12, padding: "7px 10px", borderRadius: 7, background: "var(--bg-elevated)", border: `1px solid ${clubId ? "var(--green)" : "var(--border)"}`, color: clubId ? "var(--text)" : "var(--text-dim)", cursor: "pointer", minWidth: 160 }}>
+                <option value="">— Club (optionnel) —</option>
+                {clubs.map(c => (
+                  <option key={c.external_club_id} value={c.external_club_id}>
+                    {c.club_name ? `${c.club_name} #${c.external_club_id}` : `#${c.external_club_id}`}
+                  </option>
+                ))}
+                <option value="__new__">➕ Nouveau club</option>
+              </select>
+            ) : (
+              <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                <input value={clubId} onChange={e => setClubId(e.target.value)} placeholder="Club ID"
+                  style={{ width: 80, fontSize: 12, padding: "7px 10px", borderRadius: 7, background: "var(--bg-elevated)", border: "1px solid #eab308", color: "var(--text)", outline: "none", fontFamily: "monospace" }} />
+                <input value={clubName} onChange={e => setClubName(e.target.value)} placeholder="Nom du club"
+                  style={{ width: 130, fontSize: 12, padding: "7px 10px", borderRadius: 7, background: "var(--bg-elevated)", border: "1px solid #eab308", color: "var(--text)", outline: "none" }} />
+                <button onClick={() => { setClubMode("pick"); setClubId(""); setClubName(""); setRbPct(""); setInsPct(""); }}
+                  style={{ fontSize: 11, color: "var(--text-dim)", background: "none", border: "none", cursor: "pointer", padding: "4px 6px" }}>✕</button>
+              </div>
+            )}
+
             <input value={period} onChange={e => setPeriod(e.target.value)} placeholder="Période — ex: Avr 2026"
               style={{ flex: 1, minWidth: 140, fontSize: 12, padding: "7px 12px", borderRadius: 7, background: "var(--bg-elevated)", border: "1px solid var(--border)", color: "var(--text)", outline: "none" }} />
           </div>
-          {/* Club deal rates — shown once club ID is entered */}
-          {clubId.trim() && (
-            <div style={{ padding: "10px 20px", borderBottom: "1px solid var(--border)", display: "flex", gap: 16, alignItems: "center", flexWrap: "wrap", background: clubKnown === false ? "rgba(234,179,8,0.05)" : "rgba(56,189,248,0.03)" }}>
-              {clubKnown === false && (
-                <span style={{ fontSize: 11, fontWeight: 700, color: "#eab308" }}>
-                  Nouveau club — quel est le deal ?
-                </span>
-              )}
-              {clubKnown === true && (
-                <span style={{ fontSize: 11, color: "var(--green)", fontWeight: 600 }}>✓ Club connu</span>
-              )}
-              {clubKnown === null && (
-                <span style={{ fontSize: 11, color: "var(--text-dim)" }}>Recherche…</span>
+          {/* Club deal rates — shown when a club is selected or being created */}
+          {(clubId.trim() || clubMode === "new") && (
+            <div style={{ padding: "10px 20px", borderBottom: "1px solid var(--border)", display: "flex", gap: 16, alignItems: "center", flexWrap: "wrap", background: clubMode === "new" ? "rgba(234,179,8,0.05)" : "rgba(56,189,248,0.03)" }}>
+              {clubMode === "new" && (
+                <span style={{ fontSize: 11, fontWeight: 700, color: "#eab308" }}>Nouveau club — quel est le deal ?</span>
               )}
               <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
                 <span style={{ fontSize: 11, color: "#38bdf8" }}>% RB Rake</span>
@@ -318,6 +381,10 @@ export default function ReportsClient({ games, players: initialPlayers }: { game
                 <span style={{ fontSize: 11, color: "#a78bfa" }}>% RB Insurance</span>
                 <SmallPct value={insPct} onChange={setInsPct} color="#a78bfa" />
               </div>
+              <button onClick={saveClub} disabled={savingClub || !clubId.trim()}
+                style={{ marginLeft: "auto", padding: "5px 14px", borderRadius: 6, fontSize: 12, fontWeight: 700, background: clubSaved ? "rgba(34,197,94,0.15)" : "rgba(56,189,248,0.12)", border: `1px solid ${clubSaved ? "rgba(34,197,94,0.4)" : "rgba(56,189,248,0.35)"}`, color: clubSaved ? "var(--green)" : "#38bdf8", cursor: "pointer", transition: "all 0.2s" }}>
+                {savingClub ? "…" : clubSaved ? "✓ Sauvegardé" : "Sauvegarder club"}
+              </button>
             </div>
           )}
 
@@ -336,14 +403,20 @@ export default function ReportsClient({ games, players: initialPlayers }: { game
               }}>
               {preview
                 ? <img src={preview} alt="" style={{ width: "100%", display: "block", borderRadius: 8 }} />
+                : file && isXls(file)
+                ? <div style={{ padding: "32px 20px" }}>
+                    <FileSpreadsheet size={36} color="#22c55e" style={{ marginBottom: 10 }} />
+                    <div style={{ fontSize: 13, fontWeight: 600, color: "var(--text)", marginBottom: 4 }}>{file.name}</div>
+                    <div style={{ fontSize: 11, color: "var(--text-dim)" }}>{(file.size / 1024).toFixed(1)} Ko — Excel</div>
+                  </div>
                 : <>
                   <FileImage size={36} color="var(--text-dim)" style={{ marginBottom: 12 }} />
-                  <div style={{ fontSize: 13, fontWeight: 600, color: "var(--text-muted)", marginBottom: 4 }}>Glisse le screenshot ici</div>
-                  <div style={{ fontSize: 12, color: "var(--text-dim)" }}>ou clique pour choisir — JPG, PNG</div>
+                  <div style={{ fontSize: 13, fontWeight: 600, color: "var(--text-muted)", marginBottom: 4 }}>Glisse le fichier ici</div>
+                  <div style={{ fontSize: 12, color: "var(--text-dim)" }}>Screenshot (JPG, PNG) ou export Excel (XLS, XLSX)</div>
                 </>
               }
             </div>
-            <input ref={fileRef} type="file" accept="image/*" style={{ display: "none" }}
+            <input ref={fileRef} type="file" accept="image/*,.xls,.xlsx" style={{ display: "none" }}
               onChange={e => { const f = e.target.files?.[0]; if (f) onFile(f); }} />
             {file && (
               <div style={{ marginTop: 14, display: "flex", gap: 10, alignItems: "center" }}>
@@ -375,22 +448,64 @@ export default function ReportsClient({ games, players: initialPlayers }: { game
                 <thead>
                   <tr style={{ borderBottom: "1px solid var(--border)" }}>
                     <th style={thStyle}>ID App</th>
-                    <th style={{ ...thStyle, color: "#38bdf8" }}>Rakeback</th>
-                    <th style={{ ...thStyle, color: "#a78bfa" }}>Insurance</th>
-                    <th style={{ ...thStyle, color: "#4ade80" }}>Winnings / Pertes</th>
+                    <th style={{ ...thStyle, color: "#38bdf8" }}>Rake Net</th>
+                    <th style={{ ...thStyle, color: "#a78bfa" }}>Insurance Net</th>
+                    <th style={{ ...thStyle, color: "#60a5fa", opacity: 0.85 }}>Agency RB ({rbPct || "?"}%)</th>
+                    <th style={{ ...thStyle, color: "#22d3ee", opacity: 0.6 }}>Player RB%</th>
+                    <th style={{ ...thStyle, color: "#22d3ee" }}>Players RB</th>
+                    <th style={{ ...thStyle, color: "#4ade80" }}>Agency RB Profit</th>
+                    <th style={{ ...thStyle, color: "#f97316" }}>W/L Total</th>
                     <th style={{ ...thStyle, color: "#eab308" }}>% Action</th>
+                    <th style={{ ...thStyle, color: "#f97316", opacity: 0.7 }}>W/L Agency</th>
+                    <th style={{ ...thStyle, color: "#f97316", opacity: 0.5 }}>W/L Player</th>
+                    <th style={{ ...thStyle, color: "#c084fc", fontWeight: 800 }}>P/L Player</th>
+                    <th style={{ ...thStyle, color: "#34d399", fontWeight: 800 }}>P/L Agency</th>
                     <th style={thStyle}>Joueur CRM</th>
                   </tr>
                 </thead>
                 <tbody>
                   {rows.map((row, idx) => {
                     const isCreating = creatingFor === idx;
+                    const rbPctNum = rbPct !== "" ? parseFloat(rbPct) : null;
+                    // Rake breakdown
+                    const rbBase      = row.rakeback_amount + row.insurance_amount; // Rake Net + Insurance Net
+                    const agencyComm  = rbPctNum !== null ? rbBase * rbPctNum / 100 : null;
+                    const forPlayer   = row.rakeback_pct !== null ? rbBase * row.rakeback_pct / 100 : null;
+                    const agencyRbProfit = agencyComm !== null && forPlayer !== null ? agencyComm - forPlayer : null;
+                    // W/L breakdown
+                    const wlAgency = row.action_pct !== null ? row.winnings_amount * row.action_pct / 100 : null;
+                    const wlPlayer = row.action_pct !== null ? row.winnings_amount * (1 - row.action_pct / 100) : null;
+                    // Totals (rake portion + winnings portion)
+                    const plPlayer = forPlayer !== null && wlPlayer !== null ? forPlayer + wlPlayer : null;
+                    const plAgency = agencyRbProfit !== null && wlAgency !== null ? agencyRbProfit + wlAgency : null;
+                    const dim = <span style={{ color: "var(--text-dim)" }}>—</span>;
                     return (
                       <tr key={idx} style={{ borderBottom: "1px solid var(--border)" }}>
                         <td style={{ ...tdStyle, fontFamily: "monospace", color: "var(--text-muted)", fontSize: 11 }}>{row.external_id}</td>
                         <td style={tdStyle}>{fmtAmount(row.rakeback_amount, "#38bdf8")}</td>
                         <td style={tdStyle}>{fmtAmount(row.insurance_amount, "#a78bfa")}</td>
-                        <td style={tdStyle}>{fmtAmount(row.winnings_amount, "#4ade80")}</td>
+                        <td style={tdStyle}>{agencyComm !== null ? fmtAmount(agencyComm, "#60a5fa") : dim}</td>
+                        {/* Player RB% — editable % input */}
+                        <td style={tdStyle}>
+                          {row.player_id ? (
+                            <div style={{ display: "flex", alignItems: "center", gap: 3 }}>
+                              <input type="number" min="0" max="100" step="1"
+                                value={row.rakeback_pct ?? ""}
+                                onChange={e => { const v = parseFloat(e.target.value); setRowField(idx, "rakeback_pct", isNaN(v) ? null : v); }}
+                                placeholder="—"
+                                style={{ width: 48, padding: "3px 5px", borderRadius: 5, fontSize: 12, fontWeight: 600, background: row.rakeback_pct !== null ? "rgba(34,211,238,0.10)" : "var(--bg-elevated)", border: `1px solid ${row.rakeback_pct !== null ? "rgba(34,211,238,0.4)" : "var(--border)"}`, color: "#22d3ee", textAlign: "center", outline: "none" }} />
+                              <span style={{ fontSize: 10, color: "var(--text-dim)" }}>%</span>
+                            </div>
+                          ) : <span style={{ color: "var(--text-dim)" }}>—</span>}
+                        </td>
+                        {/* Players RB — calculated */}
+                        <td style={tdStyle}>
+                          {forPlayer !== null
+                            ? <span style={{ fontWeight: 700, color: "#22d3ee" }}>-{forPlayer.toFixed(2)}</span>
+                            : <span style={{ color: "var(--text-dim)" }}>—</span>}
+                        </td>
+                        <td style={tdStyle}>{agencyRbProfit !== null ? fmtAmount(agencyRbProfit, "#4ade80") : dim}</td>
+                        <td style={tdStyle}>{fmtAmount(row.winnings_amount, "#f97316")}</td>
                         <td style={tdStyle}>
                           {row.player_id ? (
                             <div style={{ display: "flex", alignItems: "center", gap: 3 }}>
@@ -402,6 +517,14 @@ export default function ReportsClient({ games, players: initialPlayers }: { game
                               <span style={{ fontSize: 10, color: "var(--text-dim)" }}>%</span>
                             </div>
                           ) : <span style={{ color: "var(--text-dim)", fontSize: 12 }}>—</span>}
+                        </td>
+                        <td style={tdStyle}>{wlAgency !== null ? fmtAmount(wlAgency, "#f97316") : dim}</td>
+                        <td style={tdStyle}>{wlPlayer !== null ? fmtAmount(wlPlayer, "#f97316") : dim}</td>
+                        <td style={{ ...tdStyle, background: plPlayer !== null ? "rgba(192,132,252,0.05)" : undefined }}>
+                          {plPlayer !== null ? <span style={{ fontWeight: 800, color: plPlayer >= 0 ? "#c084fc" : "#f87171" }}>{plPlayer >= 0 ? "+" : ""}{plPlayer.toFixed(2)}</span> : dim}
+                        </td>
+                        <td style={{ ...tdStyle, background: plAgency !== null ? "rgba(52,211,153,0.05)" : undefined }}>
+                          {plAgency !== null ? <span style={{ fontWeight: 800, color: plAgency >= 0 ? "#34d399" : "#f87171" }}>{plAgency >= 0 ? "+" : ""}{plAgency.toFixed(2)}</span> : dim}
                         </td>
                         <td style={{ ...tdStyle, minWidth: 180 }}>
                           {row.player_id && !isCreating ? (
