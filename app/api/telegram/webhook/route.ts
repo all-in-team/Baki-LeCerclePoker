@@ -2,7 +2,10 @@ import { NextRequest, NextResponse } from "next/server";
 import { getDb } from "@/lib/db";
 import { upsertPlayerGameDeal, insertWalletTransaction } from "@/lib/queries";
 
-const OWNER_IDS = new Set([1298290355]);
+const OWNER_IDS = new Set<number>(
+  (process.env.TELEGRAM_OWNER_IDS ?? "1298290355")
+    .split(",").map(id => parseInt(id.trim(), 10)).filter(n => !isNaN(n))
+);
 const GAME_NAMES = ["tele", "wepoker", "xpoker", "clubgg"];
 const TRC20_RE = /^T[a-zA-Z0-9]{33}$/;
 
@@ -10,11 +13,12 @@ const TRC20_RE = /^T[a-zA-Z0-9]{33}$/;
 async function sendMsg(chatId: number | string, text: string) {
   const token = process.env.TELEGRAM_BOT_TOKEN;
   if (!token) return;
-  await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+  const res = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ chat_id: chatId, text, parse_mode: "HTML" }),
   });
+  if (!res.ok) console.error("[TG sendMsg]", chatId, res.status, await res.text());
 }
 
 const WALLET_GAME_PHOTO_URL = "https://lecerclepoker-production.up.railway.app/tele-wallet-guide.jpg";
@@ -44,7 +48,7 @@ type Step = "waiting_action_pct" | "waiting_wallet_game" | "waiting_wallet_casho
 
 function getSession(chatId: string | number): { step: Step; player_id: number; expected_tg_id: number | null } | null {
   return getDb().prepare(
-    `SELECT step, player_id, expected_tg_id FROM telegram_sessions WHERE chat_id = ?`
+    `SELECT step, player_id, expected_tg_id FROM telegram_sessions WHERE chat_id = ? AND created_at > datetime('now', '-24 hours')`
   ).get(String(chatId)) as any ?? null;
 }
 function setSession(chatId: string | number, step: Step, player_id: number, expected_tg_id?: number | null) {
@@ -258,9 +262,13 @@ async function handleRawMessage(text: string, chatId: number) {
       `✅ <b>WALLET CASHOUT enregistré</b> pour <b>${player.name}</b>\n<code>${text}</code>\n\n` +
       `🟢 <b>${player.name} est 100% configuré !</b>\n` +
       `Deal : <b>${deal?.action_pct ?? "?"}% action</b>` + (deal?.rakeback_pct ? ` · RB : <b>${deal.rakeback_pct}%</b>` : "") + `\n` +
-      `WALLET GAME ✅ · WALLET CASHOUT ✅\n\n` +
-      `Lance un <b>Sync TELE</b> sur le dashboard pour capturer ses transactions automatiquement.`
+      `WALLET GAME ✅ · WALLET CASHOUT ✅`
     );
+    // Auto-advance to next incomplete TELE player if any
+    const hasNext = await startNextWalletFlow(chatId, player.id);
+    if (!hasNext) {
+      await sendMsg(chatId, `🎉 <b>Tous les joueurs TELE sont configurés !</b> Lance un <b>Sync TELE</b> sur le dashboard.`);
+    }
   }
 }
 
@@ -587,10 +595,200 @@ Quand un joueur rejoint → auto-créé. Puis :
 <b>— Deal seul —</b>
 <code>/deal hugo wepoker 55% action 5% RB</code>
 
-<b>— P&L —</b>
+<b>— P&L & Solde —</b>
 <code>/pnl</code> — tous · <code>/pnl hugo</code> — un joueur
+<code>/solde hugo</code> — solde net par game
+<code>/solde hugo wepoker</code> — solde sur une game
+
+<b>— Historique —</b>
+<code>/historique hugo</code> — 5 dernières transactions
+<code>/historique hugo wepoker 10</code> — 10 dernières sur une game
+
+<b>— Onboarding en attente —</b>
+<code>/todo</code> — liste les joueurs incomplets
+<code>/kickstart</code> — collecte les wallets TELE manquants (joueur par joueur)
 
 Games : <b>TELE · Wepoker · Xpoker · ClubGG</b>`);
+}
+
+// ── Command: /solde ───────────────────────────────────────
+async function handleSolde(rawText: string, chatId: number) {
+  const p = parseArgs(rawText);
+  if (!p.playerQuery) {
+    await sendMsg(chatId, `❌ Usage : <code>/solde hugo</code> ou <code>/solde hugo wepoker</code>`);
+    return;
+  }
+  const players = findPlayer(p.playerQuery);
+  if (players.length === 0) { await sendMsg(chatId, `❌ Joueur "${p.playerQuery}" introuvable`); return; }
+  if (players.length > 1) { await sendMsg(chatId, `❌ Plusieurs joueurs :\n${players.map(x => `• ${x.name}`).join("\n")}`); return; }
+
+  const db = getDb();
+  const baseQuery = `
+    SELECT g.name AS game_name,
+      COALESCE(SUM(CASE WHEN wt.type='deposit' THEN wt.amount ELSE 0 END), 0) AS deposited,
+      COALESCE(SUM(CASE WHEN wt.type='withdrawal' THEN wt.amount ELSE 0 END), 0) AS withdrawn,
+      COALESCE(SUM(CASE WHEN wt.type='deposit' THEN wt.amount ELSE -wt.amount END), 0) AS balance
+    FROM wallet_transactions wt
+    JOIN games g ON g.id = wt.game_id
+    WHERE wt.player_id = ?`;
+
+  let rows: any[];
+  if (p.gameName) {
+    const game = findGame(p.gameName);
+    if (!game) { await sendMsg(chatId, `❌ Game "${p.gameName}" inconnue`); return; }
+    rows = db.prepare(baseQuery + ` AND g.id = ? GROUP BY wt.game_id`).all(players[0].id, game.id) as any[];
+  } else {
+    rows = db.prepare(baseQuery + ` GROUP BY wt.game_id ORDER BY g.name`).all(players[0].id) as any[];
+  }
+
+  if (rows.length === 0) {
+    await sendMsg(chatId, `ℹ️ ${players[0].name} — aucune transaction enregistrée`);
+    return;
+  }
+
+  let total = 0;
+  const lines = rows.map((r: any) => {
+    total += r.balance;
+    const emoji = r.balance > 0 ? "🟢" : r.balance < 0 ? "🔴" : "⚪";
+    return `${emoji} <b>${r.game_name}</b> : <b>${s(r.balance)} USDT</b>  (📥 ${r.deposited.toFixed(2)} / 📤 ${r.withdrawn.toFixed(2)})`;
+  });
+  const totalLine = rows.length > 1 ? `\n\n<b>Total : ${s(total)} USDT</b>` : "";
+  await sendMsg(chatId, `💰 <b>Solde — ${players[0].name}</b>\n\n${lines.join("\n")}${totalLine}`);
+}
+
+// ── Command: /todo ────────────────────────────────────────
+async function handleTodo(chatId: number) {
+  const players = getDb().prepare(`
+    SELECT p.id, p.name, p.tron_address, p.tele_wallet_cashout,
+      (SELECT COUNT(*) FROM player_game_deals pgd
+       JOIN games g ON g.id = pgd.game_id
+       WHERE pgd.player_id = p.id AND LOWER(g.name) = 'tele') AS has_deal
+    FROM players p WHERE p.status = 'active' ORDER BY p.name
+  `).all() as any[];
+
+  const incomplete = players.filter(p => {
+    const hasGame = !!(p.tron_address && TRC20_RE.test(p.tron_address));
+    const hasCashout = !!(p.tele_wallet_cashout && TRC20_RE.test(p.tele_wallet_cashout));
+    return !p.has_deal || !hasGame || !hasCashout;
+  });
+
+  if (incomplete.length === 0) {
+    await sendMsg(chatId, `✅ <b>Tous les joueurs actifs sont configurés !</b>`);
+    return;
+  }
+
+  const lines = incomplete.map(p => {
+    const hasGame = !!(p.tron_address && TRC20_RE.test(p.tron_address));
+    const hasCashout = !!(p.tele_wallet_cashout && TRC20_RE.test(p.tele_wallet_cashout));
+    const step = !p.has_deal ? "1/3 deal" : !hasGame ? "2/3 wallet game" : "3/3 wallet cashout";
+    return `• <b>${p.name}</b> — étape ${step}`;
+  });
+  await sendMsg(chatId,
+    `📋 <b>${incomplete.length} joueur(s) à compléter</b>\n\n${lines.join("\n")}\n\n<i>Utilise <code>/check nom</code> pour le détail.</i>`
+  );
+}
+
+// ── Command: /historique ──────────────────────────────────
+async function handleHistorique(rawText: string, chatId: number) {
+  const p = parseArgs(rawText);
+  const limit = p.amount !== null ? Math.min(Math.max(1, Math.round(p.amount)), 20) : 5;
+
+  if (!p.playerQuery) {
+    await sendMsg(chatId, `❌ Usage : <code>/historique hugo</code> ou <code>/historique hugo wepoker 10</code>`);
+    return;
+  }
+  const players = findPlayer(p.playerQuery);
+  if (players.length === 0) { await sendMsg(chatId, `❌ Joueur "${p.playerQuery}" introuvable`); return; }
+  if (players.length > 1) { await sendMsg(chatId, `❌ Plusieurs joueurs :\n${players.map(x => `• ${x.name}`).join("\n")}`); return; }
+
+  const db = getDb();
+  let rows: any[];
+  if (p.gameName) {
+    const game = findGame(p.gameName);
+    if (!game) { await sendMsg(chatId, `❌ Game "${p.gameName}" inconnue`); return; }
+    rows = db.prepare(`
+      SELECT wt.type, wt.amount, g.name AS game_name, wt.tx_date
+      FROM wallet_transactions wt JOIN games g ON g.id = wt.game_id
+      WHERE wt.player_id = ? AND wt.game_id = ?
+      ORDER BY wt.tx_date DESC, wt.id DESC LIMIT ?
+    `).all(players[0].id, game.id, limit) as any[];
+  } else {
+    rows = db.prepare(`
+      SELECT wt.type, wt.amount, g.name AS game_name, wt.tx_date
+      FROM wallet_transactions wt JOIN games g ON g.id = wt.game_id
+      WHERE wt.player_id = ?
+      ORDER BY wt.tx_date DESC, wt.id DESC LIMIT ?
+    `).all(players[0].id, limit) as any[];
+  }
+
+  if (rows.length === 0) {
+    await sendMsg(chatId, `ℹ️ ${players[0].name} — aucune transaction enregistrée`);
+    return;
+  }
+
+  const lines = rows.map((r: any) => {
+    const emoji = r.type === "deposit" ? "📥" : "📤";
+    const sign = r.type === "deposit" ? "+" : "−";
+    return `${emoji} ${r.tx_date} · <b>${sign}${r.amount.toFixed(2)} USDT</b> · ${r.game_name}`;
+  });
+  const gameLabel = p.gameName ? ` / ${p.gameName}` : "";
+  await sendMsg(chatId, `📜 <b>${players[0].name}${gameLabel}</b> — ${rows.length} transaction(s)\n\n${lines.join("\n")}`);
+}
+
+// ── Kickstart helpers ─────────────────────────────────────
+function getIncompleteTelePlayers() {
+  const rows = getDb().prepare(`
+    SELECT p.id, p.name, p.telegram_id, p.telegram_handle, p.tron_address, p.tele_wallet_cashout
+    FROM players p
+    JOIN player_game_deals pgd ON pgd.player_id = p.id
+    JOIN games g ON g.id = pgd.game_id
+    WHERE p.status = 'active' AND LOWER(g.name) = 'tele'
+    ORDER BY p.name
+  `).all() as { id: number; name: string; telegram_id: number | null; telegram_handle: string | null; tron_address: string | null; tele_wallet_cashout: string | null }[];
+
+  return rows.filter(p => {
+    const hasGame = !!(p.tron_address && TRC20_RE.test(p.tron_address));
+    const hasCashout = !!(p.tele_wallet_cashout && TRC20_RE.test(p.tele_wallet_cashout));
+    return !hasGame || !hasCashout;
+  });
+}
+
+async function startNextWalletFlow(chatId: number, skipPlayerId?: number) {
+  const incomplete = getIncompleteTelePlayers().filter(p => p.id !== skipPlayerId);
+  if (incomplete.length === 0) return false;
+  const next = incomplete[0];
+  const hasGame = !!(next.tron_address && TRC20_RE.test(next.tron_address));
+  if (!hasGame) {
+    setSession(chatId, "waiting_wallet_game", next.id, next.telegram_id);
+    await askWalletGame(chatId, mentionOf(next));
+  } else {
+    setSession(chatId, "waiting_wallet_cashout", next.id, next.telegram_id);
+    await sendMsg(chatId,
+      `💸 <b>Étape 3/3</b> — ${mentionOf(next)}, envoie ton <b>WALLET CASHOUT</b>\n<i>(adresse Binance TRC20 pour recevoir les cashouts)</i>`
+    );
+  }
+  return true;
+}
+
+// ── Command: /kickstart ───────────────────────────────────
+async function handleKickstart(chatId: number) {
+  const incomplete = getIncompleteTelePlayers();
+
+  if (incomplete.length === 0) {
+    await sendMsg(chatId, `✅ <b>Tous les joueurs TELE ont leurs wallets configurés !</b>`);
+    return;
+  }
+
+  const lines = incomplete.map(p => {
+    const hasGame = !!(p.tron_address && TRC20_RE.test(p.tron_address));
+    const step = !hasGame ? "wallet game" : "wallet cashout";
+    return `• ${mentionOf(p)} — manque ${step}`;
+  });
+
+  await sendMsg(chatId,
+    `🚀 <b>Kickstart TELE — ${incomplete.length} joueur(s) à compléter</b>\n\n${lines.join("\n")}\n\n<i>Collecte démarrée joueur par joueur…</i>`
+  );
+  await startNextWalletFlow(chatId);
 }
 
 // ── Member join handler ───────────────────────────────────
@@ -650,6 +848,10 @@ export async function POST(req: NextRequest) {
       else if (cmd === "/reset")        await handleReset(rawArgs, chatId);
       else if (cmd === "/check")        await handleCheck(rawArgs, chatId);
       else if (cmd === "/pnl")          await handlePnl(rawArgs, chatId);
+      else if (cmd === "/solde")        await handleSolde(rawArgs, chatId);
+      else if (cmd === "/todo")         await handleTodo(chatId);
+      else if (cmd === "/kickstart")    await handleKickstart(chatId);
+      else if (cmd === "/historique")   await handleHistorique(rawArgs, chatId);
       else if (cmd === "/aide" || cmd === "/help") await handleAide(chatId);
     } catch (e: any) {
       console.error("[TG CMD]", e);
