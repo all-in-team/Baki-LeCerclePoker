@@ -86,15 +86,32 @@ function xlsExtractDirect(bytes: ArrayBuffer): Row[] | null {
 }
 
 // ── Claude vision extraction (images only) ───────────────────────────────
-const EXTRACTION_RULES = `Rules:
-- external_id: player ID or account number
-- rakeback: rake amount (column 组局基金 in Wepoker). (0 if absent)
-- insurance: insurance net P&L (column 保险盈利 in Wepoker). (0 if absent)
-- winnings: net win/loss — positive=profit, negative=loss (column 盈亏). (0 if absent)
-- currency: USDT/USD/CNY/EUR as shown, default USDT
-- Include every player row`;
+// Wepoker column order (confirmed):
+//  排名 | 玩家昵称 | 玩家ID | 是否被平台处罚 | 局数 | 手数 | 带入 | 鱿鱼罚金场外带入 | 鱿鱼盈亏 | 保险总投保 | 保险总赔付 | 保险盈利 | 组局基金 | 盈亏 | 备注名
+//  IGNORED                                                              IGNORED      IGNORED     ← insurance NET  ← rake     ← winnings  IGNORED
+const WEPOKER_COLUMN_GUIDE = `Wepoker column order (left to right):
+排名 | 玩家昵称 | 玩家ID | 是否被平台处罚 | 局数 | 手数 | 带入 | 鱿鱼罚金场外带入 | 鱿鱼盈亏 | 保险总投保 | 保险总赔付 | 保险盈利 | 组局基金 | 盈亏 | 备注名
 
-const JSON_FORMAT = `[{"external_id":"player ID","rakeback":123.45,"insurance":45.67,"winnings":-200.00,"currency":"USDT"}]`;
+Column mapping:
+- external_id  → 玩家ID (player numeric ID)
+- rakeback     → 组局基金 (club fund / rake — 2nd-to-last before 备注名)
+- insurance    → 保险盈利 (insurance NET P&L — 4th from right). NEVER use 保险总投保 or 保险总赔付.
+- winnings     → 盈亏 (net win/loss — last column before 备注名). NEVER use 鱿鱼盈亏.
+- currency     → CNY when headers are Chinese, otherwise USDT
+
+CRITICAL:
+- 保险总投保 = insurance buy-in premium — IGNORE IT
+- 保险总赔付 = insurance payout — IGNORE IT
+- 鱿鱼盈亏 = squid side-game P&L — IGNORE IT
+- Skip all summary/total rows (rows with 总局数, 总组局, 人数, 合计, etc.)
+- Skip the header row itself
+- Include every actual player row`;
+
+const EXTRACTION_RULES = `Return ONLY a valid JSON array, one object per player:
+[{"external_id":"玩家ID value","rakeback":组局基金 value,"insurance":保险盈利 value,"winnings":盈亏 value,"currency":"CNY or USDT"}]
+Use 0 for any field not visible. Winnings can be negative.`;
+
+const JSON_FORMAT = `[{"external_id":"12345678","rakeback":152.00,"insurance":72.00,"winnings":1527.00,"currency":"CNY"}]`;
 
 function parseClaudeJson(raw: string): Row[] {
   const match = raw.match(/\[[\s\S]*\]/);
@@ -154,7 +171,7 @@ export async function POST(req: NextRequest) {
           role: "user",
           content: [
             { type: "image", source: { type: "base64", media_type: mediaType, data: base64 } },
-            { type: "text", text: `Poker app report screenshot. Extract ALL player entries.\nReturn ONLY a valid JSON array:\n${JSON_FORMAT}\n\n${EXTRACTION_RULES}` },
+            { type: "text", text: `This is a Wepoker poker club report screenshot.\n\n${WEPOKER_COLUMN_GUIDE}\n\nExample output format:\n${JSON_FORMAT}\n\n${EXTRACTION_RULES}` },
           ],
         }],
       });
