@@ -3,8 +3,8 @@
 import React, { useState, useEffect, useCallback } from "react";
 import { TrendingUp, Users, ArrowDownCircle, ArrowUpCircle, DollarSign, ChevronDown, ChevronRight } from "lucide-react";
 import {
-  ComposedChart, Bar, Line, XAxis, YAxis, Tooltip, ResponsiveContainer,
-  CartesianGrid, ReferenceLine, Cell, Legend,
+  ComposedChart, Bar, Area, XAxis, YAxis, Tooltip, ResponsiveContainer,
+  CartesianGrid, ReferenceLine, Cell,
 } from "recharts";
 
 type KPI = { currency: string; agency_rb: number; player_rb: number; wl_agency: number; wl_player: number; player_count: number; report_count: number; };
@@ -247,7 +247,6 @@ export default function FinanceClient() {
 
       {/* P/L chart */}
       {data.byDay.length > 0 && (() => {
-        // Use primary currency (first KPI)
         const cur = data.kpis[0]?.currency ?? "CNY";
         const days = data.byDay.filter(r => r.currency === cur).slice().reverse();
         let running = 0;
@@ -256,43 +255,133 @@ export default function FinanceClient() {
           running += pl;
           return { label: fmtDate(r.day), daily: pl, cumul: running };
         });
-        const maxAbs = Math.max(...chartData.map(d => Math.abs(d.daily)), 1);
-        const fmtY = (v: number) => Math.abs(v) >= 1000 ? (v / 1000).toFixed(1) + "k" : String(Math.round(v));
-        const CustomTooltip = ({ active, payload, label }: any) => {
+        const bestDay = Math.max(...chartData.map(d => d.daily));
+        const worstDay = Math.min(...chartData.map(d => d.daily));
+        const avg = running / (chartData.length || 1);
+        const fmtV = (v: number) => (Math.abs(v) >= 1000 ? (v < 0 ? "-" : "") + (Math.abs(v) / 1000).toFixed(1) + "k" : v.toFixed(0));
+        const fmtFull = (v: number) => (v >= 0 ? "+" : "") + v.toFixed(2);
+
+        const ChartTooltip = ({ active, payload, label }: any) => {
           if (!active || !payload?.length) return null;
           const daily = payload.find((p: any) => p.dataKey === "daily")?.value ?? 0;
           const cumul = payload.find((p: any) => p.dataKey === "cumul")?.value ?? 0;
           return (
-            <div style={{ background: "var(--bg-elevated)", border: "1px solid var(--border)", borderRadius: 8, padding: "10px 14px", fontSize: 12 }}>
-              <div style={{ fontWeight: 700, color: "var(--text)", marginBottom: 6 }}>{label}</div>
-              <div style={{ color: daily >= 0 ? "#22c55e" : "#f87171", fontWeight: 700 }}>Jour : {daily >= 0 ? "+" : ""}{daily.toFixed(2)} {cur}</div>
-              <div style={{ color: "#60a5fa", fontWeight: 600 }}>Cumulé : {cumul >= 0 ? "+" : ""}{cumul.toFixed(2)} {cur}</div>
+            <div style={{
+              background: "rgba(15,17,26,0.96)", border: "1px solid rgba(255,255,255,0.1)",
+              borderRadius: 10, padding: "12px 16px", fontSize: 12,
+              boxShadow: "0 12px 40px rgba(0,0,0,0.5)", backdropFilter: "blur(8px)",
+            }}>
+              <div style={{ fontWeight: 700, color: "rgba(255,255,255,0.9)", marginBottom: 10, fontSize: 13 }}>{label}</div>
+              <div style={{ display: "flex", justifyContent: "space-between", gap: 28, marginBottom: 5 }}>
+                <span style={{ color: "rgba(255,255,255,0.4)", fontSize: 11 }}>Journée</span>
+                <span style={{ fontWeight: 800, color: daily >= 0 ? "#22c55e" : "#f87171", fontSize: 13 }}>{fmtFull(daily)}</span>
+              </div>
+              <div style={{ display: "flex", justifyContent: "space-between", gap: 28 }}>
+                <span style={{ color: "rgba(255,255,255,0.4)", fontSize: 11 }}>Cumulé</span>
+                <span style={{ fontWeight: 700, color: "#93c5fd", fontSize: 13 }}>{fmtFull(cumul)}</span>
+              </div>
             </div>
           );
         };
+
         return (
-          <div style={{ background: "var(--bg-raised)", border: "1px solid var(--border)", borderRadius: 10, padding: "18px 20px", marginBottom: 24 }}>
-            <div style={{ display: "flex", alignItems: "baseline", gap: 10, marginBottom: 16 }}>
-              <span style={{ fontSize: 14, fontWeight: 800, color: "var(--text)" }}>Évolution du P/L</span>
-              <span style={{ fontSize: 11, color: "var(--text-muted)" }}>barres = profit du jour · ligne = cumulé</span>
-              <span style={{ marginLeft: "auto", fontSize: 12, color: running >= 0 ? "#22c55e" : "#f87171", fontWeight: 800 }}>
-                Total {running >= 0 ? "+" : ""}{running.toFixed(2)} {cur}
-              </span>
+          <div style={{
+            background: "linear-gradient(160deg, rgba(24,27,42,0.9) 0%, rgba(14,16,28,0.98) 100%)",
+            border: "1px solid rgba(255,255,255,0.08)",
+            borderRadius: 14, padding: "22px 24px 16px", marginBottom: 24,
+            boxShadow: "0 4px 24px rgba(0,0,0,0.3)",
+          }}>
+            {/* Header row */}
+            <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", marginBottom: 18 }}>
+              <div>
+                <div style={{ fontSize: 11, fontWeight: 700, color: "rgba(255,255,255,0.35)", textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: 6 }}>
+                  Évolution du P/L · {cur}
+                </div>
+                <div style={{ display: "flex", gap: 18, alignItems: "center" }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                    <div style={{ width: 10, height: 10, borderRadius: 3, background: "#22c55e", opacity: 0.85 }} />
+                    <span style={{ fontSize: 11, color: "rgba(255,255,255,0.35)" }}>Profit du jour</span>
+                  </div>
+                  <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                    <div style={{ width: 18, height: 2.5, background: "linear-gradient(90deg, #60a5fa, #93c5fd)", borderRadius: 2 }} />
+                    <span style={{ fontSize: 11, color: "rgba(255,255,255,0.35)" }}>Cumulé</span>
+                  </div>
+                </div>
+              </div>
+              <div style={{ textAlign: "right" }}>
+                <div style={{
+                  fontSize: 28, fontWeight: 900, letterSpacing: "-1.5px", lineHeight: 1,
+                  color: running >= 0 ? "#22c55e" : "#f87171",
+                }}>
+                  {running >= 0 ? "+" : ""}{Math.abs(running) >= 1000 ? (running / 1000).toFixed(2) + "k" : running.toFixed(2)}
+                </div>
+                <div style={{ fontSize: 10, color: "rgba(255,255,255,0.3)", marginTop: 4, textTransform: "uppercase", letterSpacing: "0.07em" }}>Total cumulé</div>
+              </div>
             </div>
-            <ResponsiveContainer width="100%" height={220}>
-              <ComposedChart data={chartData} margin={{ top: 4, right: 12, left: 0, bottom: 0 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.06)" vertical={false} />
-                <XAxis dataKey="label" tick={{ fill: "var(--text-muted)", fontSize: 11 }} axisLine={false} tickLine={false} />
-                <YAxis yAxisId="bar" tickFormatter={fmtY} tick={{ fill: "var(--text-muted)", fontSize: 11 }} axisLine={false} tickLine={false} width={40} domain={[-maxAbs * 1.1, maxAbs * 1.1]} />
-                <YAxis yAxisId="line" orientation="right" tickFormatter={fmtY} tick={{ fill: "#60a5fa", fontSize: 11 }} axisLine={false} tickLine={false} width={44} />
-                <Tooltip content={<CustomTooltip />} />
-                <ReferenceLine yAxisId="bar" y={0} stroke="rgba(255,255,255,0.15)" />
-                <Bar yAxisId="bar" dataKey="daily" radius={[4, 4, 0, 0]} maxBarSize={48}>
-                  {chartData.map((entry, i) => (
-                    <Cell key={i} fill={entry.daily >= 0 ? "#22c55e" : "#f87171"} fillOpacity={0.85} />
+
+            {/* Stats pills */}
+            <div style={{ display: "flex", gap: 6, marginBottom: 20, flexWrap: "wrap" }}>
+              {[
+                { label: "Meilleur jour", value: fmtFull(bestDay), color: "#22c55e" },
+                { label: "Pire jour",     value: fmtFull(worstDay), color: "#f87171" },
+                { label: "Moyenne/jour",  value: fmtFull(avg), color: avg >= 0 ? "#22c55e" : "#f87171" },
+                { label: "Jours actifs",  value: String(chartData.length), color: "rgba(255,255,255,0.6)" },
+              ].map(s => (
+                <div key={s.label} style={{
+                  background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.08)",
+                  borderRadius: 8, padding: "6px 12px", display: "flex", gap: 8, alignItems: "center",
+                }}>
+                  <span style={{ fontSize: 10, color: "rgba(255,255,255,0.35)", textTransform: "uppercase", letterSpacing: "0.06em" }}>{s.label}</span>
+                  <span style={{ fontSize: 12, fontWeight: 800, color: s.color }}>{s.value}</span>
+                </div>
+              ))}
+            </div>
+
+            {/* Chart */}
+            <ResponsiveContainer width="100%" height={230}>
+              <ComposedChart data={chartData} margin={{ top: 6, right: 6, left: -12, bottom: 0 }}>
+                <defs>
+                  <linearGradient id="gradCumul" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="0%"   stopColor="#60a5fa" stopOpacity={0.18} />
+                    <stop offset="100%" stopColor="#60a5fa" stopOpacity={0} />
+                  </linearGradient>
+                  <linearGradient id="gradGreen" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="0%"   stopColor="#22c55e" stopOpacity={0.9} />
+                    <stop offset="100%" stopColor="#16a34a" stopOpacity={0.7} />
+                  </linearGradient>
+                  <linearGradient id="gradRed" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="0%"   stopColor="#f87171" stopOpacity={0.9} />
+                    <stop offset="100%" stopColor="#dc2626" stopOpacity={0.7} />
+                  </linearGradient>
+                </defs>
+                <CartesianGrid strokeDasharray="1 6" stroke="rgba(255,255,255,0.05)" vertical={false} />
+                <XAxis
+                  dataKey="label"
+                  tick={{ fill: "rgba(255,255,255,0.3)", fontSize: 11, fontWeight: 500 }}
+                  axisLine={false} tickLine={false} dy={8}
+                />
+                <YAxis
+                  yAxisId="bar"
+                  tick={{ fill: "rgba(255,255,255,0.2)", fontSize: 10 }}
+                  axisLine={false} tickLine={false} width={38}
+                  tickFormatter={fmtV}
+                />
+                <YAxis yAxisId="line" orientation="right" hide />
+                <Tooltip content={<ChartTooltip />} cursor={{ fill: "rgba(255,255,255,0.03)" }} />
+                <ReferenceLine yAxisId="bar" y={0} stroke="rgba(255,255,255,0.12)" strokeWidth={1} />
+                <Bar yAxisId="bar" dataKey="daily" radius={[5, 5, 1, 1]} maxBarSize={44} isAnimationActive>
+                  {chartData.map((e, i) => (
+                    <Cell key={i} fill={e.daily >= 0 ? "url(#gradGreen)" : "url(#gradRed)"} />
                   ))}
                 </Bar>
-                <Line yAxisId="line" dataKey="cumul" type="monotone" stroke="#60a5fa" strokeWidth={2.5} dot={{ r: 4, fill: "#60a5fa", strokeWidth: 0 }} activeDot={{ r: 6 }} />
+                <Area
+                  yAxisId="line" dataKey="cumul" type="monotone"
+                  stroke="#60a5fa" strokeWidth={2.5}
+                  fill="url(#gradCumul)"
+                  dot={false}
+                  activeDot={{ r: 5, fill: "#93c5fd", stroke: "rgba(96,165,250,0.25)", strokeWidth: 6 }}
+                  isAnimationActive
+                />
               </ComposedChart>
             </ResponsiveContainer>
           </div>
