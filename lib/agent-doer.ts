@@ -60,11 +60,16 @@ export function recordSessionStart(args: {
   chat_id: string;
   description: string;
   money_ok: boolean;
+  branch_name: string;
 }) {
   getDb().prepare(
-    `INSERT INTO agent_doer_sessions (session_id, chat_id, description, money_ok, status)
-     VALUES (?, ?, ?, ?, 'starting')`
-  ).run(args.session_id, args.chat_id, args.description, args.money_ok ? 1 : 0);
+    `INSERT INTO agent_doer_sessions (session_id, chat_id, description, money_ok, branch_name, status)
+     VALUES (?, ?, ?, ?, ?, 'starting')`
+  ).run(args.session_id, args.chat_id, args.description, args.money_ok ? 1 : 0, args.branch_name);
+}
+
+export function getSessionRow(session_id: string): DoerSessionRow | null {
+  return (getDb().prepare(`SELECT * FROM agent_doer_sessions WHERE session_id = ?`).get(session_id) as DoerSessionRow | undefined) ?? null;
 }
 
 export function updateSessionStatus(session_id: string, status: string, extras?: { pr_url?: string; branch_name?: string; cost_usd_estimate?: number; error_message?: string }) {
@@ -156,22 +161,29 @@ CONTEXTE TECHNIQUE
 - Repo monté dans /workspace/Baki-LeCerclePoker
 - Branch à créer : ${branchName}
 - money:ok ${args.money_ok ? "OUI — tu as l'autorisation explicite de toucher au code financier" : "NON — refuse si la requête touche à ce code"}
-- Token Telegram d'agent-report dans la variable d'env: AGENT_REPORT_SECRET (déjà disponible — utilise $AGENT_REPORT_SECRET en bash)
 
-QUAND TU AURAS FINI (succès ou échec) :
-Poste dans le groupe Telegram via curl :
-  curl -X POST "https://lecerclepoker-production.up.railway.app/api/agent-report" \\
-    -H "Content-Type: application/json" \\
-    -H "x-agent-report-secret: $AGENT_REPORT_SECRET" \\
-    -d '{"title":"Doer terminé","summary":"<RECAP>"}'
+TON JOB (et seulement ça)
+========================
+1. cd /workspace/Baki-LeCerclePoker
+2. git checkout -b ${branchName}
+3. Lis les fichiers pertinents avant de modifier
+4. Fais le changement minimal
+5. npx tsc --noEmit  → DOIT passer
+6. npm run build     → DOIT passer
+7. git add <fichiers PRÉCIS modifiés>  (jamais git add . ni -A)
+8. git commit -m "<message clair en français>"
+9. git push origin ${branchName}
 
-Le RECAP doit contenir :
-- Ce que tu as compris de la requête
-- Les fichiers modifiés (chemins exacts)
-- Le lien de la PR si succès, sinon la raison de l'échec
-- Si tu as eu besoin de skipper quelque chose (ex: money:ok manquant), dis-le clairement.
+Quand tu as poussé la branche avec succès, c'est terminé pour toi.
+La PR sera ouverte automatiquement et un récap sera posté sur Telegram
+côté infrastructure — tu n'as PAS à le faire toi-même.
 
-Allons-y. Lis d'abord les fichiers pertinents AVANT de modifier quoi que ce soit.`;
+Si tu rencontres un problème ou tu décides de ne PAS toucher au code
+(ex: money:ok manquant alors que la requête l'exige), termine ton dernier
+message en commençant par "ABORT:" suivi de la raison. Ce signal sera
+détecté côté infra qui notifiera l'opérateur.
+
+Sois efficace, lis les fichiers UNE FOIS, fais le changement, push.`;
 
   try {
     const session = await (client as any).beta.sessions.create({
@@ -198,6 +210,7 @@ Allons-y. Lis d'abord les fichiers pertinents AVANT de modifier quoi que ce soit
       chat_id: args.chatId,
       description: args.description,
       money_ok: !!args.money_ok,
+      branch_name: branchName,
     });
 
     // Send kickoff message
@@ -225,12 +238,15 @@ Allons-y. Lis d'abord les fichiers pertinents AVANT de modifier quoi que ce soit
 }
 
 // ────────────────────────────────────────────────────────────
-// Background streaming — track session events, accumulate cost
+// Background streaming — track session events, accumulate cost,
+// then open PR + post recap to Telegram once session ends.
 // ────────────────────────────────────────────────────────────
 async function streamAndPostBackground(session_id: string, chat_id: string): Promise<void> {
   const apiKey = process.env.ANTHROPIC_API_KEY!;
   const client = new Anthropic({ apiKey });
   let totalCost = 0;
+  let lastAgentText = "";
+  let aborted = false;
   // Per-million-token pricing for Opus 4.7
   const RATE_INPUT = 5.0 / 1e6;
   const RATE_OUTPUT = 25.0 / 1e6;
@@ -248,22 +264,27 @@ async function streamAndPostBackground(session_id: string, chat_id: string): Pro
           (u.cache_read_input_tokens || 0) * RATE_CACHE_READ +
           (u.cache_creation_input_tokens || 0) * RATE_CACHE_WRITE;
         updateSessionStatus(session_id, "running", { cost_usd_estimate: totalCost });
+      } else if (event.type === "agent.message") {
+        // Capture latest agent text — may contain ABORT: signal
+        const text = (event.content ?? [])
+          .filter((b: any) => b.type === "text")
+          .map((b: any) => b.text)
+          .join("\n");
+        if (text) lastAgentText = text;
+        if (text.includes("ABORT:")) aborted = true;
       } else if (event.type === "session.status_terminated") {
-        updateSessionStatus(session_id, "completed", { cost_usd_estimate: totalCost });
         break;
       } else if (event.type === "session.status_idle") {
         const stop = event.stop_reason?.type;
-        if (stop === "requires_action") continue; // waiting on tool confirmation
-        if (stop === "end_turn" || stop === "retries_exhausted") {
-          updateSessionStatus(session_id, "completed", { cost_usd_estimate: totalCost });
-          break;
-        }
+        if (stop === "requires_action") continue;
+        if (stop === "end_turn" || stop === "retries_exhausted") break;
       } else if (event.type === "session.error") {
         updateSessionStatus(session_id, "failed", {
           cost_usd_estimate: totalCost,
           error_message: event.error?.message ?? "session error",
         });
-        break;
+        await postFinalToTelegram(chat_id, "Doer agent — erreur", `❌ Erreur session: ${event.error?.message ?? "session error"}\nCoût: $${totalCost.toFixed(3)}`);
+        return;
       }
     }
   } catch (e: any) {
@@ -271,5 +292,130 @@ async function streamAndPostBackground(session_id: string, chat_id: string): Pro
       cost_usd_estimate: totalCost,
       error_message: `stream error: ${e?.message ?? String(e)}`,
     });
+    return;
+  }
+
+  // Session ended — finalize: open PR if branch exists, post recap to Telegram
+  await finalizeSession(session_id, chat_id, totalCost, lastAgentText, aborted);
+}
+
+async function postFinalToTelegram(chat_id: string, title: string, summary: string): Promise<void> {
+  const token = process.env.TELEGRAM_BOT_TOKEN;
+  if (!token) return;
+  const text = `<b>🤖 ${escapeHtml(title)}</b>\n\n${escapeHtml(summary)}`;
+  try {
+    await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ chat_id, text, parse_mode: "HTML", disable_web_page_preview: false }),
+    });
+  } catch (e) {
+    console.error("[doer postFinal]", e);
+  }
+}
+
+function escapeHtml(s: string): string {
+  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+async function finalizeSession(session_id: string, chat_id: string, totalCost: number, lastAgentText: string, aborted: boolean): Promise<void> {
+  const session = getSessionRow(session_id);
+  if (!session) return;
+
+  // Aborted by agent (ABORT: signal in last message)
+  if (aborted) {
+    updateSessionStatus(session_id, "cancelled", {
+      cost_usd_estimate: totalCost,
+      error_message: lastAgentText.slice(0, 1000),
+    });
+    const reason = (lastAgentText.match(/ABORT:\s*(.+?)(?:\n|$)/)?.[1] ?? lastAgentText.slice(0, 300));
+    await postFinalToTelegram(chat_id, "Doer — annulé",
+      `L'agent a annulé la tâche.\n\nRaison: ${reason}\n\nCoût: $${totalCost.toFixed(3)}`);
+    return;
+  }
+
+  const pat = process.env.GITHUB_FIX_PAT;
+  const repoOwner = "all-in-team";
+  const repoName = "Baki-LeCerclePoker";
+  const branch = session.branch_name;
+
+  if (!pat || !branch) {
+    updateSessionStatus(session_id, "failed", {
+      cost_usd_estimate: totalCost,
+      error_message: "Missing GITHUB_FIX_PAT or branch_name in finalize",
+    });
+    await postFinalToTelegram(chat_id, "Doer — échec finalisation",
+      `Session terminée mais finalisation impossible (PAT ou branch manquant).\nCoût: $${totalCost.toFixed(3)}`);
+    return;
+  }
+
+  // Check if the branch was actually pushed
+  let branchExists = false;
+  let lastSha: string | null = null;
+  try {
+    const r = await fetch(
+      `https://api.github.com/repos/${repoOwner}/${repoName}/branches/${encodeURIComponent(branch)}`,
+      { headers: { Authorization: `Bearer ${pat}`, Accept: "application/vnd.github+json" } }
+    );
+    if (r.ok) {
+      branchExists = true;
+      const data = await r.json();
+      lastSha = data?.commit?.sha?.slice(0, 8) ?? null;
+    }
+  } catch {}
+
+  if (!branchExists) {
+    updateSessionStatus(session_id, "failed", {
+      cost_usd_estimate: totalCost,
+      error_message: "Agent did not push a branch",
+    });
+    await postFinalToTelegram(chat_id, "Doer — pas de branche",
+      `Session terminée mais aucune branche poussée. L'agent n'a probablement rien fait ou a buggé.\n\nDernier message agent:\n${lastAgentText.slice(0, 800)}\n\nCoût: $${totalCost.toFixed(3)}`);
+    return;
+  }
+
+  // Open the PR
+  const prTitle = `Doer: ${session.description.slice(0, 60)}`;
+  const prBody = `Auto-généré par le doer agent depuis Telegram.\n\n**Demande originale:**\n${session.description}\n\n**Session:** ${session_id}\n**Coût Claude:** $${totalCost.toFixed(3)}\n**Money flag:** ${session.money_ok ? "✅ ok" : "❌ not granted (no money-flow code touched)"}\n\n**Dernier message agent:**\n${lastAgentText.slice(0, 1500)}\n\n---\n⚠️ Review attentivement avant merge. NE PAS auto-merger.`;
+
+  let prUrl: string | null = null;
+  let prError: string | null = null;
+  try {
+    const r = await fetch(
+      `https://api.github.com/repos/${repoOwner}/${repoName}/pulls`,
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${pat}`,
+          Accept: "application/vnd.github+json",
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ title: prTitle, body: prBody, head: branch, base: "main" }),
+      }
+    );
+    const data = await r.json();
+    if (r.ok && data?.html_url) {
+      prUrl = data.html_url;
+    } else {
+      prError = data?.message ?? `HTTP ${r.status}`;
+    }
+  } catch (e: any) {
+    prError = e?.message ?? String(e);
+  }
+
+  if (prUrl) {
+    updateSessionStatus(session_id, "completed", {
+      cost_usd_estimate: totalCost,
+      pr_url: prUrl,
+    });
+    await postFinalToTelegram(chat_id, "Doer terminé ✅",
+      `<b>${escapeHtml(prTitle)}</b>\n\nPR ouverte: ${prUrl}\nBranche: <code>${branch}</code> (${lastSha ?? "?"})\nCoût: $${totalCost.toFixed(3)}\n\nReview et merge quand tu veux. Railway redéploiera tout seul.`);
+  } else {
+    updateSessionStatus(session_id, "failed", {
+      cost_usd_estimate: totalCost,
+      error_message: `PR creation failed: ${prError}`,
+    });
+    await postFinalToTelegram(chat_id, "Doer — branche poussée mais PR foirée",
+      `Branche <code>${branch}</code> poussée (${lastSha ?? "?"}).\nÉchec création PR: ${prError}\n\nTu peux ouvrir la PR à la main: https://github.com/${repoOwner}/${repoName}/compare/main...${branch}\n\nCoût: $${totalCost.toFixed(3)}`);
   }
 }
