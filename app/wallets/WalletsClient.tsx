@@ -2,9 +2,8 @@
 
 import { useState } from "react";
 import Link from "next/link";
-import { ArrowDownLeft, ArrowUpRight, Plus, Trash2, Wallet, TrendingUp, RefreshCw, Settings2, ExternalLink, CheckCircle, AlertCircle, Save, X } from "lucide-react";
+import { ArrowDownLeft, ArrowUpRight, Plus, Trash2, Wallet, TrendingUp, RefreshCw, Settings2, ExternalLink, CheckCircle, AlertCircle, Save, X, Pencil } from "lucide-react";
 import StatCard from "@/components/StatCard";
-import Badge from "@/components/Badge";
 import Btn from "@/components/Btn";
 import Modal from "@/components/Modal";
 import WalletChartsWrapper from "./WalletChartsWrapper";
@@ -69,22 +68,39 @@ export default function WalletsClient({
   const [editingWallet, setEditingWallet] = useState<number | null>(null);
   const [editWalletVals, setEditWalletVals] = useState({ wallet_game: "", wallet_cashout: "" });
   const [walletMere, setWalletMere] = useState<string | null>(null);
+  const [editingAction, setEditingAction] = useState<number | null>(null);
+  const [actionVal, setActionVal] = useState("");
 
-  async function openWalletConfig() {
+  async function openWalletConfig(focusPlayerId?: number) {
     const [playersRes, settingsRes] = await Promise.all([
       fetch("/api/players").then(r => r.json()),
       fetch("/api/settings").then(r => r.json()),
     ]);
-    setTeleConfig(
-      playersRes
-        .filter((p: any) => {
-          // show all players that have TELE deals (those with tron_address set, or all)
-          return true;
-        })
-        .map((p: any) => ({ id: p.id, name: p.name, wallet_game: p.tron_address ?? null, wallet_cashout: p.tele_wallet_cashout ?? null }))
-    );
+    const cfg = playersRes.map((p: any) => ({ id: p.id, name: p.name, wallet_game: p.tron_address ?? null, wallet_cashout: p.tele_wallet_cashout ?? null }));
+    setTeleConfig(cfg);
     setWalletMere(settingsRes.tele_wallet_mere ?? null);
+    if (focusPlayerId !== undefined) {
+      const target = cfg.find((p: any) => p.id === focusPlayerId);
+      if (target) {
+        setEditingWallet(focusPlayerId);
+        setEditWalletVals({ wallet_game: target.wallet_game ?? "", wallet_cashout: target.wallet_cashout ?? "" });
+      }
+    }
     setWalletModal(true);
+  }
+
+  async function saveAction(dealId: number) {
+    const v = Number(actionVal);
+    if (isNaN(v) || v < 0 || v > 100) {
+      alert("Action % doit être un nombre entre 0 et 100");
+      return;
+    }
+    const res = await fetch(`/api/games/deals/${dealId}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action_pct: v }),
+    });
+    if (res.ok) window.location.reload();
   }
 
   async function saveWallet(playerId: number) {
@@ -141,15 +157,26 @@ export default function WalletsClient({
   const myPnlAccent: "green" | "red" | "neutral" = kpis.my_total_pnl > 0 ? "green" : kpis.my_total_pnl < 0 ? "red" : "neutral";
   const netAccent: "green" | "red" | "neutral" = kpis.total_net > 0 ? "green" : kpis.total_net < 0 ? "red" : "neutral";
 
+  // One row per player (defensive — in practice each player has at most one TELE deal)
+  const summaryByPlayer = Object.values(
+    initialSummary.reduce<Record<number, PlayerGameRow>>((acc, r) => {
+      if (!acc[r.player_id]) {
+        acc[r.player_id] = { ...r };
+      } else {
+        acc[r.player_id].total_deposited += r.total_deposited;
+        acc[r.player_id].total_withdrawn += r.total_withdrawn;
+        acc[r.player_id].net += r.net;
+        acc[r.player_id].my_pnl += r.my_pnl;
+      }
+      return acc;
+    }, {})
+  ).sort((a, b) => b.my_pnl - a.my_pnl);
+
   // Aggregate per player for charts
-  const chartData = Object.values(initialSummary.reduce((acc, r) => {
-    if (!acc[r.player_id]) acc[r.player_id] = { id: r.player_id, name: r.player_name, action_pct: r.action_pct, total_deposited: 0, total_withdrawn: 0, net: 0, my_pnl: 0 };
-    acc[r.player_id].total_deposited += r.total_deposited;
-    acc[r.player_id].total_withdrawn += r.total_withdrawn;
-    acc[r.player_id].net += r.net;
-    acc[r.player_id].my_pnl += r.my_pnl;
-    return acc;
-  }, {} as Record<number, any>));
+  const chartData = summaryByPlayer.map(r => ({
+    id: r.player_id, name: r.player_name, action_pct: r.action_pct,
+    total_deposited: r.total_deposited, total_withdrawn: r.total_withdrawn, net: r.net, my_pnl: r.my_pnl,
+  }));
 
   return (
     <>
@@ -159,7 +186,7 @@ export default function WalletsClient({
           <RefreshCw size={14} style={{ animation: syncing ? "spin 1s linear infinite" : "none" }} />
           {syncing ? "Sync en cours…" : "Sync TELE"}
         </Btn>
-        <Btn variant="secondary" onClick={openWalletConfig}>
+        <Btn variant="secondary" onClick={() => openWalletConfig()}>
           <Settings2 size={14} /> Config Wallets
         </Btn>
         <span style={{ fontSize: 12, color: "var(--text-dim)" }}>Scanne la blockchain pour les wallets TELE</span>
@@ -185,31 +212,31 @@ export default function WalletsClient({
         <StatCard label="Mon Total P&L" value={(kpis.my_total_pnl >= 0 ? "+" : "−") + fmtKpi(Math.abs(kpis.my_total_pnl)) + " USDT"} sub="Ma part selon chaque deal" accent={myPnlAccent} icon={<Wallet size={18} />} />
       </div>
 
-      {/* Summary — per player × game */}
+      {/* Summary — one row per player */}
       <div style={{ background: "var(--bg-raised)", border: "1px solid var(--border)", borderRadius: 10, marginBottom: 28 }}>
         <div style={{ padding: "14px 20px", borderBottom: "1px solid var(--border)" }}>
-          <span style={{ fontSize: 13, fontWeight: 700, color: "var(--text)" }}>Résumé par joueur & game</span>
+          <span style={{ fontSize: 13, fontWeight: 700, color: "var(--text)" }}>Joueurs TELE AKPOKER</span>
         </div>
         <div style={{ overflowX: "auto" }}>
           <table style={{ width: "100%", borderCollapse: "collapse" }}>
             <thead>
               <tr style={{ borderBottom: "1px solid var(--border)" }}>
-                {["Joueur", "Game", "Deposited", "Withdrawn", "Net P&L", "Action %", "RB %", "Mon P&L", "Status", ""].map((h, i) => (
+                {["Joueur", "Net P&L", "Agency P&L", "Action %", "Wallet", ""].map((h, i) => (
                   <th key={i} style={{ padding: "10px 16px", textAlign: "left", fontSize: 11, fontWeight: 600, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.08em", whiteSpace: "nowrap" }}>{h}</th>
                 ))}
               </tr>
             </thead>
             <tbody>
-              {initialSummary.length === 0 ? (
-                <tr><td colSpan={10} style={{ padding: 32, textAlign: "center", color: "var(--text-dim)", fontSize: 13 }}>
-                  Aucune donnée — ajoute des joueurs à une game depuis leur profil
+              {summaryByPlayer.length === 0 ? (
+                <tr><td colSpan={6} style={{ padding: 32, textAlign: "center", color: "var(--text-dim)", fontSize: 13 }}>
+                  Aucun joueur TELE — ajoute un deal TELE à un joueur depuis son profil
                 </td></tr>
-              ) : initialSummary.map(row => {
+              ) : summaryByPlayer.map(row => {
                 const netC = row.net > 0 ? "var(--green)" : row.net < 0 ? "#f87171" : "var(--text-muted)";
                 const myC = row.my_pnl > 0 ? "var(--green)" : row.my_pnl < 0 ? "#f87171" : "var(--text-muted)";
-                const gc = GAME_COLOR[row.game_name] ?? "var(--text-muted)";
+                const isEditing = editingAction === row.deal_id;
                 return (
-                  <tr key={`${row.player_id}-${row.game_id}`} style={{ borderBottom: "1px solid var(--border)" }}>
+                  <tr key={row.player_id} style={{ borderBottom: "1px solid var(--border)" }}>
                     <td style={{ padding: "12px 16px" }}>
                       <Link href={`/players/${row.player_id}`} style={{ fontSize: 13, fontWeight: 600, color: "var(--text)", textDecoration: "none" }}
                         onMouseEnter={e => (e.currentTarget.style.color = "var(--green)")}
@@ -217,17 +244,40 @@ export default function WalletsClient({
                         {row.player_name}
                       </Link>
                     </td>
-                    <td style={{ padding: "12px 16px" }}>
-                      <span style={{ fontSize: 12, fontWeight: 700, color: gc, background: gc + "18", padding: "3px 8px", borderRadius: 5 }}>{row.game_name}</span>
-                    </td>
-                    <td style={{ padding: "12px 16px", fontSize: 13, color: "var(--text-muted)" }}>{row.total_deposited.toFixed(2)}</td>
-                    <td style={{ padding: "12px 16px", fontSize: 13, color: "var(--text-muted)" }}>{row.total_withdrawn.toFixed(2)}</td>
                     <td style={{ padding: "12px 16px", fontSize: 13, fontWeight: 600, color: netC }}>{row.net === 0 ? "—" : fmt(row.net)}</td>
-                    <td style={{ padding: "12px 16px", fontSize: 13, color: "var(--gold)", fontWeight: 600 }}>{row.action_pct}%</td>
-                    <td style={{ padding: "12px 16px", fontSize: 12, color: "var(--text-dim)" }}>{row.rakeback_pct}%</td>
                     <td style={{ padding: "12px 16px", fontSize: 14, fontWeight: 700, color: myC }}>{row.my_pnl === 0 ? "—" : fmt(row.my_pnl)}</td>
                     <td style={{ padding: "12px 16px" }}>
-                      <Badge label={row.net > 0 ? "Winning" : row.net < 0 ? "Losing" : "Flat"} color={row.net > 0 ? "green" : row.net < 0 ? "red" : "gray"} />
+                      {isEditing ? (
+                        <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                          <input
+                            type="number" min="0" max="100" step="0.5"
+                            value={actionVal}
+                            onChange={e => setActionVal(e.target.value)}
+                            onKeyDown={e => {
+                              if (e.key === "Enter") saveAction(row.deal_id);
+                              if (e.key === "Escape") setEditingAction(null);
+                            }}
+                            autoFocus
+                            style={{ width: 64, padding: "4px 7px", fontSize: 12, fontWeight: 600, background: "var(--bg-elevated)", border: "1px solid var(--gold)", borderRadius: 4, color: "var(--gold)", outline: "none" }}
+                          />
+                          <button onClick={() => saveAction(row.deal_id)} style={{ display: "flex", alignItems: "center", padding: 4, borderRadius: 4, background: "rgba(34,197,94,0.12)", color: "var(--green)", border: "1px solid rgba(34,197,94,0.3)", cursor: "pointer" }}><Save size={12} /></button>
+                          <button onClick={() => setEditingAction(null)} style={{ display: "flex", alignItems: "center", padding: 4, borderRadius: 4, background: "var(--bg-elevated)", color: "var(--text-muted)", border: "1px solid var(--border)", cursor: "pointer" }}><X size={12} /></button>
+                        </div>
+                      ) : (
+                        <button
+                          onClick={() => { setEditingAction(row.deal_id); setActionVal(String(row.action_pct)); }}
+                          style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "4px 8px", borderRadius: 5, background: "transparent", border: "1px solid transparent", cursor: "pointer", fontSize: 13, fontWeight: 600, color: "var(--gold)" }}
+                          onMouseEnter={e => (e.currentTarget.style.borderColor = "var(--border)")}
+                          onMouseLeave={e => (e.currentTarget.style.borderColor = "transparent")}>
+                          {row.action_pct}%
+                          <Pencil size={11} style={{ color: "var(--text-dim)" }} />
+                        </button>
+                      )}
+                    </td>
+                    <td style={{ padding: "12px 16px" }}>
+                      <Btn size="sm" variant="secondary" onClick={() => openWalletConfig(row.player_id)}>
+                        <Settings2 size={12} /> Config →
+                      </Btn>
                     </td>
                     <td style={{ padding: "12px 16px" }}>
                       <Btn size="sm" variant="danger" onClick={() => deleteDeal(row.deal_id, row.player_name)}><Trash2 size={13} /></Btn>
