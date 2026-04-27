@@ -167,9 +167,46 @@ export async function POST(req: NextRequest) {
 
   let extracted: Row[] = [];
 
+  const operatorNote = text?.trim()
+    ? `\n\nADDITIONAL CONTEXT FROM THE OPERATOR (use this to refine, correct, or clarify the extraction — it may contain corrections, missing data, or instructions like "ignore player X"):\n"""\n${text.trim()}\n"""`
+    : "";
+
   try {
-    if (text?.trim() && !file) {
-      // ── Free-form text: Claude extraction ──
+    if (file && isXlsFile(file)) {
+      // ── XLS: deterministic column parser, no AI ──
+      const bytes = await file.arrayBuffer();
+      const direct = xlsExtractDirect(bytes);
+      if (direct === null) {
+        return NextResponse.json({ error: "Colonnes non reconnues dans le fichier Excel. Colonnes attendues : 玩家ID, 组局基金, 保险盈利, 盈亏" }, { status: 422 });
+      }
+      extracted = direct;
+      // Note: text is ignored for XLS — deterministic columns. User can edit rows in the UI.
+
+    } else if (file) {
+      // ── Image (+ optional text): Claude vision ──
+      const bytes = await file.arrayBuffer();
+      const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+      const base64 = Buffer.from(bytes).toString("base64");
+      const mediaType = (file.type || "image/jpeg") as "image/jpeg" | "image/png" | "image/webp" | "image/gif";
+
+      const msg = await client.messages.create({
+        model: "claude-sonnet-4-6",
+        max_tokens: 4096,
+        messages: [{
+          role: "user",
+          content: [
+            { type: "image", source: { type: "base64", media_type: mediaType, data: base64 } },
+            { type: "text", text: `This is a Wepoker poker club report screenshot.\n\n${WEPOKER_COLUMN_GUIDE}\n\nExample output format:\n${JSON_FORMAT}\n\n${EXTRACTION_RULES}${operatorNote}` },
+          ],
+        }],
+      });
+
+      const raw = (msg.content[0] as any).text?.trim() ?? "";
+      console.log("[Reports upload] Image Claude raw (300 chars):", raw.substring(0, 300));
+      extracted = parseClaudeJson(raw);
+
+    } else if (text?.trim()) {
+      // ── Free-form text only: Claude extraction ──
       const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
       const msg = await client.messages.create({
         model: "claude-sonnet-4-6",
@@ -183,38 +220,6 @@ export async function POST(req: NextRequest) {
       });
       const raw = (msg.content[0] as any).text?.trim() ?? "";
       console.log("[Reports upload] Text Claude raw (300 chars):", raw.substring(0, 300));
-      extracted = parseClaudeJson(raw);
-
-    } else if (file && isXlsFile(file)) {
-      const bytes = await file.arrayBuffer();
-      // ── XLS: deterministic column parser, no AI ──
-      const direct = xlsExtractDirect(bytes);
-      if (direct === null) {
-        return NextResponse.json({ error: "Colonnes non reconnues dans le fichier Excel. Colonnes attendues : 玩家ID, 组局基金, 保险盈利, 盈亏" }, { status: 422 });
-      }
-      extracted = direct;
-
-    } else if (file) {
-      // ── Image: Claude vision ──
-      const bytes = await file.arrayBuffer();
-      const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
-      const base64 = Buffer.from(bytes).toString("base64");
-      const mediaType = (file.type || "image/jpeg") as "image/jpeg" | "image/png" | "image/webp" | "image/gif";
-
-      const msg = await client.messages.create({
-        model: "claude-sonnet-4-6",
-        max_tokens: 4096,
-        messages: [{
-          role: "user",
-          content: [
-            { type: "image", source: { type: "base64", media_type: mediaType, data: base64 } },
-            { type: "text", text: `This is a Wepoker poker club report screenshot.\n\n${WEPOKER_COLUMN_GUIDE}\n\nExample output format:\n${JSON_FORMAT}\n\n${EXTRACTION_RULES}` },
-          ],
-        }],
-      });
-
-      const raw = (msg.content[0] as any).text?.trim() ?? "";
-      console.log("[Reports upload] Image Claude raw (300 chars):", raw.substring(0, 300));
       extracted = parseClaudeJson(raw);
     }
   } catch (e: any) {
