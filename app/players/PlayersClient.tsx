@@ -115,7 +115,7 @@ export default function PlayersClient({ initialPlayers, apps }: { initialPlayers
           </thead>
           <tbody>
             {filtered.length === 0 && (
-              <tr><td colSpan={6} style={{ textAlign: "center", color: "var(--text-dim)", padding: 32 }}>
+              <tr key="empty"><td colSpan={6} style={{ textAlign: "center", color: "var(--text-dim)", padding: 32 }}>
                 {search ? "No players found" : "No players yet"}
               </td></tr>
             )}
