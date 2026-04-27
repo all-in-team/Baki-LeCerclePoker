@@ -190,11 +190,19 @@ export default function WalletsClient({
         playerId = Number(selectedPlayerId);
       } else {
         if (!newPlayer.name.trim()) { alert("Nom requis"); return; }
-        if (!newPlayer.telegram_handle.trim()) { alert("Telegram handle requis pour l'intégration au bot"); return; }
-        const handle = newPlayer.telegram_handle.trim().replace(/^@/, "");
+        const contact = newPlayer.telegram_handle.trim();
+        if (!contact) { alert("Telegram handle ou numéro requis pour l'intégration au bot"); return; }
+        // Phone if starts with + or contains only digits/spaces; otherwise handle
+        const isPhone = /^\+/.test(contact) || /^[\d\s-]+$/.test(contact);
+        const body: Record<string, unknown> = { name: newPlayer.name.trim(), tier: "A" };
+        if (isPhone) {
+          body.telegram_phone = contact.replace(/[\s-]/g, "");
+        } else {
+          body.telegram_handle = contact.replace(/^@/, "");
+        }
         const playerRes = await fetch("/api/players", {
           method: "POST", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ name: newPlayer.name.trim(), telegram_handle: handle, tier: "A" }),
+          body: JSON.stringify(body),
         });
         if (!playerRes.ok) { alert("Erreur création joueur"); return; }
         const json = await playerRes.json();
@@ -458,8 +466,8 @@ export default function WalletsClient({
             <Field label="Nom *">
               <input value={newPlayer.name} onChange={e => setNewPlayer(p => ({ ...p, name: e.target.value }))} placeholder="ex: Jean Dupont" />
             </Field>
-            <Field label="Telegram handle *">
-              <input value={newPlayer.telegram_handle} onChange={e => setNewPlayer(p => ({ ...p, telegram_handle: e.target.value }))} placeholder="@username (avec ou sans @)" spellCheck={false} />
+            <Field label="Telegram handle ou numéro *">
+              <input value={newPlayer.telegram_handle} onChange={e => setNewPlayer(p => ({ ...p, telegram_handle: e.target.value }))} placeholder="@username  ou  +33616882326" spellCheck={false} />
             </Field>
           </>
         )}
