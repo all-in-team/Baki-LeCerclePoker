@@ -141,20 +141,52 @@ function isXlsFile(file: File): boolean {
   );
 }
 
+const TEXT_EXTRACTION_PROMPT = `You are parsing a free-form rakeback / winnings report written by a poker club operator. The text may be in French, English, or Chinese, and may use any format (bullet list, paragraph, dictation, table). Each player line typically mentions some combination of: an ID or name, a rake / rakeback amount, an insurance amount, and a winnings (P/L) amount.
+
+Output ONLY a valid JSON array, one object per player:
+[{"external_id":"id-or-name","rakeback":number,"insurance":number,"winnings":number,"currency":"CNY|USDT|EUR|USD"}]
+
+Rules:
+- external_id: use the numeric ID if present, otherwise the player name as written.
+- rakeback: rake / rakeback / 组局基金 amount. 0 if not mentioned.
+- insurance: insurance / assurance / 保险盈利 amount. 0 if not mentioned.
+- winnings: net win/loss / P&L / 盈亏 (can be negative). 0 if not mentioned.
+- currency: detect from text (¥/CNY → "CNY", $/USDT → "USDT", €/EUR → "EUR"). Default "USDT" if unclear.
+- Skip any totals, summaries, or commentary lines.
+- Return ONLY the JSON array, no prose.`;
+
 export async function POST(req: NextRequest) {
   const formData = await req.formData();
   const file = formData.get("file") as File | null;
+  const text = formData.get("text") as string | null;
   const gameId = Number(formData.get("game_id"));
 
-  if (!file || !gameId) {
-    return NextResponse.json({ error: "file + game_id requis" }, { status: 400 });
+  if ((!file && !text?.trim()) || !gameId) {
+    return NextResponse.json({ error: "file ou text + game_id requis" }, { status: 400 });
   }
 
-  const bytes = await file.arrayBuffer();
   let extracted: Row[] = [];
 
   try {
-    if (isXlsFile(file)) {
+    if (text?.trim() && !file) {
+      // ── Free-form text: Claude extraction ──
+      const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+      const msg = await client.messages.create({
+        model: "claude-sonnet-4-6",
+        max_tokens: 4096,
+        messages: [{
+          role: "user",
+          content: [
+            { type: "text", text: `${TEXT_EXTRACTION_PROMPT}\n\nReport text:\n"""\n${text.trim()}\n"""` },
+          ],
+        }],
+      });
+      const raw = (msg.content[0] as any).text?.trim() ?? "";
+      console.log("[Reports upload] Text Claude raw (300 chars):", raw.substring(0, 300));
+      extracted = parseClaudeJson(raw);
+
+    } else if (file && isXlsFile(file)) {
+      const bytes = await file.arrayBuffer();
       // ── XLS: deterministic column parser, no AI ──
       const direct = xlsExtractDirect(bytes);
       if (direct === null) {
@@ -162,8 +194,9 @@ export async function POST(req: NextRequest) {
       }
       extracted = direct;
 
-    } else {
+    } else if (file) {
       // ── Image: Claude vision ──
+      const bytes = await file.arrayBuffer();
       const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
       const base64 = Buffer.from(bytes).toString("base64");
       const mediaType = (file.type || "image/jpeg") as "image/jpeg" | "image/png" | "image/webp" | "image/gif";
@@ -190,7 +223,7 @@ export async function POST(req: NextRequest) {
   }
 
   if (!extracted.length) {
-    return NextResponse.json({ error: "Aucun joueur détecté dans le fichier" }, { status: 422 });
+    return NextResponse.json({ error: "Aucun joueur détecté" }, { status: 422 });
   }
 
   // Auto-match against known player_game_ids; filter out IDs confirmed as "not our players"

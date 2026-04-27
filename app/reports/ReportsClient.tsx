@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useRef, useCallback, useEffect } from "react";
-import { Upload, FileImage, FileSpreadsheet, CheckCircle, Trash2, ChevronDown, ChevronUp, Loader } from "lucide-react";
+import { Upload, FileImage, FileSpreadsheet, FileText, CheckCircle, Trash2, ChevronDown, ChevronUp, Loader } from "lucide-react";
 import Btn from "@/components/Btn";
 import Badge from "@/components/Badge";
 
@@ -111,6 +111,8 @@ export default function ReportsClient({ games, players: initialPlayers }: { game
   const [insPct, setInsPct] = useState("");
   const [clubs, setClubs] = useState<Club[]>([]);
   const [clubMode, setClubMode] = useState<"pick" | "new">("pick"); // "pick"=dropdown, "new"=manual inputs
+  const [inputMode, setInputMode] = useState<"file" | "text">("file");
+  const [textInput, setTextInput] = useState("");
   const [file, setFile] = useState<File | null>(null);
   const [preview, setPreview] = useState<string | null>(null);
   const [dragging, setDragging] = useState(false);
@@ -223,10 +225,13 @@ export default function ReportsClient({ games, players: initialPlayers }: { game
   }
 
   async function extract() {
-    if (!file || !gameId) return;
+    if (!gameId) return;
+    if (inputMode === "file" && !file) return;
+    if (inputMode === "text" && !textInput.trim()) return;
     setLoading(true); setError(null); setRows(null);
     const fd = new FormData();
-    fd.append("file", file);
+    if (inputMode === "file" && file) fd.append("file", file);
+    if (inputMode === "text") fd.append("text", textInput.trim());
     fd.append("game_id", String(gameId));
     const res = await fetch("/api/reports/upload", { method: "POST", body: fd });
     const data = await res.json();
@@ -295,7 +300,7 @@ export default function ReportsClient({ games, players: initialPlayers }: { game
       }),
     });
     setSaving(false);
-    if (res.ok) { setSaved(true); setFile(null); setPreview(null); setRows(null); setPeriod(""); setReportDate(todayISO()); setClubId(""); setClubName(""); setRbPct(""); setInsPct(""); setClubMode("pick"); loadReports(); }
+    if (res.ok) { setSaved(true); setFile(null); setPreview(null); setTextInput(""); setRows(null); setPeriod(""); setReportDate(todayISO()); setClubId(""); setClubName(""); setRbPct(""); setInsPct(""); setClubMode("pick"); loadReports(); }
   }
 
   async function updateReportDate(id: number, date: string) {
@@ -417,42 +422,79 @@ export default function ReportsClient({ games, players: initialPlayers }: { game
           )}
 
           <div style={{ padding: 20 }}>
-            <div
-              onDragOver={e => { e.preventDefault(); setDragging(true); }}
-              onDragLeave={() => setDragging(false)}
-              onDrop={onDrop}
-              onClick={() => !preview && fileRef.current?.click()}
-              style={{
-                border: `2px dashed ${dragging ? "var(--green)" : "var(--border)"}`,
-                borderRadius: 10, cursor: preview ? "default" : "pointer",
-                background: dragging ? "rgba(34,197,94,0.05)" : "var(--bg-surface)",
-                overflow: "hidden", transition: "all 0.15s",
-                padding: preview ? 0 : "44px 20px", textAlign: "center",
-              }}>
-              {preview
-                ? <img src={preview} alt="" style={{ width: "100%", display: "block", borderRadius: 8 }} />
-                : file && isXls(file)
-                ? <div style={{ padding: "32px 20px" }}>
-                    <FileSpreadsheet size={36} color="#22c55e" style={{ marginBottom: 10 }} />
-                    <div style={{ fontSize: 13, fontWeight: 600, color: "var(--text)", marginBottom: 4 }}>{file.name}</div>
-                    <div style={{ fontSize: 11, color: "var(--text-dim)" }}>{(file.size / 1024).toFixed(1)} Ko — Excel</div>
-                  </div>
-                : <>
-                  <FileImage size={36} color="var(--text-dim)" style={{ marginBottom: 12 }} />
-                  <div style={{ fontSize: 13, fontWeight: 600, color: "var(--text-muted)", marginBottom: 4 }}>Glisse le fichier ici</div>
-                  <div style={{ fontSize: 12, color: "var(--text-dim)" }}>Screenshot (JPG, PNG) ou export Excel (XLS, XLSX)</div>
-                </>
-              }
+            {/* Mode toggle */}
+            <div style={{ display: "flex", gap: 4, marginBottom: 14, padding: 3, background: "var(--bg-surface)", borderRadius: 8, border: "1px solid var(--border)", width: "fit-content" }}>
+              <button onClick={() => { setInputMode("file"); setTextInput(""); setRows(null); setError(null); }}
+                style={{ display: "flex", alignItems: "center", gap: 6, padding: "6px 14px", borderRadius: 6, fontSize: 12, fontWeight: 600, background: inputMode === "file" ? "var(--bg-elevated)" : "transparent", border: "none", color: inputMode === "file" ? "var(--text)" : "var(--text-dim)", cursor: "pointer" }}>
+                <FileImage size={13} /> Fichier
+              </button>
+              <button onClick={() => { setInputMode("text"); setFile(null); setPreview(null); setRows(null); setError(null); }}
+                style={{ display: "flex", alignItems: "center", gap: 6, padding: "6px 14px", borderRadius: 6, fontSize: 12, fontWeight: 600, background: inputMode === "text" ? "var(--bg-elevated)" : "transparent", border: "none", color: inputMode === "text" ? "var(--text)" : "var(--text-dim)", cursor: "pointer" }}>
+                <FileText size={13} /> Texte
+              </button>
             </div>
-            <input ref={fileRef} type="file" accept="image/*,.xls,.xlsx" style={{ display: "none" }}
-              onChange={e => { const f = e.target.files?.[0]; if (f) onFile(f); }} />
-            {file && (
-              <div style={{ marginTop: 14, display: "flex", gap: 10, alignItems: "center" }}>
-                <Btn variant="primary" onClick={extract} disabled={loading}>
-                  {loading ? <><Loader size={14} style={{ animation: "spin 1s linear infinite" }} /> Analyse en cours…</> : <><Upload size={14} /> Extraire avec Claude</>}
-                </Btn>
-                <Btn variant="secondary" onClick={() => { setFile(null); setPreview(null); setRows(null); setError(null); }}>Changer</Btn>
-              </div>
+
+            {inputMode === "file" ? (
+              <>
+                <div
+                  onDragOver={e => { e.preventDefault(); setDragging(true); }}
+                  onDragLeave={() => setDragging(false)}
+                  onDrop={onDrop}
+                  onClick={() => !preview && fileRef.current?.click()}
+                  style={{
+                    border: `2px dashed ${dragging ? "var(--green)" : "var(--border)"}`,
+                    borderRadius: 10, cursor: preview ? "default" : "pointer",
+                    background: dragging ? "rgba(34,197,94,0.05)" : "var(--bg-surface)",
+                    overflow: "hidden", transition: "all 0.15s",
+                    padding: preview ? 0 : "44px 20px", textAlign: "center",
+                  }}>
+                  {preview
+                    ? <img src={preview} alt="" style={{ width: "100%", display: "block", borderRadius: 8 }} />
+                    : file && isXls(file)
+                    ? <div style={{ padding: "32px 20px" }}>
+                        <FileSpreadsheet size={36} color="#22c55e" style={{ marginBottom: 10 }} />
+                        <div style={{ fontSize: 13, fontWeight: 600, color: "var(--text)", marginBottom: 4 }}>{file.name}</div>
+                        <div style={{ fontSize: 11, color: "var(--text-dim)" }}>{(file.size / 1024).toFixed(1)} Ko — Excel</div>
+                      </div>
+                    : <>
+                      <FileImage size={36} color="var(--text-dim)" style={{ marginBottom: 12 }} />
+                      <div style={{ fontSize: 13, fontWeight: 600, color: "var(--text-muted)", marginBottom: 4 }}>Glisse le fichier ici</div>
+                      <div style={{ fontSize: 12, color: "var(--text-dim)" }}>Screenshot (JPG, PNG) ou export Excel (XLS, XLSX)</div>
+                    </>
+                  }
+                </div>
+                <input ref={fileRef} type="file" accept="image/*,.xls,.xlsx" style={{ display: "none" }}
+                  onChange={e => { const f = e.target.files?.[0]; if (f) onFile(f); }} />
+                {file && (
+                  <div style={{ marginTop: 14, display: "flex", gap: 10, alignItems: "center" }}>
+                    <Btn variant="primary" onClick={extract} disabled={loading}>
+                      {loading ? <><Loader size={14} style={{ animation: "spin 1s linear infinite" }} /> Analyse en cours…</> : <><Upload size={14} /> Extraire avec Claude</>}
+                    </Btn>
+                    <Btn variant="secondary" onClick={() => { setFile(null); setPreview(null); setRows(null); setError(null); }}>Changer</Btn>
+                  </div>
+                )}
+              </>
+            ) : (
+              <>
+                <textarea
+                  value={textInput}
+                  onChange={e => { setTextInput(e.target.value); setRows(null); setError(null); }}
+                  placeholder={`Décris le rapport librement. Exemples :\n\n• Joueur 71828947 : rake 152, insurance 72, P/L +1527\n• Bob a fait +500€ avec 80 de rakeback\n• 12345 → 200 rake, -340 winnings`}
+                  style={{
+                    width: "100%", minHeight: 220, padding: "14px 16px", borderRadius: 10,
+                    background: "var(--bg-surface)", border: "1px solid var(--border)",
+                    color: "var(--text)", fontSize: 13, fontFamily: "inherit",
+                    lineHeight: 1.5, outline: "none", resize: "vertical", boxSizing: "border-box",
+                  }} />
+                {textInput.trim() && (
+                  <div style={{ marginTop: 14, display: "flex", gap: 10, alignItems: "center" }}>
+                    <Btn variant="primary" onClick={extract} disabled={loading}>
+                      {loading ? <><Loader size={14} style={{ animation: "spin 1s linear infinite" }} /> Analyse en cours…</> : <><Upload size={14} /> Extraire avec Claude</>}
+                    </Btn>
+                    <Btn variant="secondary" onClick={() => { setTextInput(""); setRows(null); setError(null); }}>Effacer</Btn>
+                  </div>
+                )}
+              </>
             )}
             {error && <div style={{ marginTop: 12, padding: "10px 14px", background: "rgba(248,113,113,0.10)", border: "1px solid rgba(248,113,113,0.25)", borderRadius: 7, fontSize: 12, color: "#f87171" }}>{error}</div>}
           </div>
