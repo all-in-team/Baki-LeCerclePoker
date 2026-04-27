@@ -1,8 +1,7 @@
 "use client";
 
 import { Fragment, useState } from "react";
-import Link from "next/link";
-import { ArrowDownLeft, ArrowUpRight, Plus, Trash2, Wallet, TrendingUp, RefreshCw, Settings2, ExternalLink, Save, X, Pencil } from "lucide-react";
+import { ArrowDownLeft, ArrowUpRight, Plus, Trash2, Wallet, TrendingUp, RefreshCw, Settings2, ExternalLink, Save, X, Pencil, ChevronDown, ChevronRight } from "lucide-react";
 import StatCard from "@/components/StatCard";
 import Btn from "@/components/Btn";
 import Modal from "@/components/Modal";
@@ -69,6 +68,7 @@ export default function WalletsClient({
   const [rbVal, setRbVal] = useState("");
   const [expandedWallet, setExpandedWallet] = useState<number | null>(null);
   const [walletInlineVals, setWalletInlineVals] = useState({ wallet_game: "", wallet_cashout: "" });
+  const [expandedTx, setExpandedTx] = useState<number | null>(null);
 
   async function openWalletConfig(focusPlayerId?: number) {
     const [playersRes, settingsRes] = await Promise.all([
@@ -318,17 +318,23 @@ export default function WalletsClient({
                 const isEditingAction = editingAction === row.deal_id;
                 const isEditingRb = editingRb === row.deal_id;
                 const isExpanded = expandedWallet === row.player_id;
+                const isTxOpen = expandedTx === row.player_id;
                 const player = players.find(p => p.id === row.player_id);
                 const walletGame = player?.tron_address ?? null;
+                const playerTxs = scopedTransactions.filter(t => t.player_id === row.player_id);
+                const rowOpen = isExpanded || isTxOpen;
                 return (
                   <Fragment key={row.player_id}>
-                  <tr style={{ borderBottom: isExpanded ? "none" : "1px solid var(--border)" }}>
+                  <tr style={{ borderBottom: rowOpen ? "none" : "1px solid var(--border)" }}>
                     <td style={{ padding: "12px 16px" }}>
-                      <Link href={`/players/${row.player_id}`} style={{ fontSize: 13, fontWeight: 600, color: "var(--text)", textDecoration: "none" }}
+                      <button
+                        onClick={() => setExpandedTx(isTxOpen ? null : row.player_id)}
+                        style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: 0, background: "transparent", border: "none", cursor: "pointer", fontSize: 13, fontWeight: 600, color: "var(--text)" }}
                         onMouseEnter={e => (e.currentTarget.style.color = "var(--green)")}
                         onMouseLeave={e => (e.currentTarget.style.color = "var(--text)")}>
+                        {isTxOpen ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
                         {row.player_name}
-                      </Link>
+                      </button>
                     </td>
                     <td style={{ padding: "12px 16px", fontSize: 13, fontWeight: 600, color: netC }}>{row.net === 0 ? "—" : fmt(row.net)}</td>
                     <td style={{ padding: "12px 16px", fontSize: 14, fontWeight: 700, color: myC }}>{row.my_pnl === 0 ? "—" : fmt(row.my_pnl)}</td>
@@ -433,6 +439,46 @@ export default function WalletsClient({
                             </button>
                           </div>
                         </div>
+                      </td>
+                    </tr>
+                  )}
+                  {isTxOpen && (
+                    <tr style={{ borderBottom: "1px solid var(--border)", background: "var(--bg-surface)" }}>
+                      <td colSpan={7} style={{ padding: "12px 20px" }}>
+                        {playerTxs.length === 0 ? (
+                          <div style={{ fontSize: 12, color: "var(--text-dim)", padding: "12px 0", textAlign: "center" }}>
+                            Aucune transaction pour {row.player_name}
+                          </div>
+                        ) : (
+                          <div>
+                            <div style={{ display: "grid", gridTemplateColumns: "110px 1fr 130px 1fr", gap: 12, padding: "6px 0 8px", borderBottom: "1px solid var(--border)", fontSize: 10, fontWeight: 700, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.07em" }}>
+                              <span>Date</span><span>Type</span><span style={{ textAlign: "right" }}>Montant</span><span>Note</span>
+                            </div>
+                            {playerTxs.map(tx => {
+                              const isDeposit = tx.type === "deposit";
+                              return (
+                                <div key={tx.id} style={{ display: "grid", gridTemplateColumns: "110px 1fr 130px 1fr", gap: 12, padding: "8px 0", borderBottom: "1px solid var(--border)", alignItems: "center" }}>
+                                  <span style={{ fontSize: 12, color: "var(--text-muted)", whiteSpace: "nowrap" }}>{tx.tx_date}</span>
+                                  <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
+                                    {isDeposit ? <ArrowDownLeft size={13} color="#f87171" /> : <ArrowUpRight size={13} color="var(--green)" />}
+                                    <span style={{ fontSize: 12, fontWeight: 600, color: isDeposit ? "#f87171" : "var(--green)" }}>
+                                      {isDeposit ? "Dépôt (in)" : "Retrait (out)"}
+                                    </span>
+                                  </span>
+                                  <span style={{ fontSize: 13, fontWeight: 700, textAlign: "right", whiteSpace: "nowrap", color: isDeposit ? "#f87171" : "var(--green)" }}>
+                                    {isDeposit ? "−" : "+"}{tx.amount.toLocaleString("fr-FR", { minimumFractionDigits: 2 })} {tx.currency}
+                                  </span>
+                                  <span style={{ fontSize: 11, color: "var(--text-dim)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                                    {tx.note ?? "—"}
+                                  </span>
+                                </div>
+                              );
+                            })}
+                            <div style={{ fontSize: 11, color: "var(--text-dim)", marginTop: 8, textAlign: "right" }}>
+                              {playerTxs.length} transaction{playerTxs.length > 1 ? "s" : ""}
+                            </div>
+                          </div>
+                        )}
                       </td>
                     </tr>
                   )}
