@@ -51,6 +51,8 @@ export default function WalletsClient({
   const [syncing, setSyncing] = useState(false);
   const [addPlayerModal, setAddPlayerModal] = useState(false);
   const [addPlayerBusy, setAddPlayerBusy] = useState(false);
+  const [addPlayerMode, setAddPlayerMode] = useState<"existing" | "new">("existing");
+  const [selectedPlayerId, setSelectedPlayerId] = useState("");
   const [newPlayer, setNewPlayer] = useState({
     name: "", telegram_handle: "", action_pct: "40", rakeback_pct: "0",
     wallet_game: "", wallet_cashout: "",
@@ -155,24 +157,47 @@ export default function WalletsClient({
     window.location.reload();
   }
 
+  function onSelectExistingPlayer(id: string) {
+    setSelectedPlayerId(id);
+    if (!id) return;
+    const p = players.find(x => x.id === Number(id));
+    if (p) {
+      setNewPlayer(np => ({
+        ...np,
+        wallet_game: p.tron_address ?? "",
+        wallet_cashout: p.tele_wallet_cashout ?? "",
+      }));
+    }
+  }
+
   async function addNewPlayer() {
-    if (!newPlayer.name.trim()) { alert("Nom requis"); return; }
-    if (!newPlayer.telegram_handle.trim()) { alert("Telegram handle requis pour l'intégration au bot"); return; }
+    const teleGame = games.find(g => g.name === "TELE");
+    if (!teleGame) { alert("TELE game introuvable — contacte l'admin"); return; }
     const action = Number(newPlayer.action_pct);
     const rb = Number(newPlayer.rakeback_pct);
     if (isNaN(action) || action < 0 || action > 100) { alert("Action % invalide"); return; }
     if (isNaN(rb) || rb < 0 || rb > 100) { alert("RB % invalide"); return; }
-    const teleGame = games.find(g => g.name === "TELE");
-    if (!teleGame) { alert("TELE game introuvable — contacte l'admin"); return; }
+
+    let playerId: number;
+
     setAddPlayerBusy(true);
     try {
-      const handle = newPlayer.telegram_handle.trim().replace(/^@/, "");
-      const playerRes = await fetch("/api/players", {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name: newPlayer.name.trim(), telegram_handle: handle, tier: "A" }),
-      });
-      if (!playerRes.ok) { alert("Erreur création joueur"); return; }
-      const { id: playerId } = await playerRes.json();
+      if (addPlayerMode === "existing") {
+        if (!selectedPlayerId) { alert("Sélectionne un joueur"); return; }
+        playerId = Number(selectedPlayerId);
+      } else {
+        if (!newPlayer.name.trim()) { alert("Nom requis"); return; }
+        if (!newPlayer.telegram_handle.trim()) { alert("Telegram handle requis pour l'intégration au bot"); return; }
+        const handle = newPlayer.telegram_handle.trim().replace(/^@/, "");
+        const playerRes = await fetch("/api/players", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ name: newPlayer.name.trim(), telegram_handle: handle, tier: "A" }),
+        });
+        if (!playerRes.ok) { alert("Erreur création joueur"); return; }
+        const json = await playerRes.json();
+        playerId = json.id;
+      }
+
       if (newPlayer.wallet_game.trim() || newPlayer.wallet_cashout.trim()) {
         await fetch(`/api/players/${playerId}`, {
           method: "PATCH", headers: { "Content-Type": "application/json" },
@@ -415,12 +440,44 @@ export default function WalletsClient({
 
       {/* Add Player Modal */}
       <Modal open={addPlayerModal} onClose={() => setAddPlayerModal(false)} title="Ajouter un joueur TELE AKPOKER">
-        <Field label="Nom *">
-          <input value={newPlayer.name} onChange={e => setNewPlayer(p => ({ ...p, name: e.target.value }))} placeholder="ex: Jean Dupont" />
-        </Field>
-        <Field label="Telegram handle *">
-          <input value={newPlayer.telegram_handle} onChange={e => setNewPlayer(p => ({ ...p, telegram_handle: e.target.value }))} placeholder="@username (sans @ ou avec)" spellCheck={false} />
-        </Field>
+        {/* Mode toggle */}
+        <div style={{ display: "flex", gap: 6, marginBottom: 16, padding: 4, background: "var(--bg-elevated)", borderRadius: 8, border: "1px solid var(--border)" }}>
+          {(["existing", "new"] as const).map(mode => (
+            <button key={mode} onClick={() => setAddPlayerMode(mode)} style={{
+              flex: 1, padding: "8px 12px", borderRadius: 6, cursor: "pointer", fontSize: 12, fontWeight: 600,
+              border: "none",
+              background: addPlayerMode === mode ? "var(--bg-raised)" : "transparent",
+              color: addPlayerMode === mode ? "var(--text)" : "var(--text-muted)",
+              transition: "all 0.15s",
+            }}>
+              {mode === "existing" ? "Joueur existant (CRM)" : "Nouveau joueur"}
+            </button>
+          ))}
+        </div>
+
+        {addPlayerMode === "existing" ? (
+          <Field label="Joueur *">
+            <select value={selectedPlayerId} onChange={e => onSelectExistingPlayer(e.target.value)}>
+              <option value="">Sélectionne un joueur du CRM…</option>
+              {players
+                .filter(p => !listedPlayerIds.has(p.id))
+                .map(p => <option key={p.id} value={String(p.id)}>{p.name}</option>)}
+            </select>
+            <div style={{ fontSize: 11, color: "var(--text-dim)", marginTop: 6 }}>
+              Les joueurs déjà sur TELE AKPOKER sont masqués.
+            </div>
+          </Field>
+        ) : (
+          <>
+            <Field label="Nom *">
+              <input value={newPlayer.name} onChange={e => setNewPlayer(p => ({ ...p, name: e.target.value }))} placeholder="ex: Jean Dupont" />
+            </Field>
+            <Field label="Telegram handle *">
+              <input value={newPlayer.telegram_handle} onChange={e => setNewPlayer(p => ({ ...p, telegram_handle: e.target.value }))} placeholder="@username (avec ou sans @)" spellCheck={false} />
+            </Field>
+          </>
+        )}
+
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
           <Field label="Action % *">
             <input type="number" min="0" max="100" step="0.5" value={newPlayer.action_pct} onChange={e => setNewPlayer(p => ({ ...p, action_pct: e.target.value }))} />
@@ -430,18 +487,22 @@ export default function WalletsClient({
           </Field>
         </div>
         <Field label="Wallet Game (TRC20)">
-          <input value={newPlayer.wallet_game} onChange={e => setNewPlayer(p => ({ ...p, wallet_game: e.target.value }))} placeholder="TXxxx… (optionnel, configurable plus tard)" spellCheck={false} style={{ fontFamily: "monospace", fontSize: 12 }} />
+          <input value={newPlayer.wallet_game} onChange={e => setNewPlayer(p => ({ ...p, wallet_game: e.target.value }))} placeholder="TXxxx… (optionnel)" spellCheck={false} style={{ fontFamily: "monospace", fontSize: 12 }} />
         </Field>
         <Field label="Wallet Cashout">
           <input value={newPlayer.wallet_cashout} onChange={e => setNewPlayer(p => ({ ...p, wallet_cashout: e.target.value }))} placeholder="TXxxx… (optionnel)" spellCheck={false} style={{ fontFamily: "monospace", fontSize: 12 }} />
         </Field>
-        <div style={{ fontSize: 11, color: "var(--text-dim)", marginBottom: 12, padding: "8px 12px", background: "rgba(167,139,250,0.08)", borderRadius: 6, border: "1px solid rgba(167,139,250,0.2)" }}>
-          Le joueur sera reconnu par le bot Telegram via son handle.
-        </div>
+        {addPlayerMode === "new" && (
+          <div style={{ fontSize: 11, color: "var(--text-dim)", marginBottom: 12, padding: "8px 12px", background: "rgba(167,139,250,0.08)", borderRadius: 6, border: "1px solid rgba(167,139,250,0.2)" }}>
+            Le joueur sera reconnu par le bot Telegram via son handle.
+          </div>
+        )}
         <div style={{ display: "flex", gap: 10, justifyContent: "flex-end", marginTop: 8 }}>
           <Btn variant="secondary" onClick={() => setAddPlayerModal(false)}>Annuler</Btn>
-          <Btn variant="primary" disabled={!newPlayer.name.trim() || !newPlayer.telegram_handle.trim() || addPlayerBusy} onClick={addNewPlayer}>
-            {addPlayerBusy ? "Création…" : "Créer le joueur"}
+          <Btn variant="primary"
+            disabled={addPlayerBusy || (addPlayerMode === "existing" ? !selectedPlayerId : (!newPlayer.name.trim() || !newPlayer.telegram_handle.trim()))}
+            onClick={addNewPlayer}>
+            {addPlayerBusy ? "Enregistrement…" : addPlayerMode === "existing" ? "Lier à TELE AKPOKER" : "Créer le joueur"}
           </Btn>
         </div>
       </Modal>
