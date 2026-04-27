@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { Fragment, useState } from "react";
 import Link from "next/link";
 import { ArrowDownLeft, ArrowUpRight, Plus, Trash2, Wallet, TrendingUp, RefreshCw, Settings2, ExternalLink, CheckCircle, AlertCircle, Save, X, Pencil } from "lucide-react";
 import StatCard from "@/components/StatCard";
@@ -22,7 +22,7 @@ interface WalletTx {
   note: string | null; tx_date: string; player_name: string; game_name: string;
 }
 
-interface Player { id: number; name: string; }
+interface Player { id: number; name: string; tron_address?: string | null; tele_wallet_cashout?: string | null; }
 interface Game { id: number; name: string; }
 interface KPIs { total_deposited: number; total_withdrawn: number; total_net: number; my_total_pnl: number; }
 
@@ -70,6 +70,10 @@ export default function WalletsClient({
   const [walletMere, setWalletMere] = useState<string | null>(null);
   const [editingAction, setEditingAction] = useState<number | null>(null);
   const [actionVal, setActionVal] = useState("");
+  const [editingRb, setEditingRb] = useState<number | null>(null);
+  const [rbVal, setRbVal] = useState("");
+  const [expandedWallet, setExpandedWallet] = useState<number | null>(null);
+  const [walletInlineVals, setWalletInlineVals] = useState({ wallet_game: "", wallet_cashout: "" });
 
   async function openWalletConfig(focusPlayerId?: number) {
     const [playersRes, settingsRes] = await Promise.all([
@@ -99,6 +103,33 @@ export default function WalletsClient({
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ action_pct: v }),
+    });
+    if (res.ok) window.location.reload();
+  }
+
+  async function saveRb(dealId: number) {
+    const v = Number(rbVal);
+    if (isNaN(v) || v < 0 || v > 100) {
+      alert("RB % doit être un nombre entre 0 et 100");
+      return;
+    }
+    const res = await fetch(`/api/games/deals/${dealId}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ rakeback_pct: v }),
+    });
+    if (res.ok) window.location.reload();
+  }
+
+  function openInlineWallet(p: Player) {
+    setExpandedWallet(p.id);
+    setWalletInlineVals({ wallet_game: p.tron_address ?? "", wallet_cashout: p.tele_wallet_cashout ?? "" });
+  }
+
+  async function saveInlineWallet(playerId: number) {
+    const res = await fetch(`/api/players/${playerId}`, {
+      method: "PATCH", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ tron_address: walletInlineVals.wallet_game || null, tele_wallet_cashout: walletInlineVals.wallet_cashout || null }),
     });
     if (res.ok) window.location.reload();
   }
@@ -221,22 +252,27 @@ export default function WalletsClient({
           <table style={{ width: "100%", borderCollapse: "collapse" }}>
             <thead>
               <tr style={{ borderBottom: "1px solid var(--border)" }}>
-                {["Joueur", "Net P&L", "Agency P&L", "Action %", "Wallet", ""].map((h, i) => (
+                {["Joueur", "Net P&L", "Agency P&L", "Action %", "RB %", "Wallet", ""].map((h, i) => (
                   <th key={i} style={{ padding: "10px 16px", textAlign: "left", fontSize: 11, fontWeight: 600, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.08em", whiteSpace: "nowrap" }}>{h}</th>
                 ))}
               </tr>
             </thead>
             <tbody>
               {summaryByPlayer.length === 0 ? (
-                <tr><td colSpan={6} style={{ padding: 32, textAlign: "center", color: "var(--text-dim)", fontSize: 13 }}>
+                <tr><td colSpan={7} style={{ padding: 32, textAlign: "center", color: "var(--text-dim)", fontSize: 13 }}>
                   Aucun joueur TELE — ajoute un deal TELE à un joueur depuis son profil
                 </td></tr>
               ) : summaryByPlayer.map(row => {
                 const netC = row.net > 0 ? "var(--green)" : row.net < 0 ? "#f87171" : "var(--text-muted)";
                 const myC = row.my_pnl > 0 ? "var(--green)" : row.my_pnl < 0 ? "#f87171" : "var(--text-muted)";
-                const isEditing = editingAction === row.deal_id;
+                const isEditingAction = editingAction === row.deal_id;
+                const isEditingRb = editingRb === row.deal_id;
+                const isExpanded = expandedWallet === row.player_id;
+                const player = players.find(p => p.id === row.player_id);
+                const walletGame = player?.tron_address ?? null;
                 return (
-                  <tr key={row.player_id} style={{ borderBottom: "1px solid var(--border)" }}>
+                  <Fragment key={row.player_id}>
+                  <tr style={{ borderBottom: isExpanded ? "none" : "1px solid var(--border)" }}>
                     <td style={{ padding: "12px 16px" }}>
                       <Link href={`/players/${row.player_id}`} style={{ fontSize: 13, fontWeight: 600, color: "var(--text)", textDecoration: "none" }}
                         onMouseEnter={e => (e.currentTarget.style.color = "var(--green)")}
@@ -247,7 +283,7 @@ export default function WalletsClient({
                     <td style={{ padding: "12px 16px", fontSize: 13, fontWeight: 600, color: netC }}>{row.net === 0 ? "—" : fmt(row.net)}</td>
                     <td style={{ padding: "12px 16px", fontSize: 14, fontWeight: 700, color: myC }}>{row.my_pnl === 0 ? "—" : fmt(row.my_pnl)}</td>
                     <td style={{ padding: "12px 16px" }}>
-                      {isEditing ? (
+                      {isEditingAction ? (
                         <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
                           <input
                             type="number" min="0" max="100" step="0.5"
@@ -275,14 +311,82 @@ export default function WalletsClient({
                       )}
                     </td>
                     <td style={{ padding: "12px 16px" }}>
-                      <Btn size="sm" variant="secondary" onClick={() => openWalletConfig(row.player_id)}>
-                        <Settings2 size={12} /> Config →
-                      </Btn>
+                      {isEditingRb ? (
+                        <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                          <input
+                            type="number" min="0" max="100" step="0.5"
+                            value={rbVal}
+                            onChange={e => setRbVal(e.target.value)}
+                            onKeyDown={e => {
+                              if (e.key === "Enter") saveRb(row.deal_id);
+                              if (e.key === "Escape") setEditingRb(null);
+                            }}
+                            autoFocus
+                            style={{ width: 64, padding: "4px 7px", fontSize: 12, fontWeight: 600, background: "var(--bg-elevated)", border: "1px solid #38bdf8", borderRadius: 4, color: "#38bdf8", outline: "none" }}
+                          />
+                          <button onClick={() => saveRb(row.deal_id)} style={{ display: "flex", alignItems: "center", padding: 4, borderRadius: 4, background: "rgba(34,197,94,0.12)", color: "var(--green)", border: "1px solid rgba(34,197,94,0.3)", cursor: "pointer" }}><Save size={12} /></button>
+                          <button onClick={() => setEditingRb(null)} style={{ display: "flex", alignItems: "center", padding: 4, borderRadius: 4, background: "var(--bg-elevated)", color: "var(--text-muted)", border: "1px solid var(--border)", cursor: "pointer" }}><X size={12} /></button>
+                        </div>
+                      ) : (
+                        <button
+                          onClick={() => { setEditingRb(row.deal_id); setRbVal(String(row.rakeback_pct)); }}
+                          style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "4px 8px", borderRadius: 5, background: "transparent", border: "1px solid transparent", cursor: "pointer", fontSize: 13, fontWeight: 600, color: "#38bdf8" }}
+                          onMouseEnter={e => (e.currentTarget.style.borderColor = "var(--border)")}
+                          onMouseLeave={e => (e.currentTarget.style.borderColor = "transparent")}>
+                          {row.rakeback_pct}%
+                          <Pencil size={11} style={{ color: "var(--text-dim)" }} />
+                        </button>
+                      )}
+                    </td>
+                    <td style={{ padding: "12px 16px" }}>
+                      <button
+                        onClick={() => isExpanded ? setExpandedWallet(null) : (player && openInlineWallet(player))}
+                        style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "4px 8px", borderRadius: 5, background: "transparent", border: "1px solid transparent", cursor: "pointer", fontSize: 12, fontWeight: 600, color: walletGame ? "#38bdf8" : "var(--text-dim)" }}
+                        onMouseEnter={e => (e.currentTarget.style.borderColor = "var(--border)")}
+                        onMouseLeave={e => (e.currentTarget.style.borderColor = "transparent")}>
+                        {walletGame ? `${walletGame.slice(0, 6)}…${walletGame.slice(-6)}` : "Non configuré"}
+                        <Pencil size={11} style={{ color: "var(--text-dim)" }} />
+                      </button>
                     </td>
                     <td style={{ padding: "12px 16px" }}>
                       <Btn size="sm" variant="danger" onClick={() => deleteDeal(row.deal_id, row.player_name)}><Trash2 size={13} /></Btn>
                     </td>
                   </tr>
+                  {isExpanded && (
+                    <tr style={{ borderBottom: "1px solid var(--border)", background: "var(--bg-surface)" }}>
+                      <td colSpan={7} style={{ padding: "16px 20px" }}>
+                        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr auto", gap: 12, alignItems: "end" }}>
+                          <div>
+                            <label style={{ fontSize: 10, fontWeight: 700, color: "#38bdf8", textTransform: "uppercase", display: "block", marginBottom: 4, letterSpacing: "0.06em" }}>Wallet Game (TRC20)</label>
+                            <input
+                              value={walletInlineVals.wallet_game}
+                              onChange={e => setWalletInlineVals(v => ({ ...v, wallet_game: e.target.value }))}
+                              placeholder="TXxxx…" spellCheck={false}
+                              style={{ width: "100%", padding: "8px 10px", borderRadius: 6, fontSize: 12, fontFamily: "monospace", background: "var(--bg-elevated)", color: "var(--text)", border: "1px solid #38bdf840", outline: "none", boxSizing: "border-box" }}
+                            />
+                          </div>
+                          <div>
+                            <label style={{ fontSize: 10, fontWeight: 700, color: "#fb923c", textTransform: "uppercase", display: "block", marginBottom: 4, letterSpacing: "0.06em" }}>Wallet Cashout</label>
+                            <input
+                              value={walletInlineVals.wallet_cashout}
+                              onChange={e => setWalletInlineVals(v => ({ ...v, wallet_cashout: e.target.value }))}
+                              placeholder="TXxxx… (Binance ou perso)" spellCheck={false}
+                              style={{ width: "100%", padding: "8px 10px", borderRadius: 6, fontSize: 12, fontFamily: "monospace", background: "var(--bg-elevated)", color: "var(--text)", border: "1px solid #fb923c40", outline: "none", boxSizing: "border-box" }}
+                            />
+                          </div>
+                          <div style={{ display: "flex", gap: 6 }}>
+                            <button onClick={() => saveInlineWallet(row.player_id)} style={{ display: "flex", alignItems: "center", gap: 5, padding: "8px 14px", borderRadius: 6, fontSize: 12, fontWeight: 600, background: "rgba(34,197,94,0.12)", color: "var(--green)", border: "1px solid rgba(34,197,94,0.3)", cursor: "pointer", whiteSpace: "nowrap" }}>
+                              <Save size={13} /> Enregistrer
+                            </button>
+                            <button onClick={() => setExpandedWallet(null)} style={{ display: "flex", alignItems: "center", gap: 5, padding: "8px 12px", borderRadius: 6, fontSize: 12, fontWeight: 600, background: "var(--bg-elevated)", color: "var(--text-muted)", border: "1px solid var(--border)", cursor: "pointer" }}>
+                              <X size={13} />
+                            </button>
+                          </div>
+                        </div>
+                      </td>
+                    </tr>
+                  )}
+                  </Fragment>
                 );
               })}
             </tbody>
