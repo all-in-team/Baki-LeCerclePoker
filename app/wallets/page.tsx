@@ -4,11 +4,11 @@ import PageHeader from "@/components/PageHeader";
 import WalletsClient from "./WalletsClient";
 
 export default function WalletsPage() {
-  const summary = getWalletSummaryByPlayer() as any[];
-  const kpis = getWalletKPIs() ?? { total_deposited: 0, total_withdrawn: 0, total_net: 0, my_total_pnl: 0 };
-  const transactions = getWalletTransactions({ limit: 200 }) as any[];
+  const summary = getWalletSummaryByPlayer({ game_name: "TELE" }) as any[];
+  const kpis = getWalletKPIs({ game_name: "TELE" }) ?? { total_deposited: 0, total_withdrawn: 0, total_net: 0, my_total_pnl: 0 };
+  const transactions = getWalletTransactions({ limit: 200, game_name: "TELE" }) as any[];
   const players = getPlayers() as any[];
-  const games = getGames();
+  const games = (getGames() as any[]).filter((g) => g.name === "TELE");
 
   return (
     <>

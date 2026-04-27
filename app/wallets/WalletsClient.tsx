@@ -10,6 +10,7 @@ import Modal from "@/components/Modal";
 import WalletChartsWrapper from "./WalletChartsWrapper";
 
 interface PlayerGameRow {
+  deal_id: number;
   player_id: number; player_name: string;
   game_id: number; game_name: string;
   action_pct: number; rakeback_pct: number;
@@ -124,6 +125,12 @@ export default function WalletsClient({
     window.location.reload();
   }
 
+  async function deleteDeal(dealId: number, playerName: string) {
+    if (!confirm(`Supprimer la ligne "${playerName} × TELE" ?\n\nLes transactions existantes restent visibles dans le Transaction Log.`)) return;
+    await fetch(`/api/games/deals/${dealId}`, { method: "DELETE" });
+    window.location.reload();
+  }
+
   const filtered = initialTransactions.filter(t => {
     if (filterPlayer && String(t.player_id) !== filterPlayer) return false;
     if (filterGame && String(t.game_id) !== filterGame) return false;
@@ -187,14 +194,14 @@ export default function WalletsClient({
           <table style={{ width: "100%", borderCollapse: "collapse" }}>
             <thead>
               <tr style={{ borderBottom: "1px solid var(--border)" }}>
-                {["Joueur", "Game", "Deposited", "Withdrawn", "Net P&L", "Action %", "RB %", "Mon P&L", "Status"].map(h => (
-                  <th key={h} style={{ padding: "10px 16px", textAlign: "left", fontSize: 11, fontWeight: 600, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.08em", whiteSpace: "nowrap" }}>{h}</th>
+                {["Joueur", "Game", "Deposited", "Withdrawn", "Net P&L", "Action %", "RB %", "Mon P&L", "Status", ""].map((h, i) => (
+                  <th key={i} style={{ padding: "10px 16px", textAlign: "left", fontSize: 11, fontWeight: 600, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.08em", whiteSpace: "nowrap" }}>{h}</th>
                 ))}
               </tr>
             </thead>
             <tbody>
               {initialSummary.length === 0 ? (
-                <tr><td colSpan={9} style={{ padding: 32, textAlign: "center", color: "var(--text-dim)", fontSize: 13 }}>
+                <tr><td colSpan={10} style={{ padding: 32, textAlign: "center", color: "var(--text-dim)", fontSize: 13 }}>
                   Aucune donnée — ajoute des joueurs à une game depuis leur profil
                 </td></tr>
               ) : initialSummary.map(row => {
@@ -221,6 +228,9 @@ export default function WalletsClient({
                     <td style={{ padding: "12px 16px", fontSize: 14, fontWeight: 700, color: myC }}>{row.my_pnl === 0 ? "—" : fmt(row.my_pnl)}</td>
                     <td style={{ padding: "12px 16px" }}>
                       <Badge label={row.net > 0 ? "Winning" : row.net < 0 ? "Losing" : "Flat"} color={row.net > 0 ? "green" : row.net < 0 ? "red" : "gray"} />
+                    </td>
+                    <td style={{ padding: "12px 16px" }}>
+                      <Btn size="sm" variant="danger" onClick={() => deleteDeal(row.deal_id, row.player_name)}><Trash2 size={13} /></Btn>
                     </td>
                   </tr>
                 );

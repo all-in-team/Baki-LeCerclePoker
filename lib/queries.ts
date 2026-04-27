@@ -340,7 +340,7 @@ export function getPeriods() {
 }
 
 // ── Wallet Transactions ───────────────────────────────────
-export function getWalletTransactions(filters?: { player_id?: number; game_id?: number; limit?: number }) {
+export function getWalletTransactions(filters?: { player_id?: number; game_id?: number; game_name?: string; limit?: number }) {
   const db = getDb();
   let q = `
     SELECT wt.*, p.name AS player_name,
@@ -354,15 +354,17 @@ export function getWalletTransactions(filters?: { player_id?: number; game_id?: 
   const params: Record<string, unknown> = {};
   if (filters?.player_id) { q += ` AND wt.player_id = @player_id`; params.player_id = filters.player_id; }
   if (filters?.game_id)   { q += ` AND wt.game_id = @game_id`;    params.game_id = filters.game_id; }
+  if (filters?.game_name) { q += ` AND COALESCE(g.name, pa.name) = @game_name`; params.game_name = filters.game_name; }
   q += ` ORDER BY wt.tx_date DESC, wt.created_at DESC`;
   if (filters?.limit)     { q += ` LIMIT @limit`;                  params.limit = filters.limit; }
   return db.prepare(q).all(params);
 }
 
-export function getWalletSummaryByPlayer() {
+export function getWalletSummaryByPlayer(filters?: { game_name?: string }) {
   const db = getDb();
-  return db.prepare(`
+  let q = `
     SELECT
+      pgd.id AS deal_id,
       p.id AS player_id, p.name AS player_name,
       g.id AS game_id, g.name AS game_name,
       pgd.action_pct, pgd.rakeback_pct,
@@ -374,32 +376,44 @@ export function getWalletSummaryByPlayer() {
     JOIN player_game_deals pgd ON pgd.player_id = p.id
     JOIN games g ON g.id = pgd.game_id
     LEFT JOIN wallet_transactions wt ON wt.player_id = p.id AND wt.game_id = pgd.game_id
-    GROUP BY p.id, pgd.game_id
-    ORDER BY my_pnl DESC
-  `).all();
+  `;
+  const params: Record<string, unknown> = {};
+  if (filters?.game_name) {
+    q += ` WHERE g.name = @game_name`;
+    params.game_name = filters.game_name;
+  }
+  q += ` GROUP BY p.id, pgd.game_id ORDER BY my_pnl DESC`;
+  return db.prepare(q).all(params);
 }
 
-export function getWalletKPIs() {
+export function getWalletKPIs(filters?: { game_name?: string }) {
   const db = getDb();
+  let inner = `
+    SELECT
+      COALESCE(SUM(CASE WHEN wt.type='deposit'    THEN wt.amount ELSE 0 END), 0) AS total_deposited,
+      COALESCE(SUM(CASE WHEN wt.type='withdrawal' THEN wt.amount ELSE 0 END), 0) AS total_withdrawn,
+      COALESCE(SUM(CASE WHEN wt.type='withdrawal' THEN wt.amount ELSE -wt.amount END), 0) AS net,
+      COALESCE(SUM(CASE WHEN wt.type='withdrawal' THEN wt.amount ELSE -wt.amount END), 0) * pgd.action_pct / 100 AS my_pnl
+    FROM players p
+    JOIN player_game_deals pgd ON pgd.player_id = p.id
+    JOIN games g ON g.id = pgd.game_id
+    LEFT JOIN wallet_transactions wt ON wt.player_id = p.id AND wt.game_id = pgd.game_id
+  `;
+  const params: Record<string, unknown> = {};
+  if (filters?.game_name) {
+    inner += ` WHERE g.name = @game_name`;
+    params.game_name = filters.game_name;
+  }
+  inner += ` GROUP BY p.id, pgd.game_id`;
+
   return db.prepare(`
     SELECT
       COALESCE(SUM(total_deposited), 0) AS total_deposited,
       COALESCE(SUM(total_withdrawn), 0) AS total_withdrawn,
       COALESCE(SUM(net), 0) AS total_net,
       COALESCE(SUM(my_pnl), 0) AS my_total_pnl
-    FROM (
-      SELECT
-        COALESCE(SUM(CASE WHEN wt.type='deposit'    THEN wt.amount ELSE 0 END), 0) AS total_deposited,
-        COALESCE(SUM(CASE WHEN wt.type='withdrawal' THEN wt.amount ELSE 0 END), 0) AS total_withdrawn,
-        COALESCE(SUM(CASE WHEN wt.type='withdrawal' THEN wt.amount ELSE -wt.amount END), 0) AS net,
-        COALESCE(SUM(CASE WHEN wt.type='withdrawal' THEN wt.amount ELSE -wt.amount END), 0) * pgd.action_pct / 100 AS my_pnl
-      FROM players p
-      JOIN player_game_deals pgd ON pgd.player_id = p.id
-      JOIN games g ON g.id = pgd.game_id
-      LEFT JOIN wallet_transactions wt ON wt.player_id = p.id AND wt.game_id = pgd.game_id
-      GROUP BY p.id, pgd.game_id
-    )
-  `).get() as { total_deposited: number; total_withdrawn: number; total_net: number; my_total_pnl: number };
+    FROM (${inner})
+  `).get(params) as { total_deposited: number; total_withdrawn: number; total_net: number; my_total_pnl: number };
 }
 
 export function getPlayerWalletStats(playerId: number) {
