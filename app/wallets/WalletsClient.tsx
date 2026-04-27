@@ -2,7 +2,7 @@
 
 import { Fragment, useState } from "react";
 import Link from "next/link";
-import { ArrowDownLeft, ArrowUpRight, Plus, Trash2, Wallet, TrendingUp, RefreshCw, Settings2, ExternalLink, CheckCircle, AlertCircle, Save, X, Pencil } from "lucide-react";
+import { ArrowDownLeft, ArrowUpRight, Plus, Trash2, Wallet, TrendingUp, RefreshCw, Settings2, ExternalLink, Save, X, Pencil } from "lucide-react";
 import StatCard from "@/components/StatCard";
 import Btn from "@/components/Btn";
 import Modal from "@/components/Modal";
@@ -26,13 +26,6 @@ interface Player { id: number; name: string; tron_address?: string | null; tele_
 interface Game { id: number; name: string; }
 interface KPIs { total_deposited: number; total_withdrawn: number; total_net: number; my_total_pnl: number; }
 
-const BLANK_FORM = {
-  player_id: "", game_id: "",
-  type: "deposit" as "deposit" | "withdrawal",
-  amount: "", currency: "USDT", note: "",
-  tx_date: new Date().toISOString().slice(0, 10),
-};
-
 const GAME_COLOR: Record<string, string> = {
   TELE: "#a78bfa", Wepoker: "#38bdf8", Xpoker: "#fb923c", ClubGG: "#4ade80",
 };
@@ -55,13 +48,13 @@ export default function WalletsClient({
   players: Player[];
   games: Game[];
 }) {
-  const [modal, setModal] = useState(false);
-  const [form, setForm] = useState(BLANK_FORM);
-  const [busy, setBusy] = useState(false);
-  const [filterPlayer, setFilterPlayer] = useState("");
-  const [filterGame, setFilterGame] = useState("");
-  const [filterType, setFilterType] = useState<"" | "deposit" | "withdrawal">("");
   const [syncing, setSyncing] = useState(false);
+  const [addPlayerModal, setAddPlayerModal] = useState(false);
+  const [addPlayerBusy, setAddPlayerBusy] = useState(false);
+  const [newPlayer, setNewPlayer] = useState({
+    name: "", telegram_handle: "", action_pct: "40", rakeback_pct: "0",
+    wallet_game: "", wallet_cashout: "",
+  });
   const [syncResult, setSyncResult] = useState<{ imported: number; mode?: string; results: { player: string; imported: number; deposits: number; withdrawals: number; total_fetched?: number; skipped?: number; error?: string }[] } | null>(null);
   const [walletModal, setWalletModal] = useState(false);
   const [teleConfig, setTeleConfig] = useState<{ id: number; name: string; wallet_game: string | null; wallet_cashout: string | null }[]>([]);
@@ -156,34 +149,48 @@ export default function WalletsClient({
     } finally { setSyncing(false); }
   }
 
-  async function addTx() {
-    setBusy(true);
-    const res = await fetch("/api/wallets", {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ ...form, amount: Number(form.amount), player_id: Number(form.player_id), game_id: Number(form.game_id) }),
-    });
-    if (res.ok) window.location.reload();
-    setBusy(false);
-  }
-
-  async function deleteTx(id: number) {
-    if (!confirm("Supprimer cette transaction ?")) return;
-    await fetch(`/api/wallets/${id}`, { method: "DELETE" });
-    window.location.reload();
-  }
-
   async function deleteDeal(dealId: number, playerName: string) {
-    if (!confirm(`Supprimer la ligne "${playerName} × TELE" ?\n\nLes transactions existantes restent visibles dans le Transaction Log.`)) return;
+    if (!confirm(`Retirer "${playerName}" de TELE AKPOKER ?\n\nLes transactions existantes restent en base.`)) return;
     await fetch(`/api/games/deals/${dealId}`, { method: "DELETE" });
     window.location.reload();
   }
 
-  const filtered = initialTransactions.filter(t => {
-    if (filterPlayer && String(t.player_id) !== filterPlayer) return false;
-    if (filterGame && String(t.game_id) !== filterGame) return false;
-    if (filterType && t.type !== filterType) return false;
-    return true;
-  });
+  async function addNewPlayer() {
+    if (!newPlayer.name.trim()) { alert("Nom requis"); return; }
+    if (!newPlayer.telegram_handle.trim()) { alert("Telegram handle requis pour l'intégration au bot"); return; }
+    const action = Number(newPlayer.action_pct);
+    const rb = Number(newPlayer.rakeback_pct);
+    if (isNaN(action) || action < 0 || action > 100) { alert("Action % invalide"); return; }
+    if (isNaN(rb) || rb < 0 || rb > 100) { alert("RB % invalide"); return; }
+    const teleGame = games.find(g => g.name === "TELE");
+    if (!teleGame) { alert("TELE game introuvable — contacte l'admin"); return; }
+    setAddPlayerBusy(true);
+    try {
+      const handle = newPlayer.telegram_handle.trim().replace(/^@/, "");
+      const playerRes = await fetch("/api/players", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: newPlayer.name.trim(), telegram_handle: handle, tier: "A" }),
+      });
+      if (!playerRes.ok) { alert("Erreur création joueur"); return; }
+      const { id: playerId } = await playerRes.json();
+      if (newPlayer.wallet_game.trim() || newPlayer.wallet_cashout.trim()) {
+        await fetch(`/api/players/${playerId}`, {
+          method: "PATCH", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            tron_address: newPlayer.wallet_game.trim() || null,
+            tele_wallet_cashout: newPlayer.wallet_cashout.trim() || null,
+          }),
+        });
+      }
+      await fetch("/api/games/deals", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ player_id: playerId, game_id: teleGame.id, action_pct: action, rakeback_pct: rb }),
+      });
+      window.location.reload();
+    } finally {
+      setAddPlayerBusy(false);
+    }
+  }
 
   const myPnlAccent: "green" | "red" | "neutral" = kpis.my_total_pnl > 0 ? "green" : kpis.my_total_pnl < 0 ? "red" : "neutral";
   const netAccent: "green" | "red" | "neutral" = kpis.total_net > 0 ? "green" : kpis.total_net < 0 ? "red" : "neutral";
@@ -208,6 +215,10 @@ export default function WalletsClient({
     id: r.player_id, name: r.player_name, action_pct: r.action_pct,
     total_deposited: r.total_deposited, total_withdrawn: r.total_withdrawn, net: r.net, my_pnl: r.my_pnl,
   }));
+
+  // Scope transactions to only the players currently in the TELE table
+  const listedPlayerIds = new Set(summaryByPlayer.map(r => r.player_id));
+  const scopedTransactions = initialTransactions.filter(t => listedPlayerIds.has(t.player_id));
 
   return (
     <>
@@ -245,8 +256,11 @@ export default function WalletsClient({
 
       {/* Summary — one row per player */}
       <div style={{ background: "var(--bg-raised)", border: "1px solid var(--border)", borderRadius: 10, marginBottom: 28 }}>
-        <div style={{ padding: "14px 20px", borderBottom: "1px solid var(--border)" }}>
+        <div style={{ padding: "14px 20px", borderBottom: "1px solid var(--border)", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
           <span style={{ fontSize: 13, fontWeight: 700, color: "var(--text)" }}>Joueurs TELE AKPOKER</span>
+          <Btn variant="primary" size="sm" onClick={() => setAddPlayerModal(true)}>
+            <Plus size={14} /> Ajouter joueur
+          </Btn>
         </div>
         <div style={{ overflowX: "auto" }}>
           <table style={{ width: "100%", borderCollapse: "collapse" }}>
@@ -396,135 +410,38 @@ export default function WalletsClient({
 
       {/* Charts */}
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20, marginBottom: 28 }}>
-        <WalletChartsWrapper data={chartData} transactions={initialTransactions as any} />
+        <WalletChartsWrapper data={chartData} transactions={scopedTransactions as any} />
       </div>
 
-      {/* Transaction Log */}
-      <div style={{ background: "var(--bg-raised)", border: "1px solid var(--border)", borderRadius: 10 }}>
-        <div style={{ padding: "14px 20px", borderBottom: "1px solid var(--border)", display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
-          <span style={{ fontSize: 13, fontWeight: 700, color: "var(--text)", marginRight: "auto" }}>Transaction Log</span>
-          <select value={filterPlayer} onChange={e => setFilterPlayer(e.target.value)}
-            style={{ fontSize: 12, padding: "5px 10px", background: "var(--bg-elevated)", border: "1px solid var(--border)", borderRadius: 6, color: "var(--text-muted)" }}>
-            <option value="">Tous les joueurs</option>
-            {players.map(p => <option key={p.id} value={String(p.id)}>{p.name}</option>)}
-          </select>
-          <select value={filterGame} onChange={e => setFilterGame(e.target.value)}
-            style={{ fontSize: 12, padding: "5px 10px", background: "var(--bg-elevated)", border: "1px solid var(--border)", borderRadius: 6, color: "var(--text-muted)" }}>
-            <option value="">Toutes games</option>
-            {games.map(g => <option key={g.id} value={String(g.id)}>{g.name}</option>)}
-          </select>
-          <div style={{ display: "flex", gap: 4 }}>
-            {(["", "deposit", "withdrawal"] as const).map(t => (
-              <button key={t} onClick={() => setFilterType(t)} style={{ fontSize: 11, fontWeight: 600, padding: "5px 10px", borderRadius: 6, cursor: "pointer", border: "none", background: filterType === t ? "var(--bg-elevated)" : "transparent", color: filterType === t ? "var(--text)" : "var(--text-dim)" }}>
-                {t === "" ? "Tous" : t === "deposit" ? "Dépôt" : "Retrait"}
-              </button>
-            ))}
-          </div>
-          <Btn variant="primary" onClick={() => { setForm(BLANK_FORM); setModal(true); }}>
-            <Plus size={14} /> Ajouter
-          </Btn>
-        </div>
-        <div style={{ overflowX: "auto" }}>
-          <table style={{ width: "100%", borderCollapse: "collapse" }}>
-            <thead>
-              <tr style={{ borderBottom: "1px solid var(--border)" }}>
-                {["Date", "Joueur", "Game", "Type", "Montant", "Note", ""].map((h, i) => (
-                  <th key={i} style={{ padding: "10px 16px", textAlign: "left", fontSize: 11, fontWeight: 600, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.08em" }}>{h}</th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {filtered.length === 0 ? (
-                <tr><td colSpan={7} style={{ padding: 32, textAlign: "center", color: "var(--text-dim)", fontSize: 13 }}>Aucune transaction</td></tr>
-              ) : filtered.map(tx => {
-                const isDeposit = tx.type === "deposit";
-                const gc = GAME_COLOR[tx.game_name] ?? "var(--text-muted)";
-                return (
-                  <tr key={tx.id} style={{ borderBottom: "1px solid var(--border)" }}>
-                    <td style={{ padding: "11px 16px", fontSize: 12, color: "var(--text-muted)", whiteSpace: "nowrap" }}>{tx.tx_date}</td>
-                    <td style={{ padding: "11px 16px", fontSize: 13, fontWeight: 600, color: "var(--text)" }}>{tx.player_name}</td>
-                    <td style={{ padding: "11px 16px" }}>
-                      <span style={{ fontSize: 11, fontWeight: 700, color: gc, background: gc + "18", padding: "2px 7px", borderRadius: 4 }}>{tx.game_name}</span>
-                    </td>
-                    <td style={{ padding: "11px 16px" }}>
-                      <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                        {isDeposit ? <ArrowDownLeft size={14} color="#f87171" /> : <ArrowUpRight size={14} color="var(--green)" />}
-                        <span style={{ fontSize: 12, fontWeight: 600, color: isDeposit ? "#f87171" : "var(--green)" }}>
-                          {isDeposit ? "Dépôt" : "Retrait"}
-                        </span>
-                      </div>
-                    </td>
-                    <td style={{ padding: "11px 16px", fontSize: 13, fontWeight: 700, whiteSpace: "nowrap" }}>
-                      <span style={{ color: isDeposit ? "#f87171" : "var(--green)" }}>{isDeposit ? "−" : "+"}</span>
-                      {" "}{tx.amount.toLocaleString("fr-FR", { minimumFractionDigits: 2 })} {tx.currency}
-                    </td>
-                    <td style={{ padding: "11px 16px", fontSize: 12, color: "var(--text-muted)", maxWidth: 180, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                      {tx.note ?? <span style={{ color: "var(--text-dim)" }}>—</span>}
-                    </td>
-                    <td style={{ padding: "11px 16px" }}>
-                      <Btn size="sm" variant="danger" onClick={() => deleteTx(tx.id)}><Trash2 size={13} /></Btn>
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
-      </div>
-
-      {/* Add Transaction Modal */}
-      <Modal open={modal} onClose={() => setModal(false)} title="Ajouter une transaction">
-        <Field label="Joueur *">
-          <select value={form.player_id} onChange={e => setForm(f => ({ ...f, player_id: e.target.value }))}>
-            <option value="">Choisir un joueur…</option>
-            {players.map(p => <option key={p.id} value={String(p.id)}>{p.name}</option>)}
-          </select>
+      {/* Add Player Modal */}
+      <Modal open={addPlayerModal} onClose={() => setAddPlayerModal(false)} title="Ajouter un joueur TELE AKPOKER">
+        <Field label="Nom *">
+          <input value={newPlayer.name} onChange={e => setNewPlayer(p => ({ ...p, name: e.target.value }))} placeholder="ex: Jean Dupont" />
         </Field>
-        <Field label="Game *">
-          <select value={form.game_id} onChange={e => setForm(f => ({ ...f, game_id: e.target.value }))}>
-            <option value="">Choisir une game…</option>
-            {games.map(g => <option key={g.id} value={String(g.id)}>{g.name}</option>)}
-          </select>
-        </Field>
-        <Field label="Type *">
-          <div style={{ display: "flex", gap: 8 }}>
-            {(["deposit", "withdrawal"] as const).map(t => (
-              <button key={t} onClick={() => setForm(f => ({ ...f, type: t }))} style={{
-                flex: 1, padding: "10px", borderRadius: 7, cursor: "pointer", fontWeight: 600, fontSize: 13,
-                border: form.type === t ? `1px solid ${t === "deposit" ? "#f87171" : "var(--green)"}` : "1px solid var(--border)",
-                background: form.type === t ? (t === "deposit" ? "rgba(248,113,113,0.10)" : "rgba(34,197,94,0.10)") : "var(--bg-elevated)",
-                color: form.type === t ? (t === "deposit" ? "#f87171" : "var(--green)") : "var(--text-muted)",
-                display: "flex", alignItems: "center", justifyContent: "center", gap: 6,
-              }}>
-                {t === "deposit" ? <ArrowDownLeft size={14} /> : <ArrowUpRight size={14} />}
-                {t === "deposit" ? "Dépôt" : "Retrait"}
-              </button>
-            ))}
-          </div>
+        <Field label="Telegram handle *">
+          <input value={newPlayer.telegram_handle} onChange={e => setNewPlayer(p => ({ ...p, telegram_handle: e.target.value }))} placeholder="@username (sans @ ou avec)" spellCheck={false} />
         </Field>
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
-          <Field label="Montant *">
-            <input type="number" min="0" step="0.01" value={form.amount} onChange={e => setForm(f => ({ ...f, amount: e.target.value }))} placeholder="ex: 2000" />
+          <Field label="Action % *">
+            <input type="number" min="0" max="100" step="0.5" value={newPlayer.action_pct} onChange={e => setNewPlayer(p => ({ ...p, action_pct: e.target.value }))} />
           </Field>
-          <Field label="Devise">
-            <select value={form.currency} onChange={e => setForm(f => ({ ...f, currency: e.target.value }))}>
-              <option value="USDT">USDT</option>
-              <option value="EUR">EUR</option>
-              <option value="USD">USD</option>
-              <option value="RMB">RMB</option>
-            </select>
+          <Field label="RB %">
+            <input type="number" min="0" max="100" step="0.5" value={newPlayer.rakeback_pct} onChange={e => setNewPlayer(p => ({ ...p, rakeback_pct: e.target.value }))} />
           </Field>
         </div>
-        <Field label="Date *">
-          <input type="date" value={form.tx_date} onChange={e => setForm(f => ({ ...f, tx_date: e.target.value }))} />
+        <Field label="Wallet Game (TRC20)">
+          <input value={newPlayer.wallet_game} onChange={e => setNewPlayer(p => ({ ...p, wallet_game: e.target.value }))} placeholder="TXxxx… (optionnel, configurable plus tard)" spellCheck={false} style={{ fontFamily: "monospace", fontSize: 12 }} />
         </Field>
-        <Field label="Note">
-          <input value={form.note} onChange={e => setForm(f => ({ ...f, note: e.target.value }))} placeholder="Optionnel" />
+        <Field label="Wallet Cashout">
+          <input value={newPlayer.wallet_cashout} onChange={e => setNewPlayer(p => ({ ...p, wallet_cashout: e.target.value }))} placeholder="TXxxx… (optionnel)" spellCheck={false} style={{ fontFamily: "monospace", fontSize: 12 }} />
         </Field>
+        <div style={{ fontSize: 11, color: "var(--text-dim)", marginBottom: 12, padding: "8px 12px", background: "rgba(167,139,250,0.08)", borderRadius: 6, border: "1px solid rgba(167,139,250,0.2)" }}>
+          Le joueur sera reconnu par le bot Telegram via son handle.
+        </div>
         <div style={{ display: "flex", gap: 10, justifyContent: "flex-end", marginTop: 8 }}>
-          <Btn variant="secondary" onClick={() => setModal(false)}>Annuler</Btn>
-          <Btn variant="primary" disabled={!form.player_id || !form.game_id || !form.amount || !form.tx_date || busy} onClick={addTx}>
-            {busy ? "Enregistrement…" : "Ajouter"}
+          <Btn variant="secondary" onClick={() => setAddPlayerModal(false)}>Annuler</Btn>
+          <Btn variant="primary" disabled={!newPlayer.name.trim() || !newPlayer.telegram_handle.trim() || addPlayerBusy} onClick={addNewPlayer}>
+            {addPlayerBusy ? "Création…" : "Créer le joueur"}
           </Btn>
         </div>
       </Modal>
