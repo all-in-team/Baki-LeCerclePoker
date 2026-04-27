@@ -378,5 +378,28 @@ function initSchema(db: Database.Database) {
       created_at            TEXT NOT NULL DEFAULT (datetime('now'))
     );
     CREATE INDEX IF NOT EXISTS idx_agent_usage_created ON agent_usage(created_at);
+
+    CREATE TABLE IF NOT EXISTS agent_doer_sessions (
+      id                INTEGER PRIMARY KEY AUTOINCREMENT,
+      session_id        TEXT NOT NULL,
+      chat_id           TEXT NOT NULL,
+      description       TEXT NOT NULL,
+      money_ok          INTEGER NOT NULL DEFAULT 0,
+      status            TEXT NOT NULL DEFAULT 'starting' CHECK(status IN ('starting','running','idle','completed','failed','cancelled')),
+      pr_url            TEXT,
+      branch_name       TEXT,
+      cost_usd_estimate REAL DEFAULT 0,
+      error_message     TEXT,
+      created_at        TEXT NOT NULL DEFAULT (datetime('now')),
+      completed_at      TEXT,
+      UNIQUE(session_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_agent_doer_status ON agent_doer_sessions(status, created_at);
+    CREATE INDEX IF NOT EXISTS idx_agent_doer_created ON agent_doer_sessions(created_at);
   `);
+
+  // Default settings (idempotent inserts)
+  db.prepare(`INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)`).run("agent_doer_budget_cap_usd_daily", "10");
+  db.prepare(`INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)`).run("agent_doer_env_id", "");
+  db.prepare(`INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)`).run("agent_doer_agent_id", "");
 }

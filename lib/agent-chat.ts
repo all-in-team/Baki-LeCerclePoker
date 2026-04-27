@@ -164,11 +164,13 @@ export async function runChat({ chatId, userText }: RunChatArgs): Promise<string
       const toolUses = response.content.filter(
         (b): b is Anthropic.ToolUseBlock => b.type === "tool_use"
       );
-      const toolResults: Anthropic.ToolResultBlockParam[] = toolUses.map(t => ({
-        type: "tool_result",
-        tool_use_id: t.id,
-        content: executeTool(t.name, t.input),
-      }));
+      const toolResults: Anthropic.ToolResultBlockParam[] = await Promise.all(
+        toolUses.map(async t => ({
+          type: "tool_result" as const,
+          tool_use_id: t.id,
+          content: await executeTool(t.name, t.input),
+        }))
+      );
       messages.push({ role: "user", content: toolResults });
       continue;
     }

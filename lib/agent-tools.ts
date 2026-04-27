@@ -1,6 +1,7 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { getDb } from "./db";
 import { todayCost, usageBetween } from "./agent-cost";
+import { dispatchFix, isWithinBudget, recentDoerSessions, looksMoneyFlow } from "./agent-doer";
 
 // ────────────────────────────────────────────────────────────
 // Period parsing — accepts: today | yesterday | week | month |
@@ -171,6 +172,35 @@ export const TOOLS: Anthropic.Tool[] = [
       required: [],
     },
   },
+  {
+    name: "list_doer_sessions",
+    description: "Liste les dernières sessions du doer agent (PRs en cours, terminées, échouées) — utile quand l'opérateur demande 'où en est le fix de tout à l'heure ?'.",
+    input_schema: {
+      type: "object",
+      properties: {
+        limit: { type: "integer", description: "Nombre max (défaut 5)" },
+      },
+      required: [],
+    },
+  },
+  {
+    name: "request_code_fix",
+    description: "Demande au doer agent (Anthropic Managed Agents en cloud) d'attaquer un fix ou une feature. Le doer va cloner le repo, faire le changement, ouvrir une PR, puis poster un récap dans le groupe. Use quand l'opérateur dit clairement 'fix X', 'ajoute Y', 'change Z', 'corrige W'. Pour des questions ou réflexions, n'utilise PAS ce tool — réponds directement. Si la requête touche au code financier (deal/depot/retrait/wallet/PnL/rakeback), demande money_ok=true seulement si l'opérateur l'a explicitement autorisé via 'money:ok' dans son message.",
+    input_schema: {
+      type: "object",
+      properties: {
+        description: {
+          type: "string",
+          description: "Description claire du fix/feature pour le doer (en français). Inclus le contexte (quel fichier, quelle page, quel comportement attendu). Le doer va lire ça et agir en autonomie.",
+        },
+        money_ok: {
+          type: "boolean",
+          description: "true SEULEMENT si l'opérateur a explicitement écrit 'money:ok' dans son message — sinon laisse à false.",
+        },
+      },
+      required: ["description"],
+    },
+  },
 ];
 
 // ────────────────────────────────────────────────────────────
@@ -189,7 +219,7 @@ function fmtAmount(n: number): string {
   return (n >= 0 ? "+" : "") + n.toFixed(2);
 }
 
-export function executeTool(name: string, input: any): string {
+export async function executeTool(name: string, input: any): Promise<string> {
   const db = getDb();
 
   try {
@@ -334,6 +364,43 @@ export function executeTool(name: string, input: any): string {
       return rows.map(r =>
         `${r.created_at.slice(0, 16).replace("T", " ")} · ${r.player} · ${r.game ?? "?"} · ${r.type} ${r.amount.toFixed(0)} USDT${r.tron_tx_hash ? " (auto-sync)" : ""}`
       ).join("\n");
+    }
+
+    if (name === "list_doer_sessions") {
+      const limit = Math.min(input?.limit ?? 5, 50);
+      const rows = recentDoerSessions(limit);
+      if (rows.length === 0) return "Aucune session doer pour l'instant.";
+      const budget = isWithinBudget();
+      const lines = [`Budget doer aujourd'hui: $${budget.spent.toFixed(2)} / $${budget.cap.toFixed(2)} (reste $${budget.remaining.toFixed(2)})`, ""];
+      rows.forEach(r => {
+        const status = r.status === "completed" ? "✅" : r.status === "failed" ? "❌" : r.status === "running" ? "🔄" : "⏳";
+        lines.push(`${status} [${r.created_at.slice(0, 16).replace("T", " ")}] ${r.description.slice(0, 60)}`);
+        if (r.pr_url) lines.push(`  → PR: ${r.pr_url}`);
+        if (r.error_message) lines.push(`  ⚠️ ${r.error_message.slice(0, 100)}`);
+        lines.push(`  coût: $${r.cost_usd_estimate.toFixed(3)}`);
+      });
+      return lines.join("\n");
+    }
+
+    if (name === "request_code_fix") {
+      const description = String(input?.description ?? "").trim();
+      const moneyOk = input?.money_ok === true;
+      if (!description) return "description requise pour request_code_fix.";
+
+      // Defense in depth — even if Claude calls this with money_ok=false on a money-flow
+      // request, dispatchFix() will refuse cleanly.
+      if (!moneyOk && looksMoneyFlow(description)) {
+        return `⚠️ Cette requête semble toucher au code financier (deal/depot/retrait/wallet/PnL/rakeback). Je refuse de la dispatcher sans autorisation explicite. Si l'opérateur veut vraiment, qu'il rajoute "money:ok" dans son message — je rappellerai alors avec money_ok=true.`;
+      }
+
+      // We need the chat_id for dispatch — pull from a known context. Since
+      // tools don't natively get chat context, we use the agent group default.
+      const chatId = process.env.AGENT_TELEGRAM_CHAT_ID ?? "-4846690641";
+      const result = await dispatchFix({ chatId, description, money_ok: moneyOk });
+      if (!result.ok) {
+        return `❌ Dispatch refusé: ${result.reason}`;
+      }
+      return `✅ Doer agent démarré (session ${result.session_id?.slice(0, 16)}…). Il va cloner le repo, faire le changement, ouvrir une PR, et poster un récap dans le groupe quand c'est terminé. Délai typique: 2-15 min selon la complexité.`;
     }
 
     if (name === "list_players") {
