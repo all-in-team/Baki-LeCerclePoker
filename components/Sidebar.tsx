@@ -9,7 +9,7 @@ const NAV = [
   { href: "/finance", label: "Finance", icon: BarChart3 },
   { href: "/crm", label: "CRM Joueurs", icon: ContactRound },
   { href: "/apps", label: "Apps", icon: AppWindow },
-  { href: "/wallets", label: "Wallet Tracker", icon: Wallet },
+  { href: "/wallets", label: "TELE AKPOKER", icon: Wallet },
   { href: "/reports", label: "Reports", icon: FileText },
   { href: "/ledger", label: "Telegram Ledger", icon: MessageSquare },
   { href: "/signals", label: "Weekly Signal", icon: Zap },

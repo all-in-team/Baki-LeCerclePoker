@@ -13,7 +13,7 @@ export default function WalletsPage() {
   return (
     <>
       <PageHeader
-        title="Wallet Tracker"
+        title="TELE AKPOKER"
         subtitle="Dépôts & retraits par game — P&L calculé selon le deal de chaque joueur"
       />
       <WalletsClient
