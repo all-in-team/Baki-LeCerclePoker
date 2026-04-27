@@ -51,12 +51,12 @@ export default function WalletsClient({
   const [syncing, setSyncing] = useState(false);
   const [addPlayerModal, setAddPlayerModal] = useState(false);
   const [addPlayerBusy, setAddPlayerBusy] = useState(false);
-  const [addPlayerMode, setAddPlayerMode] = useState<"existing" | "new">("existing");
   const [selectedPlayerId, setSelectedPlayerId] = useState("");
   const [newPlayer, setNewPlayer] = useState({
     name: "", telegram_handle: "", action_pct: "40", rakeback_pct: "0",
     wallet_game: "", wallet_cashout: "",
   });
+  const isNewPlayer = selectedPlayerId === "__new__";
   const [syncResult, setSyncResult] = useState<{ imported: number; mode?: string; results: { player: string; imported: number; deposits: number; withdrawals: number; total_fetched?: number; skipped?: number; error?: string }[] } | null>(null);
   const [walletModal, setWalletModal] = useState(false);
   const [teleConfig, setTeleConfig] = useState<{ id: number; name: string; wallet_game: string | null; wallet_cashout: string | null }[]>([]);
@@ -157,9 +157,12 @@ export default function WalletsClient({
     window.location.reload();
   }
 
-  function onSelectExistingPlayer(id: string) {
+  function onSelectPlayer(id: string) {
     setSelectedPlayerId(id);
-    if (!id) return;
+    if (!id || id === "__new__") {
+      setNewPlayer(np => ({ ...np, wallet_game: "", wallet_cashout: "" }));
+      return;
+    }
     const p = players.find(x => x.id === Number(id));
     if (p) {
       setNewPlayer(np => ({
@@ -182,7 +185,7 @@ export default function WalletsClient({
 
     setAddPlayerBusy(true);
     try {
-      if (addPlayerMode === "existing") {
+      if (!isNewPlayer) {
         if (!selectedPlayerId) { alert("Sélectionne un joueur"); return; }
         playerId = Number(selectedPlayerId);
       } else {
@@ -440,34 +443,17 @@ export default function WalletsClient({
 
       {/* Add Player Modal */}
       <Modal open={addPlayerModal} onClose={() => setAddPlayerModal(false)} title="Ajouter un joueur TELE AKPOKER">
-        {/* Mode toggle */}
-        <div style={{ display: "flex", gap: 6, marginBottom: 16, padding: 4, background: "var(--bg-elevated)", borderRadius: 8, border: "1px solid var(--border)" }}>
-          {(["existing", "new"] as const).map(mode => (
-            <button key={mode} onClick={() => setAddPlayerMode(mode)} style={{
-              flex: 1, padding: "8px 12px", borderRadius: 6, cursor: "pointer", fontSize: 12, fontWeight: 600,
-              border: "none",
-              background: addPlayerMode === mode ? "var(--bg-raised)" : "transparent",
-              color: addPlayerMode === mode ? "var(--text)" : "var(--text-muted)",
-              transition: "all 0.15s",
-            }}>
-              {mode === "existing" ? "Joueur existant (CRM)" : "Nouveau joueur"}
-            </button>
-          ))}
-        </div>
+        <Field label="Joueur *">
+          <select value={selectedPlayerId} onChange={e => onSelectPlayer(e.target.value)}>
+            <option value="">Sélectionne un joueur…</option>
+            {players
+              .filter(p => !listedPlayerIds.has(p.id))
+              .map(p => <option key={p.id} value={String(p.id)}>{p.name}</option>)}
+            <option value="__new__">+ Nouveau joueur (pas dans le CRM)</option>
+          </select>
+        </Field>
 
-        {addPlayerMode === "existing" ? (
-          <Field label="Joueur *">
-            <select value={selectedPlayerId} onChange={e => onSelectExistingPlayer(e.target.value)}>
-              <option value="">Sélectionne un joueur du CRM…</option>
-              {players
-                .filter(p => !listedPlayerIds.has(p.id))
-                .map(p => <option key={p.id} value={String(p.id)}>{p.name}</option>)}
-            </select>
-            <div style={{ fontSize: 11, color: "var(--text-dim)", marginTop: 6 }}>
-              Les joueurs déjà sur TELE AKPOKER sont masqués.
-            </div>
-          </Field>
-        ) : (
+        {isNewPlayer && (
           <>
             <Field label="Nom *">
               <input value={newPlayer.name} onChange={e => setNewPlayer(p => ({ ...p, name: e.target.value }))} placeholder="ex: Jean Dupont" />
@@ -478,31 +464,31 @@ export default function WalletsClient({
           </>
         )}
 
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
-          <Field label="Action % *">
-            <input type="number" min="0" max="100" step="0.5" value={newPlayer.action_pct} onChange={e => setNewPlayer(p => ({ ...p, action_pct: e.target.value }))} />
-          </Field>
-          <Field label="RB %">
-            <input type="number" min="0" max="100" step="0.5" value={newPlayer.rakeback_pct} onChange={e => setNewPlayer(p => ({ ...p, rakeback_pct: e.target.value }))} />
-          </Field>
-        </div>
-        <Field label="Wallet Game (TRC20)">
-          <input value={newPlayer.wallet_game} onChange={e => setNewPlayer(p => ({ ...p, wallet_game: e.target.value }))} placeholder="TXxxx… (optionnel)" spellCheck={false} style={{ fontFamily: "monospace", fontSize: 12 }} />
-        </Field>
-        <Field label="Wallet Cashout">
-          <input value={newPlayer.wallet_cashout} onChange={e => setNewPlayer(p => ({ ...p, wallet_cashout: e.target.value }))} placeholder="TXxxx… (optionnel)" spellCheck={false} style={{ fontFamily: "monospace", fontSize: 12 }} />
-        </Field>
-        {addPlayerMode === "new" && (
-          <div style={{ fontSize: 11, color: "var(--text-dim)", marginBottom: 12, padding: "8px 12px", background: "rgba(167,139,250,0.08)", borderRadius: 6, border: "1px solid rgba(167,139,250,0.2)" }}>
-            Le joueur sera reconnu par le bot Telegram via son handle.
-          </div>
+        {selectedPlayerId && (
+          <>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+              <Field label="Action % *">
+                <input type="number" min="0" max="100" step="0.5" value={newPlayer.action_pct} onChange={e => setNewPlayer(p => ({ ...p, action_pct: e.target.value }))} />
+              </Field>
+              <Field label="RB %">
+                <input type="number" min="0" max="100" step="0.5" value={newPlayer.rakeback_pct} onChange={e => setNewPlayer(p => ({ ...p, rakeback_pct: e.target.value }))} />
+              </Field>
+            </div>
+            <Field label="Wallet Game (TRC20)">
+              <input value={newPlayer.wallet_game} onChange={e => setNewPlayer(p => ({ ...p, wallet_game: e.target.value }))} placeholder="TXxxx… (optionnel)" spellCheck={false} style={{ fontFamily: "monospace", fontSize: 12 }} />
+            </Field>
+            <Field label="Wallet Cashout">
+              <input value={newPlayer.wallet_cashout} onChange={e => setNewPlayer(p => ({ ...p, wallet_cashout: e.target.value }))} placeholder="TXxxx… (optionnel)" spellCheck={false} style={{ fontFamily: "monospace", fontSize: 12 }} />
+            </Field>
+          </>
         )}
+
         <div style={{ display: "flex", gap: 10, justifyContent: "flex-end", marginTop: 8 }}>
           <Btn variant="secondary" onClick={() => setAddPlayerModal(false)}>Annuler</Btn>
           <Btn variant="primary"
-            disabled={addPlayerBusy || (addPlayerMode === "existing" ? !selectedPlayerId : (!newPlayer.name.trim() || !newPlayer.telegram_handle.trim()))}
+            disabled={addPlayerBusy || !selectedPlayerId || (isNewPlayer && (!newPlayer.name.trim() || !newPlayer.telegram_handle.trim()))}
             onClick={addNewPlayer}>
-            {addPlayerBusy ? "Enregistrement…" : addPlayerMode === "existing" ? "Lier à TELE AKPOKER" : "Créer le joueur"}
+            {addPlayerBusy ? "Enregistrement…" : isNewPlayer ? "Créer le joueur" : "Lier à TELE AKPOKER"}
           </Btn>
         </div>
       </Modal>
