@@ -345,4 +345,25 @@ function initSchema(db: Database.Database) {
       UNIQUE(game_id, external_club_id)
     );
   `);
+
+  // Agent chat: conversation memory + inbox for scheduled-agent pickup
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS agent_conversations (
+      id         INTEGER PRIMARY KEY AUTOINCREMENT,
+      chat_id    TEXT NOT NULL,
+      role       TEXT NOT NULL CHECK(role IN ('user','assistant')),
+      content    TEXT NOT NULL,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_agent_conv_chat ON agent_conversations(chat_id, created_at DESC);
+
+    CREATE TABLE IF NOT EXISTS agent_inbox (
+      id           INTEGER PRIMARY KEY AUTOINCREMENT,
+      chat_id      TEXT NOT NULL,
+      message      TEXT NOT NULL,
+      created_at   TEXT NOT NULL DEFAULT (datetime('now')),
+      processed_at TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_agent_inbox_unprocessed ON agent_inbox(processed_at) WHERE processed_at IS NULL;
+  `);
 }

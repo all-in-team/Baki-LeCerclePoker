@@ -1,6 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getDb } from "@/lib/db";
 import { upsertPlayerGameDeal, insertWalletTransaction } from "@/lib/queries";
+import { isMention, runChat } from "@/lib/agent-chat";
+
+const AGENT_CHAT_ID = process.env.AGENT_TELEGRAM_CHAT_ID ?? "-4846690641";
 
 const OWNER_IDS = new Set<number>(
   (process.env.TELEGRAM_OWNER_IDS ?? "1298290355")
@@ -926,6 +929,18 @@ export async function POST(req: NextRequest) {
   // Debug log every incoming message sender (helps verify owner ID)
   if (msg?.from?.id) {
     console.log(`[TG] msg from user_id=${msg.from.id} username=@${msg.from.username ?? "none"} text="${msg.text?.slice(0, 30) ?? ""}"`);
+  }
+
+  // Agent chat: in the dedicated agent group, route mentions to Claude
+  if (msg?.text && String(chatId) === AGENT_CHAT_ID && isMention(msg.text)) {
+    try {
+      const reply = await runChat({ chatId, userText: msg.text });
+      await sendMsg(chatId, reply);
+    } catch (e: any) {
+      console.error("[TG AGENT CHAT]", e);
+      await sendMsg(chatId, `❌ Erreur agent : ${e.message ?? String(e)}`);
+    }
+    return NextResponse.json({ ok: true });
   }
 
   // Commands (owner only)
