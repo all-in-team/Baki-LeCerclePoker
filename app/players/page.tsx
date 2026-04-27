@@ -9,8 +9,8 @@ export default function PlayersPage() {
   return (
     <div>
       <PageHeader
-        title="Players"
-        subtitle="Manage your player roster and their app assignments"
+        title="Joueurs"
+        subtitle="Gère ta roster de joueurs et leurs assignations d apps."
       />
       <PlayersClient initialPlayers={players as any} apps={apps as any} />
     </div>
