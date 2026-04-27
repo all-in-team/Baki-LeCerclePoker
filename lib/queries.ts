@@ -83,6 +83,38 @@ export function getPlayerGameDeals(playerId: number) {
   `).all(playerId);
 }
 
+// ── Player Wallet Cashouts (multi) ───────────────────────
+export function getPlayerCashouts(playerId: number) {
+  return getDb().prepare(`SELECT id, address, label FROM player_wallet_cashouts WHERE player_id = ? ORDER BY id`).all(playerId) as { id: number; address: string; label: string | null }[];
+}
+
+export function setPlayerCashouts(playerId: number, addresses: { address: string; label?: string | null }[]) {
+  const db = getDb();
+  const tx = db.transaction(() => {
+    db.prepare(`DELETE FROM player_wallet_cashouts WHERE player_id = ?`).run(playerId);
+    const ins = db.prepare(`INSERT OR IGNORE INTO player_wallet_cashouts (player_id, address, label) VALUES (?, ?, ?)`);
+    for (const c of addresses) {
+      const a = c.address.trim();
+      if (!a) continue;
+      ins.run(playerId, a, c.label ?? null);
+    }
+    // Mirror the first address into the legacy column for Telegram-bot compatibility
+    const first = addresses.find(c => c.address.trim());
+    db.prepare(`UPDATE players SET tele_wallet_cashout = ? WHERE id = ?`).run(first ? first.address.trim() : null, playerId);
+  });
+  tx();
+}
+
+export function getAllTeleCashoutsByPlayer() {
+  // Returns one row per (player_id, address). Includes both new-table entries and the legacy single column.
+  return getDb().prepare(`
+    SELECT player_id, address FROM player_wallet_cashouts
+    UNION
+    SELECT id AS player_id, tele_wallet_cashout AS address FROM players
+    WHERE tele_wallet_cashout IS NOT NULL AND tele_wallet_cashout != ''
+  `).all() as { player_id: number; address: string }[];
+}
+
 export function upsertPlayerGameDeal(data: { player_id: number; game_id: number; action_pct: number; rakeback_pct: number }) {
   const db = getDb();
   const r = db.prepare(`

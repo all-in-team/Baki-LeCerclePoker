@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { getDb } from "@/lib/db";
-import { insertWalletTransactionByHash, getSetting } from "@/lib/queries";
+import { insertWalletTransactionByHash, getSetting, getAllTeleCashoutsByPlayer } from "@/lib/queries";
 
 const USDT_CONTRACT = "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t";
 
@@ -116,9 +116,12 @@ export async function POST() {
   }
 
   // ── Pass 2 : cashouts via WALLET MERE → WALLET CASHOUT ───────────────────
+  // Build the cashout map from BOTH the new multi-cashout table AND the legacy single column.
   const cashoutMap = new Map<string, number>(); // wallet_cashout (lowercase) → player_id
-  for (const p of players) {
-    if (p.wallet_cashout) cashoutMap.set(p.wallet_cashout.toLowerCase(), p.id);
+  const playerIdsOnTele = new Set(players.map(p => p.id));
+  for (const c of getAllTeleCashoutsByPlayer()) {
+    if (!playerIdsOnTele.has(c.player_id)) continue;
+    cashoutMap.set(c.address.toLowerCase(), c.player_id);
   }
 
   if (walletMere && cashoutMap.size > 0) {

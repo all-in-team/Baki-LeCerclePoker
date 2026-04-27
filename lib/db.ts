@@ -187,8 +187,36 @@ function initSchema(db: Database.Database) {
   // Add game_id to wallet_transactions
   try { db.exec(`ALTER TABLE wallet_transactions ADD COLUMN game_id INTEGER REFERENCES games(id) ON DELETE SET NULL`); } catch {}
 
+  // Multi-cashout support — a player can have N cashout addresses
+  try {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS player_wallet_cashouts (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        player_id INTEGER NOT NULL REFERENCES players(id) ON DELETE CASCADE,
+        address TEXT NOT NULL,
+        label TEXT,
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        UNIQUE(player_id, address)
+      );
+      CREATE INDEX IF NOT EXISTS idx_pwc_player ON player_wallet_cashouts(player_id);
+      CREATE INDEX IF NOT EXISTS idx_pwc_address ON player_wallet_cashouts(address);
+    `);
+  } catch {}
+
   // One-time fix: flip deposit/withdrawal directions (to=player means deposit, from=player means withdrawal)
   db.exec(`CREATE TABLE IF NOT EXISTS _applied_fixes (name TEXT PRIMARY KEY)`);
+
+  // Backfill from legacy single-column tele_wallet_cashout (one-time, runs after _applied_fixes exists)
+  const fixBackfillCashouts = db.prepare(`INSERT OR IGNORE INTO _applied_fixes (name) VALUES (?)`).run("backfill_player_wallet_cashouts_v1");
+  if (fixBackfillCashouts.changes > 0) {
+    try {
+      db.exec(`
+        INSERT OR IGNORE INTO player_wallet_cashouts (player_id, address)
+        SELECT id, tele_wallet_cashout FROM players
+        WHERE tele_wallet_cashout IS NOT NULL AND tele_wallet_cashout != ''
+      `);
+    } catch {}
+  }
   const fixFlip = db.prepare(`INSERT OR IGNORE INTO _applied_fixes (name) VALUES (?)`).run("flip_wallet_directions_v2");
   if (fixFlip.changes > 0) {
     db.exec(`UPDATE wallet_transactions SET type = CASE WHEN type='deposit' THEN 'withdrawal' ELSE 'deposit' END`);
