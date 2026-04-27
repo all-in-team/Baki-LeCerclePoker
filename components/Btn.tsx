@@ -1,3 +1,4 @@
+// Btn — bouton réutilisable de l app. NE PAS toucher type=submit hack pour l instant (voir QA report 2026-04-27).
 import { ReactNode, ButtonHTMLAttributes } from "react";
 
 interface BtnProps extends ButtonHTMLAttributes<HTMLButtonElement> {
