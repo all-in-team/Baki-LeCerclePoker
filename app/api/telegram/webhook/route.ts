@@ -44,25 +44,17 @@ async function askWalletGame(chatId: number | string, mention: string) {
 }
 
 // ── Session helpers ───────────────────────────────────────
-type Step = "waiting_action_pct" | "waiting_wallet_game" | "waiting_wallet_cashout";
+type Step = "waiting_action_pct" | "waiting_wallet_game" | "waiting_wallet_cashout" | "waiting_game" | "waiting_player";
 
-function getSession(chatId: string | number): { step: Step; player_id: number; expected_tg_id: number | null } | null {
+function getSession(chatId: string | number): { step: Step; player_id: number; expected_tg_id: number | null; pending_cmd: string | null } | null {
   return getDb().prepare(
-    `SELECT step, player_id, expected_tg_id FROM telegram_sessions WHERE chat_id = ? AND created_at > datetime('now', '-24 hours')`
+    `SELECT step, player_id, expected_tg_id, pending_cmd FROM telegram_sessions WHERE chat_id = ? AND created_at > datetime('now', '-24 hours')`
   ).get(String(chatId)) as any ?? null;
 }
-function setSession(chatId: string | number, step: Step, player_id: number, expected_tg_id?: number | null) {
-  const db = getDb();
-  // Try with expected_tg_id column; fall back if column not yet migrated
-  try {
-    db.prepare(
-      `INSERT OR REPLACE INTO telegram_sessions (chat_id, step, player_id, expected_tg_id, created_at) VALUES (?, ?, ?, ?, datetime('now'))`
-    ).run(String(chatId), step, player_id, expected_tg_id ?? null);
-  } catch {
-    db.prepare(
-      `INSERT OR REPLACE INTO telegram_sessions (chat_id, step, player_id, created_at) VALUES (?, ?, ?, datetime('now'))`
-    ).run(String(chatId), step, player_id);
-  }
+function setSession(chatId: string | number, step: Step, player_id: number | null, expected_tg_id?: number | null, pending_cmd?: string | null) {
+  getDb().prepare(
+    `INSERT OR REPLACE INTO telegram_sessions (chat_id, step, player_id, expected_tg_id, pending_cmd, created_at) VALUES (?, ?, ?, ?, ?, datetime('now'))`
+  ).run(String(chatId), step, player_id ?? null, expected_tg_id ?? null, pending_cmd ?? null);
 }
 
 function mentionOf(player: { name: string; telegram_handle?: string | null; telegram_id?: number | null }) {
@@ -72,6 +64,14 @@ function mentionOf(player: { name: string; telegram_handle?: string | null; tele
 }
 function clearSession(chatId: string | number) {
   getDb().prepare(`DELETE FROM telegram_sessions WHERE chat_id = ?`).run(String(chatId));
+}
+async function promptGame(chatId: number, cmd: string, args: string) {
+  setSession(chatId, "waiting_game", null, null, `${cmd}:${args}`);
+  await sendMsg(chatId, `🎮 Quelle game ?\n\n<b>TELE · Wepoker · Xpoker · ClubGG</b>`);
+}
+async function promptPlayer(chatId: number, cmd: string, args: string) {
+  setSession(chatId, "waiting_player", null, null, `${cmd}:${args}`);
+  await sendMsg(chatId, `👤 Pour quel joueur ? (envoie le nom ou @tag)`);
 }
 
 // ── Flexible parser ───────────────────────────────────────
@@ -207,6 +207,55 @@ async function handleRawMessage(text: string, chatId: number) {
   const session = getSession(chatId);
   if (!session) return;
 
+  // ── waiting_game: owner chose a game after missing it in a command ──
+  if (session.step === "waiting_game") {
+    const canonical: Record<string, string> = { tele: "TELE", wepoker: "Wepoker", xpoker: "Xpoker", clubgg: "ClubGG" };
+    const gameName = canonical[text.trim().toLowerCase()] ?? null;
+    if (!gameName) {
+      await sendMsg(chatId, `❌ Game inconnue. Réponds avec : <b>TELE</b>, <b>Wepoker</b>, <b>Xpoker</b> ou <b>ClubGG</b>`);
+      return;
+    }
+    clearSession(chatId);
+    const pending = session.pending_cmd ?? "";
+    const colon = pending.indexOf(":");
+    const cmdType = colon === -1 ? pending : pending.slice(0, colon);
+    const originalArgs = colon === -1 ? "" : pending.slice(colon + 1);
+    const fullArgs = originalArgs ? `${originalArgs} ${gameName}` : gameName;
+    if (cmdType === "deal")    { await handleDeal(fullArgs, chatId); return; }
+    if (cmdType === "depot")   { await handleTx("deposit", fullArgs, chatId); return; }
+    if (cmdType === "retrait") { await handleTx("withdrawal", fullArgs, chatId); return; }
+    if (cmdType === "reset")   { await handleReset(fullArgs, chatId); return; }
+    return;
+  }
+
+  // ── waiting_player: owner named a player after missing it in a command ──
+  if (session.step === "waiting_player") {
+    const query = text.trim();
+    const players = findPlayer(query);
+    if (players.length === 0) {
+      await sendMsg(chatId, `❌ Joueur "${query}" introuvable — essaie un autre nom ou @tag`);
+      return;
+    }
+    if (players.length > 1) {
+      const lines = players.map(p => `• <b>${p.name}</b>${p.telegram_handle ? ` (@${p.telegram_handle})` : ""}`).join("\n");
+      await sendMsg(chatId, `❌ Plusieurs joueurs trouvés :\n${lines}\n\nSois plus précis.`);
+      return;
+    }
+    // Exactly one match — confirm and re-dispatch with player name prepended
+    clearSession(chatId);
+    const pending = session.pending_cmd ?? "";
+    const colon = pending.indexOf(":");
+    const cmdType = colon === -1 ? pending : pending.slice(0, colon);
+    const originalArgs = colon === -1 ? "" : pending.slice(colon + 1);
+    const fullArgs = `${players[0].name} ${originalArgs}`.trim();
+    if (cmdType === "deal")    { await handleDeal(fullArgs, chatId); return; }
+    if (cmdType === "depot")   { await handleTx("deposit", fullArgs, chatId); return; }
+    if (cmdType === "retrait") { await handleTx("withdrawal", fullArgs, chatId); return; }
+    if (cmdType === "reset")   { await handleReset(fullArgs, chatId); return; }
+    return;
+  }
+
+  if (!session.player_id) { clearSession(chatId); return; }
   const player = getPlayerFull(session.player_id);
   if (!player) { clearSession(chatId); return; }
 
@@ -342,11 +391,11 @@ async function handleDeal(rawText: string, chatId: number) {
   const p = parseArgs(rawText);
 
   if (!p.playerQuery) {
-    await sendMsg(chatId, "❌ Usage : <code>/deal hugo wepoker 55% action 5% RB</code>");
+    await promptPlayer(chatId, "deal", rawText);
     return;
   }
   if (!p.gameName) {
-    await sendMsg(chatId, "❌ Game manquante. Games : TELE · Wepoker · Xpoker · ClubGG");
+    await promptGame(chatId, "deal", rawText);
     return;
   }
   if (p.action_pct === null) {
@@ -398,11 +447,11 @@ async function handleTx(type: "deposit" | "withdrawal", rawText: string, chatId:
   const cmd = type === "deposit" ? "depot" : "retrait";
 
   if (!p.playerQuery) {
-    await sendMsg(chatId, `❌ Usage : <code>/${cmd} hugo 2000$ wepoker</code>`);
+    await promptPlayer(chatId, cmd, rawText);
     return;
   }
   if (!p.gameName) {
-    await sendMsg(chatId, "❌ Game manquante. Games : TELE · Wepoker · Xpoker · ClubGG");
+    await promptGame(chatId, cmd, rawText);
     return;
   }
   if (!p.amount || p.amount <= 0) {
@@ -475,16 +524,37 @@ async function handleWallet(rawText: string, chatId: number) {
 }
 
 // ── Command: /reset ───────────────────────────────────────
-// /reset hugo game    → efface WALLET GAME et relance le flow
-// /reset hugo cashout → efface WALLET CASHOUT et relance le flow
-// /reset hugo         → efface tout et repart de 0
+// /reset hugo tele              → reset complet TELE (deal + wallets)
+// /reset hugo tele game         → efface wallet game, relance flow
+// /reset hugo tele cashout      → efface wallet cashout, relance flow
+// /reset hugo tele deal         → efface deal TELE seulement
+// /reset hugo wepoker           → efface deal Wepoker
 async function handleReset(rawText: string, chatId: number) {
-  const parts = rawText.trim().split(/\s+/);
-  const typeToken = parts[parts.length - 1]?.toLowerCase();
-  const hasType = ["game", "cashout", "deal"].includes(typeToken);
-  const playerQuery = hasType ? parts.slice(0, -1).join(" ").trim() : parts.join(" ").trim();
+  const parts = rawText.trim().split(/\s+/).filter(Boolean);
 
-  if (!playerQuery) { await sendMsg(chatId, `❌ Usage : <code>/reset @hugo</code> ou <code>/reset @hugo game</code>`); return; }
+  // Position-independent parse: scan all tokens for game / sub-type / player name
+  const canonical: Record<string, string> = { tele: "TELE", wepoker: "Wepoker", xpoker: "Xpoker", clubgg: "ClubGG" };
+  const subTypes = ["game", "cashout", "deal"] as const;
+  type SubType = typeof subTypes[number];
+  let gameName: string | null = null;
+  let subType: SubType | null = null;
+  const playerParts: string[] = [];
+  for (const tok of parts) {
+    const lower = tok.toLowerCase();
+    if (!gameName && GAME_NAMES.includes(lower)) { gameName = canonical[lower]; }
+    else if (!subType && (subTypes as readonly string[]).includes(lower)) { subType = lower as SubType; }
+    else { playerParts.push(tok); }
+  }
+  const playerQuery = playerParts.join(" ").trim();
+
+  if (!playerQuery) {
+    await promptPlayer(chatId, "reset", rawText.trim());
+    return;
+  }
+  if (!gameName) {
+    await promptGame(chatId, "reset", rawText.trim());
+    return;
+  }
 
   const players = findPlayer(playerQuery);
   if (players.length === 0) { await sendMsg(chatId, `❌ Joueur "${playerQuery}" introuvable`); return; }
@@ -493,28 +563,46 @@ async function handleReset(rawText: string, chatId: number) {
   const db = getDb();
   const player = players[0];
   const full = getPlayerFull(player.id)!;
+  const game = findGame(gameName);
+  if (!game) { await sendMsg(chatId, `❌ Game "${gameName}" inconnue`); return; }
   clearSession(chatId);
+  const firstName = player.name.split(" ")[0].toLowerCase();
 
-  if (typeToken === "game") {
-    db.prepare(`UPDATE players SET tron_address = NULL WHERE id = ?`).run(player.id);
-    setSession(chatId, "waiting_wallet_game", player.id, full.telegram_id);
-    await sendMsg(chatId, `🔄 WALLET GAME réinitialisé pour <b>${player.name}</b>`);
-    await askWalletGame(chatId, mentionOf(full));
-  } else if (typeToken === "cashout") {
-    db.prepare(`UPDATE players SET tele_wallet_cashout = NULL WHERE id = ?`).run(player.id);
-    setSession(chatId, "waiting_wallet_cashout", player.id, full.telegram_id);
-    await sendMsg(chatId,
-      `🔄 WALLET CASHOUT réinitialisé pour <b>${player.name}</b>\n\n` +
-      `💸 ${mentionOf(full)}, envoie ton <b>WALLET CASHOUT</b>\n<i>(adresse Binance TRC20)</i>`
-    );
+  if (gameName === "TELE") {
+    if (subType === "game") {
+      db.prepare(`UPDATE players SET tron_address = NULL WHERE id = ?`).run(player.id);
+      setSession(chatId, "waiting_wallet_game", player.id, full.telegram_id);
+      await sendMsg(chatId, `🔄 WALLET GAME réinitialisé pour <b>${player.name}</b>`);
+      await askWalletGame(chatId, mentionOf(full));
+    } else if (subType === "cashout") {
+      db.prepare(`UPDATE players SET tele_wallet_cashout = NULL WHERE id = ?`).run(player.id);
+      setSession(chatId, "waiting_wallet_cashout", player.id, full.telegram_id);
+      await sendMsg(chatId,
+        `🔄 WALLET CASHOUT réinitialisé pour <b>${player.name}</b>\n\n` +
+        `💸 ${mentionOf(full)}, envoie ton <b>WALLET CASHOUT</b>\n<i>(adresse Binance TRC20)</i>`
+      );
+    } else if (subType === "deal") {
+      db.prepare(`DELETE FROM player_game_deals WHERE player_id = ? AND game_id = ?`).run(player.id, game.id);
+      await sendMsg(chatId,
+        `🔄 Deal TELE supprimé pour <b>${player.name}</b>\n` +
+        `<code>/deal ${firstName} tele 40% action</code> pour reconfigurer.`
+      );
+    } else {
+      // Full TELE reset
+      db.prepare(`UPDATE players SET tron_address = NULL, tele_wallet_cashout = NULL WHERE id = ?`).run(player.id);
+      db.prepare(`DELETE FROM player_game_deals WHERE player_id = ? AND game_id = ?`).run(player.id, game.id);
+      setSession(chatId, "waiting_action_pct", player.id);
+      await sendMsg(chatId,
+        `🔄 <b>${player.name}</b> réinitialisé sur TELE (deal + wallets).\n\n` +
+        `📋 <b>Étape 1/3</b> — Quel est son % action sur TELE ?`
+      );
+    }
   } else {
-    // Full reset
-    db.prepare(`UPDATE players SET tron_address = NULL, tele_wallet_cashout = NULL WHERE id = ?`).run(player.id);
-    db.prepare(`DELETE FROM player_game_deals WHERE player_id = ? AND game_id = (SELECT id FROM games WHERE name='TELE')`).run(player.id);
-    setSession(chatId, "waiting_action_pct", player.id);
+    // Other games: deal reset only
+    db.prepare(`DELETE FROM player_game_deals WHERE player_id = ? AND game_id = ?`).run(player.id, game.id);
     await sendMsg(chatId,
-      `🔄 <b>${player.name}</b> réinitialisé complètement.\n\n` +
-      `📋 <b>Étape 1/3</b> — Quel est son % action sur TELE ?`
+      `🔄 Deal <b>${gameName}</b> supprimé pour <b>${player.name}</b>\n` +
+      `<code>/deal ${firstName} ${gameName.toLowerCase()} 55% action</code> pour reconfigurer.`
     );
   }
 }
@@ -579,9 +667,11 @@ Quand un joueur rejoint → auto-créé. Puis :
 <b>— Override / correction —</b>
 <code>/wallet hugo game TXxxx…</code>
 <code>/wallet hugo cashout TXxxx…</code>
-<code>/reset hugo game</code> — réinitialise WALLET GAME
-<code>/reset hugo cashout</code> — réinitialise WALLET CASHOUT
-<code>/reset hugo</code> — repart de zéro
+<code>/reset hugo tele</code> — reset complet TELE (deal + wallets)
+<code>/reset hugo tele game</code> — wallet game seulement
+<code>/reset hugo tele cashout</code> — wallet cashout seulement
+<code>/reset hugo tele deal</code> — deal TELE seulement
+<code>/reset hugo wepoker</code> — deal Wepoker · idem pour xpoker, clubgg
 
 <b>— Vérifier un joueur —</b>
 <code>/check hugo</code>
@@ -832,6 +922,11 @@ export async function POST(req: NextRequest) {
   const update = await req.json();
   const msg = update.message;
   const chatId = msg?.chat?.id;
+
+  // Debug log every incoming message sender (helps verify owner ID)
+  if (msg?.from?.id) {
+    console.log(`[TG] msg from user_id=${msg.from.id} username=@${msg.from.username ?? "none"} text="${msg.text?.slice(0, 30) ?? ""}"`);
+  }
 
   // Commands (owner only)
   if (msg?.text?.startsWith("/") && OWNER_IDS.has(msg.from?.id)) {
