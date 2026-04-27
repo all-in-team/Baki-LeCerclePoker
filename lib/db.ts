@@ -365,5 +365,18 @@ function initSchema(db: Database.Database) {
       processed_at TEXT
     );
     CREATE INDEX IF NOT EXISTS idx_agent_inbox_unprocessed ON agent_inbox(processed_at) WHERE processed_at IS NULL;
+
+    CREATE TABLE IF NOT EXISTS agent_usage (
+      id                    INTEGER PRIMARY KEY AUTOINCREMENT,
+      chat_id               TEXT NOT NULL,
+      model                 TEXT NOT NULL,
+      input_tokens          INTEGER NOT NULL DEFAULT 0,
+      output_tokens         INTEGER NOT NULL DEFAULT 0,
+      cache_creation_tokens INTEGER NOT NULL DEFAULT 0,
+      cache_read_tokens     INTEGER NOT NULL DEFAULT 0,
+      cost_usd              REAL NOT NULL DEFAULT 0,
+      created_at            TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_agent_usage_created ON agent_usage(created_at);
   `);
 }

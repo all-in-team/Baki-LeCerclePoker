@@ -1,5 +1,6 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { getDb } from "./db";
+import { todayCost, usageBetween } from "./agent-cost";
 
 // ────────────────────────────────────────────────────────────
 // Period parsing — accepts: today | yesterday | week | month |
@@ -77,6 +78,8 @@ export function buildSnapshot(): string {
      JOIN player_game_deals pgd ON pgd.player_id = wt.player_id AND pgd.game_id = wt.game_id`
   ).get() as { my_pnl: number };
 
+  const cost = todayCost();
+
   const lines = [
     `📅 ${today}`,
     `💸 Aujourd'hui — dépôts: ${dep ? dep.amt.toFixed(0) : 0} USDT (${dep ? dep.n : 0} tx) · retraits: ${wd ? wd.amt.toFixed(0) : 0} USDT (${wd ? wd.n : 0} tx)`,
@@ -84,6 +87,7 @@ export function buildSnapshot(): string {
     `📊 Mon P&L cumulé (all-time): ${myPnl.my_pnl >= 0 ? "+" : ""}${myPnl.my_pnl.toFixed(0)} USDT`,
     `📥 Inbox agent: ${inboxN} message${inboxN !== 1 ? "s" : ""} en attente`,
     `🔄 Dernière sync wallet: ${lastSync.ts ? lastSync.ts.replace("T", " ").slice(0, 16) : "jamais"}`,
+    `🤖 Crédit Claude aujourd'hui: $${cost.cost_usd.toFixed(3)} (${cost.calls} appel${cost.calls !== 1 ? "s" : ""})`,
   ];
   return lines.join("\n");
 }
@@ -96,6 +100,17 @@ export const TOOLS: Anthropic.Tool[] = [
     name: "get_apps_overview",
     description: "Liste tous les poker apps configurés (TELE, Wepoker, Xpoker, ClubGG, et tout club ajouté) avec le nombre de joueurs actifs sur chacun.",
     input_schema: { type: "object", properties: {}, required: [] },
+  },
+  {
+    name: "get_claude_usage",
+    description: "Coût Claude API consommé sur une période. Renvoie total $, nombre d'appels, breakdown tokens. Période = 'today', 'yesterday', 'week', 'month', 'ytd', YYYY-MM-DD, ou plage YYYY-MM-DD..YYYY-MM-DD.",
+    input_schema: {
+      type: "object",
+      properties: {
+        period: { type: "string", description: "today, yesterday, week, month, ytd, YYYY-MM-DD, ou YYYY-MM-DD..YYYY-MM-DD" },
+      },
+      required: ["period"],
+    },
   },
   {
     name: "get_inbox_messages",
@@ -188,6 +203,21 @@ export function executeTool(name: string, input: any): string {
       return apps.map(a =>
         `${a.name}${a.club_name ? ` (${a.club_name})` : ""} — ${a.deal_type} ${a.deal_value}${a.currency || ""} — ${a.active_players} joueur(s) actif(s)`
       ).join("\n");
+    }
+
+    if (name === "get_claude_usage") {
+      const { start, end, label } = parsePeriod(input?.period ?? "today");
+      const u = usageBetween(start, end);
+      if (u.calls === 0) return `Aucun appel Claude sur ${label}.`;
+      const lines = [
+        `Coût Claude (${label}): $${u.cost_usd.toFixed(3)} sur ${u.calls} appel(s)`,
+        `Tokens: ${u.input_tokens} input, ${u.output_tokens} output, ${u.cache_read_tokens} cache-read, ${u.cache_creation_tokens} cache-write`,
+      ];
+      if (u.by_day.length > 1) {
+        lines.push("Par jour :");
+        u.by_day.forEach(d => lines.push(`  ${d.day}: $${d.cost_usd.toFixed(3)} (${d.calls} appels)`));
+      }
+      return lines.join("\n");
     }
 
     if (name === "get_inbox_messages") {

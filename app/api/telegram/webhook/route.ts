@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getDb } from "@/lib/db";
 import { upsertPlayerGameDeal, insertWalletTransaction } from "@/lib/queries";
-import { isMention, runChat } from "@/lib/agent-chat";
+import { runChat } from "@/lib/agent-chat";
 
 const AGENT_CHAT_ID = process.env.AGENT_TELEGRAM_CHAT_ID ?? "-4846690641";
 
@@ -931,8 +931,16 @@ export async function POST(req: NextRequest) {
     console.log(`[TG] msg from user_id=${msg.from.id} username=@${msg.from.username ?? "none"} text="${msg.text?.slice(0, 30) ?? ""}"`);
   }
 
-  // Agent chat: in the dedicated agent group, route mentions to Claude
-  if (msg?.text && String(chatId) === AGENT_CHAT_ID && isMention(msg.text)) {
+  // Agent chat: in the dedicated agent group, route ALL non-command text
+  // messages to Claude. No @-mention required. Skip the bot's own messages
+  // (would loop) and skip slash commands (no commands in this group anyway,
+  // but defensive).
+  if (
+    msg?.text &&
+    String(chatId) === AGENT_CHAT_ID &&
+    !msg.from?.is_bot &&
+    !msg.text.startsWith("/")
+  ) {
     try {
       const reply = await runChat({ chatId, userText: msg.text });
       await sendMsg(chatId, reply);

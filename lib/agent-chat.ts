@@ -1,6 +1,9 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { getDb } from "./db";
 import { TOOLS, executeTool, buildSnapshot } from "./agent-tools";
+import { logUsage } from "./agent-cost";
+
+const MODEL = "claude-opus-4-7";
 
 const BOT_USERNAME = "LeCercle_Lebot";
 const MENTION_RE = new RegExp(`@${BOT_USERNAME}\\b`, "i");
@@ -125,7 +128,7 @@ export async function runChat({ chatId, userText }: RunChatArgs): Promise<string
     iterations++;
 
     const response = await client.messages.create({
-      model: "claude-opus-4-7",
+      model: MODEL,
       max_tokens: 8192,
       thinking: { type: "adaptive" },
       output_config: { effort: "high" },
@@ -136,6 +139,9 @@ export async function runChat({ chatId, userText }: RunChatArgs): Promise<string
       ],
       messages,
     });
+
+    // Log usage for cost tracking — every API call counts (including tool-loop iterations)
+    logUsage({ chatId: cid, model: MODEL, usage: response.usage });
 
     // If end_turn, extract text and return
     if (response.stop_reason === "end_turn" || response.stop_reason === "stop_sequence") {
