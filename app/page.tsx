@@ -6,6 +6,7 @@ import Badge from "@/components/Badge";
 import Link from "next/link";
 import { TrendingUp, Users, AppWindow, DollarSign, Wallet } from "lucide-react";
 import ChartsWrapper from "./ChartsWrapper";
+import DashboardActions from "./DashboardActions";
 
 function fmt(n: number, currency = "€") {
   const abs = Math.abs(n);
@@ -58,6 +59,8 @@ export default function DashboardPage() {
           </div>
         </div>
       )}
+
+      <DashboardActions />
 
       <ChartsWrapper byMonth={byMonth} byWeek={byWeek} byApp={byApp} byPlayer={byPlayer} />
 
