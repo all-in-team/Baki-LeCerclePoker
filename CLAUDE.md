@@ -1,3 +1,51 @@
+# LeCerclePoker
+
+## Project overview
+
+Next.js 15 dashboard for managing a poker affiliation business. Tracks players across multiple poker apps (TELE AKPOKER, Wepoker, Xpoker, ClubGG), handles reports, accounting, and Telegram-based cash flow tracking.
+
+**Stack:** Next.js 15 App Router, Tailwind CSS v4, better-sqlite3 (SQLite on Railway volume at `/data/lecercle.db`), Recharts, Lucide icons. No auth in v1.
+
+**Architecture:** Server components read DB directly via `lib/queries.ts` (synchronous better-sqlite3). Client components use fetch to `/api/*` routes for mutations.
+
+**How to run:** `npm run dev` → http://localhost:3000
+
+## Deployment
+
+- **Host:** Railway (project `LeCerclePoker`, workspace `contactbaki77777-rgb` — migration to `all-in-team` pending)
+- **Production URL:** https://lecerclepoker-production.up.railway.app
+- **Deploy verification:** `curl .../api/version` returns deployed commit SHA
+- **Auto-deploy:** GitHub source connected to `all-in-team/Baki-LeCerclePoker`, branch `main`. If auto-deploy breaks, fallback: `railway up --ci --detach`
+- **Railway CLI auth:** logged in as `contact.baki77777@gmail.com`. Run `railway link --project LeCerclePoker --service lecerclepoker` to re-link if needed.
+
+## Key env vars (Railway)
+
+- `TRONGRID_API_KEY` — TronGrid API key for TELE wallet sync (per-key rate limit, avoids shared-IP 429s)
+- `TELEGRAM_BOT_TOKEN` — Telegram bot integration
+- `ANTHROPIC_API_KEY` — Agent/doer features
+
+## TELE wallet sync (`/api/wallets/sync`)
+
+Scans the TRON blockchain for USDT (TRC20) transfers to track player deposits and cashouts.
+
+**Architecture:**
+- Pass 1: For each player with a `wallet_game` (tron_address), fetch incoming TRC20 transfers → insert as deposits
+- Pass 2: Fetch outgoing transfers from `wallet_mere` (global), filter by known cashout addresses → insert as withdrawals
+- Dedup: `tron_tx_hash` UNIQUE index + `INSERT OR IGNORE`. Multiple sync clicks are safe.
+
+**Rate limiting:** TronGrid free tier = 1 RPS per IP. Railway shares egress IPs across tenants. Fix: global throttle (`MIN_SPACING_MS = 1500`) + 429 retry with 12s cooldown. The `TRONGRID_API_KEY` is the real solution — gives per-key quota instead of per-IP.
+
+**Data model:**
+- `wallet_transactions.counterparty_address` — who sent (deposits) or received (withdrawals). Stored on sync, backfilled for existing rows on next sync.
+- `wallet_transactions.tron_tx_hash` — blockchain transaction ID. Links to `https://tronscan.org/#/transaction/{hash}`
+
+## DB migrations
+
+Auto-run on app boot via `lib/db.ts`. One-time fixes use `_applied_fixes` table (insert name, check changes > 0, run migration). Pattern:
+```js
+const fix = db.prepare(`INSERT OR IGNORE INTO _applied_fixes (name) VALUES (?)`).run("fix_name_v1");
+if (fix.changes > 0) { db.exec(`...`); }
+```
 
 ## Skill routing
 
