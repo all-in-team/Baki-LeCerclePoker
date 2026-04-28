@@ -127,10 +127,11 @@ export default function WalletsClient({
   }
 
   async function saveInlineWallet(playerId: number) {
+    const game = walletInlineVals.wallet_game.trim();
     // 1) wallet_game (legacy column on players)
     await fetch(`/api/players/${playerId}`, {
       method: "PATCH", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ tron_address: walletInlineVals.wallet_game || null }),
+      body: JSON.stringify({ tron_address: game || null }),
     });
     // 2) cashouts (new multi-table; mirrors first to legacy tele_wallet_cashout)
     const cashoutPayload = walletInlineVals.cashouts
@@ -144,12 +145,14 @@ export default function WalletsClient({
   }
 
   async function saveWallet(playerId: number) {
+    const game = editWalletVals.wallet_game.trim();
+    const cashout = editWalletVals.wallet_cashout.trim();
     await fetch(`/api/players/${playerId}`, {
       method: "PATCH", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ tron_address: editWalletVals.wallet_game || null, tele_wallet_cashout: editWalletVals.wallet_cashout || null }),
+      body: JSON.stringify({ tron_address: game || null, tele_wallet_cashout: cashout || null }),
     });
     setTeleConfig(cfg => cfg.map(p => p.id === playerId
-      ? { ...p, wallet_game: editWalletVals.wallet_game || null, wallet_cashout: editWalletVals.wallet_cashout || null }
+      ? { ...p, wallet_game: game || null, wallet_cashout: cashout || null }
       : p
     ));
     setEditingWallet(null);

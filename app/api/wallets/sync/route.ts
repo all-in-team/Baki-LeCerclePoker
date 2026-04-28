@@ -15,6 +15,21 @@ const USDT_CONTRACT = "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t";
 //
 // ─────────────────────────────────────────────────────────────────────────────
 
+// TronGrid free tier suspends the caller for ~5s on 429 ("allowed_rps(1)"). Retry past it.
+async function fetchTronGrid(url: string, headers: Record<string, string>): Promise<any> {
+  const maxRetries = 4;
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    const res = await fetch(url, { headers, next: { revalidate: 0 } });
+    if (res.ok) return res.json();
+    if (res.status === 429 && attempt < maxRetries) {
+      await new Promise(r => setTimeout(r, 6000));
+      continue;
+    }
+    throw new Error(`TronGrid ${res.status}: ${await res.text()}`);
+  }
+  throw new Error("TronGrid: max retries exceeded");
+}
+
 async function fetchAllTronTxs(address: string): Promise<any[]> {
   const apiKey = process.env.TRONGRID_API_KEY;
   const headers: Record<string, string> = { Accept: "application/json" };
@@ -33,9 +48,7 @@ async function fetchAllTronTxs(address: string): Promise<any[]> {
     if (fingerprint) params.set("fingerprint", fingerprint);
 
     const url = `https://api.trongrid.io/v1/accounts/${address}/transactions/trc20?${params}`;
-    const res = await fetch(url, { headers, next: { revalidate: 0 } });
-    if (!res.ok) throw new Error(`TronGrid ${res.status}: ${await res.text()}`);
-    const json = await res.json();
+    const json = await fetchTronGrid(url, headers);
 
     all.push(...(json.data ?? []));
     fingerprint = json.meta?.fingerprint ?? undefined;
@@ -88,7 +101,7 @@ export async function POST() {
   // ── Pass 1 : dépôts via WALLET GAME ──────────────────────────────────────
   for (let i = 0; i < players.length; i++) {
     const player = players[i];
-    if (i > 0) await new Promise(r => setTimeout(r, 300));
+    if (i > 0) await new Promise(r => setTimeout(r, 1100));
 
     const gameAddr = player.wallet_game.toLowerCase();
     let deposits = 0;
