@@ -130,6 +130,7 @@ export async function POST() {
           currency: "USDT",
           tx_date: toDate(tx),
           tron_tx_hash: tx.transaction_id,
+          counterparty_address: tx.from ?? null, // who sent the deposit
         });
         if (changed) deposits++;
       }
@@ -167,6 +168,7 @@ export async function POST() {
           currency: "USDT",
           tx_date: toDate(tx),
           tron_tx_hash: tx.transaction_id,
+          counterparty_address: tx.to ?? null, // which cashout wallet received
         });
         if (changed) {
           totalCashouts++;

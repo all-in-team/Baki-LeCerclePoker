@@ -600,11 +600,23 @@ export function getAllSettings(): Record<string, string> {
 export function insertWalletTransactionByHash(data: {
   player_id: number; game_id: number; type: "deposit" | "withdrawal";
   amount: number; currency: string; tx_date: string; tron_tx_hash: string;
+  counterparty_address?: string | null;
 }) {
   const db = getDb();
-  const r = db.prepare(`
-    INSERT OR IGNORE INTO wallet_transactions (player_id, game_id, type, amount, currency, tx_date, tron_tx_hash, note)
-    VALUES (@player_id, @game_id, @type, @amount, @currency, @tx_date, @tron_tx_hash, @note)
-  `).run({ note: "auto-sync", ...data });
-  return r.changes;
+  const params = { note: "auto-sync", counterparty_address: null, ...data };
+  // First: try insert. INSERT OR IGNORE returns 0 changes on conflict (existing hash).
+  const ins = db.prepare(`
+    INSERT OR IGNORE INTO wallet_transactions (player_id, game_id, type, amount, currency, tx_date, tron_tx_hash, counterparty_address, note)
+    VALUES (@player_id, @game_id, @type, @amount, @currency, @tx_date, @tron_tx_hash, @counterparty_address, @note)
+  `).run(params);
+  if (ins.changes > 0) return ins.changes; // new transaction inserted
+  // Existing row — backfill counterparty_address if it's still NULL (one-time fill, never overwrite)
+  if (params.counterparty_address) {
+    db.prepare(`
+      UPDATE wallet_transactions
+      SET counterparty_address = @counterparty_address
+      WHERE tron_tx_hash = @tron_tx_hash AND counterparty_address IS NULL
+    `).run(params);
+  }
+  return 0; // no new row imported (caller's "deposits++" counter stays accurate)
 }

@@ -19,6 +19,7 @@ interface WalletTx {
   id: number; player_id: number; game_id: number | null;
   type: "deposit" | "withdrawal"; amount: number; currency: string;
   note: string | null; tx_date: string; player_name: string; game_name: string;
+  tron_tx_hash: string | null; counterparty_address: string | null;
 }
 
 interface Player { id: number; name: string; tron_address?: string | null; tele_wallet_cashout?: string | null; }
@@ -484,13 +485,16 @@ export default function WalletsClient({
                           </div>
                         ) : (
                           <div>
-                            <div style={{ display: "grid", gridTemplateColumns: "110px 1fr 130px 1fr", gap: 12, padding: "6px 0 8px", borderBottom: "1px solid var(--border)", fontSize: 10, fontWeight: 700, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.07em" }}>
-                              <span>Date</span><span>Type</span><span style={{ textAlign: "right" }}>Montant</span><span>Note</span>
+                            <div style={{ display: "grid", gridTemplateColumns: "100px 110px 120px 1fr 60px", gap: 12, padding: "6px 0 8px", borderBottom: "1px solid var(--border)", fontSize: 10, fontWeight: 700, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.07em" }}>
+                              <span>Date</span><span>Type</span><span style={{ textAlign: "right" }}>Montant</span><span>Wallet</span><span style={{ textAlign: "right" }}>Tx</span>
                             </div>
                             {playerTxs.map(tx => {
                               const isDeposit = tx.type === "deposit";
+                              const cp = tx.counterparty_address;
+                              const cpShort = cp ? `${cp.slice(0, 6)}…${cp.slice(-6)}` : "—";
+                              const cpLabel = isDeposit ? "De" : "Vers";
                               return (
-                                <div key={tx.id} style={{ display: "grid", gridTemplateColumns: "110px 1fr 130px 1fr", gap: 12, padding: "8px 0", borderBottom: "1px solid var(--border)", alignItems: "center" }}>
+                                <div key={tx.id} style={{ display: "grid", gridTemplateColumns: "100px 110px 120px 1fr 60px", gap: 12, padding: "8px 0", borderBottom: "1px solid var(--border)", alignItems: "center" }}>
                                   <span style={{ fontSize: 12, color: "var(--text-muted)", whiteSpace: "nowrap" }}>{tx.tx_date}</span>
                                   <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
                                     {isDeposit ? <ArrowDownLeft size={13} color="#f87171" /> : <ArrowUpRight size={13} color="var(--green)" />}
@@ -501,8 +505,33 @@ export default function WalletsClient({
                                   <span style={{ fontSize: 13, fontWeight: 700, textAlign: "right", whiteSpace: "nowrap", color: isDeposit ? "#f87171" : "var(--green)" }}>
                                     {isDeposit ? "−" : "+"}{tx.amount.toLocaleString("fr-FR", { minimumFractionDigits: 2 })} {tx.currency}
                                   </span>
-                                  <span style={{ fontSize: 11, color: "var(--text-dim)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                                    {tx.note ?? "—"}
+                                  <span style={{ fontSize: 11, display: "inline-flex", alignItems: "center", gap: 4, overflow: "hidden", whiteSpace: "nowrap" }}>
+                                    <span style={{ color: "var(--text-dim)", fontSize: 10, fontWeight: 600 }}>{cpLabel}</span>
+                                    {cp ? (
+                                      <a href={`https://tronscan.org/#/address/${cp}`} target="_blank" rel="noopener noreferrer"
+                                         title={cp}
+                                         style={{ display: "inline-flex", alignItems: "center", gap: 3, fontFamily: "monospace", color: "#38bdf8", textDecoration: "none" }}
+                                         onMouseEnter={e => (e.currentTarget.style.textDecoration = "underline")}
+                                         onMouseLeave={e => (e.currentTarget.style.textDecoration = "none")}>
+                                        {cpShort}
+                                        <ExternalLink size={10} style={{ opacity: 0.7 }} />
+                                      </a>
+                                    ) : (
+                                      <span style={{ color: "var(--text-dim)" }}>—</span>
+                                    )}
+                                  </span>
+                                  <span style={{ textAlign: "right" }}>
+                                    {tx.tron_tx_hash ? (
+                                      <a href={`https://tronscan.org/#/transaction/${tx.tron_tx_hash}`} target="_blank" rel="noopener noreferrer"
+                                         title={`Voir tx ${tx.tron_tx_hash.slice(0, 12)}…`}
+                                         style={{ display: "inline-flex", alignItems: "center", gap: 3, color: "var(--text-muted)", fontSize: 11, textDecoration: "none" }}
+                                         onMouseEnter={e => (e.currentTarget.style.color = "#38bdf8")}
+                                         onMouseLeave={e => (e.currentTarget.style.color = "var(--text-muted)")}>
+                                        <ExternalLink size={11} />
+                                      </a>
+                                    ) : (
+                                      <span style={{ fontSize: 10, color: "var(--text-dim)" }}>{tx.note ?? "—"}</span>
+                                    )}
                                   </span>
                                 </div>
                               );

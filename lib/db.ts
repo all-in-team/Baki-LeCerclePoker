@@ -175,6 +175,8 @@ function initSchema(db: Database.Database) {
   try { db.exec(`ALTER TABLE players ADD COLUMN tron_app_id INTEGER REFERENCES poker_apps(id) ON DELETE SET NULL`); } catch {}
   try { db.exec(`ALTER TABLE wallet_transactions ADD COLUMN tron_tx_hash TEXT`); } catch {}
   try { db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_wallet_tron_hash ON wallet_transactions(tron_tx_hash) WHERE tron_tx_hash IS NOT NULL`); } catch {}
+  // Counterparty wallet: for deposits = sender (tx.from), for withdrawals = recipient cashout (tx.to)
+  try { db.exec(`ALTER TABLE wallet_transactions ADD COLUMN counterparty_address TEXT`); } catch {}
 
   try { db.exec(`ALTER TABLE players ADD COLUMN tele_wallet_perso TEXT`); } catch {}
   // WALLET CASHOUT : adresse fixe du joueur pour recevoir ses cashouts (Binance TRC20, wallet perso, etc.)
