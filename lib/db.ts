@@ -440,4 +440,28 @@ function initSchema(db: Database.Database) {
   db.prepare(`INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)`).run("agent_doer_budget_cap_usd_daily", "10");
   db.prepare(`INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)`).run("agent_doer_env_id", "");
   db.prepare(`INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)`).run("agent_doer_agent_id", "");
+
+  // telegram_chat_id: for direct bot messages to players (weekly summaries, cashout notifications)
+  try { db.exec(`ALTER TABLE players ADD COLUMN telegram_chat_id TEXT`); } catch {}
+
+  // Cashout requests queue
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS cashout_requests (
+      id          INTEGER PRIMARY KEY AUTOINCREMENT,
+      player_id   INTEGER NOT NULL REFERENCES players(id) ON DELETE CASCADE,
+      amount      REAL NOT NULL,
+      currency    TEXT NOT NULL DEFAULT 'USDT',
+      status      TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','approved','paid','cancelled')),
+      note        TEXT,
+      created_at  TEXT NOT NULL DEFAULT (datetime('now')),
+      approved_at TEXT,
+      paid_at     TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_cashout_status ON cashout_requests(status);
+    CREATE INDEX IF NOT EXISTS idx_cashout_player ON cashout_requests(player_id);
+  `);
+
+  // Exchange rates for multi-currency P&L normalization
+  db.prepare(`INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)`).run("exchange_rate_cny_usdt", "0.138");
+  db.prepare(`INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)`).run("exchange_rate_eur_usdt", "1.08");
 }

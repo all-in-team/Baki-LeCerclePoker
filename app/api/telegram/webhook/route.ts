@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getDb } from "@/lib/db";
-import { upsertPlayerGameDeal, insertWalletTransaction } from "@/lib/queries";
+import { upsertPlayerGameDeal, insertWalletTransaction, getStaleReports, getPlayerBalance } from "@/lib/queries";
 import { runChat } from "@/lib/agent-chat";
 
 const AGENT_CHAT_ID = process.env.AGENT_TELEGRAM_CHAT_ID ?? "-4846690641";
@@ -697,6 +697,9 @@ Quand un joueur rejoint → auto-créé. Puis :
 <code>/historique hugo</code> — 5 dernières transactions
 <code>/historique hugo wepoker 10</code> — 10 dernières sur une game
 
+<b>— Rapports —</b>
+<code>/rapports</code> — vérifie les rapports en retard
+
 <b>— Onboarding en attente —</b>
 <code>/todo</code> — liste les joueurs incomplets
 <code>/kickstart</code> — collecte les wallets TELE manquants (joueur par joueur)
@@ -704,7 +707,7 @@ Quand un joueur rejoint → auto-créé. Puis :
 Games : <b>TELE · Wepoker · Xpoker · ClubGG</b>`);
 }
 
-// ── Command: /solde ───────────────────────────────────────
+// ── Command: /solde (unified P&L: reports + wallets) ─────
 async function handleSolde(rawText: string, chatId: number) {
   const p = parseArgs(rawText);
   if (!p.playerQuery) {
@@ -715,38 +718,37 @@ async function handleSolde(rawText: string, chatId: number) {
   if (players.length === 0) { await sendMsg(chatId, `❌ Joueur "${p.playerQuery}" introuvable`); return; }
   if (players.length > 1) { await sendMsg(chatId, `❌ Plusieurs joueurs :\n${players.map(x => `• ${x.name}`).join("\n")}`); return; }
 
-  const db = getDb();
-  const baseQuery = `
-    SELECT g.name AS game_name,
-      COALESCE(SUM(CASE WHEN wt.type='deposit' THEN wt.amount ELSE 0 END), 0) AS deposited,
-      COALESCE(SUM(CASE WHEN wt.type='withdrawal' THEN wt.amount ELSE 0 END), 0) AS withdrawn,
-      COALESCE(SUM(CASE WHEN wt.type='deposit' THEN wt.amount ELSE -wt.amount END), 0) AS balance
-    FROM wallet_transactions wt
-    JOIN games g ON g.id = wt.game_id
-    WHERE wt.player_id = ?`;
-
-  let rows: any[];
-  if (p.gameName) {
-    const game = findGame(p.gameName);
-    if (!game) { await sendMsg(chatId, `❌ Game "${p.gameName}" inconnue`); return; }
-    rows = db.prepare(baseQuery + ` AND g.id = ? GROUP BY wt.game_id`).all(players[0].id, game.id) as any[];
-  } else {
-    rows = db.prepare(baseQuery + ` GROUP BY wt.game_id ORDER BY g.name`).all(players[0].id) as any[];
-  }
-
-  if (rows.length === 0) {
-    await sendMsg(chatId, `ℹ️ ${players[0].name} — aucune transaction enregistrée`);
+  const balances = getPlayerBalance(players[0].id);
+  if (balances.length === 0) {
+    await sendMsg(chatId, `ℹ️ ${players[0].name} — aucune donnée (ni rapport ni transaction)`);
     return;
   }
 
-  let total = 0;
-  const lines = rows.map((r: any) => {
-    total += r.balance;
-    const emoji = r.balance > 0 ? "🟢" : r.balance < 0 ? "🔴" : "⚪";
-    return `${emoji} <b>${r.game_name}</b> : <b>${s(r.balance)} USDT</b>  (📥 ${r.deposited.toFixed(2)} / 📤 ${r.withdrawn.toFixed(2)})`;
+  const bal = balances[0];
+  let games = bal.games;
+  if (p.gameName) {
+    games = games.filter(g => g.game_name.toLowerCase() === p.gameName!.toLowerCase());
+    if (games.length === 0) {
+      await sendMsg(chatId, `ℹ️ ${players[0].name} — aucune donnée sur ${p.gameName}`);
+      return;
+    }
+  }
+
+  const lines = games.map(g => {
+    const emoji = g.net_usdt > 0.01 ? "🟢" : g.net_usdt < -0.01 ? "🔴" : "⚪";
+    const parts: string[] = [];
+    if (g.winnings_player_usdt !== 0) parts.push(`Gains: ${s(g.winnings_player_usdt)}`);
+    if (g.rakeback_player_usdt !== 0) parts.push(`RB: ${s(g.rakeback_player_usdt)}`);
+    if (g.wallet_deposited_usdt !== 0 || g.wallet_withdrawn_usdt !== 0) {
+      parts.push(`📥 ${g.wallet_deposited_usdt.toFixed(2)} / 📤 ${g.wallet_withdrawn_usdt.toFixed(2)}`);
+    }
+    const detail = parts.length > 0 ? `\n  ${parts.join(" · ")}` : "";
+    return `${emoji} <b>${g.game_name}</b> : <b>${s(g.net_usdt)} USDT</b>${detail}`;
   });
-  const totalLine = rows.length > 1 ? `\n\n<b>Total : ${s(total)} USDT</b>` : "";
-  await sendMsg(chatId, `💰 <b>Solde — ${players[0].name}</b>\n\n${lines.join("\n")}${totalLine}`);
+
+  const total = games.reduce((sum, g) => sum + g.net_usdt, 0);
+  const totalLine = games.length > 1 ? `\n\n<b>Total : ${s(total)} USDT</b>` : "";
+  await sendMsg(chatId, `💰 <b>Solde — ${bal.player_name}</b>\n\n${lines.join("\n\n")}${totalLine}`);
 }
 
 // ── Command: /todo ────────────────────────────────────────
@@ -884,6 +886,45 @@ async function handleKickstart(chatId: number) {
   await startNextWalletFlow(chatId);
 }
 
+// ── Command: /start (echo chat_id for player linking) ───
+async function handleStart(chatId: number, fromId: number, fromName: string) {
+  const db = getDb();
+  // Check if this user is already linked to a player
+  const linked = db.prepare(
+    `SELECT id, name FROM players WHERE telegram_id = ?`
+  ).get(fromId) as { id: number; name: string } | undefined;
+
+  if (linked) {
+    // Auto-save telegram_chat_id for DMs
+    db.prepare(`UPDATE players SET telegram_chat_id = ? WHERE id = ?`).run(String(chatId), linked.id);
+    await sendMsg(chatId,
+      `👋 <b>${linked.name}</b>, tu es déjà lié.\nTon chat_id : <code>${chatId}</code>\n\n` +
+      `Commandes disponibles :\n<code>/solde</code> — ton solde par game\n<code>/historique</code> — tes dernières transactions`
+    );
+  } else {
+    await sendMsg(chatId,
+      `👋 Bienvenue <b>${fromName}</b> !\nTon chat_id : <code>${chatId}</code>\n\n` +
+      `<i>L'opérateur peut utiliser cet ID pour te lier dans le dashboard.</i>`
+    );
+  }
+}
+
+// ── Command: /rapports (stale report check) ─────────────
+async function handleRapports(chatId: number) {
+  const stale = getStaleReports(7);
+  if (stale.length === 0) {
+    await sendMsg(chatId, `✅ <b>Tous les rapports sont à jour</b> (moins de 7 jours)`);
+    return;
+  }
+  const lines = stale.map(g => {
+    const ago = g.days_since_report != null ? `<b>${g.days_since_report}j</b>` : "<b>jamais</b>";
+    return `• <b>${g.game_name}</b> — dernier rapport : ${ago} (${g.active_player_count} joueurs actifs)`;
+  });
+  await sendMsg(chatId,
+    `📋 <b>${stale.length} rapport(s) en retard</b>\n\n${lines.join("\n")}\n\n<i>Upload un rapport sur le dashboard /reports.</i>`
+  );
+}
+
 // ── Member join handler ───────────────────────────────────
 async function handleNewMembers(members: any[], chatTitle: string, chatId: number) {
   const db = getDb();
@@ -951,6 +992,13 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ ok: true });
   }
 
+  // /start is available to ALL users (echoes chat_id for linking)
+  if (msg?.text?.startsWith("/start")) {
+    const fromName = [msg.from?.first_name, msg.from?.last_name].filter(Boolean).join(" ") || "Utilisateur";
+    await handleStart(chatId, msg.from?.id, fromName);
+    return NextResponse.json({ ok: true });
+  }
+
   // Commands (owner only)
   if (msg?.text?.startsWith("/") && OWNER_IDS.has(msg.from?.id)) {
     const spaceIdx = msg.text.indexOf(" ");
@@ -970,6 +1018,7 @@ export async function POST(req: NextRequest) {
       else if (cmd === "/todo")         await handleTodo(chatId);
       else if (cmd === "/kickstart")    await handleKickstart(chatId);
       else if (cmd === "/historique")   await handleHistorique(rawArgs, chatId);
+      else if (cmd === "/rapports")  await handleRapports(chatId);
       else if (cmd === "/aide" || cmd === "/help") await handleAide(chatId);
     } catch (e: any) {
       console.error("[TG CMD]", e);

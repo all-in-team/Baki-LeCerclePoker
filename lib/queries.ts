@@ -592,9 +592,253 @@ export function deleteSetting(key: string) {
   getDb().prepare(`DELETE FROM settings WHERE key = ?`).run(key);
 }
 
+export function getExchangeRate(currency: string): number {
+  const normalized = currency.toUpperCase();
+  if (normalized === "USDT" || normalized === "USD") return 1;
+  const key = `exchange_rate_${normalized.toLowerCase()}_usdt`;
+  const val = getSetting(key);
+  if (!val) return 0;
+  return parseFloat(val) || 0;
+}
+
+export function toUsdt(amount: number, currency: string): number {
+  const rate = getExchangeRate(currency);
+  if (rate === 0) return 0;
+  return amount * rate;
+}
+
 export function getAllSettings(): Record<string, string> {
   const rows = getDb().prepare(`SELECT key, value FROM settings`).all() as { key: string; value: string }[];
   return Object.fromEntries(rows.map(r => [r.key, r.value]));
+}
+
+// ── Cashout Requests ─────────────────────────────────────
+export interface CashoutRequest {
+  id: number;
+  player_id: number;
+  player_name: string;
+  amount: number;
+  currency: string;
+  status: string;
+  note: string | null;
+  created_at: string;
+  approved_at: string | null;
+  paid_at: string | null;
+}
+
+export function getCashoutRequests(status?: string): CashoutRequest[] {
+  const db = getDb();
+  let q = `
+    SELECT cr.*, p.name AS player_name
+    FROM cashout_requests cr
+    JOIN players p ON p.id = cr.player_id
+  `;
+  const params: Record<string, unknown> = {};
+  if (status) { q += ` WHERE cr.status = @status`; params.status = status; }
+  q += ` ORDER BY cr.created_at DESC`;
+  return db.prepare(q).all(params) as CashoutRequest[];
+}
+
+export function createCashoutRequest(data: { player_id: number; amount: number; currency?: string; note?: string }) {
+  const db = getDb();
+  const r = db.prepare(`
+    INSERT INTO cashout_requests (player_id, amount, currency, note)
+    VALUES (@player_id, @amount, @currency, @note)
+  `).run({ currency: "USDT", note: null, ...data });
+  return Number(r.lastInsertRowid);
+}
+
+export function updateCashoutStatus(id: number, status: "approved" | "paid" | "cancelled"): CashoutRequest | null {
+  const db = getDb();
+  const ts = new Date().toISOString();
+  if (status === "approved") {
+    db.prepare(`UPDATE cashout_requests SET status = 'approved', approved_at = ? WHERE id = ? AND status = 'pending'`).run(ts, id);
+  } else if (status === "paid") {
+    db.prepare(`UPDATE cashout_requests SET status = 'paid', paid_at = ? WHERE id = ? AND status = 'approved'`).run(ts, id);
+  } else if (status === "cancelled") {
+    db.prepare(`UPDATE cashout_requests SET status = 'cancelled' WHERE id = ? AND status IN ('pending','approved')`).run(id);
+  }
+  return db.prepare(`SELECT cr.*, p.name AS player_name FROM cashout_requests cr JOIN players p ON p.id = cr.player_id WHERE cr.id = ?`).get(id) as CashoutRequest | null;
+}
+
+// ── Stale Report Detection ───────────────────────────────
+export interface StaleGame {
+  game_id: number;
+  game_name: string;
+  active_player_count: number;
+  last_report_date: string | null;
+  days_since_report: number | null;
+}
+
+export function getStaleReports(staleDays = 7): StaleGame[] {
+  const db = getDb();
+  return db.prepare(`
+    SELECT
+      g.id AS game_id,
+      g.name AS game_name,
+      COUNT(DISTINCT pgd.player_id) AS active_player_count,
+      MAX(COALESCE(rr.report_date, substr(rr.created_at, 1, 10))) AS last_report_date,
+      CAST(julianday('now') - julianday(MAX(COALESCE(rr.report_date, substr(rr.created_at, 1, 10)))) AS INTEGER) AS days_since_report
+    FROM games g
+    JOIN player_game_deals pgd ON pgd.game_id = g.id
+    JOIN players p ON p.id = pgd.player_id AND p.status = 'active'
+    LEFT JOIN rakeback_reports rr ON rr.game_id = g.id
+    GROUP BY g.id
+    HAVING active_player_count > 0
+      AND (last_report_date IS NULL OR days_since_report >= ?)
+    ORDER BY days_since_report DESC
+  `).all(staleDays) as StaleGame[];
+}
+
+// ── Unified P&L ──────────────────────────────────────────
+export interface PnLReportRow {
+  player_id: number;
+  player_name: string;
+  game_id: number;
+  game_name: string;
+  currency: string;
+  rakeback: number;
+  insurance: number;
+  winnings: number;
+  action_pct: number;
+  rakeback_pct: number;
+}
+
+export interface PnLWalletRow {
+  player_id: number;
+  player_name: string;
+  game_id: number;
+  game_name: string;
+  currency: string;
+  deposited: number;
+  withdrawn: number;
+}
+
+export interface PlayerBalance {
+  player_id: number;
+  player_name: string;
+  games: {
+    game_name: string;
+    currency: string;
+    winnings_player: number;
+    winnings_player_usdt: number;
+    rakeback_player: number;
+    rakeback_player_usdt: number;
+    wallet_deposited: number;
+    wallet_deposited_usdt: number;
+    wallet_withdrawn: number;
+    wallet_withdrawn_usdt: number;
+    net_usdt: number;
+  }[];
+  total_usdt: number;
+}
+
+export function getReportPnL(playerId?: number): PnLReportRow[] {
+  const db = getDb();
+  let q = `
+    SELECT
+      re.player_id,
+      p.name AS player_name,
+      rr.game_id,
+      g.name AS game_name,
+      re.currency,
+      COALESCE(SUM(re.amount), 0) AS rakeback,
+      COALESCE(SUM(re.insurance_amount), 0) AS insurance,
+      COALESCE(SUM(re.winnings_amount), 0) AS winnings,
+      COALESCE(pgd.action_pct, 0) AS action_pct,
+      COALESCE(pgd.rakeback_pct, 0) AS rakeback_pct
+    FROM rakeback_entries re
+    JOIN rakeback_reports rr ON rr.id = re.report_id
+    JOIN players p ON p.id = re.player_id
+    JOIN games g ON g.id = rr.game_id
+    LEFT JOIN player_game_deals pgd ON pgd.player_id = re.player_id AND pgd.game_id = rr.game_id
+    WHERE re.player_id IS NOT NULL
+  `;
+  const params: Record<string, unknown> = {};
+  if (playerId) { q += ` AND re.player_id = @playerId`; params.playerId = playerId; }
+  q += ` GROUP BY re.player_id, rr.game_id, re.currency`;
+  return db.prepare(q).all(params) as PnLReportRow[];
+}
+
+export function getWalletPnL(playerId?: number): PnLWalletRow[] {
+  const db = getDb();
+  let q = `
+    SELECT
+      wt.player_id,
+      p.name AS player_name,
+      wt.game_id,
+      g.name AS game_name,
+      wt.currency,
+      COALESCE(SUM(CASE WHEN wt.type='deposit' THEN wt.amount ELSE 0 END), 0) AS deposited,
+      COALESCE(SUM(CASE WHEN wt.type='withdrawal' THEN wt.amount ELSE 0 END), 0) AS withdrawn
+    FROM wallet_transactions wt
+    JOIN players p ON p.id = wt.player_id
+    JOIN games g ON g.id = wt.game_id
+    WHERE wt.game_id IS NOT NULL
+  `;
+  const params: Record<string, unknown> = {};
+  if (playerId) { q += ` AND wt.player_id = @playerId`; params.playerId = playerId; }
+  q += ` GROUP BY wt.player_id, wt.game_id, wt.currency`;
+  return db.prepare(q).all(params) as PnLWalletRow[];
+}
+
+export function getPlayerBalance(playerId?: number): PlayerBalance[] {
+  const reports = getReportPnL(playerId);
+  const wallets = getWalletPnL(playerId);
+
+  const playerMap = new Map<number, { name: string; games: Map<string, PlayerBalance["games"][0]> }>();
+
+  function ensure(pid: number, pname: string, gameName: string, currency: string) {
+    if (!playerMap.has(pid)) playerMap.set(pid, { name: pname, games: new Map() });
+    const p = playerMap.get(pid)!;
+    const key = `${gameName}:${currency}`;
+    if (!p.games.has(key)) {
+      p.games.set(key, {
+        game_name: gameName, currency,
+        winnings_player: 0, winnings_player_usdt: 0,
+        rakeback_player: 0, rakeback_player_usdt: 0,
+        wallet_deposited: 0, wallet_deposited_usdt: 0,
+        wallet_withdrawn: 0, wallet_withdrawn_usdt: 0,
+        net_usdt: 0,
+      });
+    }
+    return p.games.get(key)!;
+  }
+
+  for (const r of reports) {
+    const g = ensure(r.player_id, r.player_name, r.game_name, r.currency);
+    const playerWinnings = r.winnings * (1 - r.action_pct / 100);
+    const playerRb = (r.rakeback + r.insurance) * r.rakeback_pct / 100;
+    g.winnings_player += playerWinnings;
+    g.winnings_player_usdt += toUsdt(playerWinnings, r.currency);
+    g.rakeback_player += playerRb;
+    g.rakeback_player_usdt += toUsdt(playerRb, r.currency);
+  }
+
+  for (const w of wallets) {
+    const g = ensure(w.player_id, w.player_name, w.game_name, w.currency);
+    g.wallet_deposited += w.deposited;
+    g.wallet_deposited_usdt += toUsdt(w.deposited, w.currency);
+    g.wallet_withdrawn += w.withdrawn;
+    g.wallet_withdrawn_usdt += toUsdt(w.withdrawn, w.currency);
+  }
+
+  const result: PlayerBalance[] = [];
+  for (const [pid, p] of playerMap) {
+    const games = Array.from(p.games.values()).map(g => ({
+      ...g,
+      net_usdt: g.winnings_player_usdt + g.rakeback_player_usdt + g.wallet_withdrawn_usdt - g.wallet_deposited_usdt,
+    }));
+    result.push({
+      player_id: pid,
+      player_name: p.name,
+      games,
+      total_usdt: games.reduce((s, g) => s + g.net_usdt, 0),
+    });
+  }
+
+  result.sort((a, b) => b.total_usdt - a.total_usdt);
+  return result;
 }
 
 export function insertWalletTransactionByHash(data: {
