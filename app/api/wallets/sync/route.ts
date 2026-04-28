@@ -10,8 +10,9 @@ const USDT_CONTRACT = "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t";
 //  WALLET CASHOUT (per joueur) ← adresse fixe où le joueur reçoit ses cashouts
 //  WALLET MERE    (global)     → envoie tous les cashouts vers WALLET CASHOUT
 //
-//  Pass 1 : scan WALLET GAME  → dépôts (tout entrant)
-//  Pass 2 : scan WALLET MERE  → cashouts filtrés sur WALLET CASHOUT connus
+//  Pass 1 : scan WALLET GAME     → dépôts (tout entrant)
+//  Pass 2 : scan WALLET MERE     → cashouts filtrés sur WALLET CASHOUT connus
+//  Pass 3 : scan WALLET CASHOUT  → incoming USDT from any source (catches non-mère cashouts)
 //
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -181,6 +182,43 @@ export async function POST() {
       }
     } catch (e: any) {
       results.push({ player: "WALLET MERE", deposits: 0, cashouts: 0, error: e.message });
+    }
+  }
+
+  // ── Pass 3 : scan each WALLET CASHOUT for incoming USDT ──────────────────
+  // Catches cashouts sent from any address, not just wallet mère.
+  // Dedup via tron_tx_hash: transactions already imported in Pass 2 are skipped.
+  const scannedCashoutAddresses = new Set<string>();
+  for (const [addr, playerId] of cashoutMap) {
+    if (scannedCashoutAddresses.has(addr)) continue;
+    scannedCashoutAddresses.add(addr);
+
+    try {
+      const txs = await fetchAllTronTxs(addr);
+      for (const tx of txs) {
+        if ((tx.to ?? "").toLowerCase() !== addr) continue; // incoming only
+        const changed = insertWalletTransactionByHash({
+          player_id: playerId,
+          game_id: teleGameId,
+          type: "withdrawal",
+          amount: toAmt(tx),
+          currency: "USDT",
+          tx_date: toDate(tx),
+          tron_tx_hash: tx.transaction_id,
+          counterparty_address: tx.from ?? null,
+        });
+        if (changed) {
+          totalCashouts++;
+          const r = results.find(r => {
+            const p = players.find(p => p.id === playerId);
+            return p && r.player === p.name;
+          });
+          if (r) r.cashouts++;
+        }
+      }
+    } catch (e: any) {
+      const player = players.find(p => p.id === playerId);
+      results.push({ player: player?.name ?? `cashout-${addr.slice(0, 8)}`, deposits: 0, cashouts: 0, error: e.message });
     }
   }
 
