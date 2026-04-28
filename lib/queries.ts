@@ -661,6 +661,25 @@ export function updateCashoutStatus(id: number, status: "approved" | "paid" | "c
   return db.prepare(`SELECT cr.*, p.name AS player_name FROM cashout_requests cr JOIN players p ON p.id = cr.player_id WHERE cr.id = ?`).get(id) as CashoutRequest | null;
 }
 
+// ── Smart Alerts ─────────────────────────────────────────
+export interface AlertPlayer {
+  player_id: number;
+  player_name: string;
+  total_usdt: number;
+}
+
+export function getPlayersOverLossThreshold(): AlertPlayer[] {
+  const thresholdStr = getSetting("alert_loss_threshold_usdt");
+  if (!thresholdStr) return [];
+  const threshold = parseFloat(thresholdStr);
+  if (isNaN(threshold) || threshold >= 0) return [];
+
+  const balances = getPlayerBalance();
+  return balances
+    .filter(b => b.total_usdt < threshold)
+    .map(b => ({ player_id: b.player_id, player_name: b.player_name, total_usdt: b.total_usdt }));
+}
+
 // ── Stale Report Detection ───────────────────────────────
 export interface StaleGame {
   game_id: number;

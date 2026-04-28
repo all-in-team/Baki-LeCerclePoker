@@ -464,4 +464,7 @@ function initSchema(db: Database.Database) {
   // Exchange rates for multi-currency P&L normalization
   db.prepare(`INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)`).run("exchange_rate_cny_usdt", "0.138");
   db.prepare(`INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)`).run("exchange_rate_eur_usdt", "1.08");
+
+  // Smart alert: loss threshold (negative USDT — alert when player P&L drops below this)
+  db.prepare(`INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)`).run("alert_loss_threshold_usdt", "-2000");
 }

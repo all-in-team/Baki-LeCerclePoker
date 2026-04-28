@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import Btn from "@/components/Btn";
-import { CheckCircle, AlertCircle, Shield, Wifi, DollarSign } from "lucide-react";
+import { CheckCircle, AlertCircle, Shield, Wifi, DollarSign, Bell } from "lucide-react";
 
 const TELE_FIELDS = [
   {
@@ -10,6 +10,15 @@ const TELE_FIELDS = [
     label: "WALLET MÈRE",
     desc: "Wallet de trésorerie de l'app — envoie tous les cashouts vers les WALLET CASHOUT des joueurs",
     placeholder: "TXxxx... (adresse TRX)",
+  },
+];
+
+const ALERT_FIELDS = [
+  {
+    key: "alert_loss_threshold_usdt",
+    label: "Seuil d'alerte P&L",
+    desc: "Alerte Telegram quand un joueur passe sous ce seuil (en USDT, valeur négative)",
+    placeholder: "-2000",
   },
 ];
 
@@ -65,6 +74,14 @@ export default function SettingsClient({
         return;
       }
     }
+    // Validate alert threshold
+    for (const { key, label } of ALERT_FIELDS) {
+      const v = (values[key] ?? "").trim();
+      if (v && isNaN(parseFloat(v))) {
+        setError(`${label} : nombre requis`);
+        return;
+      }
+    }
 
     setSaving(true);
     setError(null);
@@ -72,6 +89,7 @@ export default function SettingsClient({
       const payload: Record<string, string | null> = {};
       for (const f of TELE_FIELDS) payload[f.key] = (values[f.key] ?? "").trim() || null;
       for (const f of EXCHANGE_RATE_FIELDS) payload[f.key] = (values[f.key] ?? "").trim() || null;
+      for (const f of ALERT_FIELDS) payload[f.key] = (values[f.key] ?? "").trim() || null;
 
       const res = await fetch("/api/settings", {
         method: "PATCH",
@@ -139,6 +157,47 @@ export default function SettingsClient({
               );
             })}
           </div>
+        </div>
+      </div>
+
+      {/* Alerts section */}
+      <div style={{ background: "var(--bg-raised)", border: "1px solid var(--border)", borderRadius: 10, marginBottom: 24 }}>
+        <div style={{ padding: "16px 20px", borderBottom: "1px solid var(--border)", display: "flex", alignItems: "center", gap: 10 }}>
+          <Bell size={16} color="#f87171" />
+          <span style={{ fontSize: 13, fontWeight: 700, color: "var(--text)" }}>Alertes</span>
+          <span style={{ fontSize: 11, color: "var(--text-dim)" }}>— Notifications Telegram automatiques</span>
+        </div>
+        <div style={{ padding: 20 }}>
+          {ALERT_FIELDS.map(({ key, label, desc, placeholder }) => {
+            const val = values[key] ?? "";
+            const valid = !val || !isNaN(parseFloat(val));
+            return (
+              <div key={key}>
+                <label style={{ fontSize: 11, fontWeight: 700, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.07em", display: "block", marginBottom: 6 }}>
+                  {label}
+                </label>
+                <div style={{ fontSize: 11, color: "var(--text-dim)", marginBottom: 8 }}>{desc}</div>
+                <input
+                  value={val}
+                  onChange={e => set(key, e.target.value)}
+                  placeholder={placeholder}
+                  type="text"
+                  inputMode="numeric"
+                  style={{
+                    width: 160, padding: "9px 12px", borderRadius: 7, fontSize: 13,
+                    background: "var(--bg-surface)", color: "var(--text)",
+                    border: `1px solid ${!valid ? "#f87171" : val ? "var(--green)" : "var(--border)"}`,
+                    outline: "none", boxSizing: "border-box",
+                  }}
+                />
+                {val && valid && (
+                  <span style={{ fontSize: 11, color: "var(--text-dim)", marginLeft: 10 }}>
+                    Alerte si P&L joueur &lt; {parseFloat(val)} USDT
+                  </span>
+                )}
+              </div>
+            );
+          })}
         </div>
       </div>
 
