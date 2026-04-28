@@ -1,5 +1,5 @@
 import { getDb } from "@/lib/db";
-import { getPlayerBalance } from "@/lib/queries";
+import { getPlayerBalance, createCashoutRequest } from "@/lib/queries";
 import { sendMsg, s } from "./helpers";
 
 export async function handlePlayerSelfService(chatId: number, fromId: number, text: string): Promise<boolean> {
@@ -60,8 +60,31 @@ export async function handlePlayerSelfService(chatId: number, fromId: number, te
         );
         await sendMsg(chatId, `📋 <b>Tes deals, ${linkedPlayer.name}</b>\n\n${lines.join("\n")}`);
       }
+    } else if (cmd === "/cashout" || cmd === "/retrait") {
+      const rawArgs = spaceIdx === -1 ? "" : text.slice(spaceIdx + 1).trim();
+      const amount = parseFloat(rawArgs.replace(/[^\d.]/g, ""));
+      if (!amount || amount <= 0) {
+        await sendMsg(chatId, `❌ Usage : <code>/cashout 500</code> (montant en USDT)`);
+      } else {
+        const id = createCashoutRequest({ player_id: linkedPlayer.id, amount, note: `Demande Telegram par ${linkedPlayer.name}` });
+        // Notify operator
+        const operatorChatId = process.env.TELEGRAM_OWNER_CHAT_ID ?? process.env.AGENT_TELEGRAM_CHAT_ID;
+        if (operatorChatId) {
+          await sendMsg(Number(operatorChatId),
+            `💸 <b>Nouvelle demande cashout</b>\n` +
+            `Joueur : <b>${linkedPlayer.name}</b>\n` +
+            `Montant : <b>${amount.toFixed(2)} USDT</b>\n\n` +
+            `<i>→ Approuve sur /cashouts du dashboard</i>`
+          );
+        }
+        await sendMsg(chatId,
+          `✅ <b>Demande de cashout envoyée</b>\n` +
+          `💰 <b>${amount.toFixed(2)} USDT</b>\n\n` +
+          `<i>Tu recevras une notification quand c'est approuvé.</i>`
+        );
+      }
     } else {
-      await sendMsg(chatId, `💡 Commandes disponibles :\n<code>/solde</code> — ton solde\n<code>/historique</code> — tes transactions\n<code>/deal</code> — tes deals`);
+      await sendMsg(chatId, `💡 Commandes disponibles :\n<code>/solde</code> — ton solde\n<code>/historique</code> — tes transactions\n<code>/deal</code> — tes deals\n<code>/cashout 500</code> — demander un cashout`);
     }
   } catch (e: any) {
     console.error("[TG PLAYER CMD]", e);
