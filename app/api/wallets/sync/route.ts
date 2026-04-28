@@ -144,11 +144,11 @@ export async function POST() {
 
   // ── Pass 2 : cashouts via WALLET MERE → WALLET CASHOUT ───────────────────
   // Build the cashout map from BOTH the new multi-cashout table AND the legacy single column.
-  const cashoutMap = new Map<string, number>(); // wallet_cashout (lowercase) → player_id
+  const cashoutMap = new Map<string, { playerId: number; original: string }>(); // lowercase → { playerId, original address }
   const playerIdsOnTele = new Set(players.map(p => p.id));
   for (const c of getAllTeleCashoutsByPlayer()) {
     if (!playerIdsOnTele.has(c.player_id)) continue;
-    cashoutMap.set(c.address.toLowerCase(), c.player_id);
+    cashoutMap.set(c.address.toLowerCase(), { playerId: c.player_id, original: c.address });
   }
 
   if (walletMere && cashoutMap.size > 0) {
@@ -158,11 +158,11 @@ export async function POST() {
 
       for (const tx of mereTxs) {
         if ((tx.from ?? "").toLowerCase() !== mereAddr) continue; // sortants seulement
-        const playerId = cashoutMap.get((tx.to ?? "").toLowerCase());
-        if (!playerId) continue;
+        const entry = cashoutMap.get((tx.to ?? "").toLowerCase());
+        if (!entry) continue;
 
         const changed = insertWalletTransactionByHash({
-          player_id: playerId,
+          player_id: entry.playerId,
           game_id: teleGameId,
           type: "withdrawal",
           amount: toAmt(tx),
@@ -174,7 +174,7 @@ export async function POST() {
         if (changed) {
           totalCashouts++;
           const r = results.find(r => {
-            const p = players.find(p => p.id === playerId);
+            const p = players.find(p => p.id === entry.playerId);
             return p && r.player === p.name;
           });
           if (r) r.cashouts++;
@@ -189,16 +189,16 @@ export async function POST() {
   // Catches cashouts sent from any address, not just wallet mère.
   // Dedup via tron_tx_hash: transactions already imported in Pass 2 are skipped.
   const scannedCashoutAddresses = new Set<string>();
-  for (const [addr, playerId] of cashoutMap) {
-    if (scannedCashoutAddresses.has(addr)) continue;
-    scannedCashoutAddresses.add(addr);
+  for (const [addrLower, entry] of cashoutMap) {
+    if (scannedCashoutAddresses.has(addrLower)) continue;
+    scannedCashoutAddresses.add(addrLower);
 
     try {
-      const txs = await fetchAllTronTxs(addr);
+      const txs = await fetchAllTronTxs(entry.original);
       for (const tx of txs) {
-        if ((tx.to ?? "").toLowerCase() !== addr) continue; // incoming only
+        if ((tx.to ?? "").toLowerCase() !== addrLower) continue; // incoming only
         const changed = insertWalletTransactionByHash({
-          player_id: playerId,
+          player_id: entry.playerId,
           game_id: teleGameId,
           type: "withdrawal",
           amount: toAmt(tx),
@@ -210,15 +210,15 @@ export async function POST() {
         if (changed) {
           totalCashouts++;
           const r = results.find(r => {
-            const p = players.find(p => p.id === playerId);
+            const p = players.find(p => p.id === entry.playerId);
             return p && r.player === p.name;
           });
           if (r) r.cashouts++;
         }
       }
     } catch (e: any) {
-      const player = players.find(p => p.id === playerId);
-      results.push({ player: player?.name ?? `cashout-${addr.slice(0, 8)}`, deposits: 0, cashouts: 0, error: e.message });
+      const player = players.find(p => p.id === entry.playerId);
+      results.push({ player: player?.name ?? `cashout-${addrLower.slice(0, 8)}`, deposits: 0, cashouts: 0, error: e.message });
     }
   }
 
