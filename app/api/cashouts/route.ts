@@ -3,16 +3,22 @@ import { NextRequest, NextResponse } from "next/server";
 import { getCashoutRequests, createCashoutRequest, updateCashoutStatus } from "@/lib/queries";
 import { getDb } from "@/lib/db";
 
+function mentionPlayer(player: { name: string; telegram_id: number | null }) {
+  if (player.telegram_id) return `<a href="tg://user?id=${player.telegram_id}">${player.name}</a>`;
+  return `<b>${player.name}</b>`;
+}
+
 async function notifyPlayer(playerId: number, text: string) {
   const db = getDb();
-  const player = db.prepare(`SELECT telegram_chat_id FROM players WHERE id = ?`).get(playerId) as { telegram_chat_id: string | null } | undefined;
+  const player = db.prepare(`SELECT name, telegram_id, telegram_chat_id FROM players WHERE id = ?`).get(playerId) as { name: string; telegram_id: number | null; telegram_chat_id: string | null } | undefined;
   if (!player?.telegram_chat_id) return;
+  const mention = mentionPlayer(player);
   const token = process.env.TELEGRAM_BOT_TOKEN;
   if (!token) return;
   await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ chat_id: player.telegram_chat_id, text, parse_mode: "HTML" }),
+    body: JSON.stringify({ chat_id: player.telegram_chat_id, text: `${mention} — ${text}`, parse_mode: "HTML" }),
   });
 }
 
