@@ -15,14 +15,30 @@ const USDT_CONTRACT = "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t";
 //
 // ─────────────────────────────────────────────────────────────────────────────
 
-// TronGrid free tier suspends the caller for ~5s on 429 ("allowed_rps(1)"). Retry past it.
+// TronGrid free tier limits to 1 RPS. Going over suspends the IP for ~5s, and rapid
+// retries can extend the suspension. Solution: enforce a global minimum spacing
+// between *any* TronGrid call (regardless of which player), and on 429 wait long
+// enough that the suspension fully clears before retrying.
+const MIN_SPACING_MS = 1500; // 0.66 RPS — comfortable margin under the 1 RPS limit
+const RETRY_AFTER_429_MS = 12000; // 5s suspension + 7s margin to avoid extending it
+let lastTronGridCallAt = 0;
+
+async function throttle() {
+  const now = Date.now();
+  const wait = lastTronGridCallAt + MIN_SPACING_MS - now;
+  if (wait > 0) await new Promise(r => setTimeout(r, wait));
+  lastTronGridCallAt = Date.now();
+}
+
 async function fetchTronGrid(url: string, headers: Record<string, string>): Promise<any> {
-  const maxRetries = 4;
+  const maxRetries = 5;
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    await throttle();
     const res = await fetch(url, { headers, next: { revalidate: 0 } });
     if (res.ok) return res.json();
     if (res.status === 429 && attempt < maxRetries) {
-      await new Promise(r => setTimeout(r, 6000));
+      await new Promise(r => setTimeout(r, RETRY_AFTER_429_MS));
+      lastTronGridCallAt = Date.now(); // reset so we wait the full spacing again
       continue;
     }
     throw new Error(`TronGrid ${res.status}: ${await res.text()}`);
@@ -54,7 +70,6 @@ async function fetchAllTronTxs(address: string): Promise<any[]> {
     fingerprint = json.meta?.fingerprint ?? undefined;
     page++;
     if (page >= 10) break;
-    if (fingerprint) await new Promise(r => setTimeout(r, 1200));
   } while (fingerprint);
 
   return all;
@@ -99,10 +114,7 @@ export async function POST() {
   let totalCashouts = 0;
 
   // ── Pass 1 : dépôts via WALLET GAME ──────────────────────────────────────
-  for (let i = 0; i < players.length; i++) {
-    const player = players[i];
-    if (i > 0) await new Promise(r => setTimeout(r, 1100));
-
+  for (const player of players) {
     const gameAddr = player.wallet_game.toLowerCase();
     let deposits = 0;
 
@@ -139,7 +151,6 @@ export async function POST() {
 
   if (walletMere && cashoutMap.size > 0) {
     try {
-      await new Promise(r => setTimeout(r, 6000));
       const mereTxs = await fetchAllTronTxs(walletMere);
       const mereAddr = walletMere.toLowerCase();
 
