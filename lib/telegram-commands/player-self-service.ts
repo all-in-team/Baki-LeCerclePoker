@@ -83,8 +83,17 @@ export async function handlePlayerSelfService(chatId: number, fromId: number, te
           `<i>Tu recevras une notification quand c'est approuvé.</i>`
         );
       }
+    } else if (cmd === "/aide" || cmd === "/help" || cmd === "/start") {
+      await sendMsg(chatId,
+        `🃏 <b>${linkedPlayer.name}</b> — tes commandes :\n\n` +
+        `💰 <code>/solde</code> — ton solde actuel par game\n` +
+        `📜 <code>/historique</code> — tes 10 dernières transactions\n` +
+        `📋 <code>/deal</code> — tes deals (% action, % RB)\n` +
+        `💸 <code>/cashout 500</code> — demander un retrait de 500 USDT\n\n` +
+        `<i>Toutes les commandes marchent directement ici dans le groupe.</i>`
+      );
     } else {
-      await sendMsg(chatId, `💡 Commandes disponibles :\n<code>/solde</code> — ton solde\n<code>/historique</code> — tes transactions\n<code>/deal</code> — tes deals\n<code>/cashout 500</code> — demander un cashout`);
+      return false;
     }
   } catch (e: any) {
     console.error("[TG PLAYER CMD]", e);
