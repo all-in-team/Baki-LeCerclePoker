@@ -231,6 +231,14 @@ function initSchema(db: Database.Database) {
     db.exec(`UPDATE wallet_transactions SET game_id = (SELECT id FROM games WHERE name='Wepoker') WHERE app_id IN (2,3,4) AND game_id IS NULL`);
   }
 
+  // One-time: delete orphan auto-sync rows. These are leftover from an older sync
+  // that didn't store tron_tx_hash, now duplicated by the new sync (which does).
+  // Manual entries (note != 'auto-sync') are untouched.
+  const fixOrphanSync = db.prepare(`INSERT OR IGNORE INTO _applied_fixes (name) VALUES (?)`).run("delete_orphan_auto_sync_rows_v1");
+  if (fixOrphanSync.changes > 0) {
+    db.exec(`DELETE FROM wallet_transactions WHERE note = 'auto-sync' AND tron_tx_hash IS NULL`);
+  }
+
   // One-time: create TELE game deals for players who already have a tron_address
   const fixTeleDeals = db.prepare(`INSERT OR IGNORE INTO _applied_fixes (name) VALUES (?)`).run("create_tele_game_deals_v1");
   if (fixTeleDeals.changes > 0) {
