@@ -1,6 +1,7 @@
 "use client";
 
 import { Fragment, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import { ArrowDownLeft, ArrowUpRight, Plus, Trash2, Wallet, TrendingUp, RefreshCw, Settings2, ExternalLink, Save, X, Pencil, ChevronDown, ChevronRight } from "lucide-react";
 import StatCard from "@/components/StatCard";
 import Btn from "@/components/Btn";
@@ -39,8 +40,15 @@ function fmtKpi(n: number) {
   return (n < 0 ? "−" : "") + (abs >= 1000 ? (abs / 1000).toFixed(1) + "k" : abs.toFixed(2));
 }
 
+const PERIODS = [
+  { key: "48h", label: "48h" },
+  { key: "7d", label: "7 jours" },
+  { key: "30d", label: "30 jours" },
+  { key: "lifetime", label: "Lifetime" },
+] as const;
+
 export default function WalletsClient({
-  initialSummary, kpis, initialTransactions, players, games, cashoutsByPlayer = {},
+  initialSummary, kpis, initialTransactions, players, games, cashoutsByPlayer = {}, period = "lifetime",
 }: {
   initialSummary: PlayerGameRow[];
   kpis: KPIs;
@@ -48,7 +56,9 @@ export default function WalletsClient({
   players: Player[];
   games: Game[];
   cashoutsByPlayer?: Record<number, { id: number; address: string; label: string | null }[]>;
+  period?: string;
 }) {
+  const router = useRouter();
   const [syncing, setSyncing] = useState(false);
   const [addPlayerModal, setAddPlayerModal] = useState(false);
   const [addPlayerBusy, setAddPlayerBusy] = useState(false);
@@ -302,6 +312,25 @@ export default function WalletsClient({
         )}
       </div>
       <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
+
+      {/* Period filter */}
+      <div style={{ display: "flex", gap: 4, marginBottom: 16, background: "var(--bg-raised)", border: "1px solid var(--border)", borderRadius: 8, padding: 3, width: "fit-content" }}>
+        {PERIODS.map(p => (
+          <button
+            key={p.key}
+            onClick={() => router.push(p.key === "lifetime" ? "/wallets" : `/wallets?period=${p.key}`)}
+            style={{
+              padding: "6px 14px", borderRadius: 6, fontSize: 12, fontWeight: 600, cursor: "pointer",
+              border: "none",
+              background: period === p.key ? "var(--gold)" : "transparent",
+              color: period === p.key ? "#000" : "var(--text-muted)",
+              transition: "all 0.15s ease",
+            }}
+          >
+            {p.label}
+          </button>
+        ))}
+      </div>
 
       {/* KPIs */}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 16, marginBottom: 28 }}>

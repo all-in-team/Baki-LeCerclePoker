@@ -372,7 +372,7 @@ export function getPeriods() {
 }
 
 // ── Wallet Transactions ───────────────────────────────────
-export function getWalletTransactions(filters?: { player_id?: number; game_id?: number; game_name?: string; limit?: number }) {
+export function getWalletTransactions(filters?: { player_id?: number; game_id?: number; game_name?: string; limit?: number; since_date?: string }) {
   const db = getDb();
   let q = `
     SELECT wt.*, p.name AS player_name,
@@ -387,14 +387,22 @@ export function getWalletTransactions(filters?: { player_id?: number; game_id?: 
   if (filters?.player_id) { q += ` AND wt.player_id = @player_id`; params.player_id = filters.player_id; }
   if (filters?.game_id)   { q += ` AND wt.game_id = @game_id`;    params.game_id = filters.game_id; }
   if (filters?.game_name) { q += ` AND COALESCE(g.name, pa.name) = @game_name`; params.game_name = filters.game_name; }
+  if (filters?.since_date) { q += ` AND wt.tx_date >= @since_date`; params.since_date = filters.since_date; }
   q += ` ORDER BY wt.tx_date DESC, wt.created_at DESC`;
   if (filters?.limit)     { q += ` LIMIT @limit`;                  params.limit = filters.limit; }
   return db.prepare(q).all(params);
 }
 
-export function getWalletSummaryByPlayer(filters?: { game_name?: string }) {
+export function getWalletSummaryByPlayer(filters?: { game_name?: string; since_date?: string }) {
   const db = getDb();
-  let q = `
+  const conditions: string[] = [];
+  const params: Record<string, unknown> = {};
+  if (filters?.game_name) { conditions.push(`g.name = @game_name`); params.game_name = filters.game_name; }
+  const dateJoin = filters?.since_date
+    ? `LEFT JOIN wallet_transactions wt ON wt.player_id = p.id AND wt.game_id = pgd.game_id AND wt.tx_date >= @since_date`
+    : `LEFT JOIN wallet_transactions wt ON wt.player_id = p.id AND wt.game_id = pgd.game_id`;
+  if (filters?.since_date) params.since_date = filters.since_date;
+  const q = `
     SELECT
       pgd.id AS deal_id,
       p.id AS player_id, p.name AS player_name,
@@ -407,20 +415,23 @@ export function getWalletSummaryByPlayer(filters?: { game_name?: string }) {
     FROM players p
     JOIN player_game_deals pgd ON pgd.player_id = p.id
     JOIN games g ON g.id = pgd.game_id
-    LEFT JOIN wallet_transactions wt ON wt.player_id = p.id AND wt.game_id = pgd.game_id
+    ${dateJoin}
+    ${conditions.length > 0 ? "WHERE " + conditions.join(" AND ") : ""}
+    GROUP BY p.id, pgd.game_id ORDER BY my_pnl DESC
   `;
-  const params: Record<string, unknown> = {};
-  if (filters?.game_name) {
-    q += ` WHERE g.name = @game_name`;
-    params.game_name = filters.game_name;
-  }
-  q += ` GROUP BY p.id, pgd.game_id ORDER BY my_pnl DESC`;
   return db.prepare(q).all(params);
 }
 
-export function getWalletKPIs(filters?: { game_name?: string }) {
+export function getWalletKPIs(filters?: { game_name?: string; since_date?: string }) {
   const db = getDb();
-  let inner = `
+  const conditions: string[] = [];
+  const params: Record<string, unknown> = {};
+  if (filters?.game_name) { conditions.push(`g.name = @game_name`); params.game_name = filters.game_name; }
+  const dateJoin = filters?.since_date
+    ? `LEFT JOIN wallet_transactions wt ON wt.player_id = p.id AND wt.game_id = pgd.game_id AND wt.tx_date >= @since_date`
+    : `LEFT JOIN wallet_transactions wt ON wt.player_id = p.id AND wt.game_id = pgd.game_id`;
+  if (filters?.since_date) params.since_date = filters.since_date;
+  const inner = `
     SELECT
       COALESCE(SUM(CASE WHEN wt.type='deposit'    THEN wt.amount ELSE 0 END), 0) AS total_deposited,
       COALESCE(SUM(CASE WHEN wt.type='withdrawal' THEN wt.amount ELSE 0 END), 0) AS total_withdrawn,
@@ -429,14 +440,10 @@ export function getWalletKPIs(filters?: { game_name?: string }) {
     FROM players p
     JOIN player_game_deals pgd ON pgd.player_id = p.id
     JOIN games g ON g.id = pgd.game_id
-    LEFT JOIN wallet_transactions wt ON wt.player_id = p.id AND wt.game_id = pgd.game_id
+    ${dateJoin}
+    ${conditions.length > 0 ? "WHERE " + conditions.join(" AND ") : ""}
+    GROUP BY p.id, pgd.game_id
   `;
-  const params: Record<string, unknown> = {};
-  if (filters?.game_name) {
-    inner += ` WHERE g.name = @game_name`;
-    params.game_name = filters.game_name;
-  }
-  inner += ` GROUP BY p.id, pgd.game_id`;
 
   return db.prepare(`
     SELECT

@@ -3,10 +3,25 @@ import { getWalletSummaryByPlayer, getWalletKPIs, getWalletTransactions, getPlay
 import PageHeader from "@/components/PageHeader";
 import WalletsClient from "./WalletsClient";
 
-export default function WalletsPage() {
-  const summary = getWalletSummaryByPlayer({ game_name: "TELE" }) as any[];
-  const kpis = getWalletKPIs({ game_name: "TELE" }) ?? { total_deposited: 0, total_withdrawn: 0, total_net: 0, my_total_pnl: 0 };
-  const transactions = getWalletTransactions({ limit: 200, game_name: "TELE" }) as any[];
+const PERIODS: Record<string, number> = { "48h": 2, "7d": 7, "30d": 30 };
+
+function getSinceDate(period: string | undefined): string | undefined {
+  const days = period ? PERIODS[period] : undefined;
+  if (!days) return undefined;
+  const d = new Date();
+  d.setDate(d.getDate() - days);
+  return d.toISOString().slice(0, 10);
+}
+
+export default async function WalletsPage({ searchParams }: { searchParams: Promise<{ period?: string }> }) {
+  const params = await searchParams;
+  const period = params.period && (params.period in PERIODS || params.period === "lifetime") ? params.period : "lifetime";
+  const since_date = getSinceDate(period);
+  const filters = { game_name: "TELE" as const, since_date };
+
+  const summary = getWalletSummaryByPlayer(filters) as any[];
+  const kpis = getWalletKPIs(filters) ?? { total_deposited: 0, total_withdrawn: 0, total_net: 0, my_total_pnl: 0 };
+  const transactions = getWalletTransactions({ ...filters, limit: 500 }) as any[];
   const players = getPlayers() as any[];
   const games = (getGames() as any[]).filter((g) => g.name === "TELE");
   const cashoutsByPlayer: Record<number, { id: number; address: string; label: string | null }[]> = {};
@@ -25,6 +40,7 @@ export default function WalletsPage() {
         players={players}
         games={games}
         cashoutsByPlayer={cashoutsByPlayer}
+        period={period}
       />
     </>
   );
