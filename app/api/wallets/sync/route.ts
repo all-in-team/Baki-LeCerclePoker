@@ -82,13 +82,12 @@ function getTeleGameId(): number | null {
 
 function getPlayersOnTele() {
   return getDb().prepare(`
-    SELECT p.id, p.name, p.tron_address AS wallet_game, p.tele_wallet_cashout AS wallet_cashout,
-           pgd.created_at AS deal_start
+    SELECT p.id, p.name, p.tron_address AS wallet_game, p.tele_wallet_cashout AS wallet_cashout
     FROM players p
     JOIN player_game_deals pgd ON pgd.player_id = p.id
     JOIN games g ON g.id = pgd.game_id AND g.name = 'TELE'
     WHERE p.tron_address IS NOT NULL AND p.tron_address != ''
-  `).all() as { id: number; name: string; wallet_game: string; wallet_cashout: string | null; deal_start: string }[];
+  `).all() as { id: number; name: string; wallet_game: string; wallet_cashout: string | null }[];
 }
 
 function toAmt(tx: any): number {
@@ -109,9 +108,6 @@ export async function POST() {
 
   const walletMere = getSetting("tele_wallet_mere");
 
-  const dealStartByPlayer = new Map<number, string>();
-  for (const p of players) dealStartByPlayer.set(p.id, p.deal_start.slice(0, 10));
-
   type Result = { player: string; deposits: number; cashouts: number; error?: string };
   const results: Result[] = [];
   let totalDeposits = 0;
@@ -124,10 +120,8 @@ export async function POST() {
 
     try {
       const txs = await fetchAllTronTxs(player.wallet_game);
-      const minDate = dealStartByPlayer.get(player.id)!;
       for (const tx of txs) {
         if ((tx.to ?? "").toLowerCase() !== gameAddr) continue; // entrants seulement
-        if (toDate(tx) < minDate) continue; // skip transactions before player joined
         const changed = insertWalletTransactionByHash({
           player_id: player.id,
           game_id: teleGameId,
@@ -165,8 +159,6 @@ export async function POST() {
         if ((tx.from ?? "").toLowerCase() !== mereAddr) continue; // sortants seulement
         const entry = cashoutMap.get((tx.to ?? "").toLowerCase());
         if (!entry) continue;
-        const minDate = dealStartByPlayer.get(entry.playerId);
-        if (minDate && toDate(tx) < minDate) continue; // skip transactions before player joined
 
         const changed = insertWalletTransactionByHash({
           player_id: entry.playerId,
