@@ -12,7 +12,6 @@ const USDT_CONTRACT = "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t";
 //
 //  Pass 1 : scan WALLET GAME     → dépôts (tout entrant)
 //  Pass 2 : scan WALLET MERE     → cashouts filtrés sur WALLET CASHOUT connus
-//  Pass 3 : scan WALLET CASHOUT  → incoming USDT from any source (catches non-mère cashouts)
 //
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -83,12 +82,13 @@ function getTeleGameId(): number | null {
 
 function getPlayersOnTele() {
   return getDb().prepare(`
-    SELECT p.id, p.name, p.tron_address AS wallet_game, p.tele_wallet_cashout AS wallet_cashout
+    SELECT p.id, p.name, p.tron_address AS wallet_game, p.tele_wallet_cashout AS wallet_cashout,
+           pgd.created_at AS deal_start
     FROM players p
     JOIN player_game_deals pgd ON pgd.player_id = p.id
     JOIN games g ON g.id = pgd.game_id AND g.name = 'TELE'
     WHERE p.tron_address IS NOT NULL AND p.tron_address != ''
-  `).all() as { id: number; name: string; wallet_game: string; wallet_cashout: string | null }[];
+  `).all() as { id: number; name: string; wallet_game: string; wallet_cashout: string | null; deal_start: string }[];
 }
 
 function toAmt(tx: any): number {
@@ -109,6 +109,9 @@ export async function POST() {
 
   const walletMere = getSetting("tele_wallet_mere");
 
+  const dealStartByPlayer = new Map<number, string>();
+  for (const p of players) dealStartByPlayer.set(p.id, p.deal_start.slice(0, 10));
+
   type Result = { player: string; deposits: number; cashouts: number; error?: string };
   const results: Result[] = [];
   let totalDeposits = 0;
@@ -121,8 +124,10 @@ export async function POST() {
 
     try {
       const txs = await fetchAllTronTxs(player.wallet_game);
+      const minDate = dealStartByPlayer.get(player.id)!;
       for (const tx of txs) {
         if ((tx.to ?? "").toLowerCase() !== gameAddr) continue; // entrants seulement
+        if (toDate(tx) < minDate) continue; // skip transactions before player joined
         const changed = insertWalletTransactionByHash({
           player_id: player.id,
           game_id: teleGameId,
@@ -160,6 +165,8 @@ export async function POST() {
         if ((tx.from ?? "").toLowerCase() !== mereAddr) continue; // sortants seulement
         const entry = cashoutMap.get((tx.to ?? "").toLowerCase());
         if (!entry) continue;
+        const minDate = dealStartByPlayer.get(entry.playerId);
+        if (minDate && toDate(tx) < minDate) continue; // skip transactions before player joined
 
         const changed = insertWalletTransactionByHash({
           player_id: entry.playerId,
@@ -182,43 +189,6 @@ export async function POST() {
       }
     } catch (e: any) {
       results.push({ player: "WALLET MERE", deposits: 0, cashouts: 0, error: e.message });
-    }
-  }
-
-  // ── Pass 3 : scan each WALLET CASHOUT for incoming USDT ──────────────────
-  // Catches cashouts sent from any address, not just wallet mère.
-  // Dedup via tron_tx_hash: transactions already imported in Pass 2 are skipped.
-  const scannedCashoutAddresses = new Set<string>();
-  for (const [addrLower, entry] of cashoutMap) {
-    if (scannedCashoutAddresses.has(addrLower)) continue;
-    scannedCashoutAddresses.add(addrLower);
-
-    try {
-      const txs = await fetchAllTronTxs(entry.original);
-      for (const tx of txs) {
-        if ((tx.to ?? "").toLowerCase() !== addrLower) continue; // incoming only
-        const changed = insertWalletTransactionByHash({
-          player_id: entry.playerId,
-          game_id: teleGameId,
-          type: "withdrawal",
-          amount: toAmt(tx),
-          currency: "USDT",
-          tx_date: toDate(tx),
-          tron_tx_hash: tx.transaction_id,
-          counterparty_address: tx.from ?? null,
-        });
-        if (changed) {
-          totalCashouts++;
-          const r = results.find(r => {
-            const p = players.find(p => p.id === entry.playerId);
-            return p && r.player === p.name;
-          });
-          if (r) r.cashouts++;
-        }
-      }
-    } catch (e: any) {
-      const player = players.find(p => p.id === entry.playerId);
-      results.push({ player: player?.name ?? `cashout-${addrLower.slice(0, 8)}`, deposits: 0, cashouts: 0, error: e.message });
     }
   }
 
