@@ -948,6 +948,30 @@ export function getReportDatesForClub(clubId: string, gameId: number): string[] 
   `).all(clubId, gameId).map((r: any) => r.report_date);
 }
 
+function getExpectedDates(startDate: string, endDate: string, cadence: string): string[] {
+  const dates: string[] = [];
+  const d = new Date(startDate);
+  const end = new Date(endDate);
+
+  if (cadence === "daily") {
+    while (d <= end) { dates.push(d.toISOString().slice(0, 10)); d.setDate(d.getDate() + 1); }
+  } else if (cadence === "weekdays") {
+    while (d <= end) {
+      const dow = d.getDay();
+      if (dow >= 1 && dow <= 5) dates.push(d.toISOString().slice(0, 10));
+      d.setDate(d.getDate() + 1);
+    }
+  } else if (cadence === "weekly") {
+    while (d <= end) { dates.push(d.toISOString().slice(0, 10)); d.setDate(d.getDate() + 7); }
+  } else if (cadence === "biweekly") {
+    while (d <= end) { dates.push(d.toISOString().slice(0, 10)); d.setDate(d.getDate() + 14); }
+  } else if (cadence === "monthly") {
+    while (d <= end) { dates.push(d.toISOString().slice(0, 10)); d.setMonth(d.getMonth() + 1); }
+  }
+
+  return dates;
+}
+
 export function getMissingReports() {
   const schedules = getClubSchedules();
   const today = new Date().toISOString().slice(0, 10);
@@ -959,14 +983,9 @@ export function getMissingReports() {
       getReportSkipDays({ club_id: sched.club_id, game_id: sched.game_id }).map(s => s.skip_date)
     );
 
-    const d = new Date(sched.start_date);
-    const end = new Date(today);
-    while (d <= end) {
-      const ds = d.toISOString().slice(0, 10);
-      const dow = d.getDay();
-      const isExpected = sched.cadence === "weekdays" ? dow >= 1 && dow <= 5 : true;
-
-      if (isExpected && !reportDates.has(ds) && !skipDays.has(ds)) {
+    const expectedDates = getExpectedDates(sched.start_date, today, sched.cadence);
+    for (const ds of expectedDates) {
+      if (!reportDates.has(ds) && !skipDays.has(ds)) {
         missing.push({
           club_id: sched.club_id,
           game_id: sched.game_id,
@@ -975,7 +994,6 @@ export function getMissingReports() {
           date: ds,
         });
       }
-      d.setDate(d.getDate() + 1);
     }
   }
 

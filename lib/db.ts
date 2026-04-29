@@ -467,7 +467,7 @@ function initSchema(db: Database.Database) {
       id         INTEGER PRIMARY KEY AUTOINCREMENT,
       club_id    TEXT NOT NULL,
       game_id    INTEGER NOT NULL REFERENCES games(id),
-      cadence    TEXT NOT NULL DEFAULT 'daily' CHECK(cadence IN ('daily','weekdays')),
+      cadence    TEXT NOT NULL DEFAULT 'daily' CHECK(cadence IN ('daily','weekdays','weekly','biweekly','monthly')),
       start_date TEXT NOT NULL,
       active     INTEGER NOT NULL DEFAULT 1,
       UNIQUE(game_id, club_id)
@@ -482,6 +482,25 @@ function initSchema(db: Database.Database) {
       UNIQUE(game_id, club_id, skip_date)
     );
   `);
+
+  // Migrate club_report_schedules to support more cadence values
+  const fixCadence = db.prepare(`INSERT OR IGNORE INTO _applied_fixes (name) VALUES (?)`).run("schedules_cadence_expand_v1");
+  if (fixCadence.changes > 0) {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS club_report_schedules_new (
+        id         INTEGER PRIMARY KEY AUTOINCREMENT,
+        club_id    TEXT NOT NULL,
+        game_id    INTEGER NOT NULL REFERENCES games(id),
+        cadence    TEXT NOT NULL DEFAULT 'daily' CHECK(cadence IN ('daily','weekdays','weekly','biweekly','monthly')),
+        start_date TEXT NOT NULL,
+        active     INTEGER NOT NULL DEFAULT 1,
+        UNIQUE(game_id, club_id)
+      );
+      INSERT OR IGNORE INTO club_report_schedules_new SELECT * FROM club_report_schedules;
+      DROP TABLE club_report_schedules;
+      ALTER TABLE club_report_schedules_new RENAME TO club_report_schedules;
+    `);
+  }
 
   // Exchange rates for multi-currency P&L normalization
   db.prepare(`INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)`).run("exchange_rate_cny_usdt", "0.138");

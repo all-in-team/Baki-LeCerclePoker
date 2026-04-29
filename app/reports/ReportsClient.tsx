@@ -820,7 +820,7 @@ export default function ReportsClient({ games, players: initialPlayers }: { game
                   <div key={s.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 10px", borderRadius: 6, background: "var(--bg-surface)", border: "1px solid var(--border)" }}>
                     <span style={{ fontSize: 10, fontWeight: 700, color: GAME_COLOR[s.game_name] ?? "var(--text)", background: (GAME_COLOR[s.game_name] ?? "#888") + "18", padding: "2px 6px", borderRadius: 4 }}>{s.game_name}</span>
                     <span style={{ fontSize: 12, fontWeight: 600, color: "var(--text)", flex: 1 }}>{s.club_name ?? s.club_id}</span>
-                    <span style={{ fontSize: 10, color: "var(--text-dim)" }}>{s.cadence === "weekdays" ? "lun-ven" : "quotidien"}</span>
+                    <span style={{ fontSize: 10, color: "var(--text-dim)" }}>{{ daily: "quotidien", weekdays: "lun-ven", weekly: "hebdo", biweekly: "bi-mensuel", monthly: "mensuel" }[s.cadence] ?? s.cadence}</span>
                     <button onClick={() => removeSchedule(s.id)} style={{ background: "none", border: "none", cursor: "pointer", color: "#f87171", padding: 2 }}>
                       <Trash2 size={12} />
                     </button>
@@ -851,6 +851,9 @@ export default function ReportsClient({ games, players: initialPlayers }: { game
                   style={{ flex: 1, fontSize: 12, padding: "7px 10px", borderRadius: 6, background: "var(--bg-elevated)", border: "1px solid var(--border)", color: "var(--text)", cursor: "pointer" }}>
                   <option value="daily">Quotidien</option>
                   <option value="weekdays">Lun-Ven</option>
+                  <option value="weekly">Hebdomadaire</option>
+                  <option value="biweekly">Bi-mensuel</option>
+                  <option value="monthly">Mensuel</option>
                 </select>
                 <input
                   type="date"
