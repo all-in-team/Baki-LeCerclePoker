@@ -468,18 +468,10 @@ function initSchema(db: Database.Database) {
   // Smart alert: loss threshold (negative USDT — alert when player P&L drops below this)
   db.prepare(`INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)`).run("alert_loss_threshold_usdt", "-2000");
 
-  // One-time fix: purge withdrawal records imported by Pass 3 (any-source cashout scan).
-  // Only wallet mère cashouts are legitimate. Next sync will re-import correct data from Pass 2.
-  const fixPass3 = db.prepare(`INSERT OR IGNORE INTO _applied_fixes (name) VALUES (?)`).run("purge_non_mere_withdrawals_v1");
+  // One-time fix: purge ALL withdrawal records. Pass 3 (removed) imported bogus cashouts
+  // from unrelated senders. Next sync reimports only legitimate wallet mère cashouts via Pass 2.
+  const fixPass3 = db.prepare(`INSERT OR IGNORE INTO _applied_fixes (name) VALUES (?)`).run("purge_all_withdrawals_v2");
   if (fixPass3.changes > 0) {
-    const walletMere = db.prepare(`SELECT value FROM settings WHERE key = 'tele_wallet_mere'`).get() as { value: string } | undefined;
-    if (walletMere?.value) {
-      db.prepare(`
-        DELETE FROM wallet_transactions
-        WHERE type = 'withdrawal'
-          AND counterparty_address IS NOT NULL
-          AND LOWER(counterparty_address) != LOWER(?)
-      `).run(walletMere.value);
-    }
+    db.exec(`DELETE FROM wallet_transactions WHERE type = 'withdrawal'`);
   }
 }
