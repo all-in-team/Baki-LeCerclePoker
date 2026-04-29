@@ -11,7 +11,7 @@ const USDT_CONTRACT = "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t";
 //  WALLET MERE    (global)     → envoie tous les cashouts vers WALLET CASHOUT
 //
 //  Pass 1 : scan WALLET GAME     → dépôts (tout entrant)
-//  Pass 2 : scan WALLET MERE     → cashouts filtrés sur WALLET CASHOUT connus
+//  Pass 2 : scan each WALLET CASHOUT → only keep incoming from WALLET MERE
 //
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -141,46 +141,49 @@ export async function POST() {
     }
   }
 
-  // ── Pass 2 : cashouts via WALLET MERE → WALLET CASHOUT ───────────────────
-  // Build the cashout map from BOTH the new multi-cashout table AND the legacy single column.
-  const cashoutMap = new Map<string, { playerId: number; original: string }>(); // lowercase → { playerId, original address }
+  // ── Pass 2 : cashouts — scan each WALLET CASHOUT, keep only incoming from WALLET MERE
+  const cashoutEntries: { playerId: number; address: string }[] = [];
   const playerIdsOnTele = new Set(players.map(p => p.id));
   for (const c of getAllTeleCashoutsByPlayer()) {
     if (!playerIdsOnTele.has(c.player_id)) continue;
-    cashoutMap.set(c.address.toLowerCase(), { playerId: c.player_id, original: c.address });
+    cashoutEntries.push({ playerId: c.player_id, address: c.address });
   }
 
-  if (walletMere && cashoutMap.size > 0) {
-    try {
-      const mereTxs = await fetchAllTronTxs(walletMere);
-      const mereAddr = walletMere.toLowerCase();
+  if (walletMere && cashoutEntries.length > 0) {
+    const mereAddr = walletMere.toLowerCase();
+    const scannedAddresses = new Set<string>();
 
-      for (const tx of mereTxs) {
-        if ((tx.from ?? "").toLowerCase() !== mereAddr) continue; // sortants seulement
-        const entry = cashoutMap.get((tx.to ?? "").toLowerCase());
-        if (!entry) continue;
+    for (const entry of cashoutEntries) {
+      const addrLower = entry.address.toLowerCase();
+      if (scannedAddresses.has(addrLower)) continue;
+      scannedAddresses.add(addrLower);
 
-        const changed = insertWalletTransactionByHash({
-          player_id: entry.playerId,
-          game_id: teleGameId,
-          type: "withdrawal",
-          amount: toAmt(tx),
-          currency: "USDT",
-          tx_date: toDate(tx),
-          tron_tx_hash: tx.transaction_id,
-          counterparty_address: tx.to ?? null, // which cashout wallet received
-        });
-        if (changed) {
-          totalCashouts++;
-          const r = results.find(r => {
-            const p = players.find(p => p.id === entry.playerId);
-            return p && r.player === p.name;
+      const player = players.find(p => p.id === entry.playerId);
+      try {
+        const txs = await fetchAllTronTxs(entry.address);
+        for (const tx of txs) {
+          if ((tx.to ?? "").toLowerCase() !== addrLower) continue;
+          if ((tx.from ?? "").toLowerCase() !== mereAddr) continue;
+
+          const changed = insertWalletTransactionByHash({
+            player_id: entry.playerId,
+            game_id: teleGameId,
+            type: "withdrawal",
+            amount: toAmt(tx),
+            currency: "USDT",
+            tx_date: toDate(tx),
+            tron_tx_hash: tx.transaction_id,
+            counterparty_address: tx.from ?? null,
           });
-          if (r) r.cashouts++;
+          if (changed) {
+            totalCashouts++;
+            const r = results.find(r => player && r.player === player.name);
+            if (r) r.cashouts++;
+          }
         }
+      } catch (e: any) {
+        results.push({ player: player?.name ?? entry.address.slice(0, 8), deposits: 0, cashouts: 0, error: e.message });
       }
-    } catch (e: any) {
-      results.push({ player: "WALLET MERE", deposits: 0, cashouts: 0, error: e.message });
     }
   }
 
@@ -190,7 +193,7 @@ export async function POST() {
     deposits: totalDeposits,
     cashouts: totalCashouts,
     wallet_mere_configured: !!walletMere,
-    cashout_wallets_configured: cashoutMap.size,
+    cashout_wallets_configured: cashoutEntries.length,
     results,
   });
 }
