@@ -1,7 +1,8 @@
 import { getDb } from "@/lib/db";
-import { sendMsg } from "./helpers";
+import { sendMsg, OWNER_IDS } from "./helpers";
+import { handleOnboardingWelcome } from "./onboarding";
 
-export async function handleStart(chatId: number, fromId: number, fromName: string) {
+export async function handleStart(chatId: number, fromId: number, fromName: string, from?: any) {
   const db = getDb();
   // Check if this user is already linked to a player
   const linked = db.prepare(
@@ -18,10 +19,17 @@ export async function handleStart(chatId: number, fromId: number, fromName: stri
       `<code>/deal</code> — tes deals\n` +
       `<code>/cashout 500</code> — demander un retrait`
     );
-  } else {
+  } else if (OWNER_IDS.has(fromId)) {
     await sendMsg(chatId,
-      `👋 Bienvenue <b>${fromName}</b> !\n` +
-      `<i>Tu n'es pas encore lié à un joueur. L'opérateur s'en occupe.</i>`
+      `👋 <b>${fromName}</b> — mode admin actif.`
     );
+  } else {
+    // New user → onboarding funnel
+    await handleOnboardingWelcome(chatId, {
+      id: fromId,
+      first_name: from?.first_name ?? fromName,
+      last_name: from?.last_name,
+      username: from?.username,
+    });
   }
 }

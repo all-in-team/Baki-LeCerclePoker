@@ -502,6 +502,19 @@ function initSchema(db: Database.Database) {
     `);
   }
 
+  // Onboarding leads — track funnel from Instagram → bot → group
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS onboarding_leads (
+      id                INTEGER PRIMARY KEY AUTOINCREMENT,
+      telegram_id       INTEGER NOT NULL UNIQUE,
+      telegram_username TEXT,
+      first_name        TEXT,
+      stage             TEXT NOT NULL DEFAULT 'welcome' CHECK(stage IN ('welcome','discovered','joined')),
+      created_at        TEXT NOT NULL DEFAULT (datetime('now')),
+      last_seen         TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+  `);
+
   // Exchange rates for multi-currency P&L normalization
   db.prepare(`INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)`).run("exchange_rate_cny_usdt", "0.138");
   db.prepare(`INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)`).run("exchange_rate_eur_usdt", "1.08");

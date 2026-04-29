@@ -8,6 +8,7 @@ import {
   sendMsg, getSession, handleRawMessage, registerCommandHandlers,
   OWNER_IDS, AGENT_CHAT_ID,
 } from "@/lib/telegram-commands";
+import { handleOnboardingCallback } from "@/lib/telegram-commands/onboarding";
 
 // Register command handlers for the raw-message flow (breaks circular dep)
 registerCommandHandlers({
@@ -25,6 +26,16 @@ export async function POST(req: NextRequest) {
   }
 
   const update = await req.json();
+
+  // Handle inline keyboard button clicks
+  if (update.callback_query) {
+    const cbData: string = update.callback_query.data ?? "";
+    if (cbData.startsWith("onb_")) {
+      await handleOnboardingCallback(update.callback_query);
+    }
+    return NextResponse.json({ ok: true });
+  }
+
   const msg = update.message;
   const chatId = msg?.chat?.id;
 
@@ -53,10 +64,10 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ ok: true });
   }
 
-  // /start is available to ALL users (echoes chat_id for linking)
+  // /start is available to ALL users
   if (msg?.text?.startsWith("/start")) {
     const fromName = [msg.from?.first_name, msg.from?.last_name].filter(Boolean).join(" ") || "Utilisateur";
-    await handleStart(chatId, msg.from?.id, fromName);
+    await handleStart(chatId, msg.from?.id, fromName, msg.from);
     return NextResponse.json({ ok: true });
   }
 
