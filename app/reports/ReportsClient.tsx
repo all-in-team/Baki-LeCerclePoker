@@ -128,13 +128,21 @@ export default function ReportsClient({ games, players: initialPlayers }: { game
   const [creatingFor, setCreatingFor] = useState<number | null>(null);
   const [newPlayerName, setNewPlayerName] = useState("");
   const [creatingBusy, setCreatingBusy] = useState(false);
+  const [showScheduleConfig, setShowScheduleConfig] = useState(false);
+  const [schedules, setSchedules] = useState<{ id: number; club_id: string; game_id: number; cadence: string; start_date: string; club_name: string | null; game_name: string }[]>([]);
+  const [newSchedule, setNewSchedule] = useState({ club_id: "", game_id: 0, cadence: "daily", start_date: todayISO() });
+  const [scheduleClubs, setScheduleClubs] = useState<Club[]>([]);
   const [savingClub, setSavingClub] = useState(false);
   const [clubSaved, setClubSaved] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
+  const [missingReports, setMissingReports] = useState<{ club_id: string; game_id: number; club_name: string; game_name: string; date: string }[]>([]);
+  const [skipReason, setSkipReason] = useState("");
+  const [skippingKey, setSkippingKey] = useState<string | null>(null);
 
   useEffect(() => {
     loadReports();
     loadClubs(gameId);
+    loadMissingReports();
     const stop = (e: DragEvent) => e.preventDefault();
     document.addEventListener("dragover", stop);
     document.addEventListener("drop", stop);
@@ -143,6 +151,45 @@ export default function ReportsClient({ games, players: initialPlayers }: { game
       document.removeEventListener("drop", stop);
     };
   }, []);
+
+  async function loadMissingReports() {
+    const data = await fetch("/api/reports/missing").then(r => r.json());
+    setMissingReports(Array.isArray(data) ? data : []);
+  }
+
+  async function loadSchedules() {
+    const data = await fetch("/api/reports/schedules").then(r => r.json());
+    setSchedules(Array.isArray(data) ? data : []);
+  }
+
+  async function addSchedule() {
+    if (!newSchedule.club_id || !newSchedule.game_id) return;
+    await fetch("/api/reports/schedules", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(newSchedule),
+    });
+    loadSchedules();
+    loadMissingReports();
+  }
+
+  async function removeSchedule(id: number) {
+    await fetch(`/api/reports/schedules?id=${id}`, { method: "DELETE" });
+    loadSchedules();
+    loadMissingReports();
+  }
+
+  async function markNoGame(clubId: string, gameId: number, date: string) {
+    if (!skipReason.trim()) return;
+    await fetch("/api/reports/skip-days", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ club_id: clubId, game_id: gameId, skip_date: date, reason: skipReason.trim() }),
+    });
+    setSkippingKey(null);
+    setSkipReason("");
+    loadMissingReports();
+  }
 
   async function loadClubs(gId: number) {
     const data = await fetch(`/api/clubs?game_id=${gId}`).then(r => r.json());
@@ -344,6 +391,63 @@ export default function ReportsClient({ games, players: initialPlayers }: { game
   }
 
   return (
+    <>
+    {/* Missing reports alert */}
+    {missingReports.length > 0 && (
+      <div style={{ background: "rgba(248,113,113,0.08)", border: "1px solid rgba(248,113,113,0.3)", borderRadius: 10, padding: "14px 20px", marginBottom: 20 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
+          <span style={{ fontSize: 16 }}>&#9888;</span>
+          <span style={{ fontSize: 13, fontWeight: 700, color: "#f87171" }}>
+            {missingReports.length} rapport{missingReports.length > 1 ? "s" : ""} manquant{missingReports.length > 1 ? "s" : ""}
+          </span>
+        </div>
+        <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+          {missingReports.slice(0, 15).map(m => {
+            const key = `${m.game_id}-${m.club_id}-${m.date}`;
+            const isSkipping = skippingKey === key;
+            return (
+              <div key={key} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 12px", borderRadius: 7, background: "var(--bg-raised)", border: "1px solid var(--border)" }}>
+                <span style={{ fontSize: 12, fontWeight: 600, color: GAME_COLOR[m.game_name] ?? "var(--text)", minWidth: 50 }}>{m.game_name}</span>
+                <span style={{ fontSize: 12, fontWeight: 600, color: "var(--text)" }}>{m.club_name}</span>
+                <span style={{ fontSize: 12, color: "#f87171", fontWeight: 700 }}>{m.date}</span>
+                <span style={{ flex: 1 }} />
+                {isSkipping ? (
+                  <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                    <input
+                      value={skipReason}
+                      onChange={e => setSkipReason(e.target.value)}
+                      placeholder="Raison (ex: pas de game)"
+                      autoFocus
+                      onKeyDown={e => { if (e.key === "Enter") markNoGame(m.club_id, m.game_id, m.date); if (e.key === "Escape") { setSkippingKey(null); setSkipReason(""); } }}
+                      style={{ padding: "5px 8px", borderRadius: 5, fontSize: 11, background: "var(--bg-elevated)", border: "1px solid var(--border)", color: "var(--text)", outline: "none", width: 180 }}
+                    />
+                    <button onClick={() => markNoGame(m.club_id, m.game_id, m.date)}
+                      style={{ padding: "5px 10px", borderRadius: 5, fontSize: 11, fontWeight: 600, background: "rgba(34,197,94,0.12)", color: "var(--green)", border: "1px solid rgba(34,197,94,0.3)", cursor: "pointer" }}>
+                      OK
+                    </button>
+                    <button onClick={() => { setSkippingKey(null); setSkipReason(""); }}
+                      style={{ padding: "5px 8px", borderRadius: 5, fontSize: 11, background: "var(--bg-elevated)", color: "var(--text-muted)", border: "1px solid var(--border)", cursor: "pointer" }}>
+                      &#10005;
+                    </button>
+                  </div>
+                ) : (
+                  <button onClick={() => { setSkippingKey(key); setSkipReason(""); }}
+                    style={{ padding: "4px 10px", borderRadius: 5, fontSize: 11, fontWeight: 600, background: "var(--bg-elevated)", color: "var(--text-muted)", border: "1px solid var(--border)", cursor: "pointer", whiteSpace: "nowrap" }}>
+                    Pas de game
+                  </button>
+                )}
+              </div>
+            );
+          })}
+          {missingReports.length > 15 && (
+            <span style={{ fontSize: 11, color: "var(--text-dim)", paddingLeft: 12 }}>
+              …et {missingReports.length - 15} autres
+            </span>
+          )}
+        </div>
+      </div>
+    )}
+
     <div style={{ display: "grid", gridTemplateColumns: "1fr 360px", gap: 24, alignItems: "start" }}>
 
       {showActionModal && rows && (
@@ -701,7 +805,73 @@ export default function ReportsClient({ games, players: initialPlayers }: { game
           })}
       </div>
 
+      {/* Schedule config */}
+      <div style={{ background: "var(--bg-raised)", border: "1px solid var(--border)", borderRadius: 10, marginTop: 16 }}>
+        <button onClick={() => { setShowScheduleConfig(!showScheduleConfig); if (!showScheduleConfig) loadSchedules(); }}
+          style={{ padding: "14px 20px", width: "100%", display: "flex", alignItems: "center", justifyContent: "space-between", background: "none", border: "none", borderBottom: showScheduleConfig ? "1px solid var(--border)" : "none", cursor: "pointer", color: "var(--text)" }}>
+          <span style={{ fontSize: 13, fontWeight: 700 }}>Suivi des rapports</span>
+          {showScheduleConfig ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+        </button>
+        {showScheduleConfig && (
+          <div style={{ padding: "14px 16px" }}>
+            {schedules.length > 0 && (
+              <div style={{ marginBottom: 14, display: "flex", flexDirection: "column", gap: 6 }}>
+                {schedules.map(s => (
+                  <div key={s.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 10px", borderRadius: 6, background: "var(--bg-surface)", border: "1px solid var(--border)" }}>
+                    <span style={{ fontSize: 10, fontWeight: 700, color: GAME_COLOR[s.game_name] ?? "var(--text)", background: (GAME_COLOR[s.game_name] ?? "#888") + "18", padding: "2px 6px", borderRadius: 4 }}>{s.game_name}</span>
+                    <span style={{ fontSize: 12, fontWeight: 600, color: "var(--text)", flex: 1 }}>{s.club_name ?? s.club_id}</span>
+                    <span style={{ fontSize: 10, color: "var(--text-dim)" }}>{s.cadence === "weekdays" ? "lun-ven" : "quotidien"}</span>
+                    <button onClick={() => removeSchedule(s.id)} style={{ background: "none", border: "none", cursor: "pointer", color: "#f87171", padding: 2 }}>
+                      <Trash2 size={12} />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+            <div style={{ fontSize: 11, fontWeight: 600, color: "var(--text-muted)", marginBottom: 8, textTransform: "uppercase", letterSpacing: "0.06em" }}>Ajouter un suivi</div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+              <select
+                value={newSchedule.game_id || ""}
+                onChange={async e => { const gId = Number(e.target.value); setNewSchedule(s => ({ ...s, game_id: gId, club_id: "" })); const d = await fetch(`/api/clubs?game_id=${gId}`).then(r => r.json()); setScheduleClubs(Array.isArray(d) ? d : []); }}
+                style={{ fontSize: 12, padding: "7px 10px", borderRadius: 6, background: "var(--bg-elevated)", border: "1px solid var(--border)", color: "var(--text)", cursor: "pointer" }}>
+                <option value="">Game…</option>
+                {games.map(g => <option key={g.id} value={g.id}>{g.name}</option>)}
+              </select>
+              <select
+                value={newSchedule.club_id}
+                onChange={e => setNewSchedule(s => ({ ...s, club_id: e.target.value }))}
+                style={{ fontSize: 12, padding: "7px 10px", borderRadius: 6, background: "var(--bg-elevated)", border: "1px solid var(--border)", color: "var(--text)", cursor: "pointer" }}>
+                <option value="">Club…</option>
+                {scheduleClubs.map(c => <option key={c.external_club_id} value={c.external_club_id}>{c.club_name ? `${c.club_name} #${c.external_club_id}` : `#${c.external_club_id}`}</option>)}
+              </select>
+              <div style={{ display: "flex", gap: 8 }}>
+                <select
+                  value={newSchedule.cadence}
+                  onChange={e => setNewSchedule(s => ({ ...s, cadence: e.target.value }))}
+                  style={{ flex: 1, fontSize: 12, padding: "7px 10px", borderRadius: 6, background: "var(--bg-elevated)", border: "1px solid var(--border)", color: "var(--text)", cursor: "pointer" }}>
+                  <option value="daily">Quotidien</option>
+                  <option value="weekdays">Lun-Ven</option>
+                </select>
+                <input
+                  type="date"
+                  value={newSchedule.start_date}
+                  onChange={e => setNewSchedule(s => ({ ...s, start_date: e.target.value }))}
+                  title="Date de début du suivi"
+                  style={{ flex: 1, fontSize: 12, padding: "7px 10px", borderRadius: 6, background: "var(--bg-elevated)", border: "1px solid var(--border)", color: "var(--text)", outline: "none" }}
+                />
+              </div>
+              <button onClick={addSchedule}
+                disabled={!newSchedule.club_id || !newSchedule.game_id}
+                style={{ padding: "8px 14px", borderRadius: 6, fontSize: 12, fontWeight: 600, background: newSchedule.club_id && newSchedule.game_id ? "rgba(34,197,94,0.12)" : "var(--bg-elevated)", color: newSchedule.club_id && newSchedule.game_id ? "var(--green)" : "var(--text-dim)", border: `1px solid ${newSchedule.club_id && newSchedule.game_id ? "rgba(34,197,94,0.3)" : "var(--border)"}`, cursor: newSchedule.club_id && newSchedule.game_id ? "pointer" : "default" }}>
+                Activer le suivi
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
+
       <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
     </div>
+    </>
   );
 }

@@ -890,3 +890,94 @@ export function insertWalletTransactionByHash(data: {
   }
   return 0; // no new row imported (caller's "deposits++" counter stays accurate)
 }
+
+// ── Report Schedule Tracking ────────────────────────────────
+export function getClubSchedules() {
+  return getDb().prepare(`
+    SELECT crs.*, c.club_name, g.name AS game_name
+    FROM club_report_schedules crs
+    LEFT JOIN clubs c ON c.external_club_id = crs.club_id AND c.game_id = crs.game_id
+    JOIN games g ON g.id = crs.game_id
+    WHERE crs.active = 1
+    ORDER BY g.name, c.club_name
+  `).all() as {
+    id: number; club_id: string; game_id: number; cadence: string;
+    start_date: string; active: number; club_name: string | null; game_name: string;
+  }[];
+}
+
+export function upsertClubSchedule(data: { club_id: string; game_id: number; cadence: string; start_date: string }) {
+  return getDb().prepare(`
+    INSERT INTO club_report_schedules (club_id, game_id, cadence, start_date)
+    VALUES (@club_id, @game_id, @cadence, @start_date)
+    ON CONFLICT(game_id, club_id) DO UPDATE SET
+      cadence = excluded.cadence,
+      start_date = excluded.start_date,
+      active = 1
+  `).run(data);
+}
+
+export function deleteClubSchedule(id: number) {
+  getDb().prepare(`DELETE FROM club_report_schedules WHERE id = ?`).run(id);
+}
+
+export function getReportSkipDays(filters?: { club_id?: string; game_id?: number }) {
+  let q = `SELECT * FROM report_skip_days WHERE 1=1`;
+  const params: Record<string, unknown> = {};
+  if (filters?.club_id) { q += ` AND club_id = @club_id`; params.club_id = filters.club_id; }
+  if (filters?.game_id) { q += ` AND game_id = @game_id`; params.game_id = filters.game_id; }
+  return getDb().prepare(q).all(params) as { id: number; club_id: string; game_id: number; skip_date: string; reason: string | null }[];
+}
+
+export function upsertReportSkipDay(data: { club_id: string; game_id: number; skip_date: string; reason?: string }) {
+  return getDb().prepare(`
+    INSERT INTO report_skip_days (club_id, game_id, skip_date, reason)
+    VALUES (@club_id, @game_id, @skip_date, @reason)
+    ON CONFLICT(game_id, club_id, skip_date) DO UPDATE SET reason = excluded.reason
+  `).run({ ...data, reason: data.reason ?? null });
+}
+
+export function deleteReportSkipDay(id: number) {
+  getDb().prepare(`DELETE FROM report_skip_days WHERE id = ?`).run(id);
+}
+
+export function getReportDatesForClub(clubId: string, gameId: number): string[] {
+  return getDb().prepare(`
+    SELECT DISTINCT report_date FROM rakeback_reports
+    WHERE club_id = ? AND game_id = ? AND report_date IS NOT NULL
+  `).all(clubId, gameId).map((r: any) => r.report_date);
+}
+
+export function getMissingReports() {
+  const schedules = getClubSchedules();
+  const today = new Date().toISOString().slice(0, 10);
+  const missing: { club_id: string; game_id: number; club_name: string; game_name: string; date: string }[] = [];
+
+  for (const sched of schedules) {
+    const reportDates = new Set(getReportDatesForClub(sched.club_id, sched.game_id));
+    const skipDays = new Set(
+      getReportSkipDays({ club_id: sched.club_id, game_id: sched.game_id }).map(s => s.skip_date)
+    );
+
+    const d = new Date(sched.start_date);
+    const end = new Date(today);
+    while (d <= end) {
+      const ds = d.toISOString().slice(0, 10);
+      const dow = d.getDay();
+      const isExpected = sched.cadence === "weekdays" ? dow >= 1 && dow <= 5 : true;
+
+      if (isExpected && !reportDates.has(ds) && !skipDays.has(ds)) {
+        missing.push({
+          club_id: sched.club_id,
+          game_id: sched.game_id,
+          club_name: sched.club_name ?? sched.club_id,
+          game_name: sched.game_name,
+          date: ds,
+        });
+      }
+      d.setDate(d.getDate() + 1);
+    }
+  }
+
+  return missing.sort((a, b) => b.date.localeCompare(a.date));
+}

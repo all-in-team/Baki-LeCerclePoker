@@ -461,6 +461,28 @@ function initSchema(db: Database.Database) {
     CREATE INDEX IF NOT EXISTS idx_cashout_player ON cashout_requests(player_id);
   `);
 
+  // Report schedule tracking — detect missing reports per club
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS club_report_schedules (
+      id         INTEGER PRIMARY KEY AUTOINCREMENT,
+      club_id    TEXT NOT NULL,
+      game_id    INTEGER NOT NULL REFERENCES games(id),
+      cadence    TEXT NOT NULL DEFAULT 'daily' CHECK(cadence IN ('daily','weekdays')),
+      start_date TEXT NOT NULL,
+      active     INTEGER NOT NULL DEFAULT 1,
+      UNIQUE(game_id, club_id)
+    );
+    CREATE TABLE IF NOT EXISTS report_skip_days (
+      id         INTEGER PRIMARY KEY AUTOINCREMENT,
+      club_id    TEXT NOT NULL,
+      game_id    INTEGER NOT NULL REFERENCES games(id),
+      skip_date  TEXT NOT NULL,
+      reason     TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      UNIQUE(game_id, club_id, skip_date)
+    );
+  `);
+
   // Exchange rates for multi-currency P&L normalization
   db.prepare(`INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)`).run("exchange_rate_cny_usdt", "0.138");
   db.prepare(`INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)`).run("exchange_rate_eur_usdt", "1.08");
