@@ -75,19 +75,29 @@ export async function createPlayerGroup(
       })
     );
 
-    // Extract chat ID from the result
-    const updates = result as any;
-    const chat = updates.chats?.[0];
-    if (!chat) throw new Error("no chat in response");
+    // Extract chat ID — response can be Updates, InvitedUsers wrapper, etc.
+    const raw = result as any;
+    const chats = raw.chats ?? raw.updates?.chats ?? [];
+    let chat = chats[0];
+    if (!chat && raw.updates) {
+      // InvitedUsers response: { updates: Updates { chats: [...] } }
+      const innerChats = raw.updates.chats ?? [];
+      chat = innerChats[0];
+    }
+    if (!chat) {
+      console.error("[USERBOT] unexpected CreateChat response:", JSON.stringify(raw).slice(0, 500));
+      throw new Error("no chat in response");
+    }
 
-    const chatId = -chat.id; // Telegram groups have negative IDs for bots
+    const rawChatId = typeof chat.id === "bigint" ? Number(chat.id) : chat.id;
+    const chatId = -rawChatId;
 
     // Add the bot to the group
     const botId = parseInt(botToken.split(":")[0]);
     try {
       await client.invoke(
         new Api.messages.AddChatUser({
-          chatId: chat.id,
+          chatId: BigInt(rawChatId) as any,
           userId: botId,
           fwdLimit: 0,
         })
@@ -101,7 +111,7 @@ export async function createPlayerGroup(
     try {
       const exported = await client.invoke(
         new Api.messages.ExportChatInvite({
-          peer: chat.id,
+          peer: rawChatId,
         })
       );
       inviteLink = (exported as any).link ?? "";
