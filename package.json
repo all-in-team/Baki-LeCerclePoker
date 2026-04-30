@@ -22,7 +22,7 @@
     "xlsx": "^0.18.5"
   },
   "engines": {
-    "node": ">=20"
+    "node": "20.x"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4",
