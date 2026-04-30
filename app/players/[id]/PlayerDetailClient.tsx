@@ -22,6 +22,7 @@ interface Tx {
 interface GameDeal {
   id: number; game_id: number; game_name: string;
   action_pct: number; rakeback_pct: number;
+  start_date: string | null;
 }
 
 interface Game { id: number; name: string; }
@@ -42,7 +43,7 @@ const STATUS_COLOR: Record<string, "green" | "gray" | "red"> = {
   active: "green", inactive: "gray", churned: "red",
 };
 
-const DEAL_DEFAULTS = { action_pct: "50", rakeback_pct: "0" };
+const DEAL_DEFAULTS = { action_pct: "50", rakeback_pct: "0", start_date: "" };
 
 export default function PlayerDetailClient({ player, transactions, gameDeals: initialDeals, allGames, stats, gameIds: initialGameIds }: {
   player: Player; transactions: Tx[]; gameDeals: GameDeal[]; allGames: Game[]; stats: Stats;
@@ -74,6 +75,7 @@ export default function PlayerDetailClient({ player, transactions, gameDeals: in
       body: JSON.stringify({
         player_id: player.id, game_id: Number(selectedGame),
         action_pct: Number(dealForm.action_pct), rakeback_pct: Number(dealForm.rakeback_pct),
+        start_date: dealForm.start_date || null,
       }),
     });
     if (isTele && tronAddress.trim()) {
@@ -116,6 +118,14 @@ export default function PlayerDetailClient({ player, transactions, gameDeals: in
       body: JSON.stringify({ game_id_row_id: rowId }),
     });
     setGameIds(ids => ids.filter(x => x.id !== rowId));
+  }
+
+  async function updateDeal(dealId: number, field: string, value: unknown) {
+    await fetch(`/api/games/deals/${dealId}`, {
+      method: "PATCH", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ [field]: value }),
+    });
+    setDeals(ds => ds.map(d => d.id === dealId ? { ...d, [field]: value } : d));
   }
 
   async function deleteTx(id: number) {
@@ -197,6 +207,7 @@ export default function PlayerDetailClient({ player, transactions, gameDeals: in
                     <span style={{ fontSize: 12, color: "var(--text-dim)" }}>
                       Action <span style={{ color: "var(--gold)", fontWeight: 600 }}>{d.action_pct}%</span>
                       {d.rakeback_pct > 0 && <> · RB <span style={{ color: "var(--green)", fontWeight: 600 }}>{d.rakeback_pct}%</span></>}
+                      {d.start_date && <> · Début <span style={{ color: "var(--text-muted)", fontWeight: 600 }}>{d.start_date}</span></>}
                     </span>
                     <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 10 }}>
                       {ids.length > 0
@@ -214,6 +225,20 @@ export default function PlayerDetailClient({ player, transactions, gameDeals: in
                   {/* Expanded: IDs + add */}
                   {isOpen && (
                     <div style={{ padding: "12px 20px 16px 36px", background: "var(--bg-surface)", borderTop: `1px solid ${gc}25` }}>
+                      {/* Start date */}
+                      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
+                        <label style={{ fontSize: 11, fontWeight: 600, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.07em", whiteSpace: "nowrap" }}>Date de début</label>
+                        <input type="date" value={d.start_date ?? ""}
+                          onChange={e => updateDeal(d.id, "start_date", e.target.value || null)}
+                          style={{ padding: "5px 8px", borderRadius: 6, fontSize: 12, background: "var(--bg-elevated)", border: "1px solid var(--border)", color: "var(--text)", outline: "none" }} />
+                        {d.start_date && (
+                          <button onClick={() => updateDeal(d.id, "start_date", null)}
+                            style={{ background: "none", border: "none", cursor: "pointer", padding: 2, color: "var(--text-dim)", display: "flex", alignItems: "center", fontSize: 11 }}>
+                            <X size={10} />
+                          </button>
+                        )}
+                        <span style={{ fontSize: 10, color: "var(--text-dim)" }}>Rapports avant cette date ignorés</span>
+                      </div>
                       {/* ID badges */}
                       <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 12 }}>
                         {ids.length === 0 && (
@@ -280,6 +305,16 @@ export default function PlayerDetailClient({ player, transactions, gameDeals: in
                   onChange={e => setDealForm(f => ({ ...f, rakeback_pct: e.target.value }))}
                   placeholder="0"
                   style={{ width: "100%", padding: "9px 12px", background: "var(--bg-elevated)", border: "1px solid var(--border)", borderRadius: 7, color: "var(--green)", fontSize: 14, fontWeight: 600, boxSizing: "border-box" }} />
+              </div>
+            </div>
+
+            <div style={{ marginBottom: 16 }}>
+              <label style={{ display: "block", fontSize: 12, fontWeight: 600, color: "var(--text-muted)", marginBottom: 6, textTransform: "uppercase", letterSpacing: "0.07em" }}>Date de début</label>
+              <input type="date" value={dealForm.start_date}
+                onChange={e => setDealForm(f => ({ ...f, start_date: e.target.value }))}
+                style={{ width: "100%", padding: "9px 12px", background: "var(--bg-elevated)", border: "1px solid var(--border)", borderRadius: 7, color: "var(--text)", fontSize: 14, boxSizing: "border-box" }} />
+              <div style={{ fontSize: 11, color: "var(--text-dim)", marginTop: 4 }}>
+                Les rapports avant cette date ne seront pas comptés pour ce joueur
               </div>
             </div>
 

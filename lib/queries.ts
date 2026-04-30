@@ -151,15 +151,16 @@ export function getAllTeleCashoutsByPlayer() {
   `).all() as { player_id: number; address: string }[];
 }
 
-export function upsertPlayerGameDeal(data: { player_id: number; game_id: number; action_pct: number; rakeback_pct: number }) {
+export function upsertPlayerGameDeal(data: { player_id: number; game_id: number; action_pct: number; rakeback_pct: number; start_date?: string | null }) {
   const db = getDb();
   const r = db.prepare(`
-    INSERT INTO player_game_deals (player_id, game_id, action_pct, rakeback_pct)
-    VALUES (@player_id, @game_id, @action_pct, @rakeback_pct)
+    INSERT INTO player_game_deals (player_id, game_id, action_pct, rakeback_pct, start_date)
+    VALUES (@player_id, @game_id, @action_pct, @rakeback_pct, @start_date)
     ON CONFLICT(player_id, game_id) DO UPDATE SET
       action_pct = excluded.action_pct,
-      rakeback_pct = excluded.rakeback_pct
-  `).run(data);
+      rakeback_pct = excluded.rakeback_pct,
+      start_date = excluded.start_date
+  `).run({ ...data, start_date: data.start_date ?? null });
   return r.lastInsertRowid;
 }
 
@@ -815,6 +816,7 @@ export function getReportPnL(playerId?: number): PnLReportRow[] {
     JOIN games g ON g.id = rr.game_id
     LEFT JOIN player_game_deals pgd ON pgd.player_id = re.player_id AND pgd.game_id = rr.game_id
     WHERE re.player_id IS NOT NULL
+      AND (pgd.start_date IS NULL OR COALESCE(rr.report_date, substr(rr.created_at, 1, 10)) >= pgd.start_date)
   `;
   const params: Record<string, unknown> = {};
   if (playerId) { q += ` AND re.player_id = @playerId`; params.playerId = playerId; }

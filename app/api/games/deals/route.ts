@@ -16,6 +16,7 @@ export async function POST(req: NextRequest) {
     game_id: Number(body.game_id),
     action_pct: Number(body.action_pct),
     rakeback_pct: Number(body.rakeback_pct),
+    start_date: body.start_date || null,
   });
   return NextResponse.json({ id }, { status: 201 });
 }

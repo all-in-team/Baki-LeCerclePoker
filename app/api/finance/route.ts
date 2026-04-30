@@ -7,6 +7,8 @@ const PLAYER_RB  = `(re.amount + re.insurance_amount) * COALESCE(pgd.rakeback_pc
 const WL_AGENCY  = `re.winnings_amount * COALESCE(pgd.action_pct, 0) / 100.0`;
 const WL_PLAYER  = `re.winnings_amount * (1.0 - COALESCE(pgd.action_pct, 0) / 100.0)`;
 
+const START_DATE_FILTER = ` AND (pgd.start_date IS NULL OR COALESCE(rr.report_date, substr(rr.created_at, 1, 10)) >= pgd.start_date)`;
+
 function rangeCond(range: string | null) {
   if (range === "48h")   return ` AND rr.report_date >= date('now', '-2 days')`;
   if (range === "week")  return ` AND rr.report_date >= date('now', '-7 days')`;
@@ -31,7 +33,7 @@ export async function GET(req: NextRequest) {
     FROM rakeback_entries re
     JOIN rakeback_reports rr ON rr.id = re.report_id
     LEFT JOIN player_game_deals pgd ON pgd.player_id = re.player_id AND pgd.game_id = rr.game_id
-    WHERE re.player_id IS NOT NULL${rc}
+    WHERE re.player_id IS NOT NULL${START_DATE_FILTER}${rc}
     GROUP BY re.currency
     ORDER BY re.currency
   `).all();
@@ -50,7 +52,7 @@ export async function GET(req: NextRequest) {
     JOIN rakeback_reports rr ON rr.id = re.report_id
     JOIN players p ON p.id = re.player_id
     LEFT JOIN player_game_deals pgd ON pgd.player_id = re.player_id AND pgd.game_id = rr.game_id
-    WHERE re.player_id IS NOT NULL${rc}
+    WHERE re.player_id IS NOT NULL${START_DATE_FILTER}${rc}
     GROUP BY p.id, re.currency
     ORDER BY ABS(player_rb + wl_player) DESC
   `).all();
@@ -71,7 +73,7 @@ export async function GET(req: NextRequest) {
     FROM rakeback_entries re
     JOIN rakeback_reports rr ON rr.id = re.report_id
     LEFT JOIN player_game_deals pgd ON pgd.player_id = re.player_id AND pgd.game_id = rr.game_id
-    WHERE re.player_id IS NOT NULL
+    WHERE re.player_id IS NOT NULL${START_DATE_FILTER}
     GROUP BY rr.id, re.currency
     ORDER BY latest_date DESC
   `).all();
@@ -90,7 +92,7 @@ export async function GET(req: NextRequest) {
     FROM rakeback_entries re
     JOIN rakeback_reports rr ON rr.id = re.report_id
     LEFT JOIN player_game_deals pgd ON pgd.player_id = re.player_id AND pgd.game_id = rr.game_id
-    WHERE re.player_id IS NOT NULL
+    WHERE re.player_id IS NOT NULL${START_DATE_FILTER}
     GROUP BY day, re.currency
     ORDER BY day DESC
   `).all();

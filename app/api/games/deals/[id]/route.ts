@@ -10,12 +10,14 @@ export async function DELETE(_req: NextRequest, { params }: { params: Promise<{ 
 
 export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-  const { action_pct, rakeback_pct } = await req.json();
-  getDb().prepare(`
-    UPDATE player_game_deals SET
-      action_pct   = COALESCE(?, action_pct),
-      rakeback_pct = COALESCE(?, rakeback_pct)
-    WHERE id = ?
-  `).run(action_pct ?? null, rakeback_pct ?? null, Number(id));
+  const body = await req.json();
+  const sets: string[] = [];
+  const vals: unknown[] = [];
+  if (body.action_pct !== undefined) { sets.push("action_pct = ?"); vals.push(body.action_pct); }
+  if (body.rakeback_pct !== undefined) { sets.push("rakeback_pct = ?"); vals.push(body.rakeback_pct); }
+  if ("start_date" in body) { sets.push("start_date = ?"); vals.push(body.start_date ?? null); }
+  if (sets.length === 0) return NextResponse.json({ ok: true });
+  vals.push(Number(id));
+  getDb().prepare(`UPDATE player_game_deals SET ${sets.join(", ")} WHERE id = ?`).run(...vals);
   return NextResponse.json({ ok: true });
 }

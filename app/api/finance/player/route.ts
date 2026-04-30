@@ -37,7 +37,8 @@ export async function GET(req: NextRequest) {
     FROM rakeback_entries re
     JOIN rakeback_reports rr ON rr.id = re.report_id
     LEFT JOIN player_game_deals pgd ON pgd.player_id = re.player_id AND pgd.game_id = rr.game_id
-    WHERE re.player_id = ?${rangeCond(range)}
+    WHERE re.player_id = ?
+      AND (pgd.start_date IS NULL OR COALESCE(rr.report_date, substr(rr.created_at, 1, 10)) >= pgd.start_date)${rangeCond(range)}
     ORDER BY COALESCE(rr.report_date, rr.created_at) DESC
   `).all(Number(player_id));
 
