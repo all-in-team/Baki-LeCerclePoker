@@ -602,11 +602,12 @@ export default function WalletsClient({
                             </div>
                             {playerTxs.map(tx => {
                               const isDeposit = tx.type === "deposit";
+                              const beforeStart = !!row.start_date && tx.tx_date < row.start_date;
                               const cp = tx.counterparty_address;
                               const cpShort = cp ? `${cp.slice(0, 6)}…${cp.slice(-6)}` : "—";
                               const cpLabel = isDeposit ? "De" : "Vers";
                               return (
-                                <div key={tx.id} style={{ display: "grid", gridTemplateColumns: "100px 110px 120px 1fr 60px", gap: 12, padding: "8px 0", borderBottom: "1px solid var(--border)", alignItems: "center" }}>
+                                <div key={tx.id} style={{ display: "grid", gridTemplateColumns: "100px 110px 120px 1fr 60px", gap: 12, padding: "8px 0", borderBottom: "1px solid var(--border)", alignItems: "center", opacity: beforeStart ? 0.35 : 1 }}>
                                   <span style={{ fontSize: 12, color: "var(--text-muted)", whiteSpace: "nowrap" }}>{tx.tx_date}</span>
                                   <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
                                     {isDeposit ? <ArrowDownLeft size={13} color="#f87171" /> : <ArrowUpRight size={13} color="var(--green)" />}
