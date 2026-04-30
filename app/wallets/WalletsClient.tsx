@@ -84,6 +84,7 @@ export default function WalletsClient({
   const [expandedWallet, setExpandedWallet] = useState<number | null>(null);
   const [walletInlineVals, setWalletInlineVals] = useState<{ game_wallets: string[]; cashouts: string[] }>({ game_wallets: [""], cashouts: [""] });
   const [expandedTx, setExpandedTx] = useState<number | null>(null);
+  const [manualTx, setManualTx] = useState({ type: "deposit" as "deposit" | "withdrawal", amount: "" });
 
   async function openWalletConfig(focusPlayerId?: number) {
     const [playersRes, settingsRes] = await Promise.all([
@@ -202,6 +203,20 @@ export default function WalletsClient({
   async function deleteDeal(dealId: number, playerName: string) {
     if (!confirm(`Retirer "${playerName}" de TELE AKPOKER ?\n\nLes transactions existantes restent en base.`)) return;
     await fetch(`/api/games/deals/${dealId}`, { method: "DELETE" });
+    window.location.reload();
+  }
+
+  async function addManualTx(playerId: number, gameId: number) {
+    const amt = Number(manualTx.amount);
+    if (!amt || amt <= 0) return;
+    await fetch("/api/wallets", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        player_id: playerId, game_id: gameId,
+        type: manualTx.type, amount: amt, currency: "USDT",
+        note: "manuel", tx_date: new Date().toISOString().slice(0, 10),
+      }),
+    });
     window.location.reload();
   }
 
@@ -580,11 +595,7 @@ export default function WalletsClient({
                   {isTxOpen && (
                     <tr style={{ borderBottom: "1px solid var(--border)", background: "var(--bg-surface)" }}>
                       <td colSpan={8} style={{ padding: "12px 20px" }}>
-                        {playerTxs.length === 0 ? (
-                          <div style={{ fontSize: 12, color: "var(--text-dim)", padding: "12px 0", textAlign: "center" }}>
-                            Aucune transaction pour {row.player_name}
-                          </div>
-                        ) : (
+                        {playerTxs.length > 0 && (
                           <div>
                             <div style={{ display: "grid", gridTemplateColumns: "100px 110px 120px 1fr 60px", gap: 12, padding: "6px 0 8px", borderBottom: "1px solid var(--border)", fontSize: 10, fontWeight: 700, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.07em" }}>
                               <span>Date</span><span>Type</span><span style={{ textAlign: "right" }}>Montant</span><span>Wallet</span><span style={{ textAlign: "right" }}>Tx</span>
@@ -642,6 +653,28 @@ export default function WalletsClient({
                             </div>
                           </div>
                         )}
+                        <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 10, paddingTop: 10, borderTop: "1px solid var(--border)" }}>
+                          <select
+                            value={manualTx.type}
+                            onChange={e => setManualTx(v => ({ ...v, type: e.target.value as "deposit" | "withdrawal" }))}
+                            style={{ padding: "6px 10px", borderRadius: 6, fontSize: 12, fontWeight: 600, background: "var(--bg-elevated)", border: "1px solid var(--border)", color: manualTx.type === "deposit" ? "#f87171" : "var(--green)", cursor: "pointer" }}>
+                            <option value="deposit">Dépôt (cash in)</option>
+                            <option value="withdrawal">Retrait (cash out)</option>
+                          </select>
+                          <input
+                            type="number" min="0" step="0.01"
+                            value={manualTx.amount}
+                            onChange={e => setManualTx(v => ({ ...v, amount: e.target.value }))}
+                            placeholder="Montant USDT"
+                            style={{ width: 130, padding: "6px 10px", borderRadius: 6, fontSize: 12, fontWeight: 600, background: "var(--bg-elevated)", border: "1px solid var(--border)", color: "var(--text)", outline: "none" }}
+                          />
+                          <button
+                            onClick={() => addManualTx(row.player_id, row.game_id)}
+                            disabled={!manualTx.amount || Number(manualTx.amount) <= 0}
+                            style={{ display: "flex", alignItems: "center", gap: 5, padding: "6px 12px", borderRadius: 6, fontSize: 12, fontWeight: 600, background: "rgba(34,197,94,0.12)", color: "var(--green)", border: "1px solid rgba(34,197,94,0.3)", cursor: "pointer", whiteSpace: "nowrap", opacity: !manualTx.amount || Number(manualTx.amount) <= 0 ? 0.4 : 1 }}>
+                            <Plus size={12} /> Ajouter
+                          </button>
+                        </div>
                       </td>
                     </tr>
                   )}
