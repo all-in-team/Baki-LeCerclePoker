@@ -156,7 +156,12 @@ export default function WalletsClient({
       method: "PUT", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ addresses: cashoutPayload }),
     });
-    if (res.ok) window.location.reload();
+    if (res.ok) {
+      window.location.reload();
+    } else {
+      const err = await res.json().catch(() => null);
+      alert(err?.error ?? "Erreur lors de la sauvegarde des wallets cashout");
+    }
   }
 
   async function saveWallet(playerId: number) {

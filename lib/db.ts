@@ -556,12 +556,21 @@ function initSchema(db: Database.Database) {
     db.exec(`DELETE FROM wallet_transactions WHERE type = 'withdrawal'`);
   }
 
-  // One-time fix: wallet TNBf7UHvahKbodkH8PEtwFoQk6xMLSAvNd was shared between
-  // Baki (id=2) and Hugo (id=1). It's Hugo's — remove from Baki's cashouts, then
-  // purge all auto-sync withdrawals so the next sync reimports them under the correct player.
+  // One-time fix: previous migration may have removed shared wallet from Baki — re-add it.
+  // Baki and Hugo intentionally share cashout wallet TNBf7UHvahKbodkH8PEtwFoQk6xMLSAvNd.
   const fixHugoCashouts = db.prepare(`INSERT OR IGNORE INTO _applied_fixes (name) VALUES (?)`).run("reassign_hugo_cashout_wallet_v1");
   if (fixHugoCashouts.changes > 0) {
-    db.exec(`DELETE FROM player_wallet_cashouts WHERE player_id = 2 AND address = 'TNBf7UHvahKbodkH8PEtwFoQk6xMLSAvNd'`);
+    // noop — superseded by v2 below
+  }
+
+  // Allow the same blockchain tx to be attributed to multiple players (shared cashout wallets).
+  // Change UNIQUE index from (tron_tx_hash) to (tron_tx_hash, player_id).
+  // Re-add Baki's shared wallet if removed, then purge withdrawals for clean re-import.
+  const fixSharedCashouts = db.prepare(`INSERT OR IGNORE INTO _applied_fixes (name) VALUES (?)`).run("shared_cashout_wallets_v1");
+  if (fixSharedCashouts.changes > 0) {
+    db.exec(`INSERT OR IGNORE INTO player_wallet_cashouts (player_id, address) VALUES (2, 'TNBf7UHvahKbodkH8PEtwFoQk6xMLSAvNd')`);
+    db.exec(`DROP INDEX IF EXISTS idx_wallet_tron_hash`);
+    db.exec(`CREATE UNIQUE INDEX idx_wallet_tron_hash ON wallet_transactions(tron_tx_hash, player_id) WHERE tron_tx_hash IS NOT NULL`);
     db.exec(`DELETE FROM wallet_transactions WHERE type = 'withdrawal' AND note = 'auto-sync'`);
   }
 }

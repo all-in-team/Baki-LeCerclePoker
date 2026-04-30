@@ -160,47 +160,52 @@ export async function POST() {
   }
 
   // ── Pass 2 : cashouts — scan each WALLET CASHOUT, keep only incoming from WALLET MERE
-  const cashoutEntries: { playerId: number; address: string }[] = [];
+  // Build map: address (lowercase) → [player_ids] to handle shared wallets
+  const cashoutOwners = new Map<string, { playerIds: number[]; original: string }>();
   const playerIdsOnTele = new Set(players.map(p => p.id));
   for (const c of getAllTeleCashoutsByPlayer()) {
     if (!playerIdsOnTele.has(c.player_id)) continue;
-    cashoutEntries.push({ playerId: c.player_id, address: c.address });
+    const lower = c.address.toLowerCase();
+    const existing = cashoutOwners.get(lower);
+    if (existing) {
+      if (!existing.playerIds.includes(c.player_id)) existing.playerIds.push(c.player_id);
+    } else {
+      cashoutOwners.set(lower, { playerIds: [c.player_id], original: c.address });
+    }
   }
 
-  if (walletMere && cashoutEntries.length > 0) {
+  if (walletMere && cashoutOwners.size > 0) {
     const mereAddr = walletMere.toLowerCase();
-    const scannedAddresses = new Set<string>();
 
-    for (const entry of cashoutEntries) {
-      const addrLower = entry.address.toLowerCase();
-      if (scannedAddresses.has(addrLower)) continue;
-      scannedAddresses.add(addrLower);
-
-      const player = players.find(p => p.id === entry.playerId);
+    for (const [addrLower, { playerIds, original }] of cashoutOwners) {
       try {
-        const txs = await fetchAllTronTxs(entry.address);
+        const txs = await fetchAllTronTxs(original);
         for (const tx of txs) {
           if ((tx.to ?? "").toLowerCase() !== addrLower) continue;
           if ((tx.from ?? "").toLowerCase() !== mereAddr) continue;
 
-          const changed = insertWalletTransactionByHash({
-            player_id: entry.playerId,
-            game_id: teleGameId,
-            type: "withdrawal",
-            amount: toAmt(tx),
-            currency: "USDT",
-            tx_date: toDate(tx),
-            tron_tx_hash: tx.transaction_id,
-            counterparty_address: tx.from ?? null,
-          });
-          if (changed) {
-            totalCashouts++;
-            const r = results.find(r => player && r.player === player.name);
-            if (r) r.cashouts++;
+          for (const pid of playerIds) {
+            const changed = insertWalletTransactionByHash({
+              player_id: pid,
+              game_id: teleGameId,
+              type: "withdrawal",
+              amount: toAmt(tx),
+              currency: "USDT",
+              tx_date: toDate(tx),
+              tron_tx_hash: tx.transaction_id,
+              counterparty_address: tx.from ?? null,
+            });
+            if (changed) {
+              totalCashouts++;
+              const player = players.find(p => p.id === pid);
+              const r = results.find(r => player && r.player === player.name);
+              if (r) r.cashouts++;
+            }
           }
         }
       } catch (e: any) {
-        results.push({ player: player?.name ?? entry.address.slice(0, 8), deposits: 0, cashouts: 0, error: e.message });
+        const names = playerIds.map(id => players.find(p => p.id === id)?.name ?? "?").join("/");
+        results.push({ player: names, deposits: 0, cashouts: 0, error: e.message });
       }
     }
   }
@@ -211,7 +216,7 @@ export async function POST() {
     deposits: totalDeposits,
     cashouts: totalCashouts,
     wallet_mere_configured: !!walletMere,
-    cashout_wallets_configured: cashoutEntries.length,
+    cashout_wallets_configured: cashoutOwners.size,
     results,
   });
 }
