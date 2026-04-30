@@ -555,4 +555,13 @@ function initSchema(db: Database.Database) {
   if (fixPass3.changes > 0) {
     db.exec(`DELETE FROM wallet_transactions WHERE type = 'withdrawal'`);
   }
+
+  // One-time fix: wallet TNBf7UHvahKbodkH8PEtwFoQk6xMLSAvNd was shared between
+  // Baki (id=2) and Hugo (id=1). It's Hugo's — remove from Baki's cashouts, then
+  // purge all auto-sync withdrawals so the next sync reimports them under the correct player.
+  const fixHugoCashouts = db.prepare(`INSERT OR IGNORE INTO _applied_fixes (name) VALUES (?)`).run("reassign_hugo_cashout_wallet_v1");
+  if (fixHugoCashouts.changes > 0) {
+    db.exec(`DELETE FROM player_wallet_cashouts WHERE player_id = 2 AND address = 'TNBf7UHvahKbodkH8PEtwFoQk6xMLSAvNd'`);
+    db.exec(`DELETE FROM wallet_transactions WHERE type = 'withdrawal' AND note = 'auto-sync'`);
+  }
 }
