@@ -92,13 +92,13 @@ export async function createPlayerGroup(
     const rawChatId = typeof chat.id === "bigint" ? Number(chat.id) : chat.id;
     const chatId = -rawChatId;
 
-    // Add the bot to the group
-    const botId = parseInt(botToken.split(":")[0]);
+    // Add the bot to the group (resolve by username)
     try {
+      const botEntity = await client.getInputEntity("LeCercle_Lebot");
       await client.invoke(
         new Api.messages.AddChatUser({
           chatId: BigInt(rawChatId) as any,
-          userId: botId,
+          userId: botEntity as unknown as Api.TypeInputUser,
           fwdLimit: 0,
         })
       );
@@ -111,12 +111,12 @@ export async function createPlayerGroup(
     try {
       const exported = await client.invoke(
         new Api.messages.ExportChatInvite({
-          peer: rawChatId,
+          peer: new Api.InputPeerChat({ chatId: BigInt(rawChatId) as any }),
         })
       );
       inviteLink = (exported as any).link ?? "";
-    } catch {
-      console.warn("[USERBOT] could not export invite link");
+    } catch (e) {
+      console.warn("[USERBOT] could not export invite link:", e);
     }
 
     return { chatId, inviteLink };
