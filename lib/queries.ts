@@ -598,7 +598,7 @@ export function getTelePlayers() {
   return getDb().prepare(`
     SELECT
       p.id, p.name, p.tron_address AS wallet_game, p.tele_wallet_cashout AS wallet_cashout,
-      pgd.id AS deal_id, pgd.action_pct, pgd.rakeback_pct, pgd.start_date,
+      pgd.action_pct, pgd.rakeback_pct,
       COALESCE(SUM(CASE WHEN wt.type='deposit'    THEN wt.amount ELSE 0 END), 0) AS total_deposited,
       COALESCE(SUM(CASE WHEN wt.type='withdrawal' THEN wt.amount ELSE 0 END), 0) AS total_withdrawn,
       COALESCE(SUM(CASE WHEN wt.type='withdrawal' THEN wt.amount ELSE -wt.amount END), 0) AS net,
@@ -613,7 +613,7 @@ export function getTelePlayers() {
     ORDER BY p.name
   `).all() as {
     id: number; name: string; wallet_game: string | null; wallet_cashout: string | null;
-    deal_id: number; action_pct: number; rakeback_pct: number; start_date: string | null;
+    action_pct: number; rakeback_pct: number;
     total_deposited: number; total_withdrawn: number; net: number; my_pnl: number;
     tx_count: number; last_tx: string | null;
   }[];

@@ -17,7 +17,7 @@ function fmt(n: number) {
 interface Player {
   id: number; name: string;
   wallet_game: string | null; wallet_cashout: string | null;
-  deal_id: number; action_pct: number; rakeback_pct: number; start_date: string | null;
+  action_pct: number; rakeback_pct: number;
   total_deposited: number; total_withdrawn: number; net: number; my_pnl: number;
   tx_count: number; last_tx: string | null;
 }
@@ -44,7 +44,7 @@ export default function TELEClient({ players: initial, walletMere }: { players: 
   const [syncing, setSyncing] = useState(false);
   const [syncResult, setSyncResult] = useState<any>(null);
   const [editing, setEditing] = useState<number | null>(null);
-  const [editVals, setEditVals] = useState({ wallet_game: "", wallet_cashout: "", start_date: "" });
+  const [editVals, setEditVals] = useState({ wallet_game: "", wallet_cashout: "" });
 
   async function sync() {
     setSyncing(true); setSyncResult(null);
@@ -57,29 +57,20 @@ export default function TELEClient({ players: initial, walletMere }: { players: 
 
   function startEdit(p: Player) {
     setEditing(p.id);
-    setEditVals({ wallet_game: p.wallet_game ?? "", wallet_cashout: p.wallet_cashout ?? "", start_date: p.start_date ?? "" });
+    setEditVals({ wallet_game: p.wallet_game ?? "", wallet_cashout: p.wallet_cashout ?? "" });
   }
 
-  async function saveEdit(p: Player) {
-    const newStartDate = editVals.start_date || null;
-    await Promise.all([
-      fetch(`/api/players/${p.id}`, {
-        method: "PATCH", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          tron_address: editVals.wallet_game || null,
-          tele_wallet_cashout: editVals.wallet_cashout || null,
-        }),
+  async function saveEdit(playerId: number) {
+    await fetch(`/api/players/${playerId}`, {
+      method: "PATCH", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        tron_address: editVals.wallet_game || null,
+        tele_wallet_cashout: editVals.wallet_cashout || null,
       }),
-      newStartDate !== p.start_date
-        ? fetch(`/api/games/deals/${p.deal_id}`, {
-            method: "PATCH", headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ start_date: newStartDate }),
-          })
-        : Promise.resolve(),
-    ]);
-    setPlayers(ps => ps.map(pl => pl.id === p.id
-      ? { ...pl, wallet_game: editVals.wallet_game || null, wallet_cashout: editVals.wallet_cashout || null, start_date: newStartDate }
-      : pl
+    });
+    setPlayers(ps => ps.map(p => p.id === playerId
+      ? { ...p, wallet_game: editVals.wallet_game || null, wallet_cashout: editVals.wallet_cashout || null }
+      : p
     ));
     setEditing(null);
   }
@@ -154,14 +145,14 @@ export default function TELEClient({ players: initial, walletMere }: { players: 
           <table style={{ width: "100%", borderCollapse: "collapse" }}>
             <thead>
               <tr style={{ borderBottom: "1px solid var(--border)" }}>
-                {["Joueur", "WALLET GAME", "WALLET CASHOUT", "Action %", "Début", "Déposé", "Cashout", "Mon P&L", "Tx", "Dernière TX", ""].map(h => (
+                {["Joueur", "WALLET GAME", "WALLET CASHOUT", "Action %", "Déposé", "Cashout", "Mon P&L", "Tx", "Dernière TX", ""].map(h => (
                   <th key={h} style={{ padding: "10px 14px", textAlign: "left", fontSize: 10, fontWeight: 700, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.08em", whiteSpace: "nowrap" }}>{h}</th>
                 ))}
               </tr>
             </thead>
             <tbody>
               {players.length === 0 ? (
-                <tr><td colSpan={11} style={{ padding: 32, textAlign: "center", color: "var(--text-dim)", fontSize: 13 }}>
+                <tr><td colSpan={10} style={{ padding: 32, textAlign: "center", color: "var(--text-dim)", fontSize: 13 }}>
                   Aucun joueur sur TELE — ajoute un deal TELE depuis le CRM.
                 </td></tr>
               ) : players.map((p, i) => {
@@ -194,17 +185,6 @@ export default function TELEClient({ players: initial, walletMere }: { players: 
                     <td style={{ padding: "12px 14px", fontSize: 12, color: "var(--gold)", fontWeight: 700, whiteSpace: "nowrap" }}>
                       {p.action_pct}%{p.rakeback_pct > 0 ? ` · ${p.rakeback_pct}% RB` : ""}
                     </td>
-                    <td style={{ padding: "12px 14px", whiteSpace: "nowrap" }}>
-                      {isEditing ? (
-                        <input type="date" value={editVals.start_date}
-                          onChange={e => setEditVals(v => ({ ...v, start_date: e.target.value }))}
-                          style={{ padding: "5px 8px", fontSize: 11, background: "var(--bg-elevated)", border: "1px solid var(--border)", borderRadius: 6, color: "var(--text)" }} />
-                      ) : (
-                        <span style={{ fontSize: 11, color: p.start_date ? "var(--text)" : "var(--text-dim)" }}>
-                          {p.start_date ?? "—"}
-                        </span>
-                      )}
-                    </td>
                     <td style={{ padding: "12px 14px", fontSize: 12, color: "#f87171", whiteSpace: "nowrap" }}>{p.total_deposited.toFixed(2)}</td>
                     <td style={{ padding: "12px 14px", fontSize: 12, color: "var(--green)", whiteSpace: "nowrap" }}>{p.total_withdrawn.toFixed(2)}</td>
                     <td style={{ padding: "12px 14px", fontSize: 13, fontWeight: 700, color: pnlColor, whiteSpace: "nowrap" }}>{fmt(p.my_pnl)}</td>
@@ -214,7 +194,7 @@ export default function TELEClient({ players: initial, walletMere }: { players: 
                     <td style={{ padding: "12px 14px" }}>
                       {isEditing ? (
                         <div style={{ display: "flex", gap: 6 }}>
-                          <button onClick={() => saveEdit(p)} style={{ background: "rgba(34,197,94,0.12)", border: "none", borderRadius: 5, padding: "5px 8px", cursor: "pointer", color: "var(--green)", display: "flex", alignItems: "center" }}>
+                          <button onClick={() => saveEdit(p.id)} style={{ background: "rgba(34,197,94,0.12)", border: "none", borderRadius: 5, padding: "5px 8px", cursor: "pointer", color: "var(--green)", display: "flex", alignItems: "center" }}>
                             <Save size={13} />
                           </button>
                           <button onClick={() => setEditing(null)} style={{ background: "var(--bg-elevated)", border: "none", borderRadius: 5, padding: "5px 8px", cursor: "pointer", color: "var(--text-muted)", display: "flex", alignItems: "center" }}>
