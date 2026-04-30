@@ -127,9 +127,10 @@ async function handleJoin(chatId: number, from: any) {
   const username: string | null = from.username ?? null;
   const fullName = [firstName, lastName].filter(Boolean).join(" ");
 
-  // Check if already joined
+  // Check if already joined AND has a player record (group was created)
   const lead = db.prepare(`SELECT stage FROM onboarding_leads WHERE telegram_id = ?`).get(from.id) as { stage: string } | undefined;
-  if (lead?.stage === "joined") {
+  const existingPlayer = db.prepare(`SELECT id FROM players WHERE telegram_id = ?`).get(from.id);
+  if (lead?.stage === "joined" && existingPlayer) {
     await sendMsg(chatId,
       `✅ Tu es déjà inscrit ! Ton groupe arrive bientôt.\n\nQuestions ? → @baki77777`
     );
