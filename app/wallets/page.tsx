@@ -1,5 +1,5 @@
 export const dynamic = "force-dynamic";
-import { getWalletSummaryByPlayer, getWalletKPIs, getWalletTransactions, getPlayers, getGames, getPlayerCashouts } from "@/lib/queries";
+import { getWalletSummaryByPlayer, getWalletKPIs, getWalletTransactions, getPlayers, getGames, getPlayerCashouts, getPlayerGameWallets } from "@/lib/queries";
 import PageHeader from "@/components/PageHeader";
 import WalletsClient from "./WalletsClient";
 
@@ -25,7 +25,11 @@ export default async function WalletsPage({ searchParams }: { searchParams: Prom
   const players = getPlayers() as any[];
   const games = (getGames() as any[]).filter((g) => g.name === "TELE");
   const cashoutsByPlayer: Record<number, { id: number; address: string; label: string | null }[]> = {};
-  for (const p of players) cashoutsByPlayer[p.id] = getPlayerCashouts(p.id);
+  const gameWalletsByPlayer: Record<number, { id: number; address: string; label: string | null }[]> = {};
+  for (const p of players) {
+    cashoutsByPlayer[p.id] = getPlayerCashouts(p.id);
+    gameWalletsByPlayer[p.id] = getPlayerGameWallets(p.id);
+  }
 
   return (
     <>
@@ -40,6 +44,7 @@ export default async function WalletsPage({ searchParams }: { searchParams: Prom
         players={players}
         games={games}
         cashoutsByPlayer={cashoutsByPlayer}
+        gameWalletsByPlayer={gameWalletsByPlayer}
         period={period}
       />
     </>

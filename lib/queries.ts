@@ -105,6 +105,42 @@ export function setPlayerCashouts(playerId: number, addresses: { address: string
   tx();
 }
 
+// ── Player Wallet Games (multi) ──────────────────────────
+export function getPlayerGameWallets(playerId: number) {
+  return getDb().prepare(`SELECT id, address, label FROM player_wallet_games WHERE player_id = ? ORDER BY id`).all(playerId) as { id: number; address: string; label: string | null }[];
+}
+
+export function setPlayerGameWallets(playerId: number, addresses: { address: string; label?: string | null }[]) {
+  const db = getDb();
+  const tx = db.transaction(() => {
+    db.prepare(`DELETE FROM player_wallet_games WHERE player_id = ?`).run(playerId);
+    const ins = db.prepare(`INSERT OR IGNORE INTO player_wallet_games (player_id, address, label) VALUES (?, ?, ?)`);
+    for (const c of addresses) {
+      const a = c.address.trim();
+      if (!a) continue;
+      ins.run(playerId, a, c.label ?? null);
+    }
+    const first = addresses.find(c => c.address.trim());
+    db.prepare(`UPDATE players SET tron_address = ? WHERE id = ?`).run(first ? first.address.trim() : null, playerId);
+  });
+  tx();
+}
+
+export function getAllTeleGameWalletsByPlayer() {
+  return getDb().prepare(`
+    SELECT player_id, address FROM player_wallet_games
+    WHERE player_id IN (
+      SELECT pgd.player_id FROM player_game_deals pgd
+      JOIN games g ON g.id = pgd.game_id AND g.name = 'TELE'
+    )
+    UNION
+    SELECT p.id AS player_id, p.tron_address AS address FROM players p
+    JOIN player_game_deals pgd ON pgd.player_id = p.id
+    JOIN games g ON g.id = pgd.game_id AND g.name = 'TELE'
+    WHERE p.tron_address IS NOT NULL AND p.tron_address != ''
+  `).all() as { player_id: number; address: string }[];
+}
+
 export function getAllTeleCashoutsByPlayer() {
   // Returns one row per (player_id, address). Includes both new-table entries and the legacy single column.
   return getDb().prepare(`

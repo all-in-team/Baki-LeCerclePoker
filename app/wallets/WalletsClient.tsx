@@ -48,7 +48,7 @@ const PERIODS = [
 ] as const;
 
 export default function WalletsClient({
-  initialSummary, kpis, initialTransactions, players, games, cashoutsByPlayer = {}, period = "lifetime",
+  initialSummary, kpis, initialTransactions, players, games, cashoutsByPlayer = {}, gameWalletsByPlayer = {}, period = "lifetime",
 }: {
   initialSummary: PlayerGameRow[];
   kpis: KPIs;
@@ -56,6 +56,7 @@ export default function WalletsClient({
   players: Player[];
   games: Game[];
   cashoutsByPlayer?: Record<number, { id: number; address: string; label: string | null }[]>;
+  gameWalletsByPlayer?: Record<number, { id: number; address: string; label: string | null }[]>;
   period?: string;
 }) {
   const router = useRouter();
@@ -79,7 +80,7 @@ export default function WalletsClient({
   const [editingRb, setEditingRb] = useState<number | null>(null);
   const [rbVal, setRbVal] = useState("");
   const [expandedWallet, setExpandedWallet] = useState<number | null>(null);
-  const [walletInlineVals, setWalletInlineVals] = useState<{ wallet_game: string; cashouts: string[] }>({ wallet_game: "", cashouts: [""] });
+  const [walletInlineVals, setWalletInlineVals] = useState<{ game_wallets: string[]; cashouts: string[] }>({ game_wallets: [""], cashouts: [""] });
   const [expandedTx, setExpandedTx] = useState<number | null>(null);
 
   async function openWalletConfig(focusPlayerId?: number) {
@@ -130,21 +131,24 @@ export default function WalletsClient({
 
   function openInlineWallet(p: Player) {
     setExpandedWallet(p.id);
-    const existing = cashoutsByPlayer[p.id]?.map(c => c.address) ?? [];
+    const existingCashouts = cashoutsByPlayer[p.id]?.map(c => c.address) ?? [];
+    const existingGameWallets = gameWalletsByPlayer[p.id]?.map(c => c.address) ?? [];
     setWalletInlineVals({
-      wallet_game: p.tron_address ?? "",
-      cashouts: existing.length > 0 ? existing : [""],
+      game_wallets: existingGameWallets.length > 0 ? existingGameWallets : [p.tron_address ?? ""],
+      cashouts: existingCashouts.length > 0 ? existingCashouts : [""],
     });
   }
 
   async function saveInlineWallet(playerId: number) {
-    const game = walletInlineVals.wallet_game.trim();
-    // 1) wallet_game (legacy column on players)
-    await fetch(`/api/players/${playerId}`, {
-      method: "PATCH", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ tron_address: game || null }),
+    // 1) game wallets (multi-table; mirrors first to legacy tron_address)
+    const gamePayload = walletInlineVals.game_wallets
+      .map(a => ({ address: a.trim() }))
+      .filter(a => a.address.length > 0);
+    await fetch(`/api/players/${playerId}/game-wallets`, {
+      method: "PUT", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ addresses: gamePayload }),
     });
-    // 2) cashouts (new multi-table; mirrors first to legacy tele_wallet_cashout)
+    // 2) cashouts (multi-table; mirrors first to legacy tele_wallet_cashout)
     const cashoutPayload = walletInlineVals.cashouts
       .map(a => ({ address: a.trim() }))
       .filter(a => a.address.length > 0);
@@ -238,9 +242,9 @@ export default function WalletsClient({
       }
 
       if (newPlayer.wallet_game.trim()) {
-        await fetch(`/api/players/${playerId}`, {
-          method: "PATCH", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ tron_address: newPlayer.wallet_game.trim() }),
+        await fetch(`/api/players/${playerId}/game-wallets`, {
+          method: "PUT", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ addresses: [{ address: newPlayer.wallet_game.trim() }] }),
         });
       }
       if (newPlayer.wallet_cashout.trim()) {
@@ -445,14 +449,23 @@ export default function WalletsClient({
                       )}
                     </td>
                     <td style={{ padding: "12px 16px" }}>
-                      <button
-                        onClick={() => isExpanded ? setExpandedWallet(null) : (player && openInlineWallet(player))}
-                        style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "4px 8px", borderRadius: 5, background: "transparent", border: "1px solid transparent", cursor: "pointer", fontSize: 12, fontWeight: 600, color: walletGame ? "#38bdf8" : "var(--text-dim)" }}
-                        onMouseEnter={e => (e.currentTarget.style.borderColor = "var(--border)")}
-                        onMouseLeave={e => (e.currentTarget.style.borderColor = "transparent")}>
-                        {walletGame ? `${walletGame.slice(0, 6)}…${walletGame.slice(-6)}` : "Non configuré"}
-                        <Pencil size={11} style={{ color: "var(--text-dim)" }} />
-                      </button>
+                      {(() => {
+                        const gw = gameWalletsByPlayer[row.player_id] ?? [];
+                        const count = gw.length || (walletGame ? 1 : 0);
+                        const label = count === 0 ? "Non configuré" : count === 1
+                          ? `${(gw[0]?.address ?? walletGame!).slice(0, 6)}…${(gw[0]?.address ?? walletGame!).slice(-6)}`
+                          : `${count} wallets`;
+                        return (
+                          <button
+                            onClick={() => isExpanded ? setExpandedWallet(null) : (player && openInlineWallet(player))}
+                            style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "4px 8px", borderRadius: 5, background: "transparent", border: "1px solid transparent", cursor: "pointer", fontSize: 12, fontWeight: 600, color: count > 0 ? "#38bdf8" : "var(--text-dim)" }}
+                            onMouseEnter={e => (e.currentTarget.style.borderColor = "var(--border)")}
+                            onMouseLeave={e => (e.currentTarget.style.borderColor = "transparent")}>
+                            {label}
+                            <Pencil size={11} style={{ color: "var(--text-dim)" }} />
+                          </button>
+                        );
+                      })()}
                     </td>
                     <td style={{ padding: "12px 16px" }}>
                       <Btn size="sm" variant="danger" onClick={() => deleteDeal(row.deal_id, row.player_name)}><Trash2 size={13} /></Btn>
@@ -462,13 +475,28 @@ export default function WalletsClient({
                     <tr style={{ borderBottom: "1px solid var(--border)", background: "var(--bg-surface)" }}>
                       <td colSpan={7} style={{ padding: "16px 20px" }}>
                         <div style={{ marginBottom: 12 }}>
-                          <label style={{ fontSize: 10, fontWeight: 700, color: "#38bdf8", textTransform: "uppercase", display: "block", marginBottom: 4, letterSpacing: "0.06em" }}>Wallet Game (TRC20)</label>
-                          <input
-                            value={walletInlineVals.wallet_game}
-                            onChange={e => setWalletInlineVals(v => ({ ...v, wallet_game: e.target.value }))}
-                            placeholder="TXxxx…" spellCheck={false}
-                            style={{ width: "100%", maxWidth: 480, padding: "8px 10px", borderRadius: 6, fontSize: 12, fontFamily: "monospace", background: "var(--bg-elevated)", color: "var(--text)", border: "1px solid #38bdf840", outline: "none", boxSizing: "border-box" }}
-                          />
+                          <label style={{ fontSize: 10, fontWeight: 700, color: "#38bdf8", textTransform: "uppercase", display: "block", marginBottom: 6, letterSpacing: "0.06em" }}>Wallets Game (multiple)</label>
+                          {walletInlineVals.game_wallets.map((addr, idx) => (
+                            <div key={idx} style={{ display: "flex", gap: 6, marginBottom: 6, alignItems: "center" }}>
+                              <input
+                                value={addr}
+                                onChange={e => setWalletInlineVals(v => ({ ...v, game_wallets: v.game_wallets.map((c, i) => i === idx ? e.target.value : c) }))}
+                                placeholder="TXxxx… (adresse TRC20)" spellCheck={false}
+                                style={{ flex: 1, maxWidth: 480, padding: "8px 10px", borderRadius: 6, fontSize: 12, fontFamily: "monospace", background: "var(--bg-elevated)", color: "var(--text)", border: "1px solid #38bdf840", outline: "none", boxSizing: "border-box" }}
+                              />
+                              <button
+                                onClick={() => setWalletInlineVals(v => ({ ...v, game_wallets: v.game_wallets.length === 1 ? [""] : v.game_wallets.filter((_, i) => i !== idx) }))}
+                                title="Retirer cette adresse"
+                                style={{ display: "flex", alignItems: "center", padding: 6, borderRadius: 5, background: "var(--bg-elevated)", color: "var(--text-muted)", border: "1px solid var(--border)", cursor: "pointer" }}>
+                                <X size={13} />
+                              </button>
+                            </div>
+                          ))}
+                          <button
+                            onClick={() => setWalletInlineVals(v => ({ ...v, game_wallets: [...v.game_wallets, ""] }))}
+                            style={{ display: "inline-flex", alignItems: "center", gap: 5, padding: "5px 10px", borderRadius: 5, fontSize: 11, fontWeight: 600, background: "rgba(56,189,248,0.12)", color: "#38bdf8", border: "1px dashed #38bdf860", cursor: "pointer", marginTop: 2 }}>
+                            <Plus size={11} /> Ajouter un wallet game
+                          </button>
                         </div>
                         <div style={{ marginBottom: 12 }}>
                           <label style={{ fontSize: 10, fontWeight: 700, color: "#fb923c", textTransform: "uppercase", display: "block", marginBottom: 6, letterSpacing: "0.06em" }}>Wallets Cashout (multiple)</label>

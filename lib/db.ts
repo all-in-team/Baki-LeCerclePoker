@@ -205,6 +205,22 @@ function initSchema(db: Database.Database) {
     `);
   } catch {}
 
+  // Multi-game-wallet support — a player can have N deposit/game addresses
+  try {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS player_wallet_games (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        player_id INTEGER NOT NULL REFERENCES players(id) ON DELETE CASCADE,
+        address TEXT NOT NULL,
+        label TEXT,
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        UNIQUE(player_id, address)
+      );
+      CREATE INDEX IF NOT EXISTS idx_pwg_player ON player_wallet_games(player_id);
+      CREATE INDEX IF NOT EXISTS idx_pwg_address ON player_wallet_games(address);
+    `);
+  } catch {}
+
   // One-time fix: flip deposit/withdrawal directions (to=player means deposit, from=player means withdrawal)
   db.exec(`CREATE TABLE IF NOT EXISTS _applied_fixes (name TEXT PRIMARY KEY)`);
 
@@ -216,6 +232,17 @@ function initSchema(db: Database.Database) {
         INSERT OR IGNORE INTO player_wallet_cashouts (player_id, address)
         SELECT id, tele_wallet_cashout FROM players
         WHERE tele_wallet_cashout IS NOT NULL AND tele_wallet_cashout != ''
+      `);
+    } catch {}
+  }
+  // Backfill from legacy single-column tron_address into multi-game-wallet table
+  const fixBackfillGameWallets = db.prepare(`INSERT OR IGNORE INTO _applied_fixes (name) VALUES (?)`).run("backfill_player_wallet_games_v1");
+  if (fixBackfillGameWallets.changes > 0) {
+    try {
+      db.exec(`
+        INSERT OR IGNORE INTO player_wallet_games (player_id, address)
+        SELECT id, tron_address FROM players
+        WHERE tron_address IS NOT NULL AND tron_address != ''
       `);
     } catch {}
   }

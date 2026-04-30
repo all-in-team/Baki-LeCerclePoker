@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { getDb } from "@/lib/db";
-import { insertWalletTransactionByHash, getSetting, getAllTeleCashoutsByPlayer } from "@/lib/queries";
+import { insertWalletTransactionByHash, getSetting, getAllTeleCashoutsByPlayer, getAllTeleGameWalletsByPlayer } from "@/lib/queries";
 
 const USDT_CONTRACT = "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t";
 
@@ -82,12 +82,11 @@ function getTeleGameId(): number | null {
 
 function getPlayersOnTele() {
   return getDb().prepare(`
-    SELECT p.id, p.name, p.tron_address AS wallet_game, p.tele_wallet_cashout AS wallet_cashout
+    SELECT DISTINCT p.id, p.name
     FROM players p
     JOIN player_game_deals pgd ON pgd.player_id = p.id
     JOIN games g ON g.id = pgd.game_id AND g.name = 'TELE'
-    WHERE p.tron_address IS NOT NULL AND p.tron_address != ''
-  `).all() as { id: number; name: string; wallet_game: string; wallet_cashout: string | null }[];
+  `).all() as { id: number; name: string }[];
 }
 
 function toAmt(tx: any): number {
@@ -108,37 +107,56 @@ export async function POST() {
 
   const walletMere = getSetting("tele_wallet_mere");
 
+  // Build game-wallet map: player_id → [address, ...] (deduped by lowercase)
+  const gameWalletEntries = getAllTeleGameWalletsByPlayer();
+  const gameWalletsByPlayer = new Map<number, string[]>();
+  const seenAddresses = new Map<number, Set<string>>();
+  for (const e of gameWalletEntries) {
+    const list = gameWalletsByPlayer.get(e.player_id) ?? [];
+    const seen = seenAddresses.get(e.player_id) ?? new Set();
+    const lower = e.address.toLowerCase();
+    if (!seen.has(lower)) {
+      seen.add(lower);
+      list.push(e.address);
+    }
+    gameWalletsByPlayer.set(e.player_id, list);
+    seenAddresses.set(e.player_id, seen);
+  }
+
   type Result = { player: string; deposits: number; cashouts: number; error?: string };
   const results: Result[] = [];
   let totalDeposits = 0;
   let totalCashouts = 0;
 
-  // ── Pass 1 : dépôts via WALLET GAME ──────────────────────────────────────
+  // ── Pass 1 : dépôts via WALLET GAME (all wallets per player) ─────────────
   for (const player of players) {
-    const gameAddr = player.wallet_game.toLowerCase();
+    const wallets = gameWalletsByPlayer.get(player.id) ?? [];
     let deposits = 0;
 
-    try {
-      const txs = await fetchAllTronTxs(player.wallet_game);
-      for (const tx of txs) {
-        if ((tx.to ?? "").toLowerCase() !== gameAddr) continue; // entrants seulement
-        const changed = insertWalletTransactionByHash({
-          player_id: player.id,
-          game_id: teleGameId,
-          type: "deposit",
-          amount: toAmt(tx),
-          currency: "USDT",
-          tx_date: toDate(tx),
-          tron_tx_hash: tx.transaction_id,
-          counterparty_address: tx.from ?? null, // who sent the deposit
-        });
-        if (changed) deposits++;
+    for (const walletAddr of wallets) {
+      const gameAddr = walletAddr.toLowerCase();
+      try {
+        const txs = await fetchAllTronTxs(walletAddr);
+        for (const tx of txs) {
+          if ((tx.to ?? "").toLowerCase() !== gameAddr) continue;
+          const changed = insertWalletTransactionByHash({
+            player_id: player.id,
+            game_id: teleGameId,
+            type: "deposit",
+            amount: toAmt(tx),
+            currency: "USDT",
+            tx_date: toDate(tx),
+            tron_tx_hash: tx.transaction_id,
+            counterparty_address: tx.from ?? null,
+          });
+          if (changed) deposits++;
+        }
+      } catch (e: any) {
+        results.push({ player: player.name, deposits: 0, cashouts: 0, error: `${walletAddr.slice(0, 8)}… ${e.message}` });
       }
-      totalDeposits += deposits;
-      results.push({ player: player.name, deposits, cashouts: 0 });
-    } catch (e: any) {
-      results.push({ player: player.name, deposits: 0, cashouts: 0, error: e.message });
     }
+    totalDeposits += deposits;
+    results.push({ player: player.name, deposits, cashouts: 0 });
   }
 
   // ── Pass 2 : cashouts — scan each WALLET CASHOUT, keep only incoming from WALLET MERE
