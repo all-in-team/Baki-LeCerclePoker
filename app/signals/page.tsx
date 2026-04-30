@@ -2,6 +2,8 @@ import { getSignals } from "@/lib/queries";
 import PageHeader from "@/components/PageHeader";
 import { AlertTriangle, CheckCircle, TrendingUp, Clock, Users, Zap } from "lucide-react";
 
+export const dynamic = "force-dynamic";
+
 function fmt(n: number) { return `€${Math.abs(n).toFixed(2)}`; }
 
 export default function SignalsPage() {
