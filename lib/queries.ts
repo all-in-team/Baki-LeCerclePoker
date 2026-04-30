@@ -444,7 +444,7 @@ export function getWalletSummaryByPlayer(filters?: { game_name?: string; since_d
       pgd.id AS deal_id,
       p.id AS player_id, p.name AS player_name,
       g.id AS game_id, g.name AS game_name,
-      pgd.action_pct, pgd.rakeback_pct,
+      pgd.action_pct, pgd.rakeback_pct, pgd.start_date,
       COALESCE(SUM(CASE WHEN wt.type='deposit'    THEN wt.amount ELSE 0 END), 0) AS total_deposited,
       COALESCE(SUM(CASE WHEN wt.type='withdrawal' THEN wt.amount ELSE 0 END), 0) AS total_withdrawn,
       COALESCE(SUM(CASE WHEN wt.type='withdrawal' THEN wt.amount ELSE -wt.amount END), 0) AS net,

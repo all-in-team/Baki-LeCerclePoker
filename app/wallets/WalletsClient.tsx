@@ -12,7 +12,7 @@ interface PlayerGameRow {
   deal_id: number;
   player_id: number; player_name: string;
   game_id: number; game_name: string;
-  action_pct: number; rakeback_pct: number;
+  action_pct: number; rakeback_pct: number; start_date: string | null;
   total_deposited: number; total_withdrawn: number; net: number; my_pnl: number;
 }
 
@@ -66,7 +66,7 @@ export default function WalletsClient({
   const [selectedPlayerId, setSelectedPlayerId] = useState("");
   const [newPlayer, setNewPlayer] = useState({
     name: "", telegram_handle: "", action_pct: "40", rakeback_pct: "0",
-    wallet_game: "", wallet_cashout: "",
+    wallet_game: "", wallet_cashout: "", start_date: "",
   });
   const isNewPlayer = selectedPlayerId === "__new__";
   const [syncResult, setSyncResult] = useState<{ imported: number; mode?: string; results: { player: string; imported: number; deposits: number; withdrawals: number; total_fetched?: number; skipped?: number; error?: string }[] } | null>(null);
@@ -79,6 +79,8 @@ export default function WalletsClient({
   const [actionVal, setActionVal] = useState("");
   const [editingRb, setEditingRb] = useState<number | null>(null);
   const [rbVal, setRbVal] = useState("");
+  const [editingStartDate, setEditingStartDate] = useState<number | null>(null);
+  const [startDateVal, setStartDateVal] = useState("");
   const [expandedWallet, setExpandedWallet] = useState<number | null>(null);
   const [walletInlineVals, setWalletInlineVals] = useState<{ game_wallets: string[]; cashouts: string[] }>({ game_wallets: [""], cashouts: [""] });
   const [expandedTx, setExpandedTx] = useState<number | null>(null);
@@ -125,6 +127,15 @@ export default function WalletsClient({
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ rakeback_pct: v }),
+    });
+    if (res.ok) window.location.reload();
+  }
+
+  async function saveStartDate(dealId: number) {
+    const res = await fetch(`/api/games/deals/${dealId}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ start_date: startDateVal || null }),
     });
     if (res.ok) window.location.reload();
   }
@@ -260,7 +271,7 @@ export default function WalletsClient({
       }
       await fetch("/api/games/deals", {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ player_id: playerId, game_id: teleGame.id, action_pct: action, rakeback_pct: rb }),
+        body: JSON.stringify({ player_id: playerId, game_id: teleGame.id, action_pct: action, rakeback_pct: rb, start_date: newPlayer.start_date || null }),
       });
       window.location.reload();
     } finally {
@@ -361,14 +372,14 @@ export default function WalletsClient({
           <table style={{ width: "100%", borderCollapse: "collapse" }}>
             <thead>
               <tr style={{ borderBottom: "1px solid var(--border)" }}>
-                {["Joueur", "Net P&L", "Agency P&L", "Action %", "RB %", "Wallet", ""].map((h, i) => (
+                {["Joueur", "Net P&L", "Agency P&L", "Action %", "RB %", "Début", "Wallet", ""].map((h, i) => (
                   <th key={i} style={{ padding: "10px 16px", textAlign: "left", fontSize: 11, fontWeight: 600, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.08em", whiteSpace: "nowrap" }}>{h}</th>
                 ))}
               </tr>
             </thead>
             <tbody>
               {summaryByPlayer.length === 0 ? (
-                <tr><td colSpan={7} style={{ padding: 32, textAlign: "center", color: "var(--text-dim)", fontSize: 13 }}>
+                <tr><td colSpan={8} style={{ padding: 32, textAlign: "center", color: "var(--text-dim)", fontSize: 13 }}>
                   Aucun joueur TELE — ajoute un deal TELE à un joueur depuis son profil
                 </td></tr>
               ) : summaryByPlayer.map(row => {
@@ -454,6 +465,34 @@ export default function WalletsClient({
                       )}
                     </td>
                     <td style={{ padding: "12px 16px" }}>
+                      {editingStartDate === row.deal_id ? (
+                        <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                          <input
+                            type="date"
+                            value={startDateVal}
+                            onChange={e => setStartDateVal(e.target.value)}
+                            onKeyDown={e => {
+                              if (e.key === "Enter") saveStartDate(row.deal_id);
+                              if (e.key === "Escape") setEditingStartDate(null);
+                            }}
+                            autoFocus
+                            style={{ width: 130, padding: "4px 7px", fontSize: 12, background: "var(--bg-elevated)", border: "1px solid var(--border)", borderRadius: 4, color: "var(--text)", outline: "none" }}
+                          />
+                          <button onClick={() => saveStartDate(row.deal_id)} style={{ display: "flex", alignItems: "center", padding: 4, borderRadius: 4, background: "rgba(34,197,94,0.12)", color: "var(--green)", border: "1px solid rgba(34,197,94,0.3)", cursor: "pointer" }}><Save size={12} /></button>
+                          <button onClick={() => setEditingStartDate(null)} style={{ display: "flex", alignItems: "center", padding: 4, borderRadius: 4, background: "var(--bg-elevated)", color: "var(--text-muted)", border: "1px solid var(--border)", cursor: "pointer" }}><X size={12} /></button>
+                        </div>
+                      ) : (
+                        <button
+                          onClick={() => { setEditingStartDate(row.deal_id); setStartDateVal(row.start_date ?? ""); }}
+                          style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "4px 8px", borderRadius: 5, background: "transparent", border: "1px solid transparent", cursor: "pointer", fontSize: 12, fontWeight: 600, color: row.start_date ? "var(--text)" : "var(--text-dim)" }}
+                          onMouseEnter={e => (e.currentTarget.style.borderColor = "var(--border)")}
+                          onMouseLeave={e => (e.currentTarget.style.borderColor = "transparent")}>
+                          {row.start_date ?? "—"}
+                          <Pencil size={11} style={{ color: "var(--text-dim)" }} />
+                        </button>
+                      )}
+                    </td>
+                    <td style={{ padding: "12px 16px" }}>
                       {(() => {
                         const gw = gameWalletsByPlayer[row.player_id] ?? [];
                         const count = gw.length || (walletGame ? 1 : 0);
@@ -478,7 +517,7 @@ export default function WalletsClient({
                   </tr>
                   {isExpanded && (
                     <tr style={{ borderBottom: "1px solid var(--border)", background: "var(--bg-surface)" }}>
-                      <td colSpan={7} style={{ padding: "16px 20px" }}>
+                      <td colSpan={8} style={{ padding: "16px 20px" }}>
                         <div style={{ marginBottom: 12 }}>
                           <label style={{ fontSize: 10, fontWeight: 700, color: "#38bdf8", textTransform: "uppercase", display: "block", marginBottom: 6, letterSpacing: "0.06em" }}>Wallets Game (multiple)</label>
                           {walletInlineVals.game_wallets.map((addr, idx) => (
@@ -540,7 +579,7 @@ export default function WalletsClient({
                   )}
                   {isTxOpen && (
                     <tr style={{ borderBottom: "1px solid var(--border)", background: "var(--bg-surface)" }}>
-                      <td colSpan={7} style={{ padding: "12px 20px" }}>
+                      <td colSpan={8} style={{ padding: "12px 20px" }}>
                         {playerTxs.length === 0 ? (
                           <div style={{ fontSize: 12, color: "var(--text-dim)", padding: "12px 0", textAlign: "center" }}>
                             Aucune transaction pour {row.player_name}
@@ -652,6 +691,10 @@ export default function WalletsClient({
                 <input type="number" min="0" max="100" step="0.5" value={newPlayer.rakeback_pct} onChange={e => setNewPlayer(p => ({ ...p, rakeback_pct: e.target.value }))} />
               </Field>
             </div>
+            <Field label="Date de début">
+              <input type="date" value={newPlayer.start_date} onChange={e => setNewPlayer(p => ({ ...p, start_date: e.target.value }))} />
+              <div style={{ fontSize: 11, color: "var(--text-dim)", marginTop: 4 }}>Rapports avant cette date ignorés</div>
+            </Field>
             <Field label="Wallet Game (TRC20)">
               <input value={newPlayer.wallet_game} onChange={e => setNewPlayer(p => ({ ...p, wallet_game: e.target.value }))} placeholder="TXxxx… (optionnel)" spellCheck={false} style={{ fontFamily: "monospace", fontSize: 12 }} />
             </Field>
