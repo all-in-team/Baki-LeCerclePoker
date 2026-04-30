@@ -144,7 +144,7 @@ async function handleJoin(chatId: number, from: any) {
 
   if (isUserbotConfigured() && botToken) {
     try {
-      const result = await createPlayerGroup(from.id, fullName, botToken);
+      const result = await createPlayerGroup(from.id, fullName, botToken, username ?? undefined);
       if (result) {
         groupCreated = true;
         await sendMsg(chatId,

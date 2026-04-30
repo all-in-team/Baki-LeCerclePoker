@@ -41,18 +41,28 @@ export function isUserbotConfigured(): boolean {
 export async function createPlayerGroup(
   playerTgId: number,
   playerName: string,
-  botToken: string
+  botToken: string,
+  playerUsername?: string
 ): Promise<{ chatId: number; inviteLink: string } | null> {
   const client = await getClient();
   if (!client) return null;
 
   try {
-    const usersToAdd: (string | number)[] = [playerTgId];
-    // Add @baki77777 and @hugoroine
+    // Resolve the player — prefer username (works even if userbot never saw them)
+    const usersToAdd: Api.TypeInputUser[] = [];
+    const playerHandle = playerUsername ?? String(playerTgId);
+    try {
+      const playerEntity = await client.getInputEntity(playerHandle);
+      usersToAdd.push(playerEntity as unknown as Api.TypeInputUser);
+    } catch {
+      console.error(`[USERBOT] could not resolve player ${playerHandle}`);
+      return null;
+    }
+
     for (const handle of ["baki77777", "hugoroine"]) {
       try {
-        await client.getEntity(handle);
-        usersToAdd.push(handle);
+        const entity = await client.getInputEntity(handle);
+        usersToAdd.push(entity as unknown as Api.TypeInputUser);
       } catch {
         console.warn(`[USERBOT] could not resolve @${handle}, skipping`);
       }
