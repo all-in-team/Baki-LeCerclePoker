@@ -8,7 +8,7 @@ export async function POST(req: NextRequest) {
   const { webhookUrl } = await req.json();
   if (!webhookUrl) return NextResponse.json({ error: "webhookUrl required" }, { status: 400 });
 
-  const body: Record<string, any> = { url: webhookUrl, allowed_updates: ["message"] };
+  const body: Record<string, any> = { url: webhookUrl, allowed_updates: ["message", "callback_query", "my_chat_member", "chat_member"] };
   if (secret) body.secret_token = secret;
 
   const res = await fetch(`https://api.telegram.org/bot${token}/setWebhook`, {
