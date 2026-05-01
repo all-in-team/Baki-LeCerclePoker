@@ -8,8 +8,6 @@ import {
   sendMsg, getSession, handleRawMessage, registerCommandHandlers,
   OWNER_IDS, AGENT_CHAT_ID,
 } from "@/lib/telegram-commands";
-import { handleOnboardingCallback } from "@/lib/telegram-commands/onboarding";
-
 // Register command handlers for the raw-message flow (breaks circular dep)
 registerCommandHandlers({
   handleDeal,
@@ -27,12 +25,8 @@ export async function POST(req: NextRequest) {
 
   const update = await req.json();
 
-  // Handle inline keyboard button clicks
+  // Handle inline keyboard button clicks (cashout approval etc.)
   if (update.callback_query) {
-    const cbData: string = update.callback_query.data ?? "";
-    if (cbData.startsWith("onb_")) {
-      await handleOnboardingCallback(update.callback_query);
-    }
     return NextResponse.json({ ok: true });
   }
 

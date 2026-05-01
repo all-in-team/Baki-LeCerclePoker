@@ -15,7 +15,7 @@ export { handleRapports } from "./rapports";
 export { handleStart } from "./start";
 export { handlePlayerSelfService } from "./player-self-service";
 export { handleNewMembers } from "./new-members";
-export { handleOnboardingCallback } from "./onboarding";
+export { handleOnboardingDirect } from "./onboarding";
 
 // Re-export helpers needed by route.ts
 export {

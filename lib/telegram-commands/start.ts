@@ -1,10 +1,9 @@
 import { getDb } from "@/lib/db";
 import { sendMsg, OWNER_IDS } from "./helpers";
-import { handleOnboardingWelcome } from "./onboarding";
+import { handleOnboardingDirect } from "./onboarding";
 
 export async function handleStart(chatId: number, fromId: number, fromName: string, from?: any) {
   const db = getDb();
-  // Check if this user is already linked to a player
   const linked = db.prepare(
     `SELECT id, name FROM players WHERE telegram_id = ?`
   ).get(fromId) as { id: number; name: string } | undefined;
@@ -24,8 +23,7 @@ export async function handleStart(chatId: number, fromId: number, fromName: stri
       `👋 <b>${fromName}</b> — mode admin actif.`
     );
   } else {
-    // New user → onboarding funnel
-    await handleOnboardingWelcome(chatId, {
+    await handleOnboardingDirect(chatId, {
       id: fromId,
       first_name: from?.first_name ?? fromName,
       last_name: from?.last_name,
