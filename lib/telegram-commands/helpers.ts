@@ -24,7 +24,33 @@ export async function sendMsg(chatId: number | string, text: string, messageThre
   if (!res.ok) console.error("[TG sendMsg]", chatId, res.status, await res.text());
 }
 
-export async function askWalletGame(chatId: number | string, mention: string) {
+export async function sendMsgKeyboard(chatId: number | string, text: string, keyboard: any[][], messageThreadId?: number) {
+  const token = process.env.TELEGRAM_BOT_TOKEN;
+  if (!token) return;
+  const body: Record<string, any> = {
+    chat_id: chatId, text, parse_mode: "HTML",
+    reply_markup: JSON.stringify({ inline_keyboard: keyboard }),
+  };
+  if (messageThreadId) body.message_thread_id = messageThreadId;
+  const res = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) console.error("[TG sendMsgKeyboard]", chatId, res.status, await res.text());
+}
+
+export async function answerCbQuery(id: string, text?: string) {
+  const token = process.env.TELEGRAM_BOT_TOKEN;
+  if (!token) return;
+  await fetch(`https://api.telegram.org/bot${token}/answerCallbackQuery`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ callback_query_id: id, ...(text ? { text } : {}) }),
+  });
+}
+
+export async function askWalletGame(chatId: number | string, mention: string, messageThreadId?: number) {
   const token = process.env.TELEGRAM_BOT_TOKEN;
   if (!token) return;
 
@@ -32,15 +58,17 @@ export async function askWalletGame(chatId: number | string, mention: string) {
     `📲 <b>Étape 2/3</b> — ${mention}, envoie ton <b>WALLET GAME</b>\n` +
     `<i>C'est la "Deposit Address" TRON dans l'app TELE (voir capture ci-dessus)</i>`;
 
+  const body: Record<string, any> = { chat_id: chatId, photo: WALLET_GAME_PHOTO_URL, caption, parse_mode: "HTML" };
+  if (messageThreadId) body.message_thread_id = messageThreadId;
+
   const res = await fetch(`https://api.telegram.org/bot${token}/sendPhoto`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ chat_id: chatId, photo: WALLET_GAME_PHOTO_URL, caption, parse_mode: "HTML" }),
+    body: JSON.stringify(body),
   });
 
-  // Fallback to text if photo fails
   if (!res.ok) {
-    await sendMsg(chatId, caption);
+    await sendMsg(chatId, caption, messageThreadId);
   }
 }
 
@@ -293,16 +321,17 @@ export function registerCommandHandlers(handlers: {
   commandRegistry.handleReset = handlers.handleReset;
 }
 
-export async function handleRawMessage(text: string, chatId: number) {
+export async function handleRawMessage(text: string, chatId: number, messageThreadId?: number) {
   const session = getSession(chatId);
   if (!session) return;
+  const reply = (msg: string) => sendMsg(chatId, msg, messageThreadId);
 
   // ── waiting_game: owner chose a game after missing it in a command ──
   if (session.step === "waiting_game") {
     const canonical: Record<string, string> = { tele: "TELE", wepoker: "Wepoker", xpoker: "Xpoker", clubgg: "ClubGG" };
     const gameName = canonical[text.trim().toLowerCase()] ?? null;
     if (!gameName) {
-      await sendMsg(chatId, `❌ Game inconnue. Réponds avec : <b>TELE</b>, <b>Wepoker</b>, <b>Xpoker</b> ou <b>ClubGG</b>`);
+      await reply(`❌ Game inconnue. Réponds avec : <b>TELE</b>, <b>Wepoker</b>, <b>Xpoker</b> ou <b>ClubGG</b>`);
       return;
     }
     clearSession(chatId);
@@ -323,12 +352,12 @@ export async function handleRawMessage(text: string, chatId: number) {
     const query = text.trim();
     const players = findPlayer(query);
     if (players.length === 0) {
-      await sendMsg(chatId, `❌ Joueur "${query}" introuvable — essaie un autre nom ou @tag`);
+      await reply(`❌ Joueur "${query}" introuvable — essaie un autre nom ou @tag`);
       return;
     }
     if (players.length > 1) {
       const lines = players.map(p => `• <b>${p.name}</b>${p.telegram_handle ? ` (@${p.telegram_handle})` : ""}`).join("\n");
-      await sendMsg(chatId, `❌ Plusieurs joueurs trouvés :\n${lines}\n\nSois plus précis.`);
+      await reply(`❌ Plusieurs joueurs trouvés :\n${lines}\n\nSois plus précis.`);
       return;
     }
     // Exactly one match — confirm and re-dispatch with player name prepended
@@ -356,7 +385,7 @@ export async function handleRawMessage(text: string, chatId: number) {
     // Accept "40", "40%", "40% action", "40 rb 5", etc.
     const pctMatch = text.match(/(\d+(?:\.\d+)?)/);
     if (!pctMatch) {
-      await sendMsg(chatId, `❌ Envoie juste le pourcentage, ex : <b>40</b>`);
+      await reply(`❌ Envoie juste le pourcentage, ex : <b>40</b>`);
       return;
     }
     const action_pct = parseFloat(pctMatch[1]);
@@ -364,27 +393,27 @@ export async function handleRawMessage(text: string, chatId: number) {
     const nums = [...text.matchAll(/(\d+(?:\.\d+)?)/g)].map(m => parseFloat(m[1]));
     const rakeback_pct = nums.length >= 2 ? nums[1] : 0;
 
-    if (!teleGame) { await sendMsg(chatId, `❌ Game TELE introuvable`); return; }
+    if (!teleGame) { await reply(`❌ Game TELE introuvable`); return; }
     const { upsertPlayerGameDeal } = await import("@/lib/queries");
     upsertPlayerGameDeal({ player_id: player.id, game_id: teleGame.id, action_pct, rakeback_pct });
 
     const fullForDeal = getPlayerFull(player.id)!;
     setSession(chatId, "waiting_wallet_game", player.id, fullForDeal.telegram_id);
-    await sendMsg(chatId,
+    await reply(
       `✅ <b>Deal enregistré</b> — <b>${player.name}</b> sur TELE\n` +
       `Action : <b>${action_pct}%</b>` + (rakeback_pct > 0 ? ` · RB : <b>${rakeback_pct}%</b>` : "")
     );
-    await askWalletGame(chatId, mentionOf(fullForDeal));
+    await askWalletGame(chatId, mentionOf(fullForDeal), messageThreadId);
 
   } else if (session.step === "waiting_wallet_game") {
     if (!TRC20_RE.test(text)) {
-      await sendMsg(chatId, `❌ Adresse invalide — doit commencer par <b>T</b> et faire 34 caractères\nEnvoie le WALLET GAME de ${player.name}`);
+      await reply(`❌ Adresse invalide — doit commencer par <b>T</b> et faire 34 caractères\nEnvoie le WALLET GAME de ${player.name}`);
       return;
     }
     db.prepare(`UPDATE players SET tron_address = ? WHERE id = ?`).run(text, player.id);
     const fullForGame = getPlayerFull(player.id)!;
     setSession(chatId, "waiting_wallet_cashout", player.id, fullForGame.telegram_id);
-    await sendMsg(chatId,
+    await reply(
       `✅ <b>WALLET GAME enregistré</b> pour <b>${player.name}</b>\n<code>${text}</code>\n\n` +
       `💸 <b>Étape 3/3</b> — ${mentionOf(fullForGame)}, envoie ton <b>WALLET CASHOUT</b>\n` +
       `<i>(ton adresse Binance TRC20 pour recevoir les cashouts)</i>`
@@ -392,13 +421,13 @@ export async function handleRawMessage(text: string, chatId: number) {
 
   } else if (session.step === "waiting_wallet_cashout") {
     if (!TRC20_RE.test(text)) {
-      await sendMsg(chatId, `❌ Adresse invalide — doit commencer par <b>T</b> et faire 34 caractères\nEnvoie le WALLET CASHOUT de ${player.name}`);
+      await reply(`❌ Adresse invalide — doit commencer par <b>T</b> et faire 34 caractères\nEnvoie le WALLET CASHOUT de ${player.name}`);
       return;
     }
     db.prepare(`UPDATE players SET tele_wallet_cashout = ? WHERE id = ?`).run(text, player.id);
     clearSession(chatId);
     const deal = getTeleDeal(player.id);
-    await sendMsg(chatId,
+    await reply(
       `✅ <b>WALLET CASHOUT enregistré</b> pour <b>${player.name}</b>\n<code>${text}</code>\n\n` +
       `🟢 <b>${player.name} est 100% configuré !</b>\n` +
       `Deal : <b>${deal?.action_pct ?? "?"}% action</b>` + (deal?.rakeback_pct ? ` · RB : <b>${deal.rakeback_pct}%</b>` : "") + `\n` +
@@ -407,7 +436,7 @@ export async function handleRawMessage(text: string, chatId: number) {
     // Auto-advance to next incomplete TELE player if any
     const hasNext = await startNextWalletFlow(chatId, player.id);
     if (!hasNext) {
-      await sendMsg(chatId, `🎉 <b>Tous les joueurs TELE sont configurés !</b> Lance un <b>Sync TELE</b> sur le dashboard.`);
+      await reply(`🎉 <b>Tous les joueurs TELE sont configurés !</b> Lance un <b>Sync TELE</b> sur le dashboard.`);
     }
   }
 }

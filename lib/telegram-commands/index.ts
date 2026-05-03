@@ -16,9 +16,10 @@ export { handleStart } from "./start";
 export { handlePlayerSelfService } from "./player-self-service";
 export { handleNewMembers } from "./new-members";
 export { handleOnboardingDirect } from "./onboarding";
+export { handleOnboard, handleOnboardCallback } from "./onboard";
 
 // Re-export helpers needed by route.ts
 export {
-  sendMsg, getSession, handleRawMessage, registerCommandHandlers,
+  sendMsg, answerCbQuery, getSession, handleRawMessage, registerCommandHandlers,
   OWNER_IDS, AGENT_CHAT_ID,
 } from "./helpers";

@@ -5,7 +5,8 @@ import {
   handleCheck, handlePnl, handleSolde, handleTodo, handleHistorique,
   handleKickstart, handleAide, handleRapports, handleStart,
   handlePlayerSelfService, handleNewMembers,
-  sendMsg, getSession, handleRawMessage, registerCommandHandlers,
+  handleOnboard, handleOnboardCallback,
+  sendMsg, answerCbQuery, getSession, handleRawMessage, registerCommandHandlers,
   OWNER_IDS, AGENT_CHAT_ID,
 } from "@/lib/telegram-commands";
 // Register command handlers for the raw-message flow (breaks circular dep)
@@ -25,13 +26,24 @@ export async function POST(req: NextRequest) {
 
   const update = await req.json();
 
-  // Handle inline keyboard button clicks (cashout approval etc.)
+  // Handle inline keyboard button clicks
   if (update.callback_query) {
+    const cb = update.callback_query;
+    const cbData: string = cb.data ?? "";
+    const cbChatId = cb.message?.chat?.id;
+    const cbThreadId = cb.message?.message_thread_id;
+
+    if (cbData.startsWith("onboard:")) {
+      await handleOnboardCallback(cb.id, cbData, cbChatId, cbThreadId);
+    } else {
+      await answerCbQuery(cb.id);
+    }
     return NextResponse.json({ ok: true });
   }
 
   const msg = update.message;
   const chatId = msg?.chat?.id;
+  const threadId = msg?.message_thread_id;
 
   // Debug log every incoming message sender (helps verify owner ID)
   if (msg?.from?.id) {
@@ -39,9 +51,7 @@ export async function POST(req: NextRequest) {
   }
 
   // Agent chat: in the dedicated agent group, route ALL non-command text
-  // messages to Claude. No @-mention required. Skip the bot's own messages
-  // (would loop) and skip slash commands (no commands in this group anyway,
-  // but defensive).
+  // messages to Claude.
   if (
     msg?.text &&
     String(chatId) === AGENT_CHAT_ID &&
@@ -67,7 +77,7 @@ export async function POST(req: NextRequest) {
 
   // Player self-service commands (any user linked via telegram_id)
   if (msg?.text?.startsWith("/") && msg.from?.id && !OWNER_IDS.has(msg.from?.id)) {
-    const handled = await handlePlayerSelfService(chatId, msg.from.id, msg.text, msg.message_thread_id);
+    const handled = await handlePlayerSelfService(chatId, msg.from.id, msg.text, threadId);
     if (handled) return NextResponse.json({ ok: true });
   }
 
@@ -78,7 +88,8 @@ export async function POST(req: NextRequest) {
     const rawArgs = spaceIdx === -1 ? "" : msg.text.slice(spaceIdx + 1);
     const cmd = rawCmd.split("@")[0].toLowerCase();
     try {
-      if (cmd === "/deal")              await handleDeal(rawArgs, chatId);
+      if (cmd === "/onboard")           await handleOnboard(rawArgs, chatId, msg.chat?.title, threadId);
+      else if (cmd === "/deal")         await handleDeal(rawArgs, chatId);
       else if (cmd === "/depot")        await handleTx("deposit", rawArgs, chatId);
       else if (cmd === "/retrait")      await handleTx("withdrawal", rawArgs, chatId);
       else if (cmd === "/transfer")     await handleTransfer(rawArgs, chatId);
@@ -90,7 +101,7 @@ export async function POST(req: NextRequest) {
       else if (cmd === "/todo")         await handleTodo(chatId);
       else if (cmd === "/kickstart")    await handleKickstart(chatId);
       else if (cmd === "/historique")   await handleHistorique(rawArgs, chatId);
-      else if (cmd === "/rapports")  await handleRapports(chatId);
+      else if (cmd === "/rapports")     await handleRapports(chatId);
       else if (cmd === "/aide" || cmd === "/help") await handleAide(chatId);
     } catch (e: any) {
       console.error("[TG CMD]", e);
@@ -105,11 +116,10 @@ export async function POST(req: NextRequest) {
     const senderId: number = msg.from?.id;
     const session = getSession(chatId);
     if (session) {
-      // Accept if sender is owner OR sender is the expected player
       const isOwner = OWNER_IDS.has(senderId);
       const isExpectedPlayer = session.expected_tg_id != null && senderId === session.expected_tg_id;
       if (isOwner || isExpectedPlayer) {
-        try { await handleRawMessage(text, chatId); } catch (e: any) {
+        try { await handleRawMessage(text, chatId, threadId); } catch (e: any) {
           console.error("[TG FLOW]", e);
         }
         return NextResponse.json({ ok: true });
