@@ -103,9 +103,10 @@ export async function handleOnboardingDirect(
       if (result) {
         groupCreated = true;
 
-        // Welcome in General topic
+        // Welcome in General topic — tag the player so they get a notification
+        const mention = `<a href="tg://user?id=${from.id}">${firstName}</a>`;
         await sendMsg(result.chatId,
-          `🃏 <b>Bienvenue ${firstName} !</b>\n\n` +
+          `🃏 Bienvenue ${mention} !\n\n` +
           `C'est ici que tu peux discuter avec ton support dédié.\n` +
           `Toutes les infos importantes sont dans les topics ci-dessous.\n\n` +
           `👉 Questions ? → envoie un message ici.`
