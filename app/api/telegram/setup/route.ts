@@ -18,16 +18,16 @@ export async function POST(req: NextRequest) {
   });
   const data = await res.json();
 
-  // Set bot description (shown before user clicks Start)
-  await fetch(`https://api.telegram.org/bot${token}/setMyDescription`, {
+  const descRes = await fetch(`https://api.telegram.org/bot${token}/setMyDescription`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       description: "Bienvenue sur Le Cercle !\n\nPour jouer, il te suffit de cliquer sur Start — on va créer un groupe privé avec ton support dédié.\n\n🃏 Tables privées 24/7\n💰 Dépôts & retraits rapides en USDT\n🤝 Support personnel dédié",
     }),
   });
+  const descData = await descRes.json();
 
-  return NextResponse.json(data);
+  return NextResponse.json({ webhook: data, description: descData });
 }
 
 export async function GET() {
