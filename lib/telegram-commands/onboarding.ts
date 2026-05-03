@@ -54,6 +54,20 @@ const TOPIC_MESSAGES: Record<string, string> = {
     `USDC (ERC20)\n<blockquote>0xb79AF3958e1e870DD08D63A5774abA40732045C2</blockquote>\n\n` +
     `⸻\n\n` +
     `👉 Envoie le TX + montant après dépôt`,
+
+  liveplay:
+    `🔴 <b>Liveplay</b>\n\n` +
+    `Ici seront postés les liveplay des différentes games.\n\n` +
+    `👉 Reste connecté pour ne rien rater.`,
+
+  onboarding:
+    `🚀 <b>Onboarding</b>\n\n` +
+    `Ce canal est dédié à ta mise en place.\n\n` +
+    `Ton support va te guider étape par étape :\n` +
+    `• Configuration de ton deal\n` +
+    `• Wallet game (adresse de dépôt)\n` +
+    `• Wallet cashout (adresse de retrait)\n\n` +
+    `👉 Suis les instructions ici pour être 100% opérationnel.`,
 };
 
 /**

@@ -205,6 +205,8 @@ export async function createPlayerGroup(
         { key: "deals", title: "Deals", iconColor: 0xFFD67E, emojis: ["🤝", "📋", "📝", "✍️"] },
         { key: "clubs", title: "Clubs", iconColor: 0x8EEE98, emojis: ["🏠", "🎰", "🃏", "♠️"] },
         { key: "depot", title: "Dépôt", iconColor: 0xFF93B2, emojis: ["💰", "💳", "🏦", "💵"] },
+        { key: "liveplay", title: "Liveplay", iconColor: 0xFB6F5F, emojis: ["🔴", "🎥", "📺", "▶️"] },
+        { key: "onboarding", title: "Onboarding", iconColor: 0xCB86DB, emojis: ["🚀", "✅", "📌", "⚡"] },
       ];
 
       for (const def of topicDefs) {

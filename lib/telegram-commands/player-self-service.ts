@@ -2,7 +2,7 @@ import { getDb } from "@/lib/db";
 import { getPlayerBalance, createCashoutRequest } from "@/lib/queries";
 import { sendMsg, s } from "./helpers";
 
-export async function handlePlayerSelfService(chatId: number, fromId: number, text: string): Promise<boolean> {
+export async function handlePlayerSelfService(chatId: number, fromId: number, text: string, messageThreadId?: number): Promise<boolean> {
   const db = getDb();
   const linkedPlayer = db.prepare(
     `SELECT id, name FROM players WHERE telegram_id = ?`
@@ -10,6 +10,7 @@ export async function handlePlayerSelfService(chatId: number, fromId: number, te
 
   if (!linkedPlayer) return false;
 
+  const reply = (text: string) => sendMsg(chatId, text, messageThreadId);
   const spaceIdx = text.indexOf(" ");
   const rawCmd = spaceIdx === -1 ? text : text.slice(0, spaceIdx);
   const cmd = rawCmd.split("@")[0].toLowerCase();
@@ -18,7 +19,7 @@ export async function handlePlayerSelfService(chatId: number, fromId: number, te
     if (cmd === "/solde") {
       const balances = getPlayerBalance(linkedPlayer.id);
       if (balances.length === 0) {
-        await sendMsg(chatId, `ℹ️ ${linkedPlayer.name} — aucune donnée`);
+        await reply( `ℹ️ ${linkedPlayer.name} — aucune donnée`);
       } else {
         const bal = balances[0];
         const lines = bal.games.filter(g => Math.abs(g.net_usdt) >= 0.01).map(g => {
@@ -27,7 +28,7 @@ export async function handlePlayerSelfService(chatId: number, fromId: number, te
         });
         const total = bal.games.reduce((sum, g) => sum + g.net_usdt, 0);
         const totalLine = lines.length > 1 ? `\n\n<b>Total : ${s(total)} USDT</b>` : "";
-        await sendMsg(chatId, `💰 <b>Ton solde, ${linkedPlayer.name}</b>\n\n${lines.join("\n")}${totalLine}`);
+        await reply( `💰 <b>Ton solde, ${linkedPlayer.name}</b>\n\n${lines.join("\n")}${totalLine}`);
       }
     } else if (cmd === "/historique") {
       const rows = db.prepare(`
@@ -37,14 +38,14 @@ export async function handlePlayerSelfService(chatId: number, fromId: number, te
         ORDER BY wt.tx_date DESC, wt.id DESC LIMIT 10
       `).all(linkedPlayer.id) as any[];
       if (rows.length === 0) {
-        await sendMsg(chatId, `ℹ️ ${linkedPlayer.name} — aucune transaction`);
+        await reply( `ℹ️ ${linkedPlayer.name} — aucune transaction`);
       } else {
         const lines = rows.map((r: any) => {
           const emoji = r.type === "deposit" ? "📥" : "📤";
           const sign = r.type === "deposit" ? "+" : "−";
           return `${emoji} ${r.tx_date} · <b>${sign}${r.amount.toFixed(2)} USDT</b> · ${r.game_name}`;
         });
-        await sendMsg(chatId, `📜 <b>${linkedPlayer.name}</b> — ${rows.length} dernière(s) transaction(s)\n\n${lines.join("\n")}`);
+        await reply( `📜 <b>${linkedPlayer.name}</b> — ${rows.length} dernière(s) transaction(s)\n\n${lines.join("\n")}`);
       }
     } else if (cmd === "/deal") {
       const deals = db.prepare(`
@@ -53,18 +54,18 @@ export async function handlePlayerSelfService(chatId: number, fromId: number, te
         WHERE pgd.player_id = ? ORDER BY g.name
       `).all(linkedPlayer.id) as { game_name: string; action_pct: number; rakeback_pct: number }[];
       if (deals.length === 0) {
-        await sendMsg(chatId, `ℹ️ ${linkedPlayer.name} — aucun deal configuré`);
+        await reply( `ℹ️ ${linkedPlayer.name} — aucun deal configuré`);
       } else {
         const lines = deals.map(d =>
           `• <b>${d.game_name}</b> — Action : <b>${d.action_pct}%</b>` + (d.rakeback_pct > 0 ? ` · RB : <b>${d.rakeback_pct}%</b>` : "")
         );
-        await sendMsg(chatId, `📋 <b>Tes deals, ${linkedPlayer.name}</b>\n\n${lines.join("\n")}`);
+        await reply( `📋 <b>Tes deals, ${linkedPlayer.name}</b>\n\n${lines.join("\n")}`);
       }
     } else if (cmd === "/cashout" || cmd === "/retrait") {
       const rawArgs = spaceIdx === -1 ? "" : text.slice(spaceIdx + 1).trim();
       const amount = parseFloat(rawArgs.replace(/[^\d.]/g, ""));
       if (!amount || amount <= 0) {
-        await sendMsg(chatId, `❌ Usage : <code>/cashout 500</code> (montant en USDT)`);
+        await reply( `❌ Usage : <code>/cashout 500</code> (montant en USDT)`);
       } else {
         const id = createCashoutRequest({ player_id: linkedPlayer.id, amount, note: `Demande Telegram par ${linkedPlayer.name}` });
         // Notify operator
@@ -77,14 +78,14 @@ export async function handlePlayerSelfService(chatId: number, fromId: number, te
             `<i>→ Approuve sur /cashouts du dashboard</i>`
           );
         }
-        await sendMsg(chatId,
+        await reply(
           `✅ <b>Demande de cashout envoyée</b>\n` +
           `💰 <b>${amount.toFixed(2)} USDT</b>\n\n` +
           `<i>Tu recevras une notification quand c'est approuvé.</i>`
         );
       }
     } else if (cmd === "/aide" || cmd === "/help" || cmd === "/start") {
-      await sendMsg(chatId,
+      await reply(
         `🃏 <b>${linkedPlayer.name}</b> — tes commandes :\n\n` +
         `💰 <code>/solde</code> — ton solde actuel par game\n` +
         `📜 <code>/historique</code> — tes 10 dernières transactions\n` +

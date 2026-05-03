@@ -67,7 +67,7 @@ export async function POST(req: NextRequest) {
 
   // Player self-service commands (any user linked via telegram_id)
   if (msg?.text?.startsWith("/") && msg.from?.id && !OWNER_IDS.has(msg.from?.id)) {
-    const handled = await handlePlayerSelfService(chatId, msg.from.id, msg.text);
+    const handled = await handlePlayerSelfService(chatId, msg.from.id, msg.text, msg.message_thread_id);
     if (handled) return NextResponse.json({ ok: true });
   }
 
