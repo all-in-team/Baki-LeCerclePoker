@@ -41,17 +41,17 @@ const TOPIC_MESSAGES: Record<string, string> = {
     `Frais :\n` +
     `• -1000€ → 5%\n` +
     `• +1000€ → 2%\n\n` +
-    `Nom :\n<code>Baki Consulting LLP</code>\n` +
-    `IBAN :\n<code>BE07905412731266</code>\n` +
-    `Swift :\n<code>TRWIBEB1XXX</code>\n` +
-    `Adresse :\nWise, Rue du Trône 100, 3rd floor, Brussels, 1050, Belgium\n\n` +
+    `Nom :\n<blockquote>Baki Consulting LLP</blockquote>\n` +
+    `IBAN :\n<blockquote>BE07905412731266</blockquote>\n` +
+    `Swift :\n<blockquote>TRWIBEB1XXX</blockquote>\n` +
+    `Adresse :\n<blockquote>Wise, Rue du Trône 100, 3rd floor, Brussels, 1050, Belgium</blockquote>\n\n` +
     `⸻\n\n` +
     `💰 <b>Dépôt crypto</b>\n\n` +
-    `BTC\n<code>bc1qjpglfnn8xfsqvjk36tz4vcks2qaga06cwes239</code>\n\n` +
-    `USDT (TRC20)\n<code>TTavAAgmeaBFWo8bX8zGwGQzcfLGSPfUqc</code>\n\n` +
-    `USDT (ERC20)\n<code>0xb79AF3958e1e870DD08D63A5774abA40732045C2</code>\n\n` +
-    `USDC (TRC20)\n<code>TTavAAgmeaBFWo8bX8zGwGQzcfLGSPfUqc</code>\n\n` +
-    `USDC (ERC20)\n<code>0xb79AF3958e1e870DD08D63A5774abA40732045C2</code>\n\n` +
+    `BTC\n<blockquote>bc1qjpglfnn8xfsqvjk36tz4vcks2qaga06cwes239</blockquote>\n` +
+    `USDT (TRC20)\n<blockquote>TTavAAgmeaBFWo8bX8zGwGQzcfLGSPfUqc</blockquote>\n` +
+    `USDT (ERC20)\n<blockquote>0xb79AF3958e1e870DD08D63A5774abA40732045C2</blockquote>\n` +
+    `USDC (TRC20)\n<blockquote>TTavAAgmeaBFWo8bX8zGwGQzcfLGSPfUqc</blockquote>\n` +
+    `USDC (ERC20)\n<blockquote>0xb79AF3958e1e870DD08D63A5774abA40732045C2</blockquote>\n\n` +
     `⸻\n\n` +
     `👉 Envoie le TX + montant après dépôt`,
 };
