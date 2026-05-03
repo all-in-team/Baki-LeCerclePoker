@@ -22,7 +22,7 @@ export async function POST(req: NextRequest) {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
-      description: "Bienvenue sur Le Cercle !\n\nPour jouer, il te suffit de cliquer sur Start — on va créer un groupe privé avec ton support dédié.\n\n🃏 Tables privées 24/7\n💰 Dépôts & retraits rapides en USDT\n🤝 Support personnel dédié",
+      description: "Bienvenue sur Le Cercle !\n\nPour jouer, il te suffit de cliquer sur Start — on va créer un groupe privé avec ton support dédié.\n\n🃏 Tables privées 24/7\n💰 Dépôts & retraits : USDT / Bancaire\n🤝 Support personnel dédié",
     }),
   });
   const descData = await descRes.json();

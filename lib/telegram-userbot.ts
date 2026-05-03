@@ -1,5 +1,7 @@
 import { TelegramClient, Api } from "telegram";
 import { StringSession } from "telegram/sessions";
+import * as fs from "fs";
+import * as path from "path";
 
 let _client: TelegramClient | null = null;
 
@@ -38,17 +40,22 @@ export function isUserbotConfigured(): boolean {
   return getApiCredentials() !== null;
 }
 
+export interface GroupResult {
+  chatId: number;
+  inviteLink: string;
+  topicIds: Record<string, number>;
+}
+
 export async function createPlayerGroup(
   playerTgId: number,
   playerName: string,
   botToken: string,
   playerUsername?: string
-): Promise<{ chatId: number; inviteLink: string } | null> {
+): Promise<GroupResult | null> {
   const client = await getClient();
   if (!client) return null;
 
   try {
-    // Resolve the player — prefer username (works even if userbot never saw them)
     const usersToAdd: Api.TypeInputUser[] = [];
     const playerHandle = playerUsername ?? String(playerTgId);
     try {
@@ -71,16 +78,14 @@ export async function createPlayerGroup(
     const result = await client.invoke(
       new Api.messages.CreateChat({
         users: usersToAdd,
-        title: `TELE AK POKER — ${playerName}`,
+        title: `${playerName} x LeCercle`,
       })
     );
 
-    // Extract chat ID — response can be Updates, InvitedUsers wrapper, etc.
     const raw = result as any;
     const chats = raw.chats ?? raw.updates?.chats ?? [];
     let chat = chats[0];
     if (!chat && raw.updates) {
-      // InvitedUsers response: { updates: Updates { chats: [...] } }
       const innerChats = raw.updates.chats ?? [];
       chat = innerChats[0];
     }
@@ -106,7 +111,6 @@ export async function createPlayerGroup(
       if (!channel) throw new Error("no channel after migration");
       channelId = typeof channel.id === "bigint" ? Number(channel.id) : channel.id;
 
-      // Resolve entity from gramjs cache (populated by invoke processing)
       const resolved = await client.getInputEntity(
         new Api.PeerChannel({ channelId: BigInt(channelId) as any })
       );
@@ -114,7 +118,6 @@ export async function createPlayerGroup(
       console.log("[USERBOT] migrated to supergroup, channelId:", channelId);
     } catch (e) {
       console.error("[USERBOT] migration to supergroup failed:", e);
-      // Fall back to basic group
       try {
         const botEntity = await client.getInputEntity("LeCercle_Lebot");
         await client.invoke(
@@ -125,7 +128,7 @@ export async function createPlayerGroup(
           })
         );
       } catch {}
-      return { chatId: -rawChatId, inviteLink: "" };
+      return { chatId: -rawChatId, inviteLink: "", topicIds: {} };
     }
 
     const supergroupChatId = -(1000000000000 + channelId);
@@ -143,7 +146,28 @@ export async function createPlayerGroup(
       console.warn("[USERBOT] could not add bot to supergroup:", e);
     }
 
+    // Set group photo
+    try {
+      const logoPath = path.join(process.cwd(), "public", "lecercle-logo.jpg");
+      const logoBuffer = fs.readFileSync(logoPath);
+      const { CustomFile } = await import("telegram/client/uploads");
+      const file = await client.uploadFile({
+        file: new CustomFile("lecercle-logo.jpg", logoBuffer.length, "", logoBuffer),
+        workers: 1,
+      });
+      await client.invoke(
+        new Api.channels.EditPhoto({
+          channel: channelPeer,
+          photo: new Api.InputChatUploadedPhoto({ file }),
+        })
+      );
+      console.log("[USERBOT] group photo set");
+    } catch (e) {
+      console.warn("[USERBOT] could not set group photo:", e);
+    }
+
     // Enable forum mode + create topics
+    const topicIds: Record<string, number> = {};
     try {
       await client.invoke(
         new Api.channels.ToggleForum({
@@ -152,26 +176,36 @@ export async function createPlayerGroup(
         })
       );
 
-      const topics = [
-        { title: "Accounting", iconColor: 0x6FB9F0 },
-        { title: "Deals", iconColor: 0xFFD67E },
-        { title: "Clubs", iconColor: 0x8EEE98 },
+      const topicDefs = [
+        { key: "accounting", title: "Accounting", iconColor: 0x6FB9F0 },
+        { key: "deals", title: "Deals", iconColor: 0xFFD67E },
+        { key: "clubs", title: "Clubs", iconColor: 0x8EEE98 },
+        { key: "depot", title: "Dépôt", iconColor: 0xFF93B2 },
       ];
 
-      for (const topic of topics) {
+      for (const def of topicDefs) {
         try {
-          await client.invoke(
+          const topicResult = await client.invoke(
             new Api.channels.CreateForumTopic({
               channel: channelPeer,
-              title: topic.title,
-              iconColor: topic.iconColor,
+              title: def.title,
+              iconColor: def.iconColor,
               randomId: BigInt(Math.floor(Math.random() * Number.MAX_SAFE_INTEGER)) as any,
             })
           );
+          const topicRaw = topicResult as any;
+          const updates = topicRaw.updates ?? [];
+          for (const u of updates) {
+            if (u.message?.action?.className === "MessageActionTopicCreate") {
+              topicIds[def.key] = typeof u.message.id === "bigint" ? Number(u.message.id) : u.message.id;
+              break;
+            }
+          }
         } catch (e) {
-          console.warn(`[USERBOT] could not create topic "${topic.title}":`, e);
+          console.warn(`[USERBOT] could not create topic "${def.title}":`, e);
         }
       }
+      console.log("[USERBOT] topics created:", topicIds);
     } catch (e) {
       console.warn("[USERBOT] could not enable forum mode:", e);
     }
@@ -191,7 +225,7 @@ export async function createPlayerGroup(
       console.warn("[USERBOT] could not export invite link:", e);
     }
 
-    return { chatId: supergroupChatId, inviteLink };
+    return { chatId: supergroupChatId, inviteLink, topicIds };
   } catch (e) {
     console.error("[USERBOT] createPlayerGroup failed:", e);
     return null;

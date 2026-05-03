@@ -11,13 +11,15 @@ export const AGENT_CHAT_ID = process.env.AGENT_TELEGRAM_CHAT_ID ?? "-4846690641"
 export const WALLET_GAME_PHOTO_URL = "https://lecerclepoker-production.up.railway.app/tele-wallet-guide.jpg";
 
 // ── Telegram API ──────────────────────────────────────────
-export async function sendMsg(chatId: number | string, text: string) {
+export async function sendMsg(chatId: number | string, text: string, messageThreadId?: number) {
   const token = process.env.TELEGRAM_BOT_TOKEN;
   if (!token) return;
+  const body: Record<string, any> = { chat_id: chatId, text, parse_mode: "HTML" };
+  if (messageThreadId) body.message_thread_id = messageThreadId;
   const res = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ chat_id: chatId, text, parse_mode: "HTML" }),
+    body: JSON.stringify(body),
   });
   if (!res.ok) console.error("[TG sendMsg]", chatId, res.status, await res.text());
 }
