@@ -93,7 +93,7 @@ export async function createPlayerGroup(
 
     // Migrate to supergroup
     let channelId: number;
-    let accessHash: bigint;
+    let channelPeer: Api.InputChannel;
     try {
       const migrateResult = await client.invoke(
         new Api.messages.MigrateChat({
@@ -105,7 +105,13 @@ export async function createPlayerGroup(
       const channel = allChats.find((c: any) => c.className === "Channel");
       if (!channel) throw new Error("no channel after migration");
       channelId = typeof channel.id === "bigint" ? Number(channel.id) : channel.id;
-      accessHash = typeof channel.accessHash === "bigint" ? channel.accessHash : BigInt(channel.accessHash ?? 0);
+
+      // Resolve entity from gramjs cache (populated by invoke processing)
+      const resolved = await client.getInputEntity(
+        new Api.PeerChannel({ channelId: BigInt(channelId) as any })
+      );
+      channelPeer = resolved as unknown as Api.InputChannel;
+      console.log("[USERBOT] migrated to supergroup, channelId:", channelId);
     } catch (e) {
       console.error("[USERBOT] migration to supergroup failed:", e);
       // Fall back to basic group
@@ -122,10 +128,6 @@ export async function createPlayerGroup(
       return { chatId: -rawChatId, inviteLink: "" };
     }
 
-    const channelPeer = new Api.InputChannel({
-      channelId: BigInt(channelId) as any,
-      accessHash: accessHash as any,
-    });
     const supergroupChatId = -(1000000000000 + channelId);
 
     // Add bot to supergroup
@@ -177,13 +179,12 @@ export async function createPlayerGroup(
     // Generate invite link
     let inviteLink = "";
     try {
+      const peerChannel = new Api.InputPeerChannel({
+        channelId: channelPeer.channelId,
+        accessHash: channelPeer.accessHash,
+      });
       const exported = await client.invoke(
-        new Api.messages.ExportChatInvite({
-          peer: new Api.InputPeerChannel({
-            channelId: BigInt(channelId) as any,
-            accessHash: accessHash as any,
-          }),
-        })
+        new Api.messages.ExportChatInvite({ peer: peerChannel })
       );
       inviteLink = (exported as any).link ?? "";
     } catch (e) {
