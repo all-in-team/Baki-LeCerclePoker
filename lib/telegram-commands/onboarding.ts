@@ -33,8 +33,12 @@ export async function handleOnboardingDirect(
     return;
   }
 
-  // Tell user we're setting things up
-  await sendMsg(chatId, `🃏 <b>Bienvenue !</b>\n\nOn prépare ton groupe privé...`);
+  await sendMsg(chatId,
+    `🃏 <b>Bienvenue sur Le Cercle !</b>\n\n` +
+    `On crée ton groupe privé avec ton support dédié — ` +
+    `tu y retrouveras tout pour jouer sur nos tables.\n\n` +
+    `⏳ Ça arrive...`
+  );
 
   const botToken = process.env.TELEGRAM_BOT_TOKEN ?? "";
   let groupCreated = false;
@@ -45,14 +49,13 @@ export async function handleOnboardingDirect(
       if (result) {
         groupCreated = true;
 
-        // Send presentation in the GROUP, not in private chat
         await sendMsg(result.chatId,
           `🎰 <b>TELE AK POKER — ${fullName}</b>\n\n` +
-          `Bienvenue dans ton groupe privé ! Ici tu pourras :\n\n` +
-          `✅ Tables privées 24/7\n` +
-          `✅ Dépôts & retraits rapides en USDT\n` +
-          `✅ Support personnel dédié\n` +
-          `✅ Rakeback sur toutes tes parties\n\n` +
+          `Bienvenue dans ton espace privé !\n\n` +
+          `💬 <b>General</b> — discussion avec ton support\n` +
+          `🏛 <b>Accounting</b> — suivi de tes transactions\n` +
+          `📋 <b>Deals</b> — tes deals et conditions\n` +
+          `🗂 <b>Clubs</b> — infos des clubs\n\n` +
           `Ton support dédié va te guider pour la suite. 🃏`
         );
 

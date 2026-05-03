@@ -90,20 +90,88 @@ export async function createPlayerGroup(
     }
 
     const rawChatId = typeof chat.id === "bigint" ? Number(chat.id) : chat.id;
-    const chatId = -rawChatId;
 
-    // Add the bot to the group (resolve by username)
+    // Migrate to supergroup
+    let channelId: number;
+    let accessHash: bigint;
+    try {
+      const migrateResult = await client.invoke(
+        new Api.messages.MigrateChat({
+          chatId: BigInt(rawChatId) as any,
+        })
+      );
+      const migrateRaw = migrateResult as any;
+      const allChats = migrateRaw.chats ?? migrateRaw.updates?.chats ?? [];
+      const channel = allChats.find((c: any) => c.className === "Channel");
+      if (!channel) throw new Error("no channel after migration");
+      channelId = typeof channel.id === "bigint" ? Number(channel.id) : channel.id;
+      accessHash = typeof channel.accessHash === "bigint" ? channel.accessHash : BigInt(channel.accessHash ?? 0);
+    } catch (e) {
+      console.error("[USERBOT] migration to supergroup failed:", e);
+      // Fall back to basic group
+      try {
+        const botEntity = await client.getInputEntity("LeCercle_Lebot");
+        await client.invoke(
+          new Api.messages.AddChatUser({
+            chatId: BigInt(rawChatId) as any,
+            userId: botEntity as unknown as Api.TypeInputUser,
+            fwdLimit: 0,
+          })
+        );
+      } catch {}
+      return { chatId: -rawChatId, inviteLink: "" };
+    }
+
+    const channelPeer = new Api.InputChannel({
+      channelId: BigInt(channelId) as any,
+      accessHash: accessHash as any,
+    });
+    const supergroupChatId = -(1000000000000 + channelId);
+
+    // Add bot to supergroup
     try {
       const botEntity = await client.getInputEntity("LeCercle_Lebot");
       await client.invoke(
-        new Api.messages.AddChatUser({
-          chatId: BigInt(rawChatId) as any,
-          userId: botEntity as unknown as Api.TypeInputUser,
-          fwdLimit: 0,
+        new Api.channels.InviteToChannel({
+          channel: channelPeer,
+          users: [botEntity as unknown as Api.TypeInputUser],
         })
       );
     } catch (e) {
-      console.warn("[USERBOT] could not add bot to group:", e);
+      console.warn("[USERBOT] could not add bot to supergroup:", e);
+    }
+
+    // Enable forum mode + create topics
+    try {
+      await client.invoke(
+        new Api.channels.ToggleForum({
+          channel: channelPeer,
+          enabled: true,
+        })
+      );
+
+      const topics = [
+        { title: "Accounting", iconColor: 0x6FB9F0 },
+        { title: "Deals", iconColor: 0xFFD67E },
+        { title: "Clubs", iconColor: 0x8EEE98 },
+      ];
+
+      for (const topic of topics) {
+        try {
+          await client.invoke(
+            new Api.channels.CreateForumTopic({
+              channel: channelPeer,
+              title: topic.title,
+              iconColor: topic.iconColor,
+              randomId: BigInt(Math.floor(Math.random() * Number.MAX_SAFE_INTEGER)) as any,
+            })
+          );
+        } catch (e) {
+          console.warn(`[USERBOT] could not create topic "${topic.title}":`, e);
+        }
+      }
+    } catch (e) {
+      console.warn("[USERBOT] could not enable forum mode:", e);
     }
 
     // Generate invite link
@@ -111,7 +179,10 @@ export async function createPlayerGroup(
     try {
       const exported = await client.invoke(
         new Api.messages.ExportChatInvite({
-          peer: new Api.InputPeerChat({ chatId: BigInt(rawChatId) as any }),
+          peer: new Api.InputPeerChannel({
+            channelId: BigInt(channelId) as any,
+            accessHash: accessHash as any,
+          }),
         })
       );
       inviteLink = (exported as any).link ?? "";
@@ -119,7 +190,7 @@ export async function createPlayerGroup(
       console.warn("[USERBOT] could not export invite link:", e);
     }
 
-    return { chatId, inviteLink };
+    return { chatId: supergroupChatId, inviteLink };
   } catch (e) {
     console.error("[USERBOT] createPlayerGroup failed:", e);
     return null;
