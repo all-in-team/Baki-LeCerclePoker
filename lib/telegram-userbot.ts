@@ -176,17 +176,20 @@ export async function createPlayerGroup(
         })
       );
 
-      // Fetch available forum topic icon stickers
+      // Fetch default forum topic icon stickers
       const iconMap = new Map<string, bigint>();
       try {
-        const StickersFn = (Api.messages as any).GetForumTopicIconStickers;
-        if (!StickersFn) throw new Error("API not available");
-        const stickersResult = await client.invoke(new StickersFn({ hash: BigInt(0) }));
-        const stickers = (stickersResult as any).stickers ?? [];
-        for (const sticker of stickers) {
-          for (const attr of sticker.attributes ?? []) {
+        const stickerSet = await client.invoke(
+          new Api.messages.GetStickerSet({
+            stickerset: new Api.InputStickerSetEmojiDefaultTopicIcons(),
+            hash: 0,
+          })
+        );
+        const docs = (stickerSet as any).documents ?? [];
+        for (const doc of docs) {
+          for (const attr of doc.attributes ?? []) {
             if (attr.className === "DocumentAttributeCustomEmoji" && attr.alt) {
-              iconMap.set(attr.alt, typeof sticker.id === "bigint" ? sticker.id : BigInt(sticker.id));
+              iconMap.set(attr.alt, typeof doc.id === "bigint" ? doc.id : BigInt(doc.id));
             }
           }
         }

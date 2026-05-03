@@ -1,5 +1,5 @@
 import { getDb } from "@/lib/db";
-import { sendMsg, sendMsgKeyboard, answerCbQuery, setSession, findPlayer, findGame, mentionOf } from "./helpers";
+import { sendMsg, sendMsgKeyboard, answerCbQuery, setSession, findPlayer, findGame, mentionOf, OWNER_IDS } from "./helpers";
 
 const GAME_INFO: Record<string, string> = {
   TELE:
@@ -53,15 +53,33 @@ export async function handleOnboard(rawArgs: string, chatId: number, chatTitle?:
     }
   }
 
-  // Auto-detect from group title: "{Name} x LeCercle"
+  // Auto-detect from group title: "{Name} x LeCercle" or "TELE AK POKER — {Name}"
   if (!playerId && chatTitle) {
-    const match = chatTitle.match(/^(.+?)\s*x\s*LeCercle$/i);
-    if (match) {
-      const results = findPlayer(match[1].trim());
+    let extractedName: string | null = null;
+    const newMatch = chatTitle.match(/^(.+?)\s*x\s*LeCercle$/i);
+    if (newMatch) extractedName = newMatch[1].trim();
+    if (!extractedName) {
+      const oldMatch = chatTitle.match(/^TELE AK POKER\s*[—–-]\s*(.+)$/i);
+      if (oldMatch) extractedName = oldMatch[1].trim();
+    }
+    if (extractedName) {
+      const results = findPlayer(extractedName);
       if (results.length === 1) {
         playerId = results[0].id;
         playerName = results[0].name;
       }
+    }
+  }
+
+  // Fallback: find any non-admin player linked to this chat
+  if (!playerId) {
+    const allPlayers = db.prepare(
+      `SELECT id, name, telegram_id FROM players WHERE telegram_id IS NOT NULL`
+    ).all() as { id: number; name: string; telegram_id: number }[];
+    const nonAdmin = allPlayers.filter(p => !OWNER_IDS.has(p.telegram_id));
+    if (nonAdmin.length === 1) {
+      playerId = nonAdmin[0].id;
+      playerName = nonAdmin[0].name;
     }
   }
 
