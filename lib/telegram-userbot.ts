@@ -176,22 +176,48 @@ export async function createPlayerGroup(
         })
       );
 
+      // Fetch available forum topic icon stickers
+      const iconMap = new Map<string, bigint>();
+      try {
+        const StickersFn = (Api.messages as any).GetForumTopicIconStickers;
+        if (!StickersFn) throw new Error("API not available");
+        const stickersResult = await client.invoke(new StickersFn({ hash: BigInt(0) }));
+        const stickers = (stickersResult as any).stickers ?? [];
+        for (const sticker of stickers) {
+          for (const attr of sticker.attributes ?? []) {
+            if (attr.className === "DocumentAttributeCustomEmoji" && attr.alt) {
+              iconMap.set(attr.alt, typeof sticker.id === "bigint" ? sticker.id : BigInt(sticker.id));
+            }
+          }
+        }
+        console.log("[USERBOT] topic icons available:", [...iconMap.keys()].join(" "));
+      } catch (e) {
+        console.warn("[USERBOT] could not fetch topic icons:", e);
+      }
+
+      const findIcon = (...emojis: string[]): bigint | undefined => {
+        for (const e of emojis) { const id = iconMap.get(e); if (id) return id; }
+        return undefined;
+      };
+
       const topicDefs = [
-        { key: "accounting", title: "Accounting", iconColor: 0x6FB9F0 },
-        { key: "deals", title: "Deals", iconColor: 0xFFD67E },
-        { key: "clubs", title: "Clubs", iconColor: 0x8EEE98 },
-        { key: "depot", title: "Dépôt", iconColor: 0xFF93B2 },
+        { key: "accounting", title: "Accounting", iconColor: 0x6FB9F0, emojis: ["📊", "📈", "💹", "📉"] },
+        { key: "deals", title: "Deals", iconColor: 0xFFD67E, emojis: ["🤝", "📋", "📝", "✍️"] },
+        { key: "clubs", title: "Clubs", iconColor: 0x8EEE98, emojis: ["🏠", "🎰", "🃏", "♠️"] },
+        { key: "depot", title: "Dépôt", iconColor: 0xFF93B2, emojis: ["💰", "💳", "🏦", "💵"] },
       ];
 
       for (const def of topicDefs) {
         try {
+          const iconEmojiId = findIcon(...def.emojis);
           const topicResult = await client.invoke(
             new Api.channels.CreateForumTopic({
               channel: channelPeer,
               title: def.title,
               iconColor: def.iconColor,
+              ...(iconEmojiId ? { iconEmojiId } : {}),
               randomId: BigInt(Math.floor(Math.random() * Number.MAX_SAFE_INTEGER)) as any,
-            })
+            } as any)
           );
           const topicRaw = topicResult as any;
           const updates = topicRaw.updates ?? [];
