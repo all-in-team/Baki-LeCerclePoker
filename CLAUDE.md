@@ -58,7 +58,7 @@ Full glossary including currencies, exchange rates, club logic, legacy-vs-new ac
 7. **Don't touch legacy tables (`reports`, `accounting_entries`).** They're still queried by the dashboard for `getNetByApp` / `getNetByPlayer`. Removing them silently breaks `/`. Migration to the new system is a deliberate, scoped task — ask first.
 8. **Wallet sync dedup is sacred.** `tron_tx_hash` UNIQUE + `INSERT OR IGNORE`. Never bypass.
 9. **No float math at display.** Money stored as `REAL` (known pragmatic compromise). Round to 2 decimals at the *display boundary* only, never inside aggregations. Never compare floats with `==`.
-10. **Every `wallet_transactions` row must have a source.** Column `source` must be `'sync'` (with a non-null `tron_tx_hash`) or `'manual'` (from the manual entry form). Legacy phantom rows have `source = 'unknown'` — no new inserts may use this value. Enforced by a `BEFORE INSERT` trigger and a runtime guard in `insertWalletTransaction()`. (History: phantom rows with no hash and no manual marker appeared from unknown origin — corrupted P&L views.)
+10. **Every `wallet_transactions` row must have a source.** Column `source` must be `'sync'` (with a non-null `tron_tx_hash`) or `'manual'` (from the manual entry form). `'unknown'` is a transitional legacy state — new rows must never use it. Unknown rows are excluded from all aggregates (KPIs, balances, charts) via `AND (wt.source IS NULL OR wt.source != 'unknown')` in every query, and may be purged via `/api/admin/delete-phantom-wallets`. Enforced by a `BEFORE INSERT` trigger. (History: phantom rows with no hash and no manual marker appeared from unknown origin — corrupted P&L views.)
 
 ## Workflow rules
 
