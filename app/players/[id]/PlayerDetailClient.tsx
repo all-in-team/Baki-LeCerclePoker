@@ -7,7 +7,7 @@ import StatCard from "@/components/StatCard";
 import Badge from "@/components/Badge";
 import Btn from "@/components/Btn";
 import Modal from "@/components/Modal";
-import WalletChartsWrapper from "@/app/wallets/WalletChartsWrapper";
+import WalletChartsWrapper from "@/app/tele/WalletChartsWrapper";
 
 interface Player {
   id: number; name: string; status: string;

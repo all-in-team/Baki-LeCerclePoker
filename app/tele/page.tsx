@@ -1,6 +1,6 @@
 export const dynamic = "force-dynamic";
-import { getTelePlayers, getSetting } from "@/lib/queries";
-import { getChinaWeekBounds, getLast12Weeks, toISODateTime, formatRangeLabel, isoWeekToOffset } from "@/lib/date-utils";
+import { getWalletSummaryByPlayer, getWalletKPIs, getWalletTransactions, getPlayers, getGames, getPlayerCashouts, getPlayerGameWallets, getWalletMeres } from "@/lib/queries";
+import { getChinaWeekBounds, getLast12Weeks, toISODateTime, formatRangeLabel, isoWeekToOffset, toISODate } from "@/lib/date-utils";
 import PageHeader from "@/components/PageHeader";
 import TELEClient from "./TELEClient";
 
@@ -16,7 +16,7 @@ function computeFilter(filter: string | undefined) {
     const start = new Date(end.getTime() - 30 * 24 * 60 * 60 * 1000);
     return {
       key: "30d",
-      startDate: toISODateTime(start),
+      startDate: toISODate(start),
       endDate: toISODateTime(end),
       rangeLabel: formatRangeLabel(start, end),
     };
@@ -26,7 +26,7 @@ function computeFilter(filter: string | undefined) {
     const { start, end } = getChinaWeekBounds(-1);
     return {
       key: "last",
-      startDate: toISODateTime(start),
+      startDate: toISODate(start),
       endDate: toISODateTime(end),
       rangeLabel: formatRangeLabel(start, end),
     };
@@ -39,7 +39,7 @@ function computeFilter(filter: string | undefined) {
       const { start, end } = getChinaWeekBounds(offset);
       return {
         key: f,
-        startDate: toISODateTime(start),
+        startDate: toISODate(start),
         endDate: toISODateTime(end),
         rangeLabel: formatRangeLabel(start, end),
       };
@@ -51,7 +51,7 @@ function computeFilter(filter: string | undefined) {
   const now = new Date();
   return {
     key: "current",
-    startDate: toISODateTime(start),
+    startDate: toISODate(start),
     endDate: toISODateTime(now < end ? now : end),
     rangeLabel: formatRangeLabel(start, end),
   };
@@ -60,19 +60,38 @@ function computeFilter(filter: string | undefined) {
 export default async function TELEPage({ searchParams }: { searchParams: Promise<{ filter?: string }> }) {
   const params = await searchParams;
   const { key, startDate, endDate, rangeLabel } = computeFilter(params.filter);
-  const players = getTelePlayers(startDate, endDate);
-  const walletMere = getSetting("tele_wallet_mere");
   const weeks = getLast12Weeks();
+
+  const filters = { game_name: "TELE" as const, since_date: startDate, end_date: endDate };
+  const summary = getWalletSummaryByPlayer(filters) as any[];
+  const kpis = getWalletKPIs(filters) ?? { total_deposited: 0, total_withdrawn: 0, total_net: 0, my_total_pnl: 0 };
+  const transactions = getWalletTransactions({ ...filters, limit: 500 }) as any[];
+  const players = getPlayers() as any[];
+  const games = (getGames() as any[]).filter((g) => g.name === "TELE");
+  const walletMeres = getWalletMeres();
+
+  const cashoutsByPlayer: Record<number, { id: number; address: string; label: string | null }[]> = {};
+  const gameWalletsByPlayer: Record<number, { id: number; address: string; label: string | null }[]> = {};
+  for (const p of players) {
+    cashoutsByPlayer[p.id] = getPlayerCashouts(p.id);
+    gameWalletsByPlayer[p.id] = getPlayerGameWallets(p.id);
+  }
 
   return (
     <>
       <PageHeader
-        title="TELE — Wallets"
-        subtitle="Vue & vérification des adresses par joueur — WALLET GAME · WALLET CASHOUT · WALLET MÈRE"
+        title="TELE AKPOKER"
+        subtitle="Dépôts & retraits par joueur — P&L calculé selon le deal de chaque joueur"
       />
       <TELEClient
+        initialSummary={summary}
+        kpis={kpis}
+        initialTransactions={transactions}
         players={players}
-        walletMere={walletMere}
+        games={games}
+        cashoutsByPlayer={cashoutsByPlayer}
+        gameWalletsByPlayer={gameWalletsByPlayer}
+        walletMeres={walletMeres}
         activeFilter={key}
         rangeLabel={rangeLabel}
         weeks={weeks.map(w => ({ isoWeek: w.isoWeek, label: w.label }))}

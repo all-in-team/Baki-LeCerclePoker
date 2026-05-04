@@ -409,7 +409,7 @@ export function getPeriods() {
 }
 
 // ── Wallet Transactions ───────────────────────────────────
-export function getWalletTransactions(filters?: { player_id?: number; game_id?: number; game_name?: string; limit?: number; since_date?: string }) {
+export function getWalletTransactions(filters?: { player_id?: number; game_id?: number; game_name?: string; limit?: number; since_date?: string; end_date?: string }) {
   const db = getDb();
   let q = `
     SELECT wt.*, p.name AS player_name,
@@ -425,21 +425,24 @@ export function getWalletTransactions(filters?: { player_id?: number; game_id?: 
   if (filters?.game_id)   { q += ` AND wt.game_id = @game_id`;    params.game_id = filters.game_id; }
   if (filters?.game_name) { q += ` AND COALESCE(g.name, pa.name) = @game_name`; params.game_name = filters.game_name; }
   if (filters?.since_date) { q += ` AND wt.tx_date >= @since_date`; params.since_date = filters.since_date; }
+  if (filters?.end_date)   { q += ` AND wt.tx_date <= @end_date`;   params.end_date = filters.end_date; }
   q += ` ORDER BY wt.tx_date DESC, wt.created_at DESC`;
   if (filters?.limit)     { q += ` LIMIT @limit`;                  params.limit = filters.limit; }
   return db.prepare(q).all(params);
 }
 
-export function getWalletSummaryByPlayer(filters?: { game_name?: string; since_date?: string }) {
+export function getWalletSummaryByPlayer(filters?: { game_name?: string; since_date?: string; end_date?: string }) {
   const db = getDb();
   const conditions: string[] = [];
   const params: Record<string, unknown> = {};
   if (filters?.game_name) { conditions.push(`g.name = @game_name`); params.game_name = filters.game_name; }
   const startDateCond = `AND (pgd.start_date IS NULL OR wt.tx_date >= pgd.start_date)`;
+  const endDateCond = filters?.end_date ? `AND wt.tx_date <= @end_date` : "";
   const dateJoin = filters?.since_date
-    ? `LEFT JOIN wallet_transactions wt ON wt.player_id = p.id AND wt.game_id = pgd.game_id AND wt.tx_date >= @since_date ${startDateCond}`
-    : `LEFT JOIN wallet_transactions wt ON wt.player_id = p.id AND wt.game_id = pgd.game_id ${startDateCond}`;
+    ? `LEFT JOIN wallet_transactions wt ON wt.player_id = p.id AND wt.game_id = pgd.game_id AND wt.tx_date >= @since_date ${endDateCond} ${startDateCond}`
+    : `LEFT JOIN wallet_transactions wt ON wt.player_id = p.id AND wt.game_id = pgd.game_id ${endDateCond} ${startDateCond}`;
   if (filters?.since_date) params.since_date = filters.since_date;
+  if (filters?.end_date) params.end_date = filters.end_date;
   const q = `
     SELECT
       pgd.id AS deal_id,
@@ -460,16 +463,18 @@ export function getWalletSummaryByPlayer(filters?: { game_name?: string; since_d
   return db.prepare(q).all(params);
 }
 
-export function getWalletKPIs(filters?: { game_name?: string; since_date?: string }) {
+export function getWalletKPIs(filters?: { game_name?: string; since_date?: string; end_date?: string }) {
   const db = getDb();
   const conditions: string[] = [];
   const params: Record<string, unknown> = {};
   if (filters?.game_name) { conditions.push(`g.name = @game_name`); params.game_name = filters.game_name; }
   const sdCond = `AND (pgd.start_date IS NULL OR wt.tx_date >= pgd.start_date)`;
+  const edCond = filters?.end_date ? `AND wt.tx_date <= @end_date` : "";
   const dateJoin = filters?.since_date
-    ? `LEFT JOIN wallet_transactions wt ON wt.player_id = p.id AND wt.game_id = pgd.game_id AND wt.tx_date >= @since_date ${sdCond}`
-    : `LEFT JOIN wallet_transactions wt ON wt.player_id = p.id AND wt.game_id = pgd.game_id ${sdCond}`;
+    ? `LEFT JOIN wallet_transactions wt ON wt.player_id = p.id AND wt.game_id = pgd.game_id AND wt.tx_date >= @since_date ${edCond} ${sdCond}`
+    : `LEFT JOIN wallet_transactions wt ON wt.player_id = p.id AND wt.game_id = pgd.game_id ${edCond} ${sdCond}`;
   if (filters?.since_date) params.since_date = filters.since_date;
+  if (filters?.end_date) params.end_date = filters.end_date;
   const inner = `
     SELECT
       COALESCE(SUM(CASE WHEN wt.type='deposit'    THEN wt.amount ELSE 0 END), 0) AS total_deposited,
