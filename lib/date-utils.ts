@@ -50,6 +50,12 @@ export function toISODateTime(d: Date): string {
   return d.toISOString().replace("Z", "");
 }
 
+export function toChinaISO(d: Date): string {
+  const china = toChinaDate(d);
+  const p = (n: number) => String(n).padStart(2, "0");
+  return `${china.getUTCFullYear()}-${p(china.getUTCMonth() + 1)}-${p(china.getUTCDate())}T${p(china.getUTCHours())}:${p(china.getUTCMinutes())}:${p(china.getUTCSeconds())}+08:00`;
+}
+
 // ISO week string YYYY-Www from a Monday date (in UTC, representing China Monday)
 export function toISOWeek(mondayUTC: Date): string {
   // The monday in China time
@@ -140,3 +146,16 @@ export function formatRangeLabel(startUTC: Date, endUTC: Date): string {
 // getChinaWeekBounds(0) when "now" is Sun May 10 2026 23:00 → start: Mon May 4 00:00, end: Sun May 10 23:59:59
 // getChinaWeekBounds(0) when "now" is Mon May 11 2026 00:01 → start: Mon May 11 00:00, end: Sun May 17 23:59:59
 // getChinaWeekBounds(-1) when "now" is Mon May 4 2026 09:00 → start: Mon Apr 27 00:00, end: Sun May 3 23:59:59
+
+// tx_datetime week boundary precision:
+// A blockchain tx with block_timestamp = 2026-05-03T20:00:00Z
+// → stored tx_datetime = 2026-05-04T04:00:00+08:00
+// → getChinaWeekBounds(0) start = toChinaISO(May 3 16:00 UTC) = 2026-05-04T00:00:00+08:00
+// → "2026-05-04T04:00:00+08:00" >= "2026-05-04T00:00:00+08:00" ✓ (in current week)
+// → getChinaWeekBounds(-1) end = toChinaISO(May 3 15:59:59 UTC) = 2026-05-03T23:59:59+08:00
+// → "2026-05-04T04:00:00+08:00" <= "2026-05-03T23:59:59+08:00" ✗ (NOT in last week) ✓ correct
+//
+// A blockchain tx with block_timestamp = 2026-05-03T15:00:00Z
+// → stored tx_datetime = 2026-05-03T23:00:00+08:00
+// → "2026-05-03T23:00:00+08:00" >= "2026-05-04T00:00:00+08:00" ✗ (NOT in current week) ✓ correct
+// → "2026-05-03T23:00:00+08:00" <= "2026-05-03T23:59:59+08:00" ✓ (in last week) ✓ correct

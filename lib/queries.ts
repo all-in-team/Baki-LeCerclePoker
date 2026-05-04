@@ -424,9 +424,9 @@ export function getWalletTransactions(filters?: { player_id?: number; game_id?: 
   if (filters?.player_id) { q += ` AND wt.player_id = @player_id`; params.player_id = filters.player_id; }
   if (filters?.game_id)   { q += ` AND wt.game_id = @game_id`;    params.game_id = filters.game_id; }
   if (filters?.game_name) { q += ` AND COALESCE(g.name, pa.name) = @game_name`; params.game_name = filters.game_name; }
-  if (filters?.since_date) { q += ` AND wt.tx_date >= @since_date`; params.since_date = filters.since_date; }
-  if (filters?.end_date)   { q += ` AND wt.tx_date <= @end_date`;   params.end_date = filters.end_date; }
-  q += ` ORDER BY wt.tx_date DESC, wt.created_at DESC`;
+  if (filters?.since_date) { q += ` AND wt.tx_datetime >= @since_date`; params.since_date = filters.since_date; }
+  if (filters?.end_date)   { q += ` AND wt.tx_datetime <= @end_date`;   params.end_date = filters.end_date; }
+  q += ` ORDER BY wt.tx_datetime DESC, wt.created_at DESC`;
   if (filters?.limit)     { q += ` LIMIT @limit`;                  params.limit = filters.limit; }
   return db.prepare(q).all(params);
 }
@@ -437,10 +437,10 @@ export function getWalletSummaryByPlayer(filters?: { game_name?: string; since_d
   const params: Record<string, unknown> = {};
   if (filters?.game_name) { conditions.push(`g.name = @game_name`); params.game_name = filters.game_name; }
   const srcFilter = `AND (wt.source IS NULL OR wt.source != 'unknown')`;
-  const startDateCond = `AND (pgd.start_date IS NULL OR wt.tx_date >= pgd.start_date)`;
-  const endDateCond = filters?.end_date ? `AND wt.tx_date <= @end_date` : "";
+  const startDateCond = `AND (pgd.start_date IS NULL OR wt.tx_datetime >= pgd.start_date)`;
+  const endDateCond = filters?.end_date ? `AND wt.tx_datetime <= @end_date` : "";
   const dateJoin = filters?.since_date
-    ? `LEFT JOIN wallet_transactions wt ON wt.player_id = p.id AND wt.game_id = pgd.game_id ${srcFilter} AND wt.tx_date >= @since_date ${endDateCond} ${startDateCond}`
+    ? `LEFT JOIN wallet_transactions wt ON wt.player_id = p.id AND wt.game_id = pgd.game_id ${srcFilter} AND wt.tx_datetime >= @since_date ${endDateCond} ${startDateCond}`
     : `LEFT JOIN wallet_transactions wt ON wt.player_id = p.id AND wt.game_id = pgd.game_id ${srcFilter} ${endDateCond} ${startDateCond}`;
   if (filters?.since_date) params.since_date = filters.since_date;
   if (filters?.end_date) params.end_date = filters.end_date;
@@ -470,10 +470,10 @@ export function getWalletKPIs(filters?: { game_name?: string; since_date?: strin
   const params: Record<string, unknown> = {};
   if (filters?.game_name) { conditions.push(`g.name = @game_name`); params.game_name = filters.game_name; }
   const srcF = `AND (wt.source IS NULL OR wt.source != 'unknown')`;
-  const sdCond = `AND (pgd.start_date IS NULL OR wt.tx_date >= pgd.start_date)`;
-  const edCond = filters?.end_date ? `AND wt.tx_date <= @end_date` : "";
+  const sdCond = `AND (pgd.start_date IS NULL OR wt.tx_datetime >= pgd.start_date)`;
+  const edCond = filters?.end_date ? `AND wt.tx_datetime <= @end_date` : "";
   const dateJoin = filters?.since_date
-    ? `LEFT JOIN wallet_transactions wt ON wt.player_id = p.id AND wt.game_id = pgd.game_id ${srcF} AND wt.tx_date >= @since_date ${edCond} ${sdCond}`
+    ? `LEFT JOIN wallet_transactions wt ON wt.player_id = p.id AND wt.game_id = pgd.game_id ${srcF} AND wt.tx_datetime >= @since_date ${edCond} ${sdCond}`
     : `LEFT JOIN wallet_transactions wt ON wt.player_id = p.id AND wt.game_id = pgd.game_id ${srcF} ${edCond} ${sdCond}`;
   if (filters?.since_date) params.since_date = filters.since_date;
   if (filters?.end_date) params.end_date = filters.end_date;
@@ -515,19 +515,20 @@ export function getPlayerWalletStats(playerId: number) {
     JOIN player_game_deals pgd ON pgd.player_id = wt.player_id AND pgd.game_id = wt.game_id
     WHERE wt.player_id = ?
       AND (wt.source IS NULL OR wt.source != 'unknown')
-      AND (pgd.start_date IS NULL OR wt.tx_date >= pgd.start_date)
+      AND (pgd.start_date IS NULL OR wt.tx_datetime >= pgd.start_date)
   `).get(playerId) as { deposited: number; withdrawn: number; net: number; my_pnl: number } | undefined;
 }
 
 export function insertWalletTransaction(data: {
   player_id: number; game_id: number; type: "deposit" | "withdrawal";
-  amount: number; currency?: string; note?: string; tx_date: string;
+  amount: number; currency?: string; note?: string; tx_date: string; tx_datetime?: string;
 }) {
   const db = getDb();
+  const tx_datetime = data.tx_datetime || data.tx_date.slice(0, 10) + "T00:00:00+08:00";
   const r = db.prepare(`
-    INSERT INTO wallet_transactions (player_id, game_id, type, amount, currency, note, tx_date, source)
-    VALUES (@player_id, @game_id, @type, @amount, @currency, @note, @tx_date, 'manual')
-  `).run({ currency: "USDT", note: null, ...data });
+    INSERT INTO wallet_transactions (player_id, game_id, type, amount, currency, note, tx_date, tx_datetime, source)
+    VALUES (@player_id, @game_id, @type, @amount, @currency, @note, @tx_date, @tx_datetime, 'manual')
+  `).run({ currency: "USDT", note: null, ...data, tx_datetime });
   return r.lastInsertRowid;
 }
 
@@ -607,7 +608,7 @@ export function insertTgMessage(data: { player_id: number | null; tg_chat_id: st
 // ── TELE Players overview ────────────────────────────────
 export function getTelePlayers(startDate?: string, endDate?: string) {
   const dateFilter = startDate && endDate
-    ? `AND wt.tx_date >= @startDate AND wt.tx_date <= @endDate`
+    ? `AND wt.tx_datetime >= @startDate AND wt.tx_datetime <= @endDate`
     : "";
   return getDb().prepare(`
     SELECT
@@ -618,7 +619,7 @@ export function getTelePlayers(startDate?: string, endDate?: string) {
       COALESCE(SUM(CASE WHEN wt.type='withdrawal' THEN wt.amount ELSE -wt.amount END), 0) AS net,
       COALESCE(SUM(CASE WHEN wt.type='withdrawal' THEN wt.amount ELSE -wt.amount END), 0) * pgd.action_pct / 100 AS my_pnl,
       COUNT(wt.id) AS tx_count,
-      MAX(wt.tx_date) AS last_tx
+      MAX(wt.tx_datetime) AS last_tx
     FROM players p
     JOIN player_game_deals pgd ON pgd.player_id = p.id
     JOIN games g ON g.id = pgd.game_id AND g.name = 'TELE'
@@ -877,7 +878,7 @@ export function getWalletPnL(playerId?: number): PnLWalletRow[] {
     LEFT JOIN player_game_deals pgd ON pgd.player_id = wt.player_id AND pgd.game_id = wt.game_id
     WHERE wt.game_id IS NOT NULL
       AND (wt.source IS NULL OR wt.source != 'unknown')
-      AND (pgd.start_date IS NULL OR wt.tx_date >= pgd.start_date)
+      AND (pgd.start_date IS NULL OR wt.tx_datetime >= pgd.start_date)
   `;
   const params: Record<string, unknown> = {};
   if (playerId) { q += ` AND wt.player_id = @playerId`; params.playerId = playerId; }
@@ -946,15 +947,15 @@ export function getPlayerBalance(playerId?: number): PlayerBalance[] {
 
 export function insertWalletTransactionByHash(data: {
   player_id: number; game_id: number; type: "deposit" | "withdrawal";
-  amount: number; currency: string; tx_date: string; tron_tx_hash: string;
+  amount: number; currency: string; tx_date: string; tx_datetime: string; tron_tx_hash: string;
   counterparty_address?: string | null;
 }) {
   const db = getDb();
   const params = { note: "auto-sync", counterparty_address: null, ...data };
   // First: try insert. INSERT OR IGNORE returns 0 changes on conflict (existing hash).
   const ins = db.prepare(`
-    INSERT OR IGNORE INTO wallet_transactions (player_id, game_id, type, amount, currency, tx_date, tron_tx_hash, counterparty_address, note, source)
-    VALUES (@player_id, @game_id, @type, @amount, @currency, @tx_date, @tron_tx_hash, @counterparty_address, @note, 'sync')
+    INSERT OR IGNORE INTO wallet_transactions (player_id, game_id, type, amount, currency, tx_date, tx_datetime, tron_tx_hash, counterparty_address, note, source)
+    VALUES (@player_id, @game_id, @type, @amount, @currency, @tx_date, @tx_datetime, @tron_tx_hash, @counterparty_address, @note, 'sync')
   `).run(params);
   if (ins.changes > 0) return ins.changes; // new transaction inserted
   // Existing row — backfill counterparty_address if it's still NULL (one-time fill, never overwrite)

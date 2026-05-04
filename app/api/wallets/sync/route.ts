@@ -95,6 +95,12 @@ function toAmt(tx: any): number {
 function toDate(tx: any): string {
   return new Date(tx.block_timestamp).toISOString().slice(0, 10);
 }
+function toDatetime(tx: any): string {
+  const d = new Date(tx.block_timestamp);
+  const china = new Date(d.getTime() + 8 * 60 * 60 * 1000);
+  const p = (n: number) => String(n).padStart(2, "0");
+  return `${china.getUTCFullYear()}-${p(china.getUTCMonth() + 1)}-${p(china.getUTCDate())}T${p(china.getUTCHours())}:${p(china.getUTCMinutes())}:${p(china.getUTCSeconds())}+08:00`;
+}
 
 export async function POST() {
   const teleGameId = getTeleGameId();
@@ -147,6 +153,7 @@ export async function POST() {
             amount: toAmt(tx),
             currency: "USDT",
             tx_date: toDate(tx),
+            tx_datetime: toDatetime(tx),
             tron_tx_hash: tx.transaction_id,
             counterparty_address: tx.from ?? null,
           });
@@ -192,6 +199,7 @@ export async function POST() {
               amount: toAmt(tx),
               currency: "USDT",
               tx_date: toDate(tx),
+              tx_datetime: toDatetime(tx),
               tron_tx_hash: tx.transaction_id,
               counterparty_address: tx.from ?? null,
             });

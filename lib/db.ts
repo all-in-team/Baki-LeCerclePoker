@@ -625,4 +625,19 @@ function initSchema(db: Database.Database) {
          OR NEW.source NOT IN ('sync', 'manual', 'unknown');
     END
   `);
+
+  // Precise China-time datetime for week-boundary filtering.
+  // Backfill assumptions:
+  //   sync rows: tx_date is UTC date from block_timestamp. Midnight UTC = 08:00 China.
+  //     Intra-day precision is lost for existing rows; future syncs write exact block_timestamp.
+  //   manual rows: tx_date was entered as a China-local date. Treat as midnight China time.
+  //   A future re-sync can backfill exact times for existing rows if needed.
+  const fixTxDatetime = db.prepare(`INSERT OR IGNORE INTO _applied_fixes (name) VALUES (?)`).run("add_tx_datetime_v1");
+  if (fixTxDatetime.changes > 0) {
+    db.exec(`ALTER TABLE wallet_transactions ADD COLUMN tx_datetime TEXT`);
+    db.exec(`UPDATE wallet_transactions SET tx_datetime = SUBSTR(tx_date, 1, 10) || 'T08:00:00+08:00' WHERE source = 'sync' AND tx_datetime IS NULL`);
+    db.exec(`UPDATE wallet_transactions SET tx_datetime = SUBSTR(tx_date, 1, 10) || 'T00:00:00+08:00' WHERE source = 'manual' AND tx_datetime IS NULL`);
+    db.exec(`UPDATE wallet_transactions SET tx_datetime = SUBSTR(tx_date, 1, 10) || 'T08:00:00+08:00' WHERE tx_datetime IS NULL`);
+  }
+  try { db.exec(`ALTER TABLE wallet_transactions ADD COLUMN tx_datetime TEXT`); } catch {}
 }

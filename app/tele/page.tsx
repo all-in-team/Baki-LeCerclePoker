@@ -1,6 +1,6 @@
 export const dynamic = "force-dynamic";
 import { getWalletSummaryByPlayer, getWalletKPIs, getWalletTransactions, getPlayers, getGames, getPlayerCashouts, getPlayerGameWallets, getWalletMeres } from "@/lib/queries";
-import { getChinaWeekBounds, getLast12Weeks, toISODateTime, formatRangeLabel, isoWeekToOffset, toISODate } from "@/lib/date-utils";
+import { getChinaWeekBounds, getLast12Weeks, toChinaISO, formatRangeLabel, isoWeekToOffset } from "@/lib/date-utils";
 import PageHeader from "@/components/PageHeader";
 import TELEClient from "./TELEClient";
 
@@ -16,8 +16,8 @@ function computeFilter(filter: string | undefined) {
     const start = new Date(end.getTime() - 30 * 24 * 60 * 60 * 1000);
     return {
       key: "30d",
-      startDate: toISODate(start),
-      endDate: toISODateTime(end),
+      startDate: toChinaISO(start),
+      endDate: toChinaISO(end),
       rangeLabel: formatRangeLabel(start, end),
     };
   }
@@ -26,8 +26,8 @@ function computeFilter(filter: string | undefined) {
     const { start, end } = getChinaWeekBounds(-1);
     return {
       key: "last",
-      startDate: toISODate(start),
-      endDate: toISODateTime(end),
+      startDate: toChinaISO(start),
+      endDate: toChinaISO(end),
       rangeLabel: formatRangeLabel(start, end),
     };
   }
@@ -39,8 +39,8 @@ function computeFilter(filter: string | undefined) {
       const { start, end } = getChinaWeekBounds(offset);
       return {
         key: f,
-        startDate: toISODate(start),
-        endDate: toISODateTime(end),
+        startDate: toChinaISO(start),
+        endDate: toChinaISO(end),
         rangeLabel: formatRangeLabel(start, end),
       };
     }
@@ -51,8 +51,8 @@ function computeFilter(filter: string | undefined) {
   const now = new Date();
   return {
     key: "current",
-    startDate: toISODate(start),
-    endDate: toISODateTime(now < end ? now : end),
+    startDate: toChinaISO(start),
+    endDate: toChinaISO(now < end ? now : end),
     rangeLabel: formatRangeLabel(start, end),
   };
 }
