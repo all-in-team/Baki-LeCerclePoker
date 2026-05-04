@@ -418,7 +418,7 @@ export function getWalletTransactions(filters?: { player_id?: number; game_id?: 
     JOIN players p ON p.id = wt.player_id
     LEFT JOIN games g ON g.id = wt.game_id
     LEFT JOIN poker_apps pa ON pa.id = wt.app_id
-    WHERE 1=1
+    WHERE (wt.source IS NULL OR wt.source != 'unknown')
   `;
   const params: Record<string, unknown> = {};
   if (filters?.player_id) { q += ` AND wt.player_id = @player_id`; params.player_id = filters.player_id; }
@@ -436,11 +436,12 @@ export function getWalletSummaryByPlayer(filters?: { game_name?: string; since_d
   const conditions: string[] = [];
   const params: Record<string, unknown> = {};
   if (filters?.game_name) { conditions.push(`g.name = @game_name`); params.game_name = filters.game_name; }
+  const srcFilter = `AND (wt.source IS NULL OR wt.source != 'unknown')`;
   const startDateCond = `AND (pgd.start_date IS NULL OR wt.tx_date >= pgd.start_date)`;
   const endDateCond = filters?.end_date ? `AND wt.tx_date <= @end_date` : "";
   const dateJoin = filters?.since_date
-    ? `LEFT JOIN wallet_transactions wt ON wt.player_id = p.id AND wt.game_id = pgd.game_id AND wt.tx_date >= @since_date ${endDateCond} ${startDateCond}`
-    : `LEFT JOIN wallet_transactions wt ON wt.player_id = p.id AND wt.game_id = pgd.game_id ${endDateCond} ${startDateCond}`;
+    ? `LEFT JOIN wallet_transactions wt ON wt.player_id = p.id AND wt.game_id = pgd.game_id ${srcFilter} AND wt.tx_date >= @since_date ${endDateCond} ${startDateCond}`
+    : `LEFT JOIN wallet_transactions wt ON wt.player_id = p.id AND wt.game_id = pgd.game_id ${srcFilter} ${endDateCond} ${startDateCond}`;
   if (filters?.since_date) params.since_date = filters.since_date;
   if (filters?.end_date) params.end_date = filters.end_date;
   const q = `
@@ -468,11 +469,12 @@ export function getWalletKPIs(filters?: { game_name?: string; since_date?: strin
   const conditions: string[] = [];
   const params: Record<string, unknown> = {};
   if (filters?.game_name) { conditions.push(`g.name = @game_name`); params.game_name = filters.game_name; }
+  const srcF = `AND (wt.source IS NULL OR wt.source != 'unknown')`;
   const sdCond = `AND (pgd.start_date IS NULL OR wt.tx_date >= pgd.start_date)`;
   const edCond = filters?.end_date ? `AND wt.tx_date <= @end_date` : "";
   const dateJoin = filters?.since_date
-    ? `LEFT JOIN wallet_transactions wt ON wt.player_id = p.id AND wt.game_id = pgd.game_id AND wt.tx_date >= @since_date ${edCond} ${sdCond}`
-    : `LEFT JOIN wallet_transactions wt ON wt.player_id = p.id AND wt.game_id = pgd.game_id ${edCond} ${sdCond}`;
+    ? `LEFT JOIN wallet_transactions wt ON wt.player_id = p.id AND wt.game_id = pgd.game_id ${srcF} AND wt.tx_date >= @since_date ${edCond} ${sdCond}`
+    : `LEFT JOIN wallet_transactions wt ON wt.player_id = p.id AND wt.game_id = pgd.game_id ${srcF} ${edCond} ${sdCond}`;
   if (filters?.since_date) params.since_date = filters.since_date;
   if (filters?.end_date) params.end_date = filters.end_date;
   const inner = `
@@ -512,6 +514,7 @@ export function getPlayerWalletStats(playerId: number) {
     FROM wallet_transactions wt
     JOIN player_game_deals pgd ON pgd.player_id = wt.player_id AND pgd.game_id = wt.game_id
     WHERE wt.player_id = ?
+      AND (wt.source IS NULL OR wt.source != 'unknown')
       AND (pgd.start_date IS NULL OR wt.tx_date >= pgd.start_date)
   `).get(playerId) as { deposited: number; withdrawn: number; net: number; my_pnl: number } | undefined;
 }
@@ -582,7 +585,7 @@ export function getCrmOverview() {
       (SELECT msg_date FROM tg_messages WHERE player_id = p.id ORDER BY msg_date DESC LIMIT 1) AS last_msg_date,
       COALESCE((SELECT SUM(CASE WHEN direction='in' THEN amount ELSE -amount END) FROM telegram_transactions WHERE player_id = p.id), 0) AS balance_du
     FROM players p
-    LEFT JOIN wallet_transactions wt ON wt.player_id = p.id
+    LEFT JOIN wallet_transactions wt ON wt.player_id = p.id AND (wt.source IS NULL OR wt.source != 'unknown')
     GROUP BY p.id ORDER BY p.name
   `).all();
 }
@@ -619,7 +622,7 @@ export function getTelePlayers(startDate?: string, endDate?: string) {
     FROM players p
     JOIN player_game_deals pgd ON pgd.player_id = p.id
     JOIN games g ON g.id = pgd.game_id AND g.name = 'TELE'
-    LEFT JOIN wallet_transactions wt ON wt.player_id = p.id AND wt.game_id = g.id ${dateFilter}
+    LEFT JOIN wallet_transactions wt ON wt.player_id = p.id AND wt.game_id = g.id AND (wt.source IS NULL OR wt.source != 'unknown') ${dateFilter}
     GROUP BY p.id
     ORDER BY p.name
   `).all(startDate && endDate ? { startDate, endDate } : {}) as {
@@ -873,6 +876,7 @@ export function getWalletPnL(playerId?: number): PnLWalletRow[] {
     JOIN games g ON g.id = wt.game_id
     LEFT JOIN player_game_deals pgd ON pgd.player_id = wt.player_id AND pgd.game_id = wt.game_id
     WHERE wt.game_id IS NOT NULL
+      AND (wt.source IS NULL OR wt.source != 'unknown')
       AND (pgd.start_date IS NULL OR wt.tx_date >= pgd.start_date)
   `;
   const params: Record<string, unknown> = {};
