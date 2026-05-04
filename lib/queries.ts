@@ -1,4 +1,5 @@
 import { getDb } from "./db";
+import { toParisDate } from "./date-utils";
 
 // ── Players ──────────────────────────────────────────────
 export function getPlayers() {
@@ -1076,4 +1077,72 @@ export function getMissingReports() {
   }
 
   return missing.sort((a, b) => b.date.localeCompare(a.date));
+}
+
+// ── Lock-aware settlement helpers ────────────────────────
+
+function isWeekLocked(weekStart: string): boolean {
+  const row = getDb().prepare(`SELECT status FROM weekly_settlement_periods WHERE week_start = ?`).get(weekStart) as { status: string } | undefined;
+  return row?.status === "locked";
+}
+
+function getWeekStartFromDates(sinceDate: string, endDate: string): string | null {
+  const startDate = toParisDate(sinceDate);
+  const endDateParis = toParisDate(endDate);
+  const startD = new Date(startDate + "T12:00:00Z");
+  const endD = new Date(endDateParis + "T12:00:00Z");
+  const diffDays = Math.round((endD.getTime() - startD.getTime()) / 86400000);
+  if (diffDays >= 6 && diffDays <= 7 && startD.getUTCDay() === 1) return startDate;
+  return null;
+}
+
+export function getLockedSummaryByPlayer(weekStart: string) {
+  return getDb().prepare(`
+    SELECT
+      ws.player_id, p.name AS player_name,
+      g.id AS game_id, g.name AS game_name,
+      ws.action_pct_snapshot AS action_pct, pgd.rakeback_pct, pgd.start_date,
+      CASE WHEN ws.pnl_player < 0 THEN ABS(ws.pnl_player) ELSE 0 END AS total_deposited,
+      CASE WHEN ws.pnl_player >= 0 THEN ws.pnl_player ELSE 0 END AS total_withdrawn,
+      ws.pnl_player AS net,
+      ws.pnl_operator AS my_pnl
+    FROM weekly_settlements ws
+    JOIN players p ON p.id = ws.player_id
+    JOIN player_game_deals pgd ON pgd.player_id = ws.player_id
+    JOIN games g ON g.id = pgd.game_id AND g.name = 'TELE'
+    WHERE ws.week_start = ?
+    ORDER BY ws.pnl_operator DESC
+  `).all(weekStart);
+}
+
+export function getLockedKPIs(weekStart: string) {
+  const row = getDb().prepare(`
+    SELECT
+      COALESCE(SUM(CASE WHEN pnl_player < 0 THEN ABS(pnl_player) ELSE 0 END), 0) AS total_deposited,
+      COALESCE(SUM(CASE WHEN pnl_player >= 0 THEN pnl_player ELSE 0 END), 0) AS total_withdrawn,
+      COALESCE(SUM(pnl_player), 0) AS total_net,
+      COALESCE(SUM(pnl_operator), 0) AS my_total_pnl
+    FROM weekly_settlements WHERE week_start = ?
+  `).get(weekStart) as { total_deposited: number; total_withdrawn: number; total_net: number; my_total_pnl: number };
+  return row;
+}
+
+export function getLockAwareSummaryByPlayer(filters?: { game_name?: string; since_date?: string; end_date?: string }) {
+  if (filters?.since_date && filters?.end_date) {
+    const weekStart = getWeekStartFromDates(filters.since_date, filters.end_date);
+    if (weekStart && isWeekLocked(weekStart)) {
+      return getLockedSummaryByPlayer(weekStart);
+    }
+  }
+  return getWalletSummaryByPlayer(filters);
+}
+
+export function getLockAwareKPIs(filters?: { game_name?: string; since_date?: string; end_date?: string }) {
+  if (filters?.since_date && filters?.end_date) {
+    const weekStart = getWeekStartFromDates(filters.since_date, filters.end_date);
+    if (weekStart && isWeekLocked(weekStart)) {
+      return getLockedKPIs(weekStart);
+    }
+  }
+  return getWalletKPIs(filters);
 }

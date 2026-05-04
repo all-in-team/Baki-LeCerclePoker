@@ -1,5 +1,5 @@
 export const dynamic = "force-dynamic";
-import { getWalletSummaryByPlayer, getWalletKPIs, getWalletTransactions, getPlayers, getGames, getPlayerCashouts, getPlayerGameWallets, getWalletMeres } from "@/lib/queries";
+import { getWalletTransactions, getPlayers, getGames, getPlayerCashouts, getPlayerGameWallets, getWalletMeres, getLockAwareSummaryByPlayer, getLockAwareKPIs } from "@/lib/queries";
 import { getWeekBounds, getLast12Weeks, toUTCISO, formatRangeLabel, isoWeekToOffset } from "@/lib/date-utils";
 import PageHeader from "@/components/PageHeader";
 import TELEClient from "./TELEClient";
@@ -63,8 +63,8 @@ export default async function TELEPage({ searchParams }: { searchParams: Promise
   const weeks = getLast12Weeks();
 
   const filters = { game_name: "TELE" as const, since_date: startDate, end_date: endDate };
-  const summary = getWalletSummaryByPlayer(filters) as any[];
-  const kpis = getWalletKPIs(filters) ?? { total_deposited: 0, total_withdrawn: 0, total_net: 0, my_total_pnl: 0 };
+  const summary = getLockAwareSummaryByPlayer(filters) as any[];
+  const kpis = getLockAwareKPIs(filters) ?? { total_deposited: 0, total_withdrawn: 0, total_net: 0, my_total_pnl: 0 };
   const transactions = getWalletTransactions({ ...filters, limit: 500 }) as any[];
   const players = getPlayers() as any[];
   const games = (getGames() as any[]).filter((g) => g.name === "TELE");
