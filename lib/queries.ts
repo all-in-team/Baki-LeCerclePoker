@@ -524,7 +524,7 @@ export function insertWalletTransaction(data: {
   amount: number; currency?: string; note?: string; tx_date: string; tx_datetime?: string;
 }) {
   const db = getDb();
-  const tx_datetime = data.tx_datetime || data.tx_date.slice(0, 10) + "T00:00:00+08:00";
+  const tx_datetime = data.tx_datetime || data.tx_date.slice(0, 10) + "T00:00:00Z";
   const r = db.prepare(`
     INSERT INTO wallet_transactions (player_id, game_id, type, amount, currency, note, tx_date, tx_datetime, source)
     VALUES (@player_id, @game_id, @type, @amount, @currency, @note, @tx_date, @tx_datetime, 'manual')

@@ -1,6 +1,6 @@
 export const dynamic = "force-dynamic";
 import { getWalletSummaryByPlayer, getWalletKPIs, getWalletTransactions, getPlayers, getGames, getPlayerCashouts, getPlayerGameWallets, getWalletMeres } from "@/lib/queries";
-import { getChinaWeekBounds, getLast12Weeks, toChinaISO, formatRangeLabel, isoWeekToOffset } from "@/lib/date-utils";
+import { getWeekBounds, getLast12Weeks, toUTCISO, formatRangeLabel, isoWeekToOffset } from "@/lib/date-utils";
 import PageHeader from "@/components/PageHeader";
 import TELEClient from "./TELEClient";
 
@@ -16,18 +16,18 @@ function computeFilter(filter: string | undefined) {
     const start = new Date(end.getTime() - 30 * 24 * 60 * 60 * 1000);
     return {
       key: "30d",
-      startDate: toChinaISO(start),
-      endDate: toChinaISO(end),
+      startDate: toUTCISO(start),
+      endDate: toUTCISO(end),
       rangeLabel: formatRangeLabel(start, end),
     };
   }
 
   if (f === "last") {
-    const { start, end } = getChinaWeekBounds(-1);
+    const { start, end } = getWeekBounds(-1);
     return {
       key: "last",
-      startDate: toChinaISO(start),
-      endDate: toChinaISO(end),
+      startDate: toUTCISO(start),
+      endDate: toUTCISO(end),
       rangeLabel: formatRangeLabel(start, end),
     };
   }
@@ -36,23 +36,23 @@ function computeFilter(filter: string | undefined) {
   if (/^\d{4}-W\d{2}$/.test(f)) {
     const offset = isoWeekToOffset(f);
     if (offset !== null && offset < 0) {
-      const { start, end } = getChinaWeekBounds(offset);
+      const { start, end } = getWeekBounds(offset);
       return {
         key: f,
-        startDate: toChinaISO(start),
-        endDate: toChinaISO(end),
+        startDate: toUTCISO(start),
+        endDate: toUTCISO(end),
         rangeLabel: formatRangeLabel(start, end),
       };
     }
   }
 
   // Default: current week — label shows full Mon→Sun, SQL caps to now
-  const { start, end } = getChinaWeekBounds(0);
+  const { start, end } = getWeekBounds(0);
   const now = new Date();
   return {
     key: "current",
-    startDate: toChinaISO(start),
-    endDate: toChinaISO(now < end ? now : end),
+    startDate: toUTCISO(start),
+    endDate: toUTCISO(now < end ? now : end),
     rangeLabel: formatRangeLabel(start, end),
   };
 }

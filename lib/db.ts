@@ -640,4 +640,26 @@ function initSchema(db: Database.Database) {
     db.exec(`UPDATE wallet_transactions SET tx_datetime = SUBSTR(tx_date, 1, 10) || 'T08:00:00+08:00' WHERE tx_datetime IS NULL`);
   }
   try { db.exec(`ALTER TABLE wallet_transactions ADD COLUMN tx_datetime TEXT`); } catch {}
+
+  // Normalize tx_datetime from +08:00 (China) to UTC Z for France-time filtering
+  const fixNormalize = db.prepare(`INSERT OR IGNORE INTO _applied_fixes (name) VALUES (?)`).run("normalize_tx_datetime_utc_v1");
+  if (fixNormalize.changes > 0) {
+    // Convert +08:00 → Z: subtract 8 hours from the local timestamp
+    db.exec(`
+      UPDATE wallet_transactions
+      SET tx_datetime = STRFTIME('%Y-%m-%dT%H:%M:%SZ',
+        SUBSTR(tx_datetime, 1, 19), '-8 hours')
+      WHERE tx_datetime LIKE '%+08:00'
+    `);
+    // Convert +00:00 → Z (if any exist)
+    db.exec(`
+      UPDATE wallet_transactions
+      SET tx_datetime = SUBSTR(tx_datetime, 1, 19) || 'Z'
+      WHERE tx_datetime LIKE '%+00:00'
+    `);
+    // Rollback SQL (documentation only — never auto-run):
+    // UPDATE wallet_transactions
+    // SET tx_datetime = STRFTIME('%Y-%m-%dT%H:%M:%S+08:00', SUBSTR(tx_datetime, 1, 19), '+8 hours')
+    // WHERE tx_datetime LIKE '%Z';
+  }
 }

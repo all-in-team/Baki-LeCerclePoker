@@ -96,10 +96,7 @@ function toDate(tx: any): string {
   return new Date(tx.block_timestamp).toISOString().slice(0, 10);
 }
 function toDatetime(tx: any): string {
-  const d = new Date(tx.block_timestamp);
-  const china = new Date(d.getTime() + 8 * 60 * 60 * 1000);
-  const p = (n: number) => String(n).padStart(2, "0");
-  return `${china.getUTCFullYear()}-${p(china.getUTCMonth() + 1)}-${p(china.getUTCDate())}T${p(china.getUTCHours())}:${p(china.getUTCMinutes())}:${p(china.getUTCSeconds())}+08:00`;
+  return new Date(tx.block_timestamp).toISOString().replace(/\.\d{3}Z$/, "Z");
 }
 
 export async function POST() {
