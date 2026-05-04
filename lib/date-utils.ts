@@ -133,3 +133,10 @@ export function formatRangeLabel(startUTC: Date, endUTC: Date): string {
   const ed = `${eDay} ${e.getUTCDate()} ${months[e.getUTCMonth()]} ${e.getUTCFullYear()}`;
   return `${sd} → ${ed} (UTC+8)`;
 }
+
+// Sanity examples (China time, UTC+8):
+// getChinaWeekBounds(0) when "now" is Mon May 4 2026 09:00  → start: Mon May 4 00:00, end: Sun May 10 23:59:59
+// getChinaWeekBounds(0) when "now" is Wed May 6 2026 14:00  → start: Mon May 4 00:00, end: Sun May 10 23:59:59
+// getChinaWeekBounds(0) when "now" is Sun May 10 2026 23:00 → start: Mon May 4 00:00, end: Sun May 10 23:59:59
+// getChinaWeekBounds(0) when "now" is Mon May 11 2026 00:01 → start: Mon May 11 00:00, end: Sun May 17 23:59:59
+// getChinaWeekBounds(-1) when "now" is Mon May 4 2026 09:00 → start: Mon Apr 27 00:00, end: Sun May 3 23:59:59

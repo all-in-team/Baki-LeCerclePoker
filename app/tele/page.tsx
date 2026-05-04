@@ -46,14 +46,14 @@ function computeFilter(filter: string | undefined) {
     }
   }
 
-  // Default: current week
+  // Default: current week — label shows full Mon→Sun, SQL caps to now
   const { start, end } = getChinaWeekBounds(0);
   const now = new Date();
   return {
     key: "current",
     startDate: toISODateTime(start),
     endDate: toISODateTime(now < end ? now : end),
-    rangeLabel: formatRangeLabel(start, now < end ? now : end),
+    rangeLabel: formatRangeLabel(start, end),
   };
 }
 
