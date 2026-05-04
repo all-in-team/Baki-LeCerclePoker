@@ -597,7 +597,10 @@ export function insertTgMessage(data: { player_id: number | null; tg_chat_id: st
 }
 
 // ── TELE Players overview ────────────────────────────────
-export function getTelePlayers() {
+export function getTelePlayers(startDate?: string, endDate?: string) {
+  const dateFilter = startDate && endDate
+    ? `AND wt.tx_date >= @startDate AND wt.tx_date <= @endDate`
+    : "";
   return getDb().prepare(`
     SELECT
       p.id, p.name, p.tron_address AS wallet_game, p.tele_wallet_cashout AS wallet_cashout,
@@ -611,10 +614,10 @@ export function getTelePlayers() {
     FROM players p
     JOIN player_game_deals pgd ON pgd.player_id = p.id
     JOIN games g ON g.id = pgd.game_id AND g.name = 'TELE'
-    LEFT JOIN wallet_transactions wt ON wt.player_id = p.id AND wt.game_id = g.id
+    LEFT JOIN wallet_transactions wt ON wt.player_id = p.id AND wt.game_id = g.id ${dateFilter}
     GROUP BY p.id
     ORDER BY p.name
-  `).all() as {
+  `).all(startDate && endDate ? { startDate, endDate } : {}) as {
     id: number; name: string; wallet_game: string | null; wallet_cashout: string | null;
     action_pct: number; rakeback_pct: number;
     total_deposited: number; total_withdrawn: number; net: number; my_pnl: number;
