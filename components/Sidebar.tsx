@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { LayoutDashboard, AppWindow, FileText, MessageSquare, TrendingUp, Zap, Wallet, ContactRound, Settings, BarChart3, ArrowRightLeft } from "lucide-react";
+import { LayoutDashboard, AppWindow, FileText, MessageSquare, TrendingUp, Zap, Wallet, ContactRound, Settings, BarChart3, ArrowRightLeft, Scale } from "lucide-react";
 
 const NAV = [
   { href: "/", label: "Dashboard", icon: LayoutDashboard },
@@ -11,6 +11,7 @@ const NAV = [
   { href: "/apps", label: "Apps", icon: AppWindow },
   { href: "/tele", label: "TELE AKPOKER", icon: Wallet },
   { href: "/cashouts", label: "Cashouts", icon: ArrowRightLeft },
+  { href: "/settlements", label: "Settlements", icon: Scale },
   { href: "/reports", label: "Reports", icon: FileText },
   { href: "/ledger", label: "Telegram Ledger", icon: MessageSquare },
   { href: "/signals", label: "Weekly Signal", icon: Zap },

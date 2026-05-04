@@ -107,6 +107,35 @@ Two surfaces:
 
 Onboarding flow creates a Telegram supergroup per player with forum topics: General, Accounting, Deals, Clubs, Depot, Liveplay, Onboarding. The userbot handles group creation; the webhook bot handles ongoing commands inside the group.
 
+## Settlement model
+
+Weekly settlement cycle for TELE wallet P&L:
+
+**Period:** Monday 00:00:00 → Sunday 23:59:59 Europe/Paris (DST-aware).
+
+**Settlement P&L (wallet-only):**
+- `pnl_player = sum(withdrawals) - sum(deposits)` within the week window.
+- `pnl_operator = pnl_player * action_pct / 100` (snapshot at compute time).
+- Reports/rakeback/insurance feed /finance but NOT the weekly settlement.
+
+**Per-player statuses:**
+- `auto_settled` — at least one withdrawal in the window. Anchor = last withdrawal's tx_datetime.
+- `pending_manual` — no withdrawal. Baki decides: carry over (pnl=0) or manual close (enter amount).
+- `settled` — confirmed by Baki (from auto_settled or manual_close).
+- `carry_over` — carried over with pnl=0.
+- `conflict` — reserved for future late-attribution manual overrides.
+
+**Period lifecycle:** open → computed (engine ran) → locked (all players validated).
+
+**Lock semantics:**
+- Once locked, settlement rows are immutable. `computeWeek` will not overwrite them.
+- Late transactions (tx_datetime within a locked week but arriving after lock) belong to the next open week.
+- Hard cutoff: Monday 00:00:00 Paris. No tolerance window, no exceptions.
+
+**Lock anchor:** The last withdrawal's tx_datetime in the settlement window. Anything with tx_datetime > lock_anchor but < Monday 00:00 of next week is a "late-attribution orphan" — visible in the next week's computation.
+
+**Tables:** `weekly_settlement_periods` (one row per week), `weekly_settlements` (one row per player per week).
+
 ## What's NOT in scope (push back if asked)
 
 - Authentication / user accounts — v1 is single-operator, dashboard is open

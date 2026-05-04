@@ -662,4 +662,38 @@ function initSchema(db: Database.Database) {
     // SET tx_datetime = STRFTIME('%Y-%m-%dT%H:%M:%S+08:00', SUBSTR(tx_datetime, 1, 19), '+8 hours')
     // WHERE tx_datetime LIKE '%Z';
   }
+
+  // Settlement engine tables
+  const fixSettlement = db.prepare(`INSERT OR IGNORE INTO _applied_fixes (name) VALUES (?)`).run("settlement_engine_v1");
+  if (fixSettlement.changes > 0) {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS weekly_settlement_periods (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        week_start TEXT NOT NULL UNIQUE,
+        week_end TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'open' CHECK(status IN ('open','computed','locked')),
+        computed_at TEXT,
+        locked_at TEXT,
+        created_at TEXT NOT NULL DEFAULT (datetime('now'))
+      );
+
+      CREATE TABLE IF NOT EXISTS weekly_settlements (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        week_start TEXT NOT NULL,
+        player_id INTEGER NOT NULL REFERENCES players(id),
+        status TEXT NOT NULL CHECK(status IN ('auto_settled','pending_manual','carry_over','settled','conflict')),
+        pnl_player REAL,
+        pnl_operator REAL,
+        action_pct_snapshot REAL,
+        lock_anchor_tx_id INTEGER REFERENCES wallet_transactions(id),
+        lock_anchor_datetime TEXT,
+        locked_at TEXT,
+        locked_by TEXT,
+        manual_close_amount REAL,
+        note TEXT,
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        UNIQUE(week_start, player_id)
+      );
+    `);
+  }
 }

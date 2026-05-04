@@ -59,6 +59,7 @@ Full glossary including currencies, exchange rates, club logic, legacy-vs-new ac
 8. **Wallet sync dedup is sacred.** `tron_tx_hash` UNIQUE + `INSERT OR IGNORE`. Never bypass.
 9. **No float math at display.** Money stored as `REAL` (known pragmatic compromise). Round to 2 decimals at the *display boundary* only, never inside aggregations. Never compare floats with `==`.
 10. **Every `wallet_transactions` row must have a source.** Column `source` must be `'sync'` (with a non-null `tron_tx_hash`) or `'manual'` (from the manual entry form). `'unknown'` is a transitional legacy state — new rows must never use it. Unknown rows are excluded from all aggregates (KPIs, balances, charts) via `AND (wt.source IS NULL OR wt.source != 'unknown')` in every query, and may be purged via `/api/admin/delete-phantom-wallets`. Enforced by a `BEFORE INSERT` trigger. (History: phantom rows with no hash and no manual marker appeared from unknown origin — corrupted P&L views.)
+11. **Locked weekly settlements are immutable.** `computeWeek` must skip rows already in terminal state for a locked period. Late transactions (tx_datetime within a locked week's bounds but arriving after lock) are attributed to the next open week by the settlement engine — the `wallet_transactions` row itself is unchanged; only the settlement's filtering excludes it. Once a `weekly_settlement_periods` row has `status='locked'`, its `weekly_settlements` rows must never be overwritten or recomputed.
 
 ## Workflow rules
 
