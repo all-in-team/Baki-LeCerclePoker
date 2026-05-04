@@ -98,4 +98,4 @@ When summarizing this conversation:
 - Verify deploy: `curl .../api/version` returns deployed commit SHA
 - Auto-deploy: GitHub `all-in-team/Baki-LeCerclePoker` `main`. Fallback if broken: `railway up --ci --detach`
 - CLI auth: `contact.baki77777@gmail.com`. Re-link: `railway link --project LeCerclePoker --service lecerclepoker`
-- Key env vars: `TRONGRID_API_KEY`, `TELEGRAM_BOT_TOKEN`, `ANTHROPIC_API_KEY`
+- Key env vars: `TRONGRID_API_KEY`, `TELEGRAM_BOT_TOKEN`, `ANTHROPIC_API_KEY`, `ADMIN_RECONCILE_TOKEN`
