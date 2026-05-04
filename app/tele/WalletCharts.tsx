@@ -12,7 +12,7 @@ interface PlayerSummary {
 
 interface WalletTx {
   id: number; player_id: number; type: "deposit" | "withdrawal";
-  amount: number; currency: string; tx_date: string; player_name: string;
+  amount: number; currency: string; tx_date: string; tx_datetime: string; player_name: string;
 }
 
 const TOOLTIP = {
@@ -27,14 +27,15 @@ function fmtAmt(v: number) {
 }
 
 function buildCumulative(txs: WalletTx[]) {
-  const sorted = [...txs].sort((a, b) => a.tx_date.localeCompare(b.tx_date));
+  const sorted = [...txs].sort((a, b) => a.tx_datetime.localeCompare(b.tx_datetime));
   let cumulative = 0;
   const points: { date: string; net: number; cumulative: number; myPnl: number }[] = [];
   const byDate: Record<string, number> = {};
 
   for (const tx of sorted) {
     const delta = tx.type === "withdrawal" ? tx.amount : -tx.amount;
-    byDate[tx.tx_date] = (byDate[tx.tx_date] ?? 0) + delta;
+    const chinaDate = tx.tx_datetime.slice(0, 10);
+    byDate[chinaDate] = (byDate[chinaDate] ?? 0) + delta;
   }
 
   for (const [date, net] of Object.entries(byDate).sort()) {
@@ -47,7 +48,7 @@ function buildCumulative(txs: WalletTx[]) {
 function buildMonthly(txs: WalletTx[]) {
   const map: Record<string, { deposited: number; withdrawn: number }> = {};
   for (const tx of txs) {
-    const month = tx.tx_date.slice(0, 7);
+    const month = tx.tx_datetime.slice(0, 7);
     if (!map[month]) map[month] = { deposited: 0, withdrawn: 0 };
     if (tx.type === "deposit") map[month].deposited += tx.amount;
     else map[month].withdrawn += tx.amount;

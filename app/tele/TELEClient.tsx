@@ -19,7 +19,7 @@ interface PlayerGameRow {
 interface WalletTx {
   id: number; player_id: number; game_id: number | null;
   type: "deposit" | "withdrawal"; amount: number; currency: string;
-  note: string | null; tx_date: string; player_name: string; game_name: string;
+  note: string | null; tx_date: string; tx_datetime: string; player_name: string; game_name: string;
   tron_tx_hash: string | null; counterparty_address: string | null;
   source: string | null;
 }
@@ -487,13 +487,13 @@ export default function TELEClient({
                             </div>
                             {playerTxs.map(tx => {
                               const isDeposit = tx.type === "deposit";
-                              const beforeStart = !!row.start_date && tx.tx_date < row.start_date;
+                              const beforeStart = !!row.start_date && tx.tx_datetime < row.start_date;
                               const cp = tx.counterparty_address;
                               const cpShort = cp ? `${cp.slice(0, 6)}…${cp.slice(-6)}` : "—";
                               const cpLabel = isDeposit ? "De" : "Vers";
                               return (
                                 <div key={tx.id} style={{ display: "grid", gridTemplateColumns: "100px 110px 36px 120px 1fr 60px", gap: 12, padding: "8px 0", borderBottom: "1px solid var(--border)", alignItems: "center", opacity: beforeStart ? 0.35 : 1 }}>
-                                  <span style={{ fontSize: 12, color: "var(--text-muted)", whiteSpace: "nowrap" }}>{tx.tx_date}</span>
+                                  <span style={{ fontSize: 12, color: "var(--text-muted)", whiteSpace: "nowrap" }}>{tx.tx_datetime.slice(0, 10)}</span>
                                   <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
                                     {isDeposit ? <ArrowDownLeft size={13} color="#f87171" /> : <ArrowUpRight size={13} color="var(--green)" />}
                                     <span style={{ fontSize: 12, fontWeight: 600, color: isDeposit ? "#f87171" : "var(--green)" }}>{isDeposit ? "Dépôt (in)" : "Retrait (out)"}</span>
