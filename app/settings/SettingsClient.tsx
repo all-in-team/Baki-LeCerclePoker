@@ -1,8 +1,8 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect, useCallback } from "react";
 import Btn from "@/components/Btn";
-import { CheckCircle, AlertCircle, Shield, Wifi, DollarSign, Bell } from "lucide-react";
+import { CheckCircle, AlertCircle, Shield, Wifi, DollarSign, Bell, Plus, Trash2, Wallet } from "lucide-react";
 
 const TELE_FIELDS = [
   {
@@ -50,6 +50,47 @@ export default function SettingsClient({
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [error, setError]  = useState<string | null>(null);
+
+  // Wallet mères state
+  type WM = { id: number; address: string; label: string | null; created_at: string };
+  const [walletMeres, setWalletMeres] = useState<WM[]>([]);
+  const [wmAddr, setWmAddr] = useState("");
+  const [wmLabel, setWmLabel] = useState("");
+  const [wmAdding, setWmAdding] = useState(false);
+  const [wmError, setWmError] = useState<string | null>(null);
+  const [wmShowForm, setWmShowForm] = useState(false);
+
+  const loadWalletMeres = useCallback(async () => {
+    try {
+      const res = await fetch("/api/wallet-meres");
+      if (res.ok) { const j = await res.json(); setWalletMeres(j.wallets); }
+    } catch {}
+  }, []);
+
+  useEffect(() => { loadWalletMeres(); }, [loadWalletMeres]);
+
+  async function addWalletMere() {
+    const addr = wmAddr.trim();
+    if (!isTronAddr(addr)) { setWmError("Adresse invalide (T + 33 caractères)"); return; }
+    setWmAdding(true); setWmError(null);
+    try {
+      const res = await fetch("/api/wallet-meres", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ address: addr, label: wmLabel.trim() || null }),
+      });
+      if (!res.ok) { const j = await res.json(); setWmError(j.error ?? "Erreur"); return; }
+      setWmAddr(""); setWmLabel(""); setWmShowForm(false);
+      await loadWalletMeres();
+    } catch (e: any) { setWmError(e.message); }
+    finally { setWmAdding(false); }
+  }
+
+  async function deleteWalletMere(id: number) {
+    try {
+      await fetch(`/api/wallet-meres/${id}`, { method: "DELETE" });
+      await loadWalletMeres();
+    } catch {}
+  }
 
   function set(key: string, val: string) {
     setValues(v => ({ ...v, [key]: val }));
@@ -201,66 +242,109 @@ export default function SettingsClient({
         </div>
       </div>
 
-      {/* TELE section */}
+      {/* Wallets mères section */}
       <div style={{ background: "var(--bg-raised)", border: "1px solid var(--border)", borderRadius: 10, marginBottom: 24 }}>
         <div style={{ padding: "16px 20px", borderBottom: "1px solid var(--border)", display: "flex", alignItems: "center", gap: 10 }}>
-          <Wifi size={16} color="#a78bfa" />
-          <span style={{ fontSize: 13, fontWeight: 700, color: "var(--text)" }}>TELE — Architecture 3 wallets</span>
-          {configured ? (
-            <span style={{ marginLeft: "auto", fontSize: 11, fontWeight: 600, padding: "3px 8px", borderRadius: 20, background: "rgba(34,197,94,0.12)", color: "var(--green)", display: "flex", alignItems: "center", gap: 4 }}>
-              <CheckCircle size={11} /> Configuré — mode précis actif
-            </span>
-          ) : (
-            <span style={{ marginLeft: "auto", fontSize: 11, fontWeight: 600, padding: "3px 8px", borderRadius: 20, background: "rgba(248,113,113,0.12)", color: "#f87171", display: "flex", alignItems: "center", gap: 4 }}>
-              <AlertCircle size={11} /> Mode direction (fallback)
+          <Wallet size={16} color="#4ade80" />
+          <span style={{ fontSize: 13, fontWeight: 700, color: "var(--text)" }}>Wallets mères</span>
+          <span style={{ fontSize: 11, color: "var(--text-dim)" }}>— Adresses de trésorerie qui envoient les cashouts</span>
+          {walletMeres.length > 0 && (
+            <span style={{ marginLeft: "auto", fontSize: 11, fontWeight: 600, padding: "3px 8px", borderRadius: 20, background: "rgba(74,222,128,0.12)", color: "#4ade80", display: "flex", alignItems: "center", gap: 4 }}>
+              <CheckCircle size={11} /> {walletMeres.length} configuré{walletMeres.length > 1 ? "s" : ""}
             </span>
           )}
         </div>
-
         <div style={{ padding: 20 }}>
-          {/* Mode explanation */}
-          <div style={{ background: "rgba(167,139,250,0.07)", border: "1px solid rgba(167,139,250,0.18)", borderRadius: 8, padding: "12px 14px", marginBottom: 20, fontSize: 12, color: "var(--text-muted)", lineHeight: 1.6 }}>
-            <Shield size={12} style={{ display: "inline", marginRight: 6, color: "#a78bfa" }} />
-            <strong style={{ color: "var(--text)" }}>Mode précis (recommandé) :</strong> le sync ne compte que les dépôts vers l'ACCOUNT WALLET et les retraits depuis le WALLET MÈRE.
-            Les autres transferts USDT du joueur sont ignorés.
-            <br />
-            <span style={{ color: "var(--text-dim)" }}>Sans ces adresses : le sync utilise la direction du flux (moins précis, peut capter des faux positifs).</span>
+          <div style={{ background: "rgba(74,222,128,0.07)", border: "1px solid rgba(74,222,128,0.18)", borderRadius: 8, padding: "12px 14px", marginBottom: 20, fontSize: 12, color: "var(--text-muted)", lineHeight: 1.6 }}>
+            <Shield size={12} style={{ display: "inline", marginRight: 6, color: "#4ade80" }} />
+            Le sync ne reconnaît un cashout que si l{"'"}expéditeur est l{"'"}une de ces adresses ET le destinataire est un wallet cashout connu.
           </div>
 
-          {TELE_FIELDS.map(({ key, label, desc, placeholder }) => {
-            const val = values[key] ?? "";
-            const valid = !val || isTronAddr(val);
-            return (
-              <div key={key} style={{ marginBottom: 18 }}>
+          {walletMeres.length === 0 && !wmShowForm && (
+            <div style={{ fontSize: 12, color: "var(--text-dim)", marginBottom: 16 }}>Aucune wallet mère configurée.</div>
+          )}
+
+          {walletMeres.map(wm => (
+            <div key={wm.id} style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 14px", background: "var(--bg-surface)", borderRadius: 8, marginBottom: 8, border: "1px solid var(--border)" }}>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontSize: 12, fontWeight: 600, color: "var(--text)", marginBottom: 2 }}>
+                  {wm.label || "Sans label"}
+                </div>
+                <div style={{ fontSize: 11, fontFamily: "monospace", color: "var(--text-muted)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                  {wm.address}
+                </div>
+              </div>
+              <button
+                onClick={() => deleteWalletMere(wm.id)}
+                style={{ background: "none", border: "none", cursor: "pointer", padding: 6, borderRadius: 6, color: "var(--text-dim)", display: "flex" }}
+                title="Supprimer"
+              >
+                <Trash2 size={14} />
+              </button>
+            </div>
+          ))}
+
+          {wmShowForm ? (
+            <div style={{ padding: 14, background: "var(--bg-surface)", borderRadius: 8, border: "1px solid var(--border)", marginTop: 8 }}>
+              <div style={{ marginBottom: 10 }}>
                 <label style={{ fontSize: 11, fontWeight: 700, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.07em", display: "block", marginBottom: 6 }}>
-                  {label}
+                  Adresse TRON
                 </label>
-                <div style={{ fontSize: 11, color: "var(--text-dim)", marginBottom: 8 }}>{desc}</div>
                 <input
-                  value={val}
-                  onChange={e => set(key, e.target.value)}
-                  placeholder={placeholder}
+                  value={wmAddr}
+                  onChange={e => { setWmAddr(e.target.value); setWmError(null); }}
+                  placeholder="TXxxx... (adresse TRC20)"
                   spellCheck={false}
                   style={{
                     width: "100%", padding: "9px 12px", borderRadius: 7, fontSize: 12, fontFamily: "monospace",
-                    background: "var(--bg-surface)", color: "var(--text)",
-                    border: `1px solid ${!valid ? "#f87171" : val ? "var(--green)" : "var(--border)"}`,
+                    background: "var(--bg-raised)", color: "var(--text)",
+                    border: `1px solid ${wmAddr && !isTronAddr(wmAddr) ? "#f87171" : "var(--border)"}`,
                     outline: "none", boxSizing: "border-box",
                   }}
                 />
-                {val && !valid && (
-                  <div style={{ fontSize: 11, color: "#f87171", marginTop: 4 }}>Adresse invalide (T + 33 caractères)</div>
-                )}
-                {val && valid && (
-                  <div style={{ fontSize: 11, color: "var(--green)", marginTop: 4 }}>
-                    <CheckCircle size={10} style={{ display: "inline", marginRight: 4 }} />
-                    {val.slice(0, 6)}…{val.slice(-6)}
-                  </div>
-                )}
               </div>
-            );
-          })}
-
+              <div style={{ marginBottom: 12 }}>
+                <label style={{ fontSize: 11, fontWeight: 700, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.07em", display: "block", marginBottom: 6 }}>
+                  Label (optionnel)
+                </label>
+                <input
+                  value={wmLabel}
+                  onChange={e => setWmLabel(e.target.value)}
+                  placeholder="Ex: WM principal, WM backup…"
+                  style={{
+                    width: "100%", padding: "9px 12px", borderRadius: 7, fontSize: 12,
+                    background: "var(--bg-raised)", color: "var(--text)",
+                    border: "1px solid var(--border)", outline: "none", boxSizing: "border-box",
+                  }}
+                />
+              </div>
+              {wmError && (
+                <div style={{ fontSize: 11, color: "#f87171", marginBottom: 10 }}>{wmError}</div>
+              )}
+              <div style={{ display: "flex", gap: 8 }}>
+                <Btn onClick={addWalletMere} disabled={wmAdding}>
+                  {wmAdding ? "Ajout…" : "Ajouter"}
+                </Btn>
+                <button
+                  onClick={() => { setWmShowForm(false); setWmAddr(""); setWmLabel(""); setWmError(null); }}
+                  style={{ background: "none", border: "1px solid var(--border)", borderRadius: 7, padding: "6px 14px", fontSize: 12, color: "var(--text-muted)", cursor: "pointer" }}
+                >
+                  Annuler
+                </button>
+              </div>
+            </div>
+          ) : (
+            <button
+              onClick={() => setWmShowForm(true)}
+              style={{
+                display: "flex", alignItems: "center", gap: 6, marginTop: 8,
+                background: "none", border: "1px dashed var(--border)", borderRadius: 8,
+                padding: "10px 14px", fontSize: 12, color: "var(--text-muted)", cursor: "pointer", width: "100%",
+              }}
+            >
+              <Plus size={14} /> Ajouter une wallet mère
+            </button>
+          )}
         </div>
       </div>
 

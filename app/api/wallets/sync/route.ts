@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { getDb } from "@/lib/db";
-import { insertWalletTransactionByHash, getSetting, getAllTeleCashoutsByPlayer, getAllTeleGameWalletsByPlayer } from "@/lib/queries";
+import { insertWalletTransactionByHash, getWalletMeres, getAllTeleCashoutsByPlayer, getAllTeleGameWalletsByPlayer } from "@/lib/queries";
 
 const USDT_CONTRACT = "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t";
 
@@ -105,7 +105,8 @@ export async function POST() {
   if (players.length === 0)
     return NextResponse.json({ ok: true, imported: 0, message: "Aucun joueur avec un Wallet Game configuré." });
 
-  const walletMere = getSetting("tele_wallet_mere");
+  const walletMeres = getWalletMeres();
+  const mereAddrs = new Set(walletMeres.map(wm => wm.address.toLowerCase()));
 
   // Build game-wallet map: player_id → [address, ...] (deduped by lowercase)
   const gameWalletEntries = getAllTeleGameWalletsByPlayer();
@@ -174,15 +175,14 @@ export async function POST() {
     }
   }
 
-  if (walletMere && cashoutOwners.size > 0) {
-    const mereAddr = walletMere.toLowerCase();
-
+  if (mereAddrs.size > 0 && cashoutOwners.size > 0) {
     for (const [addrLower, { playerIds, original }] of cashoutOwners) {
       try {
         const txs = await fetchAllTronTxs(original);
         for (const tx of txs) {
           if ((tx.to ?? "").toLowerCase() !== addrLower) continue;
-          if ((tx.from ?? "").toLowerCase() !== mereAddr) continue;
+          // Invariant #1: withdrawal ONLY if sender is a known wallet mère
+          if (!mereAddrs.has((tx.from ?? "").toLowerCase())) continue;
 
           for (const pid of playerIds) {
             const changed = insertWalletTransactionByHash({
@@ -215,7 +215,7 @@ export async function POST() {
     imported: totalDeposits + totalCashouts,
     deposits: totalDeposits,
     cashouts: totalCashouts,
-    wallet_mere_configured: !!walletMere,
+    wallet_meres_configured: mereAddrs.size,
     cashout_wallets_configured: cashoutOwners.size,
     results,
   });

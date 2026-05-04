@@ -659,6 +659,28 @@ export function getAllSettings(): Record<string, string> {
   return Object.fromEntries(rows.map(r => [r.key, r.value]));
 }
 
+// ── Wallet Mères ────────────────────────────────────────
+export interface WalletMere {
+  id: number;
+  address: string;
+  label: string | null;
+  created_at: string;
+}
+
+export function getWalletMeres(): WalletMere[] {
+  return getDb().prepare(`SELECT id, address, label, created_at FROM wallet_meres ORDER BY id`).all() as WalletMere[];
+}
+
+export function addWalletMere(address: string, label: string | null): WalletMere {
+  const result = getDb().prepare(`INSERT INTO wallet_meres (address, label) VALUES (?, ?)`).run(address, label || null);
+  return { id: Number(result.lastInsertRowid), address, label: label || null, created_at: new Date().toISOString() };
+}
+
+export function deleteWalletMere(id: number): boolean {
+  const result = getDb().prepare(`DELETE FROM wallet_meres WHERE id = ?`).run(id);
+  return result.changes > 0;
+}
+
 // ── Cashout Requests ─────────────────────────────────────
 export interface CashoutRequest {
   id: number;

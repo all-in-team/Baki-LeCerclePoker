@@ -574,4 +574,30 @@ function initSchema(db: Database.Database) {
     db.exec(`CREATE UNIQUE INDEX idx_wallet_tron_hash ON wallet_transactions(tron_tx_hash, player_id) WHERE tron_tx_hash IS NOT NULL`);
     db.exec(`DELETE FROM wallet_transactions WHERE type = 'withdrawal' AND note = 'auto-sync'`);
   }
+
+  // Multi wallet mère support — replaces single settings.tele_wallet_mere
+  const fixWalletMeres = db.prepare(`INSERT OR IGNORE INTO _applied_fixes (name) VALUES (?)`).run("add_wallet_meres_v1");
+  if (fixWalletMeres.changes > 0) {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS wallet_meres (
+        id         INTEGER PRIMARY KEY AUTOINCREMENT,
+        address    TEXT NOT NULL UNIQUE,
+        label      TEXT,
+        created_at TEXT NOT NULL DEFAULT (datetime('now'))
+      );
+    `);
+    db.exec(`
+      INSERT OR IGNORE INTO wallet_meres (address, label)
+      SELECT value, 'Principal' FROM settings
+      WHERE key = 'tele_wallet_mere' AND value != ''
+    `);
+  }
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS wallet_meres (
+      id         INTEGER PRIMARY KEY AUTOINCREMENT,
+      address    TEXT NOT NULL UNIQUE,
+      label      TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+  `);
 }
