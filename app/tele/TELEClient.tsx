@@ -21,6 +21,7 @@ interface WalletTx {
   type: "deposit" | "withdrawal"; amount: number; currency: string;
   note: string | null; tx_date: string; player_name: string; game_name: string;
   tron_tx_hash: string | null; counterparty_address: string | null;
+  source: string | null;
 }
 
 interface Player { id: number; name: string; tron_address?: string | null; tele_wallet_cashout?: string | null; }
@@ -481,8 +482,8 @@ export default function TELEClient({
                       <td colSpan={8} style={{ padding: "12px 20px" }}>
                         {playerTxs.length > 0 && (
                           <div>
-                            <div style={{ display: "grid", gridTemplateColumns: "100px 110px 120px 1fr 60px", gap: 12, padding: "6px 0 8px", borderBottom: "1px solid var(--border)", fontSize: 10, fontWeight: 700, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.07em" }}>
-                              <span>Date</span><span>Type</span><span style={{ textAlign: "right" }}>Montant</span><span>Wallet</span><span style={{ textAlign: "right" }}>Tx</span>
+                            <div style={{ display: "grid", gridTemplateColumns: "100px 110px 36px 120px 1fr 60px", gap: 12, padding: "6px 0 8px", borderBottom: "1px solid var(--border)", fontSize: 10, fontWeight: 700, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.07em" }}>
+                              <span>Date</span><span>Type</span><span>Src</span><span style={{ textAlign: "right" }}>Montant</span><span>Wallet</span><span style={{ textAlign: "right" }}>Tx</span>
                             </div>
                             {playerTxs.map(tx => {
                               const isDeposit = tx.type === "deposit";
@@ -491,11 +492,14 @@ export default function TELEClient({
                               const cpShort = cp ? `${cp.slice(0, 6)}…${cp.slice(-6)}` : "—";
                               const cpLabel = isDeposit ? "De" : "Vers";
                               return (
-                                <div key={tx.id} style={{ display: "grid", gridTemplateColumns: "100px 110px 120px 1fr 60px", gap: 12, padding: "8px 0", borderBottom: "1px solid var(--border)", alignItems: "center", opacity: beforeStart ? 0.35 : 1 }}>
+                                <div key={tx.id} style={{ display: "grid", gridTemplateColumns: "100px 110px 36px 120px 1fr 60px", gap: 12, padding: "8px 0", borderBottom: "1px solid var(--border)", alignItems: "center", opacity: beforeStart ? 0.35 : 1 }}>
                                   <span style={{ fontSize: 12, color: "var(--text-muted)", whiteSpace: "nowrap" }}>{tx.tx_date}</span>
                                   <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
                                     {isDeposit ? <ArrowDownLeft size={13} color="#f87171" /> : <ArrowUpRight size={13} color="var(--green)" />}
                                     <span style={{ fontSize: 12, fontWeight: 600, color: isDeposit ? "#f87171" : "var(--green)" }}>{isDeposit ? "Dépôt (in)" : "Retrait (out)"}</span>
+                                  </span>
+                                  <span title={tx.source ?? "unknown"} style={{ fontSize: 14, cursor: "default" }}>
+                                    {tx.source === "sync" ? "🔗" : tx.source === "manual" ? "✍️" : "⚠️"}
                                   </span>
                                   <span style={{ fontSize: 13, fontWeight: 700, textAlign: "right", whiteSpace: "nowrap", color: isDeposit ? "#f87171" : "var(--green)" }}>{isDeposit ? "−" : "+"}{tx.amount.toLocaleString("fr-FR", { minimumFractionDigits: 2 })} {tx.currency}</span>
                                   <span style={{ fontSize: 11, display: "inline-flex", alignItems: "center", gap: 4, overflow: "hidden", whiteSpace: "nowrap" }}>

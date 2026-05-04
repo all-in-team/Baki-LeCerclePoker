@@ -600,4 +600,29 @@ function initSchema(db: Database.Database) {
       created_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
   `);
+
+  // Source tracking for wallet_transactions — every row must be 'sync', 'manual', or 'unknown' (legacy)
+  const fixWalletTxSource = db.prepare(`INSERT OR IGNORE INTO _applied_fixes (name) VALUES (?)`).run("add_wallet_tx_source_v1");
+  if (fixWalletTxSource.changes > 0) {
+    db.exec(`ALTER TABLE wallet_transactions ADD COLUMN source TEXT DEFAULT 'unknown'`);
+    db.exec(`UPDATE wallet_transactions SET source = 'sync' WHERE tron_tx_hash IS NOT NULL AND tron_tx_hash != ''`);
+    db.exec(`UPDATE wallet_transactions SET source = 'manual' WHERE (tron_tx_hash IS NULL OR tron_tx_hash = '') AND note IS NOT NULL`);
+    db.exec(`
+      CREATE TRIGGER IF NOT EXISTS wallet_tx_source_check BEFORE INSERT ON wallet_transactions
+      BEGIN
+        SELECT RAISE(ABORT, 'wallet_transactions: source must be sync (with tron_tx_hash) or manual')
+        WHERE (NEW.source = 'sync' AND (NEW.tron_tx_hash IS NULL OR NEW.tron_tx_hash = ''))
+           OR NEW.source NOT IN ('sync', 'manual', 'unknown');
+      END
+    `);
+  }
+  try { db.exec(`ALTER TABLE wallet_transactions ADD COLUMN source TEXT DEFAULT 'unknown'`); } catch {}
+  db.exec(`
+    CREATE TRIGGER IF NOT EXISTS wallet_tx_source_check BEFORE INSERT ON wallet_transactions
+    BEGIN
+      SELECT RAISE(ABORT, 'wallet_transactions: source must be sync (with tron_tx_hash) or manual')
+      WHERE (NEW.source = 'sync' AND (NEW.tron_tx_hash IS NULL OR NEW.tron_tx_hash = ''))
+         OR NEW.source NOT IN ('sync', 'manual', 'unknown');
+    END
+  `);
 }

@@ -522,8 +522,8 @@ export function insertWalletTransaction(data: {
 }) {
   const db = getDb();
   const r = db.prepare(`
-    INSERT INTO wallet_transactions (player_id, game_id, type, amount, currency, note, tx_date)
-    VALUES (@player_id, @game_id, @type, @amount, @currency, @note, @tx_date)
+    INSERT INTO wallet_transactions (player_id, game_id, type, amount, currency, note, tx_date, source)
+    VALUES (@player_id, @game_id, @type, @amount, @currency, @note, @tx_date, 'manual')
   `).run({ currency: "USDT", note: null, ...data });
   return r.lastInsertRowid;
 }
@@ -949,8 +949,8 @@ export function insertWalletTransactionByHash(data: {
   const params = { note: "auto-sync", counterparty_address: null, ...data };
   // First: try insert. INSERT OR IGNORE returns 0 changes on conflict (existing hash).
   const ins = db.prepare(`
-    INSERT OR IGNORE INTO wallet_transactions (player_id, game_id, type, amount, currency, tx_date, tron_tx_hash, counterparty_address, note)
-    VALUES (@player_id, @game_id, @type, @amount, @currency, @tx_date, @tron_tx_hash, @counterparty_address, @note)
+    INSERT OR IGNORE INTO wallet_transactions (player_id, game_id, type, amount, currency, tx_date, tron_tx_hash, counterparty_address, note, source)
+    VALUES (@player_id, @game_id, @type, @amount, @currency, @tx_date, @tron_tx_hash, @counterparty_address, @note, 'sync')
   `).run(params);
   if (ins.changes > 0) return ins.changes; // new transaction inserted
   // Existing row — backfill counterparty_address if it's still NULL (one-time fill, never overwrite)
