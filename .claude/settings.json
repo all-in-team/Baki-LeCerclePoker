@@ -1,0 +1,72 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm run dev:*)",
+      "Bash(npm run build:*)",
+      "Bash(npm run lint:*)",
+      "Bash(npm start:*)",
+      "Bash(git status)",
+      "Bash(git diff:*)",
+      "Bash(git log:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(git push:*)",
+      "Bash(git rev-parse:*)",
+      "Bash(curl:*)",
+      "Bash(railway:*)",
+      "Read",
+      "Glob",
+      "Grep"
+    ],
+    "ask": [
+      "Bash(rm:*)",
+      "Bash(npm uninstall:*)",
+      "Bash(railway down:*)",
+      "Edit(lib/db.ts)",
+      "Edit(app/api/wallets/sync/route.ts)"
+    ],
+    "deny": [
+      "Read(./.env)",
+      "Read(./.env.*)",
+      "Read(./data/lecercle.db)",
+      "Bash(rm -rf*)",
+      "Bash(rm */data/lecercle.db*)",
+      "Bash(rm data/lecercle.db*)",
+      "Bash(sqlite3 */data/lecercle.db*)",
+      "Bash(sqlite3 data/lecercle.db*)"
+    ]
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "if echo \"$CLAUDE_TOOL_INPUT\" | grep -E '(rm|truncate|DROP|TRUNCATE|DELETE FROM)' | grep -E '(lecercle\\.db|wallet_transactions|rakeback_|accounting_entries|player_game_deals)' >/dev/null; then echo 'BLOCKED: command targets the production DB or a money-critical table. Confirm with Baki out-of-band first.' >&2; exit 2; fi"
+          }
+        ]
+      },
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "if echo \"$CLAUDE_TOOL_INPUT\" | grep -E '(getPlayerBalance|getWalletPnL|cashout|wallet_mère|wallet_mere)' >/dev/null; then echo 'NOTE: change touches money-critical code. Run the money-auditor subagent before declaring done.' >&2; fi"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "if echo \"$CLAUDE_TOOL_INPUT\" | grep -E '^git push' >/dev/null; then echo 'REMINDER: deploy verification — curl -s https://lecerclepoker-production.up.railway.app/api/version and match against git rev-parse HEAD before telling Baki to test.' >&2; fi"
+          }
+        ]
+      }
+    ]
+  }
+}

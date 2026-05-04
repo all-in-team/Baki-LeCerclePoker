@@ -1,89 +1,101 @@
-# LeCerclePoker
+# LeCerclePoker — Claude Code Instructions
 
-## Project overview
+## What this is
+Internal ops + accounting tool for a single-operator poker affiliation business (Baki). NOT a SaaS. Audience = Baki only. Optimize for throughput and clarity over generality.
 
-Next.js 15 dashboard for managing a poker affiliation business. Tracks players across multiple poker apps (TELE AKPOKER, Wepoker, Xpoker, ClubGG), handles reports, accounting, and Telegram-based cash flow tracking.
+## Stack
+- Next.js 15 App Router · React 19 · TS strict · Tailwind v4
+- DB: better-sqlite3, raw SQL, no ORM. File: `data/lecercle.db` (local) / `/data/lecercle.db` (Railway volume)
+- Charts: Recharts · Telegram: GramJS + Bot API · AI: @anthropic-ai/sdk · XLS: xlsx
+- Deploy: Railway, auto-deploy from `main`. No Docker. Node 20.
+- No auth (v1). No tests. No staging — `main` is prod.
 
-**Stack:** Next.js 15 App Router, Tailwind CSS v4, better-sqlite3 (SQLite on Railway volume at `/data/lecercle.db`), Recharts, Lucide icons. No auth in v1.
+## File routing — where things live
+- Server reads (SQL) → `lib/queries.ts`
+- Schema + migrations → `lib/db.ts` (`initSchema()` + `_applied_fixes`)
+- Telegram bot → `lib/telegram-commands/*.ts` (one file per command, registered in `index.ts`)
+- Pages → `app/*/page.tsx` · API routes → `app/api/**/route.ts`
+- Shared UI → `components/`
+- **Domain glossary (READ FIRST when touching balance / wallet / report code)** → `docs/DOMAIN.md`
 
-**Architecture:** Server components read DB directly via `lib/queries.ts` (synchronous better-sqlite3). Client components use fetch to `/api/*` routes for mutations.
+## Domain — minimum mental model
 
-**How to run:** `npm run dev` → http://localhost:3000
+- Each **player** has a **deal per game** (`player_game_deals`): `action_pct`, `rakeback_pct`, `insurance_pct`. Per-player-per-game, not global.
+- **Action** = operator's % of player's winnings AND losses (both directions).
+- **Rakeback / insurance** = % of those reported amounts the player gets back (operator pays out).
+- **Reports** = data extracted from app screenshots (Claude Vision) or Wepoker XLS (deterministic parser). Stored in `rakeback_reports` + `rakeback_entries`.
+- **Wallet transactions** = on-chain USDT movements (`wallet_transactions`), type `deposit | withdrawal`.
 
-## Deployment
+### Wallet direction rule (CRITICAL — got this wrong before, cost a migration)
+- Incoming USDT to a player's **game wallet** = **deposit** (player funds their action).
+- Incoming USDT to a player's **cashout wallet from `wallet_mère`** = **withdrawal** (operator pays the player).
+- **Anything else is NOT a transaction.** Do not import. See invariant #1 below.
 
-- **Host:** Railway (project `LeCerclePoker`, workspace `contactbaki77777-rgb` — migration to `all-in-team` pending)
-- **Production URL:** https://lecerclepoker-production.up.railway.app
-- **Deploy verification:** `curl .../api/version` returns deployed commit SHA
-- **Auto-deploy:** GitHub source connected to `all-in-team/Baki-LeCerclePoker`, branch `main`. If auto-deploy breaks, fallback: `railway up --ci --detach`
-- **Railway CLI auth:** logged in as `contact.baki77777@gmail.com`. Run `railway link --project LeCerclePoker --service lecerclepoker` to re-link if needed.
-
-## Key env vars (Railway)
-
-- `TRONGRID_API_KEY` — TronGrid API key for TELE wallet sync (per-key rate limit, avoids shared-IP 429s)
-- `TELEGRAM_BOT_TOKEN` — Telegram bot integration
-- `ANTHROPIC_API_KEY` — Agent/doer features
-
-## TELE wallet sync (`/api/wallets/sync`)
-
-Scans the TRON blockchain for USDT (TRC20) transfers to track player deposits and cashouts.
-
-**Architecture:**
-- Pass 1: For each player with a `wallet_game` (tron_address), fetch incoming TRC20 transfers → insert as deposits
-- Pass 2: Fetch outgoing transfers from `wallet_mere` (global), filter by known cashout addresses → insert as withdrawals
-- Dedup: `tron_tx_hash` UNIQUE index + `INSERT OR IGNORE`. Multiple sync clicks are safe.
-
-**Rate limiting:** TronGrid free tier = 1 RPS per IP. Railway shares egress IPs across tenants. Fix: global throttle (`MIN_SPACING_MS = 1500`) + 429 retry with 12s cooldown. The `TRONGRID_API_KEY` is the real solution — gives per-key quota instead of per-IP.
-
-**Data model:**
-- `wallet_transactions.counterparty_address` — who sent (deposits) or received (withdrawals). Stored on sync, backfilled for existing rows on next sync.
-- `wallet_transactions.tron_tx_hash` — blockchain transaction ID. Links to `https://tronscan.org/#/transaction/{hash}`
-
-## DB migrations
-
-Auto-run on app boot via `lib/db.ts`. One-time fixes use `_applied_fixes` table (insert name, check changes > 0, run migration). Pattern:
-```js
-const fix = db.prepare(`INSERT OR IGNORE INTO _applied_fixes (name) VALUES (?)`).run("fix_name_v1");
-if (fix.changes > 0) { db.exec(`...`); }
+### Net balance formula (`getPlayerBalance` in `lib/queries.ts`)
 ```
+net = winnings * (1 - action_pct/100)
+    + (rakeback + insurance) * rakeback_pct / 100
+    + wallet_withdrawn
+    - wallet_deposited
+```
+Positive net = operator owes player. Negative = player owes operator.
 
-## Skill routing
+Full glossary including currencies, exchange rates, club logic, legacy-vs-new accounting, in `docs/DOMAIN.md`. **Read it before any change to balance/wallet/report code.**
 
-When the user's request matches an available skill, invoke it via the Skill tool. The
-skill has multi-step workflows, checklists, and quality gates that produce better
-results than an ad-hoc answer. When in doubt, invoke the skill. A false positive is
-cheaper than a false negative.
+## Hard invariants — never violate without explicit Baki approval
 
-Key routing rules:
-- Product ideas, "is this worth building", brainstorming → invoke /office-hours
-- Strategy, scope, "think bigger", "what should we build" → invoke /plan-ceo-review
-- Architecture, "does this design make sense" → invoke /plan-eng-review
-- Design system, brand, "how should this look" → invoke /design-consultation
-- Design review of a plan → invoke /plan-design-review
-- Developer experience of a plan → invoke /plan-devex-review
-- "Review everything", full review pipeline → invoke /autoplan
-- Bugs, errors, "why is this broken", "wtf", "this doesn't work" → invoke /investigate
-- Test the site, find bugs, "does this work" → invoke /qa (or /qa-only for report only)
-- Code review, check the diff, "look at my changes" → invoke /review
-- Visual polish, design audit, "this looks off" → invoke /design-review
-- Developer experience audit, try onboarding → invoke /devex-review
-- Ship, deploy, create a PR, "send it" → invoke /ship
-- Merge + deploy + verify → invoke /land-and-deploy
-- Configure deployment → invoke /setup-deploy
-- Post-deploy monitoring → invoke /canary
-- Update docs after shipping → invoke /document-release
-- Weekly retro, "how'd we do" → invoke /retro
-- Second opinion, codex review → invoke /codex
-- Safety mode, careful mode, lock it down → invoke /careful or /guard
-- Restrict edits to a directory → invoke /freeze or /unfreeze
-- Upgrade gstack → invoke /gstack-upgrade
-- Save progress, "save my work" → invoke /context-save
-- Resume, restore, "where was I" → invoke /context-restore
-- Security audit, OWASP, "is this secure" → invoke /cso
-- Make a PDF, document, publication → invoke /make-pdf
-- Launch real browser for QA → invoke /open-gstack-browser
-- Import cookies for authenticated testing → invoke /setup-browser-cookies
-- Performance regression, page speed, benchmarks → invoke /benchmark
-- Review what gstack has learned → invoke /learn
-- Tune question sensitivity → invoke /plan-tune
-- Code quality dashboard → invoke /health
+1. **Cashout source rule.** Withdrawals come ONLY from `wallet_mère` → cashout wallets. Importing from any other source corrupts the ledger. (History: a "Pass 3" once imported thousands of phantom cashouts; required a full purge.)
+2. **Money math lives in `lib/queries.ts` only.** No business math in route handlers, no math in client components. Routes = thin parameter validation + DB call + response.
+3. **Currencies are tracked.** All amounts have a `currency` column. Aggregation across currencies MUST go through `toUsdt()`. Never sum raw amounts across currencies.
+4. **Reports are player data, not operator framing.** `rakeback`, `insurance_amount`, `winnings_amount` are the player's numbers. Don't synthesize "Mon coût" or operator-side aggregates unless asked.
+5. **Wepoker XLS column mapping.** `保险盈利` = insurance, `组局基金` = rake, `盈亏` = winnings. Use the deterministic parser in `app/api/reports/upload/route.ts`. Do NOT use Claude Vision for Wepoker XLS — Vision read the wrong columns repeatedly.
+6. **Migrations are append-only.** Use `_applied_fixes` in `lib/db.ts`:
+   ```ts
+   const fix = db.prepare(`INSERT OR IGNORE INTO _applied_fixes (name) VALUES (?)`).run("fix_name_v1");
+   if (fix.changes > 0) { db.exec(`...`); }
+   ```
+   Never edit existing CREATE TABLE in `initSchema()` after it ships — add a new `_applied_fixes` migration.
+7. **Don't touch legacy tables (`reports`, `accounting_entries`).** They're still queried by the dashboard for `getNetByApp` / `getNetByPlayer`. Removing them silently breaks `/`. Migration to the new system is a deliberate, scoped task — ask first.
+8. **Wallet sync dedup is sacred.** `tron_tx_hash` UNIQUE + `INSERT OR IGNORE`. Never bypass.
+9. **No float math at display.** Money stored as `REAL` (known pragmatic compromise). Round to 2 decimals at the *display boundary* only, never inside aggregations. Never compare floats with `==`.
+
+## Workflow rules
+
+- **Deploy without asking.** After any change that compiles, push to `main`. Commit style: `fix:` or `feat:` prefix, lowercase, single line.
+- **Verify before saying "try it."** Workflow:
+  1. `git push`
+  2. Wait for Railway, then `curl -s https://lecerclepoker-production.up.railway.app/api/version`
+  3. Confirm the returned SHA matches `git rev-parse HEAD`
+  4. *Then* tell Baki to test
+  
+  If the deploy hasn't propagated, wait and retry. Don't punt verification to Baki.
+- **Maximum work yourself.** Run lints, builds, curls, log inspections. Only ask Baki for credentials, 2FA codes, on-device approvals, physical actions.
+- **Ask before acting** ONLY for:
+  - DB-destructive ops (DROP, TRUNCATE, DELETE without WHERE)
+  - Removing legacy tables/columns
+  - Changes to cashout source logic in `app/api/wallets/sync/route.ts`
+  - Changes to `getPlayerBalance()` math
+  - Auth, payments, private-key handling
+- **No new tests required.** Don't add a test suite unless asked.
+
+## When in doubt — playbook
+
+1. **Plan first** for anything touching `lib/queries.ts`, `lib/db.ts`, `app/api/wallets/sync/route.ts`, or any balance/P&L code. Use plan mode (Shift+Tab twice). Output: files I'll touch, invariants this affects, math change, migration name if any, rollback.
+2. **Spawn `money-auditor` subagent** for any change to balance math. It reviews against the invariant list with fresh context.
+3. **Telegram bot work** → handler in `lib/telegram-commands/`, register in `index.ts`. Webhook entry: `app/api/telegram/webhook/route.ts`.
+4. **TRON / wallet sync work** → re-read `docs/DOMAIN.md` § "Wallet sync" first. Cashout source rule is the easiest invariant to break.
+
+## Compact policy
+
+When summarizing this conversation:
+- **Preserve:** decisions about money math, schema changes, the wallet-direction model, deployed SHAs, error→resolution pairs, list of modified files.
+- **Discard:** styling debates, generic Next.js syntax help, exploratory dead ends.
+
+## Deployment specifics
+
+- Host: Railway (project `LeCerclePoker`)
+- Production URL: https://lecerclepoker-production.up.railway.app
+- Verify deploy: `curl .../api/version` returns deployed commit SHA
+- Auto-deploy: GitHub `all-in-team/Baki-LeCerclePoker` `main`. Fallback if broken: `railway up --ci --detach`
+- CLI auth: `contact.baki77777@gmail.com`. Re-link: `railway link --project LeCerclePoker --service lecerclepoker`
+- Key env vars: `TRONGRID_API_KEY`, `TELEGRAM_BOT_TOKEN`, `ANTHROPIC_API_KEY`

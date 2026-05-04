@@ -62,7 +62,17 @@
       "Bash(python3 -c \"import sys,json; players=json.load\\(sys.stdin\\); [print\\(f\\\\\"{p['id']} — {p['name']} | tron: {p.get\\('tron_address','—'\\)}\\\\\"\\) for p in players]\")",
       "Bash(python3 -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\(json.dumps\\(d, indent=2\\)\\)\")",
       "Bash(python3 -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\(d.get\\('TELEGRAM_BOT_TOKEN','not found'\\)\\)\")",
-      "Bash(env)"
-    ]
+      "Bash(env)",
+      "Bash(gh browse *)",
+      "Bash(gh repo *)",
+      "Read(//Users/baki/.config/**)",
+      "Read(//Users/baki/.config/gh/**)",
+      "Bash(git remote *)",
+      "Bash(ssh *)",
+      "Skill(update-config)",
+      "Bash(mkdir -p .claude/agent)",
+      "Read(//Users/baki/**)"
+    ],
+    "defaultMode": "bypassPermissions"
   }
 }
