@@ -117,7 +117,6 @@ export async function handleOnboardingDirect(
       if (result) {
         groupCreated = true;
 
-        // Welcome in General topic — tag the player so they get a notification
         const mention = `<a href="tg://user?id=${from.id}">${firstName}</a>`;
         await sendMsg(result.chatId,
           `🃏 Bienvenue ${mention} !\n\n` +
@@ -126,7 +125,6 @@ export async function handleOnboardingDirect(
           `👉 Questions ? → envoie un message ici.`
         );
 
-        // Send messages in each topic
         for (const [key, msg] of Object.entries(TOPIC_MESSAGES)) {
           const topicId = result.topicIds[key];
           if (topicId) {
@@ -134,21 +132,34 @@ export async function handleOnboardingDirect(
           }
         }
 
-        // Confirm in private chat
         await sendMsg(chatId,
           `🎉 <b>C'est parti !</b>\n\n` +
           `Ton groupe privé a été créé. Retrouve-le dans tes conversations !\n\n` +
           `Bienvenue dans Le Cercle 🃏`
         );
 
-        // Notify admins
-        await sendMsg(AGENT_CHAT_ID,
-          `🆕 <b>Nouveau joueur onboardé !</b>\n\n` +
-          `👤 ${fullName}\n` +
-          (username ? `📱 @${username}\n` : "") +
-          `🆔 <code>${from.id}</code>\n` +
-          `✅ Groupe créé automatiquement`
-        );
+        if (result.status === "full_success") {
+          await sendMsg(AGENT_CHAT_ID,
+            `🆕 <b>Nouveau joueur onboardé !</b>\n\n` +
+            `👤 ${fullName}\n` +
+            (username ? `📱 @${username}\n` : "") +
+            `🆔 <code>${from.id}</code>\n` +
+            `✅ Groupe créé — ${Object.keys(result.topicIds).length} topics`
+          );
+        } else {
+          const topicCount = Object.keys(result.topicIds).length;
+          await sendMsg(AGENT_CHAT_ID,
+            `⚠️ <b>Onboarding partiel — ${fullName}</b>\n\n` +
+            `👤 ${fullName}\n` +
+            (username ? `📱 @${username}\n` : "") +
+            `🆔 <code>${from.id}</code>\n` +
+            `📦 Chat ID: <code>${result.chatId}</code>\n\n` +
+            `✅ Groupe créé` + (topicCount > 0 ? ` — ${topicCount}/6 topics` : ` — 0 topics`) + `\n` +
+            `❌ ${result.failedSteps.join(", ")}\n` +
+            `💬 ${result.errors.join(" | ")}\n\n` +
+            `<i>→ Répare avec POST /api/admin/recreate-topics {chat_id: ${result.chatId}}</i>`
+          );
+        }
       }
     } catch (e) {
       console.error("[ONBOARDING] auto-group failed:", e);

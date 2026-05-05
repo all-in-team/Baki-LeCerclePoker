@@ -5,6 +5,8 @@ import * as path from "path";
 
 let _client: TelegramClient | null = null;
 
+const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
+
 function getApiCredentials() {
   const apiId = parseInt(process.env.TELEGRAM_API_ID ?? "0");
   const apiHash = process.env.TELEGRAM_API_HASH ?? "";
@@ -70,11 +72,139 @@ export async function checkUserbotHealth(): Promise<{
   }
 }
 
+// ── Types ────────────────────────────────────────────────
+
 export interface GroupResult {
   chatId: number;
   inviteLink: string;
   topicIds: Record<string, number>;
+  status: "full_success" | "partial" | "failed";
+  failedSteps: string[];
+  errors: string[];
 }
+
+const TOPIC_DEFS = [
+  { key: "accounting", title: "Accounting", iconColor: 0x6FB9F0, emojis: ["📊", "📈", "💹", "📉"] },
+  { key: "deals", title: "Deals", iconColor: 0xFFD67E, emojis: ["🤝", "📋", "📝", "✍️"] },
+  { key: "clubs", title: "Clubs", iconColor: 0x8EEE98, emojis: ["🏠", "🎰", "🃏", "♠️"] },
+  { key: "depot", title: "Dépôt", iconColor: 0xFF93B2, emojis: ["💰", "💳", "🏦", "💵"] },
+  { key: "liveplay", title: "Liveplay", iconColor: 0xFB6F5F, emojis: ["🔴", "🎥", "📺", "▶️"] },
+  { key: "onboarding", title: "Onboarding", iconColor: 0xCB86DB, emojis: ["🚀", "✅", "📌", "⚡"] },
+];
+
+// ── Retry helper ─────────────────────────────────────────
+
+function errMsg(e: any): string {
+  return e?.message ?? e?.errorMessage ?? String(e);
+}
+
+function parseFloodWait(e: any): number | null {
+  const msg = errMsg(e);
+  const match = msg.match(/FLOOD_WAIT_(\d+)/i) ?? msg.match(/A wait of (\d+) seconds/i);
+  return match ? parseInt(match[1]) : null;
+}
+
+async function retry<T>(
+  fn: () => Promise<T>,
+  label: string,
+  maxAttempts: number,
+  backoffMs: number[],
+): Promise<T> {
+  let lastErr: any;
+  for (let i = 0; i < maxAttempts; i++) {
+    try {
+      return await fn();
+    } catch (e: any) {
+      lastErr = e;
+      const flood = parseFloodWait(e);
+      const waitMs = flood ? flood * 1000 : (backoffMs[i] ?? backoffMs[backoffMs.length - 1]);
+      console.warn(`[USERBOT] ${label} attempt ${i + 1}/${maxAttempts} failed: ${errMsg(e)}, retrying in ${waitMs}ms`);
+      if (i < maxAttempts - 1) await sleep(waitMs);
+    }
+  }
+  throw lastErr;
+}
+
+// ── Icon fetching ────────────────────────────────────────
+
+async function fetchTopicIcons(client: TelegramClient): Promise<Map<string, bigint>> {
+  const iconMap = new Map<string, bigint>();
+  try {
+    const stickerSet = await client.invoke(
+      new Api.messages.GetStickerSet({
+        stickerset: new Api.InputStickerSetEmojiDefaultTopicIcons(),
+        hash: 0,
+      })
+    );
+    const docs = (stickerSet as any).documents ?? [];
+    for (const doc of docs) {
+      for (const attr of doc.attributes ?? []) {
+        if (attr.className === "DocumentAttributeCustomEmoji" && attr.alt) {
+          iconMap.set(attr.alt, typeof doc.id === "bigint" ? doc.id : BigInt(doc.id));
+        }
+      }
+    }
+    console.log("[USERBOT] topic icons available:", [...iconMap.keys()].join(" "));
+  } catch (e) {
+    console.warn("[USERBOT] could not fetch topic icons:", errMsg(e));
+  }
+  return iconMap;
+}
+
+function findIcon(iconMap: Map<string, bigint>, ...emojis: string[]): bigint | undefined {
+  for (const e of emojis) { const id = iconMap.get(e); if (id) return id; }
+  return undefined;
+}
+
+// ── Create topics on an existing supergroup ──────────────
+
+async function createTopicsOnChannel(
+  client: TelegramClient,
+  channelPeer: Api.InputChannel,
+  failedSteps: string[],
+  errors: string[],
+): Promise<Record<string, number>> {
+  const topicIds: Record<string, number> = {};
+  const iconMap = await fetchTopicIcons(client);
+
+  for (const def of TOPIC_DEFS) {
+    try {
+      const topicId = await retry(async () => {
+        const iconEmojiId = findIcon(iconMap, ...def.emojis);
+        const topicResult = await client.invoke(
+          new Api.channels.CreateForumTopic({
+            channel: channelPeer,
+            title: def.title,
+            iconColor: def.iconColor,
+            ...(iconEmojiId ? { iconEmojiId } : {}),
+            randomId: BigInt(Math.floor(Math.random() * Number.MAX_SAFE_INTEGER)) as any,
+          } as any)
+        );
+        const topicRaw = topicResult as any;
+        const updates = topicRaw.updates ?? [];
+        for (const u of updates) {
+          if (u.message?.action?.className === "MessageActionTopicCreate") {
+            return typeof u.message.id === "bigint" ? Number(u.message.id) : u.message.id;
+          }
+        }
+        throw new Error("no TopicCreate in response");
+      }, `topic:${def.title}`, 2, [1000, 2000]);
+
+      topicIds[def.key] = topicId;
+    } catch (e: any) {
+      const msg = errMsg(e);
+      console.error(`[USERBOT] topic "${def.title}" failed after retries: ${msg}`);
+      failedSteps.push(`topic:${def.title}`);
+      errors.push(`${def.title}: ${msg}`);
+    }
+    await sleep(300);
+  }
+
+  console.log("[USERBOT] topics created:", topicIds);
+  return topicIds;
+}
+
+// ── createPlayerGroup ────────────────────────────────────
 
 export async function createPlayerGroup(
   playerTgId: number,
@@ -85,13 +215,12 @@ export async function createPlayerGroup(
   const client = await getClient();
   if (!client) return null;
 
+  const failedSteps: string[] = [];
+  const errors: string[] = [];
+
   try {
     const usersToAdd: Api.TypeInputUser[] = [];
 
-    // Three-tier player entity resolution:
-    // 1. @username (global search — most reliable)
-    // 2. Numeric ID (users.GetUsers with accessHash=0 — works if userbot has seen the user)
-    // 3. Raw InputPeerUser (accessHash=0 — last resort, works if Telegram server knows both parties)
     let playerEntity: Api.TypeInputUser | null = null;
     if (playerUsername) {
       try {
@@ -127,6 +256,7 @@ export async function createPlayerGroup(
       }
     }
 
+    // ── Step 1: Create chat ──
     const result = await client.invoke(
       new Api.messages.CreateChat({
         users: usersToAdd,
@@ -148,7 +278,7 @@ export async function createPlayerGroup(
 
     const rawChatId = typeof chat.id === "bigint" ? Number(chat.id) : chat.id;
 
-    // Migrate to supergroup
+    // ── Step 2: Migrate to supergroup ──
     let channelId: number;
     let channelPeer: Api.InputChannel;
     try {
@@ -168,8 +298,11 @@ export async function createPlayerGroup(
       );
       channelPeer = resolved as unknown as Api.InputChannel;
       console.log("[USERBOT] migrated to supergroup, channelId:", channelId);
-    } catch (e) {
-      console.error("[USERBOT] migration to supergroup failed:", e);
+    } catch (e: any) {
+      const msg = errMsg(e);
+      console.error("[USERBOT] migration to supergroup failed:", msg);
+      failedSteps.push("migrate_supergroup");
+      errors.push(`MigrateChat: ${msg}`);
       try {
         const botEntity = await client.getInputEntity("LeCercle_Lebot");
         await client.invoke(
@@ -179,13 +312,18 @@ export async function createPlayerGroup(
             fwdLimit: 0,
           })
         );
-      } catch {}
-      return { chatId: -rawChatId, inviteLink: "", topicIds: {} };
+      } catch (e2: any) {
+        console.error("[USERBOT] fallback bot-add to regular chat failed:", errMsg(e2));
+      }
+      return { chatId: -rawChatId, inviteLink: "", topicIds: {}, status: "failed", failedSteps, errors };
     }
 
     const supergroupChatId = -(1000000000000 + channelId);
 
-    // Add bot to supergroup
+    // Wait for admin rights to propagate after migration
+    await sleep(1500);
+
+    // ── Step 3: Add bot to supergroup ──
     try {
       const botEntity = await client.getInputEntity("LeCercle_Lebot");
       await client.invoke(
@@ -194,11 +332,14 @@ export async function createPlayerGroup(
           users: [botEntity as unknown as Api.TypeInputUser],
         })
       );
-    } catch (e) {
-      console.warn("[USERBOT] could not add bot to supergroup:", e);
+    } catch (e: any) {
+      const msg = errMsg(e);
+      console.warn("[USERBOT] could not add bot to supergroup:", msg);
+      failedSteps.push("add_bot");
+      errors.push(`InviteToChannel: ${msg}`);
     }
 
-    // Set group photo
+    // ── Step 4: Set group photo ──
     try {
       const logoPath = path.join(process.cwd(), "public", "lecercle-logo.jpg");
       const logoBuffer = fs.readFileSync(logoPath);
@@ -214,86 +355,41 @@ export async function createPlayerGroup(
         })
       );
       console.log("[USERBOT] group photo set");
-    } catch (e) {
-      console.warn("[USERBOT] could not set group photo:", e);
+    } catch (e: any) {
+      const msg = errMsg(e);
+      console.warn("[USERBOT] could not set group photo:", msg);
+      failedSteps.push("photo");
+      errors.push(`EditPhoto: ${msg}`);
     }
 
-    // Enable forum mode + create topics
-    const topicIds: Record<string, number> = {};
+    // ── Step 5: Enable forum mode (with retry) ──
+    let forumEnabled = false;
     try {
-      await client.invoke(
-        new Api.channels.ToggleForum({
-          channel: channelPeer,
-          enabled: true,
-        })
-      );
-
-      // Fetch default forum topic icon stickers
-      const iconMap = new Map<string, bigint>();
-      try {
-        const stickerSet = await client.invoke(
-          new Api.messages.GetStickerSet({
-            stickerset: new Api.InputStickerSetEmojiDefaultTopicIcons(),
-            hash: 0,
+      await retry(async () => {
+        await client.invoke(
+          new Api.channels.ToggleForum({
+            channel: channelPeer,
+            enabled: true,
           })
         );
-        const docs = (stickerSet as any).documents ?? [];
-        for (const doc of docs) {
-          for (const attr of doc.attributes ?? []) {
-            if (attr.className === "DocumentAttributeCustomEmoji" && attr.alt) {
-              iconMap.set(attr.alt, typeof doc.id === "bigint" ? doc.id : BigInt(doc.id));
-            }
-          }
-        }
-        console.log("[USERBOT] topic icons available:", [...iconMap.keys()].join(" "));
-      } catch (e) {
-        console.warn("[USERBOT] could not fetch topic icons:", e);
-      }
-
-      const findIcon = (...emojis: string[]): bigint | undefined => {
-        for (const e of emojis) { const id = iconMap.get(e); if (id) return id; }
-        return undefined;
-      };
-
-      const topicDefs = [
-        { key: "accounting", title: "Accounting", iconColor: 0x6FB9F0, emojis: ["📊", "📈", "💹", "📉"] },
-        { key: "deals", title: "Deals", iconColor: 0xFFD67E, emojis: ["🤝", "📋", "📝", "✍️"] },
-        { key: "clubs", title: "Clubs", iconColor: 0x8EEE98, emojis: ["🏠", "🎰", "🃏", "♠️"] },
-        { key: "depot", title: "Dépôt", iconColor: 0xFF93B2, emojis: ["💰", "💳", "🏦", "💵"] },
-        { key: "liveplay", title: "Liveplay", iconColor: 0xFB6F5F, emojis: ["🔴", "🎥", "📺", "▶️"] },
-        { key: "onboarding", title: "Onboarding", iconColor: 0xCB86DB, emojis: ["🚀", "✅", "📌", "⚡"] },
-      ];
-
-      for (const def of topicDefs) {
-        try {
-          const iconEmojiId = findIcon(...def.emojis);
-          const topicResult = await client.invoke(
-            new Api.channels.CreateForumTopic({
-              channel: channelPeer,
-              title: def.title,
-              iconColor: def.iconColor,
-              ...(iconEmojiId ? { iconEmojiId } : {}),
-              randomId: BigInt(Math.floor(Math.random() * Number.MAX_SAFE_INTEGER)) as any,
-            } as any)
-          );
-          const topicRaw = topicResult as any;
-          const updates = topicRaw.updates ?? [];
-          for (const u of updates) {
-            if (u.message?.action?.className === "MessageActionTopicCreate") {
-              topicIds[def.key] = typeof u.message.id === "bigint" ? Number(u.message.id) : u.message.id;
-              break;
-            }
-          }
-        } catch (e) {
-          console.warn(`[USERBOT] could not create topic "${def.title}":`, e);
-        }
-      }
-      console.log("[USERBOT] topics created:", topicIds);
-    } catch (e) {
-      console.warn("[USERBOT] could not enable forum mode:", e);
+      }, "ToggleForum", 3, [1000, 2000, 4000]);
+      forumEnabled = true;
+      console.log("[USERBOT] forum mode enabled");
+    } catch (e: any) {
+      const msg = errMsg(e);
+      console.error("[USERBOT] could not enable forum mode after retries:", msg);
+      failedSteps.push("forum_toggle");
+      errors.push(`ToggleForum: ${msg}`);
     }
 
-    // Generate invite link
+    // ── Step 6: Create topics (with per-topic retry) ──
+    let topicIds: Record<string, number> = {};
+    if (forumEnabled) {
+      await sleep(800);
+      topicIds = await createTopicsOnChannel(client, channelPeer, failedSteps, errors);
+    }
+
+    // ── Step 7: Generate invite link ──
     let inviteLink = "";
     try {
       const peerChannel = new Api.InputPeerChannel({
@@ -304,13 +400,102 @@ export async function createPlayerGroup(
         new Api.messages.ExportChatInvite({ peer: peerChannel })
       );
       inviteLink = (exported as any).link ?? "";
-    } catch (e) {
-      console.warn("[USERBOT] could not export invite link:", e);
+    } catch (e: any) {
+      const msg = errMsg(e);
+      console.warn("[USERBOT] could not export invite link:", msg);
+      failedSteps.push("invite_link");
+      errors.push(`ExportChatInvite: ${msg}`);
     }
 
-    return { chatId: supergroupChatId, inviteLink, topicIds };
-  } catch (e) {
-    console.error("[USERBOT] createPlayerGroup failed:", e);
+    const status = failedSteps.length === 0 ? "full_success" : "partial";
+    return { chatId: supergroupChatId, inviteLink, topicIds, status, failedSteps, errors };
+  } catch (e: any) {
+    console.error("[USERBOT] createPlayerGroup failed:", errMsg(e));
     return null;
+  }
+}
+
+// ── recreateTopics (recovery) ────────────────────────────
+
+export async function recreateTopics(chatId: number): Promise<{
+  ok: boolean;
+  created: string[];
+  skipped: string[];
+  errors: string[];
+}> {
+  const client = await getClient();
+  if (!client) return { ok: false, created: [], skipped: [], errors: ["Userbot not connected"] };
+
+  try {
+    // Derive channelId from the Bot API chat_id format: -(1000000000000 + channelId)
+    const channelId = -(chatId + 1000000000000);
+    const channelPeer = await client.getInputEntity(
+      new Api.PeerChannel({ channelId: BigInt(channelId) as any })
+    ) as unknown as Api.InputChannel;
+
+    // Check existing topics
+    const existingTopics = await client.invoke(
+      new Api.channels.GetForumTopics({
+        channel: channelPeer,
+        offsetDate: 0,
+        offsetId: 0,
+        offsetTopic: 0,
+        limit: 100,
+      })
+    );
+    const existingTitles = new Set(
+      ((existingTopics as any).topics ?? []).map((t: any) => t.title?.toLowerCase())
+    );
+
+    // Enable forum mode if not already
+    if (existingTitles.size === 0) {
+      try {
+        await retry(async () => {
+          await client.invoke(
+            new Api.channels.ToggleForum({ channel: channelPeer, enabled: true })
+          );
+        }, "ToggleForum", 3, [1000, 2000, 4000]);
+        await sleep(800);
+      } catch (e: any) {
+        return { ok: false, created: [], skipped: [], errors: [`ToggleForum: ${errMsg(e)}`] };
+      }
+    }
+
+    const created: string[] = [];
+    const skipped: string[] = [];
+    const errors: string[] = [];
+    const failedSteps: string[] = [];
+
+    const iconMap = await fetchTopicIcons(client);
+
+    for (const def of TOPIC_DEFS) {
+      if (existingTitles.has(def.title.toLowerCase())) {
+        skipped.push(def.title);
+        continue;
+      }
+
+      try {
+        await retry(async () => {
+          const iconEmojiId = findIcon(iconMap, ...def.emojis);
+          await client.invoke(
+            new Api.channels.CreateForumTopic({
+              channel: channelPeer,
+              title: def.title,
+              iconColor: def.iconColor,
+              ...(iconEmojiId ? { iconEmojiId } : {}),
+              randomId: BigInt(Math.floor(Math.random() * Number.MAX_SAFE_INTEGER)) as any,
+            } as any)
+          );
+        }, `topic:${def.title}`, 2, [1000, 2000]);
+        created.push(def.title);
+      } catch (e: any) {
+        errors.push(`${def.title}: ${errMsg(e)}`);
+      }
+      await sleep(300);
+    }
+
+    return { ok: errors.length === 0, created, skipped, errors };
+  } catch (e: any) {
+    return { ok: false, created: [], skipped: [], errors: [errMsg(e)] };
   }
 }
