@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import {
   runSettlement,
   lockWeekAction,
+  unlockWeekAction,
   validatePlayerAction,
   excludeTransaction,
   includeTransaction,
@@ -106,6 +107,20 @@ export default function SettlementsClient({ weekStart, weekEnd, period, rows, ra
       startTransition(() => router.refresh());
     } catch (e: any) {
       alert(e.message || "Error locking week");
+    } finally {
+      setLoading(null);
+    }
+  }
+
+  async function handleUnlock() {
+    if (!confirm("Unlock this week? Settlement rows return to editable state. Audit trail preserved.")) return;
+    setLoading("unlock");
+    try {
+      const result = await unlockWeekAction(weekStart);
+      if (!result.ok) { alert(result.error); return; }
+      startTransition(() => router.refresh());
+    } catch (e: any) {
+      alert(e.message || "Error unlocking week");
     } finally {
       setLoading(null);
     }
@@ -215,9 +230,19 @@ export default function SettlementsClient({ weekStart, weekEnd, period, rows, ra
         <span style={{ fontSize: 14, color: "var(--text-muted)" }}>{rangeLabel}</span>
 
         {isLocked && (
-          <span style={{ marginLeft: "auto", background: "rgba(34,197,94,0.15)", color: "var(--green)", padding: "6px 12px", borderRadius: 6, fontSize: 12, fontWeight: 600 }}>
-            {"🔒"} Locked {period?.locked_at ? `on ${fmtDate(period.locked_at)}` : ""}
-          </span>
+          <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 8 }}>
+            <span style={{ background: "rgba(34,197,94,0.15)", color: "var(--green)", padding: "6px 12px", borderRadius: 6, fontSize: 12, fontWeight: 600 }}>
+              {"🔒"} Locked {period?.locked_at ? `on ${fmtDate(period.locked_at)}` : ""}
+            </span>
+            <button
+              onClick={handleUnlock}
+              disabled={loading !== null}
+              title="Unlock this week for editing"
+              style={{ padding: "5px 8px", borderRadius: 5, border: "1px solid var(--border)", background: "transparent", color: "var(--text-muted)", fontSize: 11, cursor: "pointer" }}
+            >
+              {"🔓"} Unlock
+            </button>
+          </div>
         )}
 
         {!isLocked && (

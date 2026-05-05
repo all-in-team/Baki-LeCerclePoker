@@ -736,4 +736,10 @@ function initSchema(db: Database.Database) {
         );
     `);
   }
+
+  // Migration: add note column to weekly_settlement_periods for unlock audit trail
+  const fix4 = db.prepare(`INSERT OR IGNORE INTO _applied_fixes (name) VALUES (?)`).run("settlement_period_note_v1");
+  if (fix4.changes > 0) {
+    db.exec(`ALTER TABLE weekly_settlement_periods ADD COLUMN note TEXT;`);
+  }
 }

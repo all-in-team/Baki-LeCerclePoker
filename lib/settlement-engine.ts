@@ -489,6 +489,45 @@ export function lockWeek(weekStart: string): { ok: boolean; error?: string } {
   return { ok: true };
 }
 
+// ── unlockWeek ───────────────────────────────────────────
+
+export function unlockWeek(weekStart: string): { ok: boolean; error?: string } {
+  const db = getDb();
+  const period = db.prepare(`SELECT * FROM weekly_settlement_periods WHERE week_start = ?`).get(weekStart) as any;
+  if (!period) return { ok: false, error: "Period not found" };
+  if (period.status !== "locked") return { ok: false, error: "Period is not locked" };
+
+  // Cascading check: refuse if the next week is also locked
+  const nextLocked = db.prepare(`
+    SELECT week_start, week_end FROM weekly_settlement_periods
+    WHERE week_start > ? AND status = 'locked'
+    ORDER BY week_start ASC LIMIT 1
+  `).get(weekStart) as { week_start: string; week_end: string } | undefined;
+
+  if (nextLocked) {
+    return { ok: false, error: `Cannot unlock — week ${nextLocked.week_start} → ${nextLocked.week_end} is also locked. Unlock that one first.` };
+  }
+
+  // Revert settled rows (from lock) back to auto_settled; preserve PnL values
+  db.prepare(`
+    UPDATE weekly_settlements
+    SET status = 'auto_settled', locked_at = NULL, locked_by = NULL
+    WHERE week_start = ? AND status = 'settled'
+  `).run(weekStart);
+
+  // Unlock the period
+  const now = new Date().toISOString();
+  const existingNote = period.note || "";
+  const auditNote = (existingNote ? existingNote + "\n" : "") + `Unlocked by baki at ${now}`;
+  db.prepare(`
+    UPDATE weekly_settlement_periods
+    SET status = 'computed', locked_at = NULL, note = ?
+    WHERE week_start = ?
+  `).run(auditNote, weekStart);
+
+  return { ok: true };
+}
+
 // ── Helpers ──────────────────────────────────────────────
 
 export function getLockedWeeks(): string[] {

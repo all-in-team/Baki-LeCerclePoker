@@ -3,6 +3,7 @@
 import {
   computeWeekByDate,
   lockWeek,
+  unlockWeek,
   validatePlayer,
   addOverride,
   removeOverride,
@@ -17,6 +18,10 @@ export async function runSettlement(weekStart: string, force = false) {
 
 export async function lockWeekAction(weekStart: string) {
   return lockWeek(weekStart);
+}
+
+export async function unlockWeekAction(weekStart: string) {
+  return unlockWeek(weekStart);
 }
 
 export async function validatePlayerAction(
