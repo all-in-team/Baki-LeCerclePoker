@@ -127,6 +127,12 @@ export async function POST(req: NextRequest) {
     }
   }
 
+  // Catch-all: unknown user sends non-command text in private DM → nudge to /start
+  if (msg?.text && !msg.text.startsWith("/") && msg.chat?.type === "private") {
+    await sendMsg(chatId, "👋 Envoie <b>/start</b> pour commencer !");
+    return NextResponse.json({ ok: true });
+  }
+
   // New members
   if (msg?.new_chat_members) {
     await handleNewMembers(msg.new_chat_members, msg.chat?.title ?? "", chatId);

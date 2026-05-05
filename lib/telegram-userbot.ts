@@ -40,6 +40,36 @@ export function isUserbotConfigured(): boolean {
   return getApiCredentials() !== null;
 }
 
+export async function checkUserbotHealth(): Promise<{
+  configured: boolean;
+  connected: boolean;
+  session_valid: boolean;
+  user_id: number | null;
+  username: string | null;
+  error: string | null;
+}> {
+  if (!getApiCredentials()) {
+    return { configured: false, connected: false, session_valid: false, user_id: null, username: null, error: "Missing TELEGRAM_API_ID, TELEGRAM_API_HASH, or TELEGRAM_SESSION" };
+  }
+  try {
+    const client = await getClient();
+    if (!client) {
+      return { configured: true, connected: false, session_valid: false, user_id: null, username: null, error: "Connection failed" };
+    }
+    const me = await client.getMe() as any;
+    return {
+      configured: true,
+      connected: true,
+      session_valid: true,
+      user_id: typeof me.id === "bigint" ? Number(me.id) : me.id,
+      username: me.username ?? null,
+      error: null,
+    };
+  } catch (e: any) {
+    return { configured: true, connected: false, session_valid: false, user_id: null, username: null, error: e.message ?? String(e) };
+  }
+}
+
 export interface GroupResult {
   chatId: number;
   inviteLink: string;
@@ -57,14 +87,36 @@ export async function createPlayerGroup(
 
   try {
     const usersToAdd: Api.TypeInputUser[] = [];
-    const playerHandle = playerUsername ?? String(playerTgId);
-    try {
-      const playerEntity = await client.getInputEntity(playerHandle);
-      usersToAdd.push(playerEntity as unknown as Api.TypeInputUser);
-    } catch {
-      console.error(`[USERBOT] could not resolve player ${playerHandle}`);
-      return null;
+
+    // Three-tier player entity resolution:
+    // 1. @username (global search — most reliable)
+    // 2. Numeric ID (users.GetUsers with accessHash=0 — works if userbot has seen the user)
+    // 3. Raw InputPeerUser (accessHash=0 — last resort, works if Telegram server knows both parties)
+    let playerEntity: Api.TypeInputUser | null = null;
+    if (playerUsername) {
+      try {
+        playerEntity = await client.getInputEntity(playerUsername) as unknown as Api.TypeInputUser;
+        console.log(`[USERBOT] resolved player via @${playerUsername}`);
+      } catch {
+        console.warn(`[USERBOT] could not resolve @${playerUsername}, trying by ID`);
+      }
     }
+    if (!playerEntity) {
+      try {
+        playerEntity = await client.getInputEntity(playerTgId) as unknown as Api.TypeInputUser;
+        console.log(`[USERBOT] resolved player via numeric ID ${playerTgId}`);
+      } catch {
+        console.warn(`[USERBOT] could not resolve numeric ID ${playerTgId}, using raw InputPeerUser`);
+      }
+    }
+    if (!playerEntity) {
+      playerEntity = new Api.InputPeerUser({
+        userId: BigInt(playerTgId) as any,
+        accessHash: BigInt(0) as any,
+      }) as unknown as Api.TypeInputUser;
+      console.log(`[USERBOT] using raw InputPeerUser for ${playerTgId} (accessHash=0)`);
+    }
+    usersToAdd.push(playerEntity);
 
     for (const handle of ["baki77777", "hugoroine"]) {
       try {
