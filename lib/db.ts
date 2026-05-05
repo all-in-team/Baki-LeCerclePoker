@@ -706,4 +706,34 @@ function initSchema(db: Database.Database) {
       WHERE status = 'auto_settled';
     `);
   }
+
+  // Migration: tx overrides table for per-player transaction include/exclude
+  const fix2 = db.prepare(`INSERT OR IGNORE INTO _applied_fixes (name) VALUES (?)`).run("settlement_tx_overrides_v1");
+  if (fix2.changes > 0) {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS weekly_settlement_tx_overrides (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        settlement_id INTEGER NOT NULL REFERENCES weekly_settlements(id),
+        wallet_transaction_id INTEGER NOT NULL REFERENCES wallet_transactions(id),
+        action TEXT NOT NULL CHECK(action IN ('exclude', 'include')),
+        reason TEXT,
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        created_by TEXT NOT NULL DEFAULT 'baki',
+        UNIQUE(settlement_id, wallet_transaction_id)
+      );
+    `);
+  }
+
+  // Migration: revert auto-lock on non-locked periods (back to editable)
+  const fix3 = db.prepare(`INSERT OR IGNORE INTO _applied_fixes (name) VALUES (?)`).run("settlement_revert_auto_lock_v1");
+  if (fix3.changes > 0) {
+    db.exec(`
+      UPDATE weekly_settlements
+      SET status = 'auto_settled', locked_at = NULL, locked_by = NULL
+      WHERE status = 'settled' AND locked_by = 'auto'
+        AND week_start IN (
+          SELECT week_start FROM weekly_settlement_periods WHERE status != 'locked'
+        );
+    `);
+  }
 }

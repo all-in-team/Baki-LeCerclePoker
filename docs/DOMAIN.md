@@ -114,31 +114,37 @@ Weekly settlement cycle for TELE wallet P&L:
 **Period:** Monday 00:00:00 → Sunday 23:59:59 Europe/Paris (DST-aware).
 
 **Settlement P&L (wallet-only):**
-- `pnl_player = sum(withdrawals) - sum(deposits)` within the week window.
+- `pnl_player = sum(withdrawals) - sum(deposits)` from the effective transaction set.
 - `pnl_operator = pnl_player * action_pct / 100` (snapshot at compute time).
+- The effective set = wallet_transactions in-window − excluded + included (from overrides).
 - Reports/rakeback/insurance feed /finance but NOT the weekly settlement.
 
 **Per-player statuses:**
-- `settled` — at least one withdrawal in the window. Auto-locked at compute time (locked_by='auto'). Anchor = last withdrawal's tx_datetime.
+- `auto_settled` — at least one withdrawal in the effective set. Editable. Anchor = last withdrawal's tx_datetime.
 - `pending_manual` — no withdrawal. Baki decides: carry over (pnl=0) or manual close (enter amount).
-- `carry_over` — carried over with pnl=0. Terminal state.
-- `conflict` — reserved for future late-attribution manual overrides.
+- `settled` — locked by Baki (from auto_settled at lock time, or from manual_close). Terminal.
+- `carry_over` — carried over with pnl=0. Terminal.
+- `conflict` — reserved for future manual overrides.
 
-**Auto-lock behavior:**
-- `computeWeek` immediately sets status='settled' + locked_at/locked_by for players with cashouts. No manual confirmation step.
-- After all player rows reach terminal state (settled/carry_over), the period auto-locks.
-- `validatePlayer` (carry_over/manual_close) also triggers `checkAndLockPeriod` — resolving the last pending player auto-locks the period.
+**Transaction overrides (`weekly_settlement_tx_overrides`):**
+- Scoped to a single settlement_id (one player + one week).
+- `exclude` — tx in-window but removed from this settlement's P&L.
+- `include` — tx outside-window but added to this settlement's P&L.
+- wallet_transactions row is NEVER modified; override is a separate entry.
+- Recompute (clicking "Recompute") deletes all overrides for the week and rebuilds fresh.
 
-**Period lifecycle:** open → computed → locked (automatic when all rows terminal).
+**Period lifecycle:** open → computed (engine ran) → locked (Baki clicks "Lock week").
 
 **Lock semantics:**
-- Once locked, settlement rows are immutable. `computeWeek` will not overwrite them.
+- Lock only available when all rows are in terminal state (no pending_manual, no conflict).
+- On lock: all `auto_settled` rows flip to `settled` with locked_at/locked_by='baki'. Period.status='locked'.
+- Once locked, settlement rows and overrides are immutable. `computeWeek` will not overwrite them.
 - Late transactions (tx_datetime within a locked week but arriving after lock) belong to the next open week.
 - Hard cutoff: Monday 00:00:00 Paris. No tolerance window, no exceptions.
 
-**Lock anchor:** The last withdrawal's tx_datetime in the settlement window. Anything with tx_datetime > lock_anchor but < Monday 00:00 of next week is a "late-attribution orphan" — visible in the next week's computation.
+**Lock anchor:** The last withdrawal's tx_datetime in the effective transaction set. Anything with tx_datetime > lock_anchor but < Monday 00:00 of next week is a "late-attribution orphan" — visible in the next week's computation.
 
-**Tables:** `weekly_settlement_periods` (one row per week), `weekly_settlements` (one row per player per week).
+**Tables:** `weekly_settlement_periods` (one row per week), `weekly_settlements` (one row per player per week), `weekly_settlement_tx_overrides` (per-tx edits per settlement).
 
 ## What's NOT in scope (push back if asked)
 

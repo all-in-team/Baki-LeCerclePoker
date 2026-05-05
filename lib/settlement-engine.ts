@@ -1,7 +1,7 @@
 /**
  * Settlement engine — weekly P&L computation and lock management.
+ * Supports per-player transaction overrides (include/exclude).
  * Math lives here (parallel to queries.ts for settlement-specific logic).
- * Pure functions + documented INSERT/UPDATE on weekly_settlements / weekly_settlement_periods.
  */
 
 import { getDb } from "./db";
@@ -14,7 +14,7 @@ export interface SettlementRow {
   week_start: string;
   player_id: number;
   player_name: string;
-  status: "pending_manual" | "carry_over" | "settled" | "conflict";
+  status: "auto_settled" | "pending_manual" | "carry_over" | "settled" | "conflict";
   pnl_player: number | null;
   pnl_operator: number | null;
   action_pct_snapshot: number | null;
@@ -24,6 +24,7 @@ export interface SettlementRow {
   locked_by: string | null;
   manual_close_amount: number | null;
   note: string | null;
+  override_count: number;
 }
 
 export interface PeriodRow {
@@ -39,9 +40,21 @@ export interface ComputeResult {
   week_start: string;
   week_end: string;
   total_players: number;
-  settled: number;
+  auto_settled: number;
   pending_manual: number;
   period_locked: boolean;
+  overrides_deleted: number;
+}
+
+export interface TxRow {
+  id: number;
+  tx_datetime: string;
+  type: "deposit" | "withdrawal";
+  amount: number;
+  source: string | null;
+  tron_tx_hash: string | null;
+  is_override: boolean;
+  override_action?: "include";
 }
 
 // ── computeWeek ──────────────────────────────────────────
@@ -55,29 +68,56 @@ export function computeWeek(weekOffset: number): ComputeResult {
   return _computeWeekInternal(weekStart, weekEnd, startISO, endISO);
 }
 
-export function computeWeekByDate(weekStartDate: string): ComputeResult {
+export function computeWeekByDate(weekStartDate: string, force = false): ComputeResult & { needs_confirm?: boolean; override_count?: number } {
   const target = new Date(weekStartDate + "T00:00:00Z");
   const { start: currentWeekStart } = getWeekBounds(0);
   const currentMonday = new Date(toParisDate(toUTCISO(currentWeekStart)) + "T00:00:00Z");
   let offset = Math.round((target.getTime() - currentMonday.getTime()) / (7 * 86400000));
   let bounds = getWeekBounds(offset);
-  // DST safety: verify the derived bounds match the requested weekStart
   if (toParisDate(toUTCISO(bounds.start)) !== weekStartDate) {
     offset += toParisDate(toUTCISO(bounds.start)) < weekStartDate ? 1 : -1;
     bounds = getWeekBounds(offset);
   }
   const weekEnd = toParisDate(toUTCISO(bounds.end));
+
+  // Check for existing overrides if not forced
+  if (!force) {
+    const db = getDb();
+    const existingPeriod = db.prepare(`SELECT id FROM weekly_settlement_periods WHERE week_start = ?`).get(weekStartDate) as { id: number } | undefined;
+    if (existingPeriod) {
+      const overrideCount = db.prepare(`
+        SELECT COUNT(*) as cnt FROM weekly_settlement_tx_overrides
+        WHERE settlement_id IN (SELECT id FROM weekly_settlements WHERE week_start = ?)
+      `).get(weekStartDate) as { cnt: number };
+      if (overrideCount.cnt > 0) {
+        return {
+          week_start: weekStartDate, week_end: weekEnd, total_players: 0,
+          auto_settled: 0, pending_manual: 0, period_locked: false,
+          overrides_deleted: 0, needs_confirm: true, override_count: overrideCount.cnt
+        };
+      }
+    }
+  }
+
   return _computeWeekInternal(weekStartDate, weekEnd, toUTCISO(bounds.start), toUTCISO(bounds.end));
 }
 
 function _computeWeekInternal(weekStart: string, weekEnd: string, startISO: string, endISO: string): ComputeResult {
   const db = getDb();
 
-  // Skip if period is already locked
   const existingPeriod = db.prepare(`SELECT status FROM weekly_settlement_periods WHERE week_start = ?`).get(weekStart) as { status: string } | undefined;
   if (existingPeriod?.status === "locked") {
     const existing = db.prepare(`SELECT COUNT(*) as cnt FROM weekly_settlements WHERE week_start = ?`).get(weekStart) as { cnt: number };
-    return { week_start: weekStart, week_end: weekEnd, total_players: existing.cnt, settled: 0, pending_manual: 0, period_locked: true };
+    return { week_start: weekStart, week_end: weekEnd, total_players: existing.cnt, auto_settled: 0, pending_manual: 0, period_locked: true, overrides_deleted: 0 };
+  }
+
+  // Delete existing overrides on recompute
+  let overridesDeleted = 0;
+  const existingSettlements = db.prepare(`SELECT id FROM weekly_settlements WHERE week_start = ?`).all(weekStart) as { id: number }[];
+  if (existingSettlements.length > 0) {
+    const ids = existingSettlements.map(s => s.id);
+    const result = db.prepare(`DELETE FROM weekly_settlement_tx_overrides WHERE settlement_id IN (${ids.map(() => '?').join(',')})`).run(...ids);
+    overridesDeleted = result.changes;
   }
 
   // Upsert period
@@ -89,7 +129,6 @@ function _computeWeekInternal(weekStart: string, weekEnd: string, startISO: stri
       status = CASE WHEN weekly_settlement_periods.status = 'locked' THEN 'locked' ELSE 'computed' END
   `).run({ week_start: weekStart, week_end: weekEnd });
 
-  // Get all TELE players with their deals
   const players = db.prepare(`
     SELECT p.id AS player_id, p.name AS player_name, pgd.action_pct
     FROM players p
@@ -97,12 +136,12 @@ function _computeWeekInternal(weekStart: string, weekEnd: string, startISO: stri
     JOIN games g ON g.id = pgd.game_id AND g.name = 'TELE'
   `).all() as { player_id: number; player_name: string; action_pct: number }[];
 
-  let settled = 0;
+  let autoSettled = 0;
   let pendingManual = 0;
 
   const upsert = db.prepare(`
-    INSERT INTO weekly_settlements (week_start, player_id, status, pnl_player, pnl_operator, action_pct_snapshot, lock_anchor_tx_id, lock_anchor_datetime, locked_at, locked_by)
-    VALUES (@week_start, @player_id, @status, @pnl_player, @pnl_operator, @action_pct_snapshot, @lock_anchor_tx_id, @lock_anchor_datetime, @locked_at, @locked_by)
+    INSERT INTO weekly_settlements (week_start, player_id, status, pnl_player, pnl_operator, action_pct_snapshot, lock_anchor_tx_id, lock_anchor_datetime)
+    VALUES (@week_start, @player_id, @status, @pnl_player, @pnl_operator, @action_pct_snapshot, @lock_anchor_tx_id, @lock_anchor_datetime)
     ON CONFLICT(week_start, player_id) DO UPDATE SET
       status = CASE
         WHEN weekly_settlements.status IN ('settled', 'carry_over') AND weekly_settlements.locked_at IS NOT NULL
@@ -137,12 +176,12 @@ function _computeWeekInternal(weekStart: string, weekEnd: string, startISO: stri
       locked_at = CASE
         WHEN weekly_settlements.status IN ('settled', 'carry_over') AND weekly_settlements.locked_at IS NOT NULL
         THEN weekly_settlements.locked_at
-        ELSE excluded.locked_at
+        ELSE NULL
       END,
       locked_by = CASE
         WHEN weekly_settlements.status IN ('settled', 'carry_over') AND weekly_settlements.locked_at IS NOT NULL
         THEN weekly_settlements.locked_by
-        ELSE excluded.locked_by
+        ELSE NULL
       END
   `);
 
@@ -172,8 +211,8 @@ function _computeWeekInternal(weekStart: string, weekEnd: string, startISO: stri
     `).get({ player_id: player.player_id, start: startISO, end: endISO }) as { id: number; tx_datetime: string } | undefined;
 
     const hasAnchor = !!anchor;
-    const status = hasAnchor ? "settled" : "pending_manual";
-    if (hasAnchor) settled++; else pendingManual++;
+    const status = hasAnchor ? "auto_settled" : "pending_manual";
+    if (hasAnchor) autoSettled++; else pendingManual++;
 
     upsert.run({
       week_start: weekStart,
@@ -184,13 +223,10 @@ function _computeWeekInternal(weekStart: string, weekEnd: string, startISO: stri
       action_pct_snapshot: player.action_pct,
       lock_anchor_tx_id: anchor?.id ?? null,
       lock_anchor_datetime: anchor?.tx_datetime ?? null,
-      locked_at: hasAnchor ? new Date().toISOString() : null,
-      locked_by: hasAnchor ? "auto" : null,
     });
   }
 
-  const periodLocked = checkAndLockPeriod(weekStart);
-  return { week_start: weekStart, week_end: weekEnd, total_players: players.length, settled, pending_manual: pendingManual, period_locked: periodLocked };
+  return { week_start: weekStart, week_end: weekEnd, total_players: players.length, auto_settled: autoSettled, pending_manual: pendingManual, period_locked: false, overrides_deleted: overridesDeleted };
 }
 
 // ── getQueue ─────────────────────────────────────────────
@@ -199,13 +235,183 @@ export function getQueue(weekStart: string): { period: PeriodRow | null; rows: S
   const db = getDb();
   const period = db.prepare(`SELECT * FROM weekly_settlement_periods WHERE week_start = ?`).get(weekStart) as PeriodRow | undefined;
   const rows = db.prepare(`
-    SELECT ws.*, p.name AS player_name
+    SELECT ws.*, p.name AS player_name,
+      (SELECT COUNT(*) FROM weekly_settlement_tx_overrides WHERE settlement_id = ws.id) AS override_count
     FROM weekly_settlements ws
     JOIN players p ON p.id = ws.player_id
     WHERE ws.week_start = ?
-    ORDER BY ws.status, p.name
+    ORDER BY
+      CASE ws.status WHEN 'auto_settled' THEN 1 WHEN 'pending_manual' THEN 2 WHEN 'settled' THEN 3 WHEN 'carry_over' THEN 4 ELSE 5 END,
+      p.name
   `).all(weekStart) as SettlementRow[];
   return { period: period ?? null, rows };
+}
+
+// ── getSettlementTransactions ────────────────────────────
+
+export function getSettlementTransactions(settlementId: number): TxRow[] {
+  const db = getDb();
+  const settlement = db.prepare(`SELECT * FROM weekly_settlements WHERE id = ?`).get(settlementId) as any;
+  if (!settlement) return [];
+
+  const period = db.prepare(`SELECT * FROM weekly_settlement_periods WHERE week_start = ?`).get(settlement.week_start) as any;
+  if (!period) return [];
+
+  const { start, end } = _getWeekBoundsForDate(settlement.week_start);
+  const startISO = toUTCISO(start);
+  const endISO = toUTCISO(end);
+
+  // Base transactions in window
+  const baseTxs = db.prepare(`
+    SELECT id, tx_datetime, type, amount, source, tron_tx_hash
+    FROM wallet_transactions
+    WHERE player_id = @player_id
+      AND tx_datetime >= @start AND tx_datetime <= @end
+      AND (source IS NULL OR source != 'unknown')
+  `).all({ player_id: settlement.player_id, start: startISO, end: endISO }) as any[];
+
+  // Get overrides
+  const overrides = db.prepare(`
+    SELECT wallet_transaction_id, action FROM weekly_settlement_tx_overrides
+    WHERE settlement_id = ?
+  `).all(settlementId) as { wallet_transaction_id: number; action: string }[];
+
+  const excludeIds = new Set(overrides.filter(o => o.action === "exclude").map(o => o.wallet_transaction_id));
+  const includeIds = overrides.filter(o => o.action === "include").map(o => o.wallet_transaction_id);
+
+  // Filter base (remove excluded)
+  const result: TxRow[] = baseTxs
+    .filter(tx => !excludeIds.has(tx.id))
+    .map(tx => ({ ...tx, is_override: false }));
+
+  // Add included (from outside window)
+  if (includeIds.length > 0) {
+    const includedTxs = db.prepare(`
+      SELECT id, tx_datetime, type, amount, source, tron_tx_hash
+      FROM wallet_transactions WHERE id IN (${includeIds.map(() => '?').join(',')})
+    `).all(...includeIds) as any[];
+    for (const tx of includedTxs) {
+      result.push({ ...tx, is_override: true, override_action: "include" });
+    }
+  }
+
+  result.sort((a, b) => a.tx_datetime.localeCompare(b.tx_datetime));
+  return result;
+}
+
+// ── getAvailableTransactions ─────────────────────────────
+
+export function getAvailableTransactions(playerId: number, weekStart: string, settlementId: number): TxRow[] {
+  const db = getDb();
+  const { start, end } = _getWeekBoundsForDate(weekStart);
+  const startISO = toUTCISO(start);
+  const endISO = toUTCISO(end);
+
+  // Get IDs already in the settlement (in-window not excluded + included)
+  const currentTxs = getSettlementTransactions(settlementId);
+  const currentIds = new Set(currentTxs.map(t => t.id));
+
+  // Also get excluded IDs (they should appear as available to re-add)
+  const excludedOverrides = db.prepare(`
+    SELECT wallet_transaction_id FROM weekly_settlement_tx_overrides
+    WHERE settlement_id = ? AND action = 'exclude'
+  `).all(settlementId) as { wallet_transaction_id: number }[];
+  const excludedIds = new Set(excludedOverrides.map(o => o.wallet_transaction_id));
+
+  // All player's transactions (broader window: ±2 weeks)
+  const broaderStart = new Date(new Date(startISO).getTime() - 14 * 86400000).toISOString();
+  const broaderEnd = new Date(new Date(endISO).getTime() + 14 * 86400000).toISOString();
+
+  const allTxs = db.prepare(`
+    SELECT id, tx_datetime, type, amount, source, tron_tx_hash
+    FROM wallet_transactions
+    WHERE player_id = ?
+      AND tx_datetime >= ? AND tx_datetime <= ?
+      AND (source IS NULL OR source != 'unknown')
+    ORDER BY tx_datetime DESC
+  `).all(playerId, broaderStart, broaderEnd) as any[];
+
+  return allTxs
+    .filter(tx => !currentIds.has(tx.id) || excludedIds.has(tx.id))
+    .map(tx => ({ ...tx, is_override: false }));
+}
+
+// ── Override management ──────────────────────────────────
+
+export function addOverride(settlementId: number, txId: number, action: "exclude" | "include", reason?: string): { ok: boolean; error?: string } {
+  const db = getDb();
+
+  const settlement = db.prepare(`SELECT * FROM weekly_settlements WHERE id = ?`).get(settlementId) as any;
+  if (!settlement) return { ok: false, error: "Settlement not found" };
+  if (settlement.locked_at) return { ok: false, error: "Player row is already locked" };
+
+  const period = db.prepare(`SELECT status FROM weekly_settlement_periods WHERE week_start = ?`).get(settlement.week_start) as any;
+  if (period?.status === "locked") return { ok: false, error: "Week is locked" };
+
+  db.prepare(`
+    INSERT OR REPLACE INTO weekly_settlement_tx_overrides (settlement_id, wallet_transaction_id, action, reason)
+    VALUES (?, ?, ?, ?)
+  `).run(settlementId, txId, action, reason ?? null);
+
+  _recomputeSettlementPnl(settlementId);
+  return { ok: true };
+}
+
+export function removeOverride(settlementId: number, txId: number): { ok: boolean; error?: string } {
+  const db = getDb();
+
+  const settlement = db.prepare(`SELECT * FROM weekly_settlements WHERE id = ?`).get(settlementId) as any;
+  if (!settlement) return { ok: false, error: "Settlement not found" };
+  if (settlement.locked_at) return { ok: false, error: "Player row is already locked" };
+
+  const period = db.prepare(`SELECT status FROM weekly_settlement_periods WHERE week_start = ?`).get(settlement.week_start) as any;
+  if (period?.status === "locked") return { ok: false, error: "Week is locked" };
+
+  db.prepare(`DELETE FROM weekly_settlement_tx_overrides WHERE settlement_id = ? AND wallet_transaction_id = ?`).run(settlementId, txId);
+
+  _recomputeSettlementPnl(settlementId);
+  return { ok: true };
+}
+
+function _recomputeSettlementPnl(settlementId: number) {
+  const db = getDb();
+  const settlement = db.prepare(`SELECT * FROM weekly_settlements WHERE id = ?`).get(settlementId) as any;
+  if (!settlement) return;
+
+  const txs = getSettlementTransactions(settlementId);
+
+  let deposited = 0;
+  let withdrawn = 0;
+  let lastWithdrawal: { id: number; tx_datetime: string } | null = null;
+
+  for (const tx of txs) {
+    if (tx.type === "deposit") deposited += tx.amount;
+    else if (tx.type === "withdrawal") {
+      withdrawn += tx.amount;
+      if (!lastWithdrawal || tx.tx_datetime > lastWithdrawal.tx_datetime) {
+        lastWithdrawal = { id: tx.id, tx_datetime: tx.tx_datetime };
+      }
+    }
+  }
+
+  const pnlPlayer = withdrawn - deposited;
+  const pnlOperator = pnlPlayer * (settlement.action_pct_snapshot ?? 0) / 100;
+  const hasAnchor = !!lastWithdrawal;
+  const newStatus = hasAnchor ? "auto_settled" : "pending_manual";
+
+  // Only update status if not already in a terminal locked state
+  if (settlement.locked_at) return;
+
+  db.prepare(`
+    UPDATE weekly_settlements
+    SET pnl_player = ?, pnl_operator = ?, status = ?,
+        lock_anchor_tx_id = ?, lock_anchor_datetime = ?
+    WHERE id = ?
+  `).run(
+    pnlPlayer, pnlOperator, newStatus,
+    lastWithdrawal?.id ?? null, lastWithdrawal?.tx_datetime ?? null,
+    settlementId
+  );
 }
 
 // ── validatePlayer ───────────────────────────────────────
@@ -215,7 +421,7 @@ export function validatePlayer(
   weekStart: string,
   action: "carry_over" | "manual_close",
   payload?: { amount?: number; note?: string }
-): { ok: boolean; error?: string; period_locked?: boolean } {
+): { ok: boolean; error?: string } {
   const db = getDb();
 
   const row = db.prepare(`SELECT * FROM weekly_settlements WHERE week_start = ? AND player_id = ?`).get(weekStart, playerId) as any;
@@ -230,8 +436,7 @@ export function validatePlayer(
       UPDATE weekly_settlements SET status = 'carry_over', pnl_player = 0, pnl_operator = 0, locked_at = datetime('now'), locked_by = 'baki'
       WHERE week_start = ? AND player_id = ?
     `).run(weekStart, playerId);
-    const periodLocked = checkAndLockPeriod(weekStart);
-    return { ok: true, period_locked: periodLocked };
+    return { ok: true };
   }
 
   if (action === "manual_close") {
@@ -245,34 +450,13 @@ export function validatePlayer(
           note = @note
       WHERE week_start = @week_start AND player_id = @player_id
     `).run({ amount: payload.amount, pnl_operator: pnlOperator, week_start: weekStart, player_id: playerId, note: payload.note ?? null });
-    const periodLocked = checkAndLockPeriod(weekStart);
-    return { ok: true, period_locked: periodLocked };
+    return { ok: true };
   }
 
   return { ok: false, error: "Unknown action" };
 }
 
-// ── checkAndLockPeriod ───────────────────────────────────
-
-export function checkAndLockPeriod(weekStart: string): boolean {
-  const db = getDb();
-  const pending = db.prepare(`
-    SELECT COUNT(*) as cnt FROM weekly_settlements
-    WHERE week_start = ? AND status NOT IN ('settled', 'carry_over')
-  `).get(weekStart) as { cnt: number };
-
-  if (pending.cnt === 0) {
-    db.prepare(`
-      UPDATE weekly_settlement_periods
-      SET status = 'locked', locked_at = datetime('now')
-      WHERE week_start = ? AND status != 'locked'
-    `).run(weekStart);
-    return true;
-  }
-  return false;
-}
-
-// ── lockWeek (admin/manual override) ─────────────────────
+// ── lockWeek ─────────────────────────────────────────────
 
 export function lockWeek(weekStart: string): { ok: boolean; error?: string } {
   const db = getDb();
@@ -290,6 +474,14 @@ export function lockWeek(weekStart: string): { ok: boolean; error?: string } {
     return { ok: false, error: `Cannot lock: ${pending.length} player(s) still pending: ${pending.map(p => p.name).join(", ")}` };
   }
 
+  // Flip all auto_settled → settled with lock snapshot
+  db.prepare(`
+    UPDATE weekly_settlements
+    SET status = 'settled', locked_at = datetime('now'), locked_by = 'baki'
+    WHERE week_start = ? AND status = 'auto_settled'
+  `).run(weekStart);
+
+  // Lock the period
   db.prepare(`
     UPDATE weekly_settlement_periods SET status = 'locked', locked_at = datetime('now')
     WHERE week_start = ?
@@ -307,4 +499,17 @@ export function getLockedWeeks(): string[] {
 export function getPeriod(weekStart: string): PeriodRow | null {
   const db = getDb();
   return (db.prepare(`SELECT * FROM weekly_settlement_periods WHERE week_start = ?`).get(weekStart) as PeriodRow) ?? null;
+}
+
+function _getWeekBoundsForDate(weekStartDate: string): { start: Date; end: Date } {
+  const target = new Date(weekStartDate + "T00:00:00Z");
+  const { start: currentWeekStart } = getWeekBounds(0);
+  const currentMonday = new Date(toParisDate(toUTCISO(currentWeekStart)) + "T00:00:00Z");
+  let offset = Math.round((target.getTime() - currentMonday.getTime()) / (7 * 86400000));
+  let bounds = getWeekBounds(offset);
+  if (toParisDate(toUTCISO(bounds.start)) !== weekStartDate) {
+    offset += toParisDate(toUTCISO(bounds.start)) < weekStartDate ? 1 : -1;
+    bounds = getWeekBounds(offset);
+  }
+  return bounds;
 }
