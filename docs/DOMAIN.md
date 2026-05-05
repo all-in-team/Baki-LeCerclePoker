@@ -119,13 +119,17 @@ Weekly settlement cycle for TELE wallet P&L:
 - Reports/rakeback/insurance feed /finance but NOT the weekly settlement.
 
 **Per-player statuses:**
-- `auto_settled` — at least one withdrawal in the window. Anchor = last withdrawal's tx_datetime.
+- `settled` — at least one withdrawal in the window. Auto-locked at compute time (locked_by='auto'). Anchor = last withdrawal's tx_datetime.
 - `pending_manual` — no withdrawal. Baki decides: carry over (pnl=0) or manual close (enter amount).
-- `settled` — confirmed by Baki (from auto_settled or manual_close).
-- `carry_over` — carried over with pnl=0.
+- `carry_over` — carried over with pnl=0. Terminal state.
 - `conflict` — reserved for future late-attribution manual overrides.
 
-**Period lifecycle:** open → computed (engine ran) → locked (all players validated).
+**Auto-lock behavior:**
+- `computeWeek` immediately sets status='settled' + locked_at/locked_by for players with cashouts. No manual confirmation step.
+- After all player rows reach terminal state (settled/carry_over), the period auto-locks.
+- `validatePlayer` (carry_over/manual_close) also triggers `checkAndLockPeriod` — resolving the last pending player auto-locks the period.
+
+**Period lifecycle:** open → computed → locked (automatic when all rows terminal).
 
 **Lock semantics:**
 - Once locked, settlement rows are immutable. `computeWeek` will not overwrite them.

@@ -696,4 +696,14 @@ function initSchema(db: Database.Database) {
       );
     `);
   }
+
+  // Migration: auto_settled → settled (settlement auto-lock)
+  const fix = db.prepare(`INSERT OR IGNORE INTO _applied_fixes (name) VALUES (?)`).run("settlement_auto_lock_v1");
+  if (fix.changes > 0) {
+    db.exec(`
+      UPDATE weekly_settlements
+      SET status = 'settled', locked_at = COALESCE(locked_at, datetime('now')), locked_by = COALESCE(locked_by, 'auto')
+      WHERE status = 'auto_settled';
+    `);
+  }
 }
