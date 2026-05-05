@@ -153,7 +153,7 @@ export function getLast12Weeks(): WeekOption[] {
     const { start, end } = getWeekBounds(i);
     weeks.push({
       offset: i,
-      isoWeek: toISOWeek(start),
+      isoWeek: toParisDate(toUTCISO(start)),
       label: formatWeekLabel(start, end),
       start,
       end,

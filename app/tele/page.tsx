@@ -1,6 +1,6 @@
 export const dynamic = "force-dynamic";
 import { getWalletTransactions, getPlayers, getGames, getPlayerCashouts, getPlayerGameWallets, getWalletMeres, getLockAwareSummaryByPlayer, getLockAwareKPIs } from "@/lib/queries";
-import { getWeekBounds, getLast12Weeks, toUTCISO, formatRangeLabel, isoWeekToOffset } from "@/lib/date-utils";
+import { getWeekBounds, getLast12Weeks, toUTCISO, toParisDate, formatRangeLabel, isoWeekToOffset } from "@/lib/date-utils";
 import PageHeader from "@/components/PageHeader";
 import TELEClient from "./TELEClient";
 
@@ -44,6 +44,25 @@ function computeFilter(filter: string | undefined) {
         rangeLabel: formatRangeLabel(start, end),
       };
     }
+  }
+
+  // Date format: 2026-04-27 (Monday of the week)
+  if (/^\d{4}-\d{2}-\d{2}$/.test(f)) {
+    const target = new Date(f + "T00:00:00Z");
+    const { start: currentWeekStart } = getWeekBounds(0);
+    const currentMonday = new Date(toParisDate(toUTCISO(currentWeekStart)) + "T00:00:00Z");
+    let offset = Math.round((target.getTime() - currentMonday.getTime()) / (7 * 86400000));
+    let bounds = getWeekBounds(offset);
+    if (toParisDate(toUTCISO(bounds.start)) !== f) {
+      offset += toParisDate(toUTCISO(bounds.start)) < f ? 1 : -1;
+      bounds = getWeekBounds(offset);
+    }
+    return {
+      key: f,
+      startDate: toUTCISO(bounds.start),
+      endDate: toUTCISO(bounds.end),
+      rangeLabel: formatRangeLabel(bounds.start, bounds.end),
+    };
   }
 
   // Default: current week — label shows full Mon→Sun, SQL caps to now
