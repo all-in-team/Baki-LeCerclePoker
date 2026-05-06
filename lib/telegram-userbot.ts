@@ -256,10 +256,10 @@ async function createTopicsOnChannel(
 // ── createPlayerGroup ────────────────────────────────────
 
 export async function createPlayerGroup(
-  playerTgId: number,
+  _playerTgId: number,
   playerName: string,
-  botToken: string,
-  playerUsername?: string
+  _botToken?: string,
+  _playerUsername?: string
 ): Promise<GroupResult | null> {
   const client = await getClient();
   if (!client) return null;
@@ -268,34 +268,8 @@ export async function createPlayerGroup(
   const errors: string[] = [];
 
   try {
+    // Only add admins to the group — player joins via invite link
     const usersToAdd: Api.TypeInputUser[] = [];
-
-    let playerEntity: Api.TypeInputUser | null = null;
-    if (playerUsername) {
-      try {
-        playerEntity = await client.getInputEntity(playerUsername) as unknown as Api.TypeInputUser;
-        console.log(`[USERBOT] resolved player via @${playerUsername}`);
-      } catch {
-        console.warn(`[USERBOT] could not resolve @${playerUsername}, trying by ID`);
-      }
-    }
-    if (!playerEntity) {
-      try {
-        playerEntity = await client.getInputEntity(playerTgId) as unknown as Api.TypeInputUser;
-        console.log(`[USERBOT] resolved player via numeric ID ${playerTgId}`);
-      } catch {
-        console.warn(`[USERBOT] could not resolve numeric ID ${playerTgId}, using raw InputPeerUser`);
-      }
-    }
-    if (!playerEntity) {
-      playerEntity = new Api.InputPeerUser({
-        userId: BigInt(playerTgId) as any,
-        accessHash: BigInt(0) as any,
-      }) as unknown as Api.TypeInputUser;
-      console.log(`[USERBOT] using raw InputPeerUser for ${playerTgId} (accessHash=0)`);
-    }
-    usersToAdd.push(playerEntity);
-
     for (const handle of ["baki77777", "hugoroine"]) {
       try {
         const entity = await client.getInputEntity(handle);
@@ -571,5 +545,31 @@ export async function listGroups(): Promise<{
     return { ok: true, groups, error: null };
   } catch (e: any) {
     return { ok: false, groups: [], error: errMsg(e) };
+  }
+}
+
+// ── getInviteLink (admin utility) ────────────────────────
+
+export async function getInviteLink(chatId: number): Promise<{ ok: boolean; link: string; error: string | null }> {
+  const client = await getClient();
+  if (!client) return { ok: false, link: "", error: "Userbot not connected" };
+
+  try {
+    const channelId = -(chatId + 1000000000000);
+    const channelPeer = await client.getInputEntity(
+      new Api.PeerChannel({ channelId: BigInt(channelId) as any })
+    ) as unknown as Api.InputChannel;
+
+    const peerChannel = new Api.InputPeerChannel({
+      channelId: channelPeer.channelId,
+      accessHash: channelPeer.accessHash,
+    });
+    const exported = await client.invoke(
+      new Api.messages.ExportChatInvite({ peer: peerChannel })
+    );
+    const link = (exported as any).link ?? "";
+    return { ok: !!link, link, error: link ? null : "Empty link returned" };
+  } catch (e: any) {
+    return { ok: false, link: "", error: errMsg(e) };
   }
 }

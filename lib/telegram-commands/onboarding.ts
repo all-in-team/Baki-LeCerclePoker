@@ -117,14 +117,7 @@ export async function handleOnboardingDirect(
       if (result) {
         groupCreated = true;
 
-        const mention = `<a href="tg://user?id=${from.id}">${firstName}</a>`;
-        await sendMsg(result.chatId,
-          `🃏 Bienvenue ${mention} !\n\n` +
-          `C'est ici que tu peux discuter avec ton support dédié.\n` +
-          `Toutes les infos importantes sont dans les topics ci-dessous.\n\n` +
-          `👉 Questions ? → envoie un message ici.`
-        );
-
+        // Send topic welcome messages into the group (bot is already in it)
         for (const [key, msg] of Object.entries(TOPIC_MESSAGES)) {
           const topicId = result.topicIds[key];
           if (topicId) {
@@ -132,11 +125,21 @@ export async function handleOnboardingDirect(
           }
         }
 
-        await sendMsg(chatId,
-          `🎉 <b>C'est parti !</b>\n\n` +
-          `Ton groupe privé a été créé. Retrouve-le dans tes conversations !\n\n` +
-          `Bienvenue dans Le Cercle 🃏`
-        );
+        // Send invite link to the player's private DM
+        if (result.inviteLink) {
+          await sendMsg(chatId,
+            `🎉 <b>C'est parti !</b>\n\n` +
+            `Ton groupe privé est prêt.\n` +
+            `👉 <b>Clique ici pour le rejoindre :</b>\n${result.inviteLink}\n\n` +
+            `Bienvenue dans Le Cercle 🃏`
+          );
+        } else {
+          await sendMsg(chatId,
+            `🎉 <b>C'est parti !</b>\n\n` +
+            `Ton groupe privé a été créé. Tu recevras une invitation très bientôt.\n\n` +
+            `En attendant → @baki77777`
+          );
+        }
 
         if (result.status === "full_success") {
           await sendMsg(AGENT_CHAT_ID,
