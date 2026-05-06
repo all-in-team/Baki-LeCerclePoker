@@ -159,6 +159,67 @@ function findIcon(iconMap: Map<string, bigint>, ...emojis: string[]): bigint | u
   return undefined;
 }
 
+// ── Single topic creation with DOCUMENT_INVALID fallback ─
+
+function extractTopicId(result: any): number {
+  const updates = result.updates ?? [];
+  for (const u of updates) {
+    if (u.message?.action?.className === "MessageActionTopicCreate") {
+      return typeof u.message.id === "bigint" ? Number(u.message.id) : u.message.id;
+    }
+  }
+  throw new Error("no TopicCreate in response");
+}
+
+async function createSingleTopic(
+  client: TelegramClient,
+  channelPeer: Api.InputChannel,
+  def: typeof TOPIC_DEFS[number],
+  iconMap: Map<string, bigint>,
+): Promise<{ topicId: number; usedFallback: boolean }> {
+  const iconEmojiId = findIcon(iconMap, ...def.emojis);
+
+  // Attempt with icon
+  if (iconEmojiId) {
+    try {
+      const result = await retry(async () => {
+        const raw = await client.invoke(
+          new Api.channels.CreateForumTopic({
+            channel: channelPeer,
+            title: def.title,
+            iconColor: def.iconColor,
+            iconEmojiId,
+            randomId: BigInt(Math.floor(Math.random() * Number.MAX_SAFE_INTEGER)) as any,
+          } as any)
+        );
+        return extractTopicId(raw);
+      }, `topic:${def.title}`, 2, [1000, 2000]);
+      return { topicId: result, usedFallback: false };
+    } catch (e: any) {
+      const msg = errMsg(e);
+      if (msg.includes("DOCUMENT_INVALID")) {
+        console.warn(`[USERBOT] topic "${def.title}": icon ${iconEmojiId} rejected (DOCUMENT_INVALID), retrying without icon`);
+      } else {
+        throw e;
+      }
+    }
+  }
+
+  // Fallback: no icon (colored circle from iconColor)
+  const result = await retry(async () => {
+    const raw = await client.invoke(
+      new Api.channels.CreateForumTopic({
+        channel: channelPeer,
+        title: def.title,
+        iconColor: def.iconColor,
+        randomId: BigInt(Math.floor(Math.random() * Number.MAX_SAFE_INTEGER)) as any,
+      } as any)
+    );
+    return extractTopicId(raw);
+  }, `topic:${def.title}:no-icon`, 2, [1000, 2000]);
+  return { topicId: result, usedFallback: true };
+}
+
 // ── Create topics on an existing supergroup ──────────────
 
 async function createTopicsOnChannel(
@@ -172,28 +233,9 @@ async function createTopicsOnChannel(
 
   for (const def of TOPIC_DEFS) {
     try {
-      const topicId = await retry(async () => {
-        const iconEmojiId = findIcon(iconMap, ...def.emojis);
-        const topicResult = await client.invoke(
-          new Api.channels.CreateForumTopic({
-            channel: channelPeer,
-            title: def.title,
-            iconColor: def.iconColor,
-            ...(iconEmojiId ? { iconEmojiId } : {}),
-            randomId: BigInt(Math.floor(Math.random() * Number.MAX_SAFE_INTEGER)) as any,
-          } as any)
-        );
-        const topicRaw = topicResult as any;
-        const updates = topicRaw.updates ?? [];
-        for (const u of updates) {
-          if (u.message?.action?.className === "MessageActionTopicCreate") {
-            return typeof u.message.id === "bigint" ? Number(u.message.id) : u.message.id;
-          }
-        }
-        throw new Error("no TopicCreate in response");
-      }, `topic:${def.title}`, 2, [1000, 2000]);
-
+      const { topicId, usedFallback } = await createSingleTopic(client, channelPeer, def, iconMap);
       topicIds[def.key] = topicId;
+      if (usedFallback) console.log(`[USERBOT] topic "${def.title}" created with fallback icon`);
     } catch (e: any) {
       const msg = errMsg(e);
       console.error(`[USERBOT] topic "${def.title}" failed after retries: ${msg}`);
@@ -467,7 +509,6 @@ export async function recreateTopics(chatId: number): Promise<{
     const created: string[] = [];
     const skipped: string[] = [];
     const errors: string[] = [];
-    const failedSteps: string[] = [];
 
     const iconMap = await fetchTopicIcons(client);
 
@@ -478,19 +519,8 @@ export async function recreateTopics(chatId: number): Promise<{
       }
 
       try {
-        await retry(async () => {
-          const iconEmojiId = findIcon(iconMap, ...def.emojis);
-          await client.invoke(
-            new Api.channels.CreateForumTopic({
-              channel: channelPeer,
-              title: def.title,
-              iconColor: def.iconColor,
-              ...(iconEmojiId ? { iconEmojiId } : {}),
-              randomId: BigInt(Math.floor(Math.random() * Number.MAX_SAFE_INTEGER)) as any,
-            } as any)
-          );
-        }, `topic:${def.title}`, 2, [1000, 2000]);
-        created.push(def.title);
+        const { usedFallback } = await createSingleTopic(client, channelPeer, def, iconMap);
+        created.push(usedFallback ? `${def.title} (fallback icon)` : def.title);
       } catch (e: any) {
         errors.push(`${def.title}: ${errMsg(e)}`);
       }
