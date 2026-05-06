@@ -95,7 +95,10 @@ const TOPIC_DEFS = [
 // ── Retry helper ─────────────────────────────────────────
 
 function errMsg(e: any): string {
-  return e?.message ?? e?.errorMessage ?? String(e);
+  if (e?.message) return String(e.message);
+  if (e?.errorMessage) return String(e.errorMessage);
+  try { return JSON.stringify(e, (_, v) => typeof v === "bigint" ? v.toString() : v); }
+  catch { return "[unserializable error]"; }
 }
 
 function parseFloodWait(e: any): number | null {
@@ -497,5 +500,42 @@ export async function recreateTopics(chatId: number): Promise<{
     return { ok: errors.length === 0, created, skipped, errors };
   } catch (e: any) {
     return { ok: false, created: [], skipped: [], errors: [errMsg(e)] };
+  }
+}
+
+// ── listGroups (admin utility) ───────────────────────────
+
+export async function listGroups(): Promise<{
+  ok: boolean;
+  groups: { chat_id: string; title: string; member_count: number }[];
+  error: string | null;
+}> {
+  const client = await getClient();
+  if (!client) return { ok: false, groups: [], error: "Userbot not connected" };
+
+  try {
+    const dialogs = await client.getDialogs({ limit: 200 });
+    const groups: { chat_id: string; title: string; member_count: number }[] = [];
+
+    for (const d of dialogs) {
+      const entity = d.entity as any;
+      if (!entity) continue;
+      const isChannel = entity.className === "Channel";
+      const isMegagroup = isChannel && (entity.megagroup || entity.gigagroup);
+      if (!isChannel && !isMegagroup) continue;
+
+      const channelId = typeof entity.id === "bigint" ? Number(entity.id) : entity.id;
+      const chatId = `-100${channelId}`;
+      groups.push({
+        chat_id: chatId,
+        title: entity.title ?? "(untitled)",
+        member_count: entity.participantsCount ?? 0,
+      });
+    }
+
+    groups.sort((a, b) => a.title.localeCompare(b.title));
+    return { ok: true, groups, error: null };
+  } catch (e: any) {
+    return { ok: false, groups: [], error: errMsg(e) };
   }
 }

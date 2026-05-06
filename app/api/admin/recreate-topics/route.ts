@@ -12,6 +12,9 @@ export async function POST(req: NextRequest) {
   if (!chatId || typeof chatId !== "number") {
     return NextResponse.json({ error: "Missing or invalid chat_id (number)" }, { status: 400 });
   }
+  if (!/^-100\d{7,14}$/.test(String(chatId))) {
+    return NextResponse.json({ error: "Invalid supergroup chat_id format. Expected -100xxxxxxxxxx (e.g. -1001234567890)" }, { status: 400 });
+  }
 
   const result = await recreateTopics(chatId);
   return NextResponse.json(result, { status: result.ok ? 200 : 500 });
