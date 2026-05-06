@@ -7,6 +7,10 @@ let _client: TelegramClient | null = null;
 
 const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
 
+// GramJS returns BigInt wrapper objects ({ value: bigint }), not native bigint.
+// typeof returns "object", not "bigint", so naive checks fail silently.
+const toNum = (v: any): number => Number(BigInt(v));
+
 function getApiCredentials() {
   const apiId = parseInt(process.env.TELEGRAM_API_ID ?? "0");
   const apiHash = process.env.TELEGRAM_API_HASH ?? "";
@@ -63,7 +67,7 @@ export async function checkUserbotHealth(): Promise<{
       configured: true,
       connected: true,
       session_valid: true,
-      user_id: typeof me.id === "bigint" ? Number(me.id) : me.id,
+      user_id: toNum(me.id),
       username: me.username ?? null,
       error: null,
     };
@@ -143,7 +147,7 @@ async function fetchTopicIcons(client: TelegramClient): Promise<Map<string, bigi
     for (const doc of docs) {
       for (const attr of doc.attributes ?? []) {
         if (attr.className === "DocumentAttributeCustomEmoji" && attr.alt) {
-          iconMap.set(attr.alt, typeof doc.id === "bigint" ? doc.id : BigInt(doc.id));
+          iconMap.set(attr.alt, BigInt(doc.id));
         }
       }
     }
@@ -165,7 +169,7 @@ function extractTopicId(result: any): number {
   const updates = result.updates ?? [];
   for (const u of updates) {
     if (u.message?.action?.className === "MessageActionTopicCreate") {
-      return typeof u.message.id === "bigint" ? Number(u.message.id) : u.message.id;
+      return toNum(u.message.id);
     }
   }
   throw new Error("no TopicCreate in response");
@@ -321,7 +325,7 @@ export async function createPlayerGroup(
       throw new Error("no chat in response");
     }
 
-    const rawChatId = typeof chat.id === "bigint" ? Number(chat.id) : chat.id;
+    const rawChatId = toNum(chat.id);
 
     // ── Step 2: Migrate to supergroup ──
     let channelId: number;
@@ -336,7 +340,7 @@ export async function createPlayerGroup(
       const allChats = migrateRaw.chats ?? migrateRaw.updates?.chats ?? [];
       const channel = allChats.find((c: any) => c.className === "Channel");
       if (!channel) throw new Error("no channel after migration");
-      channelId = typeof channel.id === "bigint" ? Number(channel.id) : channel.id;
+      channelId = toNum(channel.id);
 
       const resolved = await client.getInputEntity(
         new Api.PeerChannel({ channelId: BigInt(channelId) as any })
@@ -554,7 +558,7 @@ export async function listGroups(): Promise<{
       const isMegagroup = isChannel && (entity.megagroup || entity.gigagroup);
       if (!isChannel && !isMegagroup) continue;
 
-      const channelId = typeof entity.id === "bigint" ? Number(entity.id) : entity.id;
+      const channelId = toNum(entity.id);
       const chatId = `-100${channelId}`;
       groups.push({
         chat_id: chatId,
