@@ -63,6 +63,7 @@ Full glossary including currencies, exchange rates, club logic, legacy-vs-new ac
 
 ## Workflow rules
 
+- **AUTO-COMMIT RULE.** After completing any feature, fix, or meaningful change, always run `git add` + `git commit` + `git push` automatically before declaring the work done. Never leave uncommitted work waiting for user approval to commit. The user will catch problems by testing on Railway, not by reviewing local commits.
 - **Deploy without asking.** After any change that compiles, push to `main`. Commit style: `fix:` or `feat:` prefix, lowercase, single line.
 - **Verify before saying "try it."** Workflow:
   1. `git push`
