@@ -26,6 +26,10 @@ export async function POST(req: NextRequest) {
 
   const update = await req.json();
 
+  const updateType = update.callback_query ? "callback" : update.message?.new_chat_members ? "new_members" : update.message ? "message" : update.chat_member ? "chat_member" : "other";
+  console.log(`[WEBHOOK_RAW] type=${updateType} chat=${update.message?.chat?.id ?? update.chat_member?.chat?.id ?? update.callback_query?.message?.chat?.id ?? "?"} from=${update.message?.from?.id ?? update.chat_member?.from?.id ?? update.callback_query?.from?.id ?? "?"}`);
+
+
   // Handle inline keyboard button clicks
   if (update.callback_query) {
     const cb = update.callback_query;

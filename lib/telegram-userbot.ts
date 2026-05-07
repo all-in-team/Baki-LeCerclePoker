@@ -85,6 +85,7 @@ export interface GroupResult {
   status: "full_success" | "partial" | "failed";
   failedSteps: string[];
   errors: string[];
+  botPromoted: boolean;
 }
 
 const TOPIC_DEFS = [
@@ -338,7 +339,7 @@ export async function createPlayerGroup(
       } catch (e2: any) {
         console.error("[USERBOT] fallback bot-add to regular chat failed:", errMsg(e2));
       }
-      return { chatId: -rawChatId, inviteLink: "", topicIds: {}, status: "failed", failedSteps, errors };
+      return { chatId: -rawChatId, inviteLink: "", topicIds: {}, status: "failed", failedSteps, errors, botPromoted: false };
     }
 
     const supergroupChatId = -(1000000000000 + channelId);
@@ -346,7 +347,8 @@ export async function createPlayerGroup(
     // Wait for admin rights to propagate after migration
     await sleep(1500);
 
-    // ── Step 3: Add bot to supergroup ──
+    // ── Step 3: Add bot to supergroup + promote to admin ──
+    let botPromoted = false;
     try {
       const botEntity = await client.getInputEntity("LeCercle_Lebot");
       await client.invoke(
@@ -355,11 +357,38 @@ export async function createPlayerGroup(
           users: [botEntity as unknown as Api.TypeInputUser],
         })
       );
+      console.log("[USERBOT] bot invited to supergroup");
+
+      await sleep(800);
+
+      // Promote bot to admin so it receives new_chat_members events
+      await retry(async () => {
+        await client.invoke(
+          new Api.channels.EditAdmin({
+            channel: channelPeer,
+            userId: botEntity as unknown as Api.TypeInputUser,
+            adminRights: new Api.ChatAdminRights({
+              postMessages: true,
+              editMessages: true,
+              deleteMessages: true,
+              banUsers: true,
+              inviteUsers: true,
+              changeInfo: true,
+              manageTopics: true,
+            }),
+            rank: "",
+          })
+        );
+      }, "EditAdmin", 2, [1000]);
+      botPromoted = true;
+      console.log(`[USERBOT] bot promoted to admin in channel ${channelId}`);
+
+      await sleep(800);
     } catch (e: any) {
       const msg = errMsg(e);
-      console.warn("[USERBOT] could not add bot to supergroup:", msg);
-      failedSteps.push("add_bot");
-      errors.push(`InviteToChannel: ${msg}`);
+      console.error("[USERBOT] bot invite/promote failed:", msg);
+      failedSteps.push("bot_admin");
+      errors.push(`BotAdmin: ${msg}`);
     }
 
     // ── Step 4: Set group photo ──
@@ -431,7 +460,7 @@ export async function createPlayerGroup(
     }
 
     const status = failedSteps.length === 0 ? "full_success" : "partial";
-    return { chatId: supergroupChatId, inviteLink, topicIds, status, failedSteps, errors };
+    return { chatId: supergroupChatId, inviteLink, topicIds, status, failedSteps, errors, botPromoted };
   } catch (e: any) {
     console.error("[USERBOT] createPlayerGroup failed:", errMsg(e));
     return null;
@@ -571,5 +600,45 @@ export async function getInviteLink(chatId: number): Promise<{ ok: boolean; link
     return { ok: !!link, link, error: link ? null : "Empty link returned" };
   } catch (e: any) {
     return { ok: false, link: "", error: errMsg(e) };
+  }
+}
+
+// ── promoteBot (recovery) ────────────────────────────────
+
+export async function promoteBot(chatId: number): Promise<{ ok: boolean; error: string | null }> {
+  const client = await getClient();
+  if (!client) return { ok: false, error: "Userbot not connected" };
+
+  try {
+    const channelId = -(chatId + 1000000000000);
+    const channelPeer = await client.getInputEntity(
+      new Api.PeerChannel({ channelId: BigInt(channelId) as any })
+    ) as unknown as Api.InputChannel;
+
+    const botEntity = await client.getInputEntity("LeCercle_Lebot");
+
+    await retry(async () => {
+      await client.invoke(
+        new Api.channels.EditAdmin({
+          channel: channelPeer,
+          userId: botEntity as unknown as Api.TypeInputUser,
+          adminRights: new Api.ChatAdminRights({
+            postMessages: true,
+            editMessages: true,
+            deleteMessages: true,
+            banUsers: true,
+            inviteUsers: true,
+            changeInfo: true,
+            manageTopics: true,
+          }),
+          rank: "",
+        })
+      );
+    }, "EditAdmin", 2, [1000]);
+
+    console.log(`[USERBOT] bot promoted to admin in ${chatId}`);
+    return { ok: true, error: null };
+  } catch (e: any) {
+    return { ok: false, error: errMsg(e) };
   }
 }

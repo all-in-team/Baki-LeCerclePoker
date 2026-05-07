@@ -141,26 +141,28 @@ export async function handleOnboardingDirect(
           );
         }
 
+        const topicCount = Object.keys(result.topicIds).length;
+        const botStatus = result.botPromoted ? "Bot admin ✅" : "⚠️ Bot NOT admin";
         if (result.status === "full_success") {
           await sendMsg(AGENT_CHAT_ID,
             `🆕 <b>Nouveau joueur onboardé !</b>\n\n` +
             `👤 ${fullName}\n` +
             (username ? `📱 @${username}\n` : "") +
             `🆔 <code>${from.id}</code>\n` +
-            `✅ Groupe créé — ${Object.keys(result.topicIds).length} topics`
+            `📦 Chat ID: <code>${result.chatId}</code>\n` +
+            `✅ Groupe créé — ${topicCount} topics — ${botStatus}`
           );
         } else {
-          const topicCount = Object.keys(result.topicIds).length;
           await sendMsg(AGENT_CHAT_ID,
             `⚠️ <b>Onboarding partiel — ${fullName}</b>\n\n` +
             `👤 ${fullName}\n` +
             (username ? `📱 @${username}\n` : "") +
             `🆔 <code>${from.id}</code>\n` +
             `📦 Chat ID: <code>${result.chatId}</code>\n\n` +
-            `✅ Groupe créé` + (topicCount > 0 ? ` — ${topicCount}/6 topics` : ` — 0 topics`) + `\n` +
+            `✅ Groupe créé — ${topicCount}/6 topics — ${botStatus}\n` +
             `❌ ${result.failedSteps.join(", ")}\n` +
             `💬 ${result.errors.join(" | ")}\n\n` +
-            `<i>→ Répare avec POST /api/admin/recreate-topics {chat_id: ${result.chatId}}</i>`
+            `<i>→ /api/admin/promote-bot + /api/admin/recreate-topics</i>`
           );
         }
       }
