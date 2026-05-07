@@ -71,9 +71,9 @@ export const SIGNED_MSG_4 =
 
 export const HAS_WALLET_MSG_1 = `Parfait. On va récupérer tes 2 adresses.`;
 
-export const HAS_WALLET_DEPOSIT_CAPTION_1 = `📍 D'abord ton adresse de <b>DÉPÔT</b> : va dans Profile sur l'app de poker (en bas à droite)`;
+export const HAS_WALLET_DEPOSIT_CAPTION_1 = `📍 D'abord ton adresse de <b>DÉPÔT</b> : va dans Profile sur l'app de poker (en bas à droite), puis clique sur USDT.`;
 
-export const HAS_WALLET_DEPOSIT_CAPTION_2 = `Clique sur USDT puis copie l'adresse encadrée en rouge sous "Deposit Address". C'est ton adresse de DÉPÔT.`;
+export const HAS_WALLET_DEPOSIT_CAPTION_2 = `L'adresse encadrée en rouge sous "Deposit Address" c'est ton adresse de DÉPÔT. Copie-la.`;
 
 export const HAS_WALLET_ASK_DEPOSIT =
   `Envoie-moi ton <b>adresse de DÉPÔT</b> ici 👇\n` +
@@ -100,9 +100,9 @@ export const HELP_WALLET_STEP_5 = `💰 <b>Étape 5</b> — Cette adresse sera u
 export const HELP_WALLET_TRANSITION =
   `Maintenant on récupère tes 2 adresses.`;
 
-export const HELP_WALLET_DEPOSIT_CAPTION_1 = `📍 D'abord ton adresse de <b>DÉPÔT</b> sur l'app de poker : va dans Profile (en bas à droite)`;
+export const HELP_WALLET_DEPOSIT_CAPTION_1 = `📍 D'abord ton adresse de <b>DÉPÔT</b> sur l'app de poker : va dans Profile (en bas à droite), puis clique sur USDT.`;
 
-export const HELP_WALLET_DEPOSIT_CAPTION_2 = `Clique sur USDT puis copie l'adresse encadrée en rouge sous "Deposit Address".`;
+export const HELP_WALLET_DEPOSIT_CAPTION_2 = `L'adresse encadrée en rouge sous "Deposit Address" c'est ton adresse de DÉPÔT. Copie-la.`;
 
 export const HELP_WALLET_ASK_DEPOSIT =
   `Envoie-moi ton <b>adresse de DÉPÔT</b> ici 👇`;
