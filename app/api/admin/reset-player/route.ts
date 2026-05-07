@@ -32,10 +32,18 @@ export async function POST(req: NextRequest) {
   db.prepare(`DELETE FROM crm_notes WHERE player_id = ?`).run(player.id);
   db.prepare(`DELETE FROM players WHERE id = ?`).run(player.id);
 
+  // Clean onboarding_leads so /start flow runs fresh
+  let deletedLead = false;
+  if (telegram_id) {
+    const r = db.prepare(`DELETE FROM onboarding_leads WHERE telegram_id = ?`).run(telegram_id);
+    deletedLead = r.changes > 0;
+  }
+
   return NextResponse.json({
     ok: true,
     deleted_player_id: player.id,
     deleted_player_name: player.name,
     deleted_session: deletedSession,
+    deleted_lead: deletedLead,
   });
 }
