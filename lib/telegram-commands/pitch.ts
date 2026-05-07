@@ -2,7 +2,7 @@ import { getDb } from "@/lib/db";
 import { sendMsg, sendMsgKeyboard, answerCbQuery, getSession, setSession, AGENT_CHAT_ID } from "./helpers";
 import {
   SOLO_RESPONSE, CONTRACT_MSG_1, CONTRACT_MSG_2, CONTRACT_MSG_3, CONTRACT_MSG_4,
-  SIGNED_RESPONSE, QUESTIONS_RESPONSE,
+  SIGNED_MSG_1, SIGNED_MSG_2, SIGNED_MSG_3, SIGNED_MSG_4, QUESTIONS_RESPONSE,
 } from "./onboarding-script";
 
 const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
@@ -99,27 +99,32 @@ export async function handlePitchCallback(
         console.warn(`[PITCH] sign: wrong step "${session.step}", expected "contract_shown"`);
         return;
       }
-      console.log(`[PITCH] → branch: signed_active`);
-      safeSetSession(chatId, "signed_active", session.player_id, session.expected_tg_id, "signed");
+      console.log(`[PITCH] → branch: awaiting_deposit_wallet`);
 
-      // Mark player as active
       if (session.player_id) {
         try {
           db.prepare(`UPDATE players SET status = 'active' WHERE id = ?`).run(session.player_id);
-          console.log(`[PITCH] player ${session.player_id} status → active`);
         } catch (e: any) {
           console.error(`[PITCH] failed to update player status:`, e?.message ?? e);
         }
       }
 
-      await safeSend(chatId, SIGNED_RESPONSE, messageThreadId, "SIGNED_RESPONSE");
+      await safeSend(chatId, SIGNED_MSG_1, messageThreadId, "SIGNED_1");
+      await sleep(1500);
+      await safeSend(chatId, SIGNED_MSG_2, messageThreadId, "SIGNED_2");
+      await sleep(2000);
+      await safeSend(chatId, SIGNED_MSG_3, messageThreadId, "SIGNED_3");
+      await sleep(2500);
 
-      // Alert ops
+      safeSetSession(chatId, "awaiting_deposit_wallet", session.player_id, session.expected_tg_id, "deposit_wallet");
+      await safeSend(chatId, SIGNED_MSG_4, messageThreadId, "SIGNED_4");
+
       await sendMsg(AGENT_CHAT_ID,
         `🎉 <b>Nouveau joueur signé</b>\n` +
         `Nom : <b>${playerName}</b>\n` +
         `Deal : 60/20/20\n` +
-        `Groupe : <code>${chatId}</code>`
+        `Groupe : <code>${chatId}</code>\n` +
+        `<i>En attente des wallets...</i>`
       );
     }
 

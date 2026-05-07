@@ -73,7 +73,7 @@ export async function askWalletGame(chatId: number | string, mention: string, me
 }
 
 // ── Session helpers ───────────────────────────────────────
-export type Step = "pitch_sent" | "solo_declined" | "contract_shown" | "signed_active" | "contract_questions" | "waiting_action_pct" | "waiting_wallet_game" | "waiting_wallet_cashout" | "waiting_game" | "waiting_player";
+export type Step = "pitch_sent" | "solo_declined" | "contract_shown" | "signed_active" | "contract_questions" | "awaiting_deposit_wallet" | "awaiting_cashout_wallet" | "wallets_complete" | "waiting_action_pct" | "waiting_wallet_game" | "waiting_wallet_cashout" | "waiting_game" | "waiting_player";
 
 export function getSession(chatId: string | number): { step: Step; player_id: number; expected_tg_id: number | null; pending_cmd: string | null } | null {
   return getDb().prepare(
@@ -380,6 +380,56 @@ export async function handleRawMessage(text: string, chatId: number, messageThre
 
   const db = getDb();
   const teleGame = findGame("TELE");
+
+  // ── Player-facing wallet collection (from pitch flow) ──
+  if (session.step === "awaiting_deposit_wallet") {
+    if (!TRC20_RE.test(text)) {
+      await reply(`Cette adresse ne semble pas être au bon format. Une adresse TRON commence par <b>T</b> et fait 34 caractères. Réessaie.`);
+      return;
+    }
+    db.prepare(`UPDATE players SET tron_address = ? WHERE id = ?`).run(text, player.id);
+    setSession(chatId, "awaiting_cashout_wallet", player.id, session.expected_tg_id);
+    await reply(
+      `✅ Adresse de dépôt enregistrée.\n\n` +
+      `Maintenant ton <b>adresse TRON USDT de CASHOUT</b> (celle que tu utilises pour retirer de la game).\n` +
+      `Si c'est la même que celle de dépôt, écris juste "<b>même</b>".`
+    );
+    return;
+  }
+
+  if (session.step === "awaiting_cashout_wallet") {
+    const sameAliases = ["même", "meme", "same", "pareil", "idem"];
+    let cashoutAddress: string;
+    if (sameAliases.includes(text.toLowerCase())) {
+      cashoutAddress = player.tron_address ?? "";
+      if (!cashoutAddress) {
+        await reply(`❌ Pas d'adresse de dépôt enregistrée. Envoie ton adresse TRON de cashout.`);
+        return;
+      }
+    } else {
+      if (!TRC20_RE.test(text)) {
+        await reply(`Cette adresse ne semble pas être au bon format. Une adresse TRON commence par <b>T</b> et fait 34 caractères. Réessaie.\n\nOu écris "<b>même</b>" si c'est la même que ton adresse de dépôt.`);
+        return;
+      }
+      cashoutAddress = text;
+    }
+    db.prepare(`UPDATE players SET tele_wallet_cashout = ? WHERE id = ?`).run(cashoutAddress, player.id);
+    setSession(chatId, "wallets_complete", player.id, session.expected_tg_id);
+    await reply(
+      `✅ Adresse de cashout enregistrée.\n\n` +
+      `Tu es prêt. Tu peux commencer à jouer 🎰\n` +
+      `Ton support reste disponible ici 24/7 pour toute question.`
+    );
+    const depositAddr = player.tron_address ?? "(non définie)";
+    await sendMsg(AGENT_CHAT_ID,
+      `🎉 <b>Onboarding complet — ${player.name}</b>\n` +
+      `Deal : 60/20/20\n` +
+      `Wallet dépôt : <code>${depositAddr}</code>\n` +
+      `Wallet cashout : <code>${cashoutAddress}</code>\n` +
+      `Groupe : <code>${chatId}</code>`
+    );
+    return;
+  }
 
   if (session.step === "waiting_action_pct") {
     // Accept "40", "40%", "40% action", "40 rb 5", etc.

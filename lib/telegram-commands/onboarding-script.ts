@@ -1,7 +1,8 @@
 // All player-facing French text for the onboarding pitch flow.
 // Edit wording here without touching logic in pitch.ts / new-members.ts.
 
-export const GAME_LINK = "https://t.me/lecercle_poker_PLACEHOLDER";
+export const GAME_LINK = "https://t.me/+SNiV3Ina_jJiOWJl";
+export const VIDEO_LINK = "https://taap.it/CNg3mhC";
 
 export const PITCH_MSG_1 = (name: string) =>
   `🃏 Bienvenue <b>${name}</b> !\n\n` +
@@ -44,14 +45,38 @@ export const CONTRACT_MSG_3 =
 
 export const CONTRACT_MSG_4 = `Tu valides ?`;
 
-export const SIGNED_RESPONSE =
-  `✅ <b>Deal accepté !</b>\n\n` +
-  `Tu peux rejoindre la game ici :\n` +
+export const SIGNED_MSG_1 = `✅ <b>Deal accepté !</b>`;
+
+export const SIGNED_MSG_2 =
+  `Voici le lien pour rejoindre la game :\n` +
   `👉 ${GAME_LINK}`;
 
-export const STEP_1_ACTION_PCT =
-  `📋 <b>Étape 1/3</b> — Quel est ton <b>% action sur TELE</b> ?\n` +
-  `<i>(envoie juste le chiffre, ex : <b>40</b> — ou <b>40 5</b> pour 40% action + 5% RB)</i>`;
+export const SIGNED_MSG_3 =
+  `🎥 Regarde cette vidéo avant de te lancer sur l'app, ça t'aidera :\n` +
+  `👉 ${VIDEO_LINK}`;
+
+export const SIGNED_MSG_4 =
+  `Dernière étape : on a besoin de tes wallets crypto pour te brancher à notre dashboard.\n\n` +
+  `Envoie-moi d'abord ton <b>adresse TRON USDT de DÉPÔT</b> (celle que tu utilises pour déposer sur la game).\n\n` +
+  `Format attendu : commence par T, 34 caractères.`;
+
+export const WALLET_INVALID =
+  `Cette adresse ne semble pas être au bon format. Une adresse TRON commence par <b>T</b> et fait 34 caractères. Réessaie.`;
+
+export const DEPOSIT_SAVED =
+  `✅ Adresse de dépôt enregistrée.\n\n` +
+  `Maintenant ton <b>adresse TRON USDT de CASHOUT</b> (celle que tu utilises pour retirer de la game).\n` +
+  `Si c'est la même que celle de dépôt, écris juste "<b>même</b>".`;
+
+export const CASHOUT_SAVED =
+  `✅ Adresse de cashout enregistrée.\n\n` +
+  `Tu es prêt. Tu peux commencer à jouer 🎰\n` +
+  `Ton support reste disponible ici 24/7 pour toute question.`;
 
 export const QUESTIONS_RESPONSE =
   `Pas de souci, on te répond rapidement ici. À très vite.`;
+
+// Legacy — kept for the admin /onboard flow
+export const STEP_1_ACTION_PCT =
+  `📋 <b>Étape 1/3</b> — Quel est ton <b>% action sur TELE</b> ?\n` +
+  `<i>(envoie juste le chiffre, ex : <b>40</b> — ou <b>40 5</b> pour 40% action + 5% RB)</i>`;
