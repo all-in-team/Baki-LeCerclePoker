@@ -399,29 +399,7 @@ export async function handleRawMessage(text: string, chatId: number, messageThre
   const db = getDb();
   const teleGame = findGame("TELE");
 
-  // ── Unified wallet collection (new onboarding — single address) ──
-  if (session.step === "awaiting_wallet_address") {
-    if (!TRC20_RE.test(text)) {
-      await reply(`Cette adresse ne semble pas être au bon format. Une adresse TRON commence par <b>T</b> et fait 34 caractères. Réessaie.`);
-      return;
-    }
-    db.prepare(`UPDATE players SET tron_address = ?, tele_wallet_cashout = ? WHERE id = ?`).run(text, text, player.id);
-    setSession(chatId, "onboarding_complete", player.id, session.expected_tg_id);
-    await reply(
-      `✅ Adresse enregistrée.\n\n` +
-      `Tu es prêt à jouer 🎰\n` +
-      `Ton support reste disponible ici 24/7 pour toute question.`
-    );
-    await sendMsg(AGENT_CHAT_ID,
-      `🎉 <b>Onboarding complet — ${player.name}</b>\n` +
-      `Deal : 60/20/20\n` +
-      `Wallet : <code>${text}</code>\n` +
-      `Groupe : <code>${chatId}</code>`
-    );
-    return;
-  }
-
-  // ── Legacy: two-step wallet collection (from old pitch flow) ──
+  // ── Deposit wallet collection (pitch flow — step 1 of 2) ──
   if (session.step === "awaiting_deposit_wallet") {
     if (!TRC20_RE.test(text)) {
       await reply(`Cette adresse ne semble pas être au bon format. Une adresse TRON commence par <b>T</b> et fait 34 caractères. Réessaie.`);
@@ -429,19 +407,24 @@ export async function handleRawMessage(text: string, chatId: number, messageThre
     }
     db.prepare(`UPDATE players SET tron_address = ? WHERE id = ?`).run(text, player.id);
     setSession(chatId, "awaiting_cashout_wallet", player.id, session.expected_tg_id);
+    await reply(`✅ Adresse de dépôt enregistrée.`);
+    await new Promise(r => setTimeout(r, 1500));
     await reply(
-      `✅ Adresse de dépôt enregistrée.\n\n` +
-      `Maintenant ton <b>adresse TRON USDT de CASHOUT</b> (celle que tu utilises pour retirer de la game).\n` +
-      `Si c'est la même que celle de dépôt, écris juste "<b>même</b>".`
+      `Maintenant ton adresse de <b>CASHOUT</b> — c'est ta wallet perso (TronLink ou autre) où tu recevras tes gains.\n\n` +
+      `Envoie-moi ton <b>adresse de CASHOUT</b> ici 👇\n` +
+      `(format : commence par T, 34 caractères)\n\n` +
+      `Si c'est la même adresse que ta wallet de dépôt, écris "<b>même</b>".`
     );
     return;
   }
 
+  // ── Cashout wallet collection (pitch flow — step 2 of 2) ──
   if (session.step === "awaiting_cashout_wallet") {
     const sameAliases = ["même", "meme", "same", "pareil", "idem"];
     let cashoutAddress: string;
     if (sameAliases.includes(text.toLowerCase())) {
-      cashoutAddress = player.tron_address ?? "";
+      const freshPlayer = getPlayerFull(player.id);
+      cashoutAddress = freshPlayer?.tron_address ?? "";
       if (!cashoutAddress) {
         await reply(`❌ Pas d'adresse de dépôt enregistrée. Envoie ton adresse TRON de cashout.`);
         return;
@@ -454,13 +437,14 @@ export async function handleRawMessage(text: string, chatId: number, messageThre
       cashoutAddress = text;
     }
     db.prepare(`UPDATE players SET tele_wallet_cashout = ? WHERE id = ?`).run(cashoutAddress, player.id);
-    setSession(chatId, "wallets_complete", player.id, session.expected_tg_id);
+    setSession(chatId, "onboarding_complete", player.id, session.expected_tg_id);
     await reply(
-      `✅ Adresse de cashout enregistrée.\n\n` +
-      `Tu es prêt. Tu peux commencer à jouer 🎰\n` +
+      `✅ Tes 2 adresses sont enregistrées.\n\n` +
+      `Tu es prêt à jouer 🎰\n` +
       `Ton support reste disponible ici 24/7 pour toute question.`
     );
-    const depositAddr = player.tron_address ?? "(non définie)";
+    const freshPlayer = getPlayerFull(player.id);
+    const depositAddr = freshPlayer?.tron_address ?? "(non définie)";
     await sendMsg(AGENT_CHAT_ID,
       `🎉 <b>Onboarding complet — ${player.name}</b>\n` +
       `Deal : 60/20/20\n` +

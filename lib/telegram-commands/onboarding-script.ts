@@ -62,45 +62,71 @@ export const SIGNED_MSG_3 =
   `👉 ${VIDEO_LINK}`;
 
 export const SIGNED_MSG_4 =
-  `Dernière étape : on a besoin de ton adresse de dépôt USDT (TRON) pour te brancher à notre dashboard et tracker tes mouvements automatiquement.\n\n` +
-  `Tu as déjà une wallet crypto ?`;
+  `Dernière étape : on a besoin de <b>2 adresses TRON</b> pour te brancher à notre dashboard :\n` +
+  `- Ton adresse de <b>dépôt</b> (sur l'app de poker)\n` +
+  `- Ton adresse de <b>cashout</b> (ta wallet perso pour recevoir tes gains)\n\n` +
+  `Tu as déjà une wallet crypto perso ?`;
 
 // ── Branch A: Already has wallet ─────────────────────────
 
-export const HAS_WALLET_MSG_1 = `Parfait, c'est rapide. Suis ces 2 étapes :`;
+export const HAS_WALLET_MSG_1 = `Parfait. On va récupérer tes 2 adresses.`;
 
-export const HAS_WALLET_MSG_2 = `📍 <b>Étape 1</b> — Va dans Profile sur l'app de poker (en bas à droite)`;
+export const HAS_WALLET_DEPOSIT_CAPTION_1 = `📍 D'abord ton adresse de <b>DÉPÔT</b> : va dans Profile sur l'app de poker (en bas à droite)`;
 
-export const HAS_WALLET_MSG_3 = `📍 <b>Étape 2</b> — Clique sur USDT puis copie l'adresse encadrée en rouge sous "Deposit Address"`;
+export const HAS_WALLET_DEPOSIT_CAPTION_2 = `Clique sur USDT puis copie l'adresse encadrée en rouge sous "Deposit Address". C'est ton adresse de DÉPÔT.`;
 
-export const HAS_WALLET_MSG_4 = `Envoie-moi ton adresse TRON ici 👇\n(format : commence par T, 34 caractères)`;
+export const HAS_WALLET_ASK_DEPOSIT =
+  `Envoie-moi ton <b>adresse de DÉPÔT</b> ici 👇\n` +
+  `(format : commence par T, 34 caractères)`;
 
 // ── Branch B: Needs wallet setup ─────────────────────────
 
 export const HELP_WALLET_MSG_1 = `Pas de souci, on va te setup ça en 5 minutes.`;
 
-export const HELP_WALLET_MSG_2 = `📱 <b>Étape 1</b> — Télécharge l'app <b>TronLink</b> depuis l'App Store ou Google Play`;
+export const HELP_WALLET_STEP_1_CAPTION = `📱 <b>Étape 1</b> — Télécharge l'app <b>TronLink</b> depuis l'App Store ou Google Play`;
 
-export const HELP_WALLET_MSG_3 =
+export const HELP_WALLET_STEP_2 =
   `🔐 <b>Étape 2</b> — Ouvre TronLink et créer une nouvelle wallet\n` +
   `⚠️ Note ta phrase de récupération sur papier et garde-la safe — sans elle tu perds tout.`;
 
-export const HELP_WALLET_MSG_4 =
+export const HELP_WALLET_STEP_3_CAPTION =
   `⚡ <b>Étape 3</b> — Active <b>GasFree</b> dans l'app\n` +
   `Ça réduit les frais de transfer de 5-10$ à 1$, donc fais-le maintenant.`;
 
-export const HELP_WALLET_MSG_5 = `📋 <b>Étape 4</b> — Une fois ta wallet créée, récupère ton adresse TRON (encadrée en rouge sur le screenshot)`;
+export const HELP_WALLET_STEP_4_CAPTION = `📋 <b>Étape 4</b> — Une fois ta wallet créée, récupère ton adresse TRON (encadrée en rouge sur le screenshot)`;
 
-export const HELP_WALLET_MSG_6 = `💰 <b>Étape 5</b> — Cette adresse sera utilisée à la fois pour tes dépôts ET tes cashouts. Tous tes retraits arriveront ici.`;
+export const HELP_WALLET_STEP_5 = `💰 <b>Étape 5</b> — Cette adresse sera utilisée pour recevoir tes cashouts. Garde-la précieusement.`;
 
-export const HELP_WALLET_MSG_7 = `Envoie-moi ton adresse TRON ici 👇\n(format : commence par T, 34 caractères)`;
+export const HELP_WALLET_TRANSITION =
+  `Maintenant on récupère tes 2 adresses.`;
 
-// ── Wallet validation ────────────────────────────────────
+export const HELP_WALLET_DEPOSIT_CAPTION_1 = `📍 D'abord ton adresse de <b>DÉPÔT</b> sur l'app de poker : va dans Profile (en bas à droite)`;
+
+export const HELP_WALLET_DEPOSIT_CAPTION_2 = `Clique sur USDT puis copie l'adresse encadrée en rouge sous "Deposit Address".`;
+
+export const HELP_WALLET_ASK_DEPOSIT =
+  `Envoie-moi ton <b>adresse de DÉPÔT</b> ici 👇`;
+
+// ── After deposit saved (shared by both branches) ────────
+
+export const DEPOSIT_SAVED = `✅ Adresse de dépôt enregistrée.`;
+
+export const ASK_CASHOUT_A =
+  `Maintenant ton adresse de <b>CASHOUT</b> — c'est ta wallet perso (TronLink ou autre) où tu recevras tes gains.\n\n` +
+  `Envoie-moi ton <b>adresse de CASHOUT</b> ici 👇\n` +
+  `(format : commence par T, 34 caractères)\n\n` +
+  `Si c'est la même adresse que ta wallet de dépôt, écris "<b>même</b>".`;
+
+export const ASK_CASHOUT_B =
+  `Maintenant ton adresse de <b>CASHOUT</b> — c'est ta nouvelle wallet TronLink que tu viens de créer.\n\n` +
+  `Envoie-moi ton <b>adresse de CASHOUT</b> ici 👇`;
+
+// ── Completion ───────────────────────────────────────────
 
 export const WALLET_INVALID = `Cette adresse ne semble pas être au bon format. Une adresse TRON commence par <b>T</b> et fait 34 caractères. Réessaie.`;
 
-export const WALLET_SAVED =
-  `✅ Adresse enregistrée.\n\n` +
+export const ONBOARDING_COMPLETE =
+  `✅ Tes 2 adresses sont enregistrées.\n\n` +
   `Tu es prêt à jouer 🎰\n` +
   `Ton support reste disponible ici 24/7 pour toute question.`;
 
