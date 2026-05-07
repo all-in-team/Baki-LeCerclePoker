@@ -1,8 +1,11 @@
 import { getDb } from "@/lib/db";
-import { sendMsg, sendMsgKeyboard, answerCbQuery, getSession, setSession, AGENT_CHAT_ID } from "./helpers";
+import { sendMsg, sendMsgKeyboard, sendPhoto, answerCbQuery, getSession, setSession, AGENT_CHAT_ID } from "./helpers";
 import {
   SOLO_RESPONSE, CONTRACT_MSG_1, CONTRACT_MSG_2, CONTRACT_MSG_3, CONTRACT_MSG_4,
   SIGNED_MSG_1, SIGNED_MSG_2, SIGNED_MSG_3, SIGNED_MSG_4, QUESTIONS_RESPONSE,
+  HAS_WALLET_MSG_1, HAS_WALLET_MSG_2, HAS_WALLET_MSG_3, HAS_WALLET_MSG_4,
+  HELP_WALLET_MSG_1, HELP_WALLET_MSG_2, HELP_WALLET_MSG_3, HELP_WALLET_MSG_4,
+  HELP_WALLET_MSG_5, HELP_WALLET_MSG_6, HELP_WALLET_MSG_7,
 } from "./onboarding-script";
 
 const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
@@ -99,7 +102,7 @@ export async function handlePitchCallback(
         console.warn(`[PITCH] sign: wrong step "${session.step}", expected "contract_shown"`);
         return;
       }
-      console.log(`[PITCH] → branch: awaiting_deposit_wallet`);
+      console.log(`[PITCH] → branch: signed → wallet choice`);
 
       if (session.player_id) {
         try {
@@ -109,23 +112,70 @@ export async function handlePitchCallback(
         }
       }
 
+      safeSetSession(chatId, "signed_active", session.player_id, session.expected_tg_id, "signed");
+
       await safeSend(chatId, SIGNED_MSG_1, messageThreadId, "SIGNED_1");
       await sleep(1500);
       await safeSend(chatId, SIGNED_MSG_2, messageThreadId, "SIGNED_2");
       await sleep(2000);
       await safeSend(chatId, SIGNED_MSG_3, messageThreadId, "SIGNED_3");
       await sleep(2500);
-
-      safeSetSession(chatId, "awaiting_deposit_wallet", session.player_id, session.expected_tg_id, "deposit_wallet");
-      await safeSend(chatId, SIGNED_MSG_4, messageThreadId, "SIGNED_4");
+      try {
+        await sendMsgKeyboard(chatId, SIGNED_MSG_4, [
+          [{ text: "💼 Oui, j'en ai déjà une", callback_data: "onboard_wallet_has" }],
+          [{ text: "🆕 Non, j'aimerais savoir comment faire", callback_data: "onboard_wallet_help" }],
+        ], messageThreadId);
+      } catch (e: any) {
+        console.error(`[PITCH] sendMsgKeyboard failed (wallet choice):`, e?.message ?? e);
+      }
 
       await sendMsg(AGENT_CHAT_ID,
         `🎉 <b>Nouveau joueur signé</b>\n` +
         `Nom : <b>${playerName}</b>\n` +
         `Deal : 60/20/20\n` +
         `Groupe : <code>${chatId}</code>\n` +
-        `<i>En attente des wallets...</i>`
+        `<i>En attente du wallet...</i>`
       );
+    }
+
+    // ── Already has wallet ──
+    else if (data === "onboard_wallet_has") {
+      if (session.step !== "signed_active") {
+        console.warn(`[PITCH] wallet_has: wrong step "${session.step}", expected "signed_active"`);
+        return;
+      }
+      console.log(`[PITCH] → branch: has wallet`);
+      await safeSend(chatId, HAS_WALLET_MSG_1, messageThreadId, "HAS_1");
+      await sleep(2000);
+      await sendPhoto(chatId, "case1_profile.png", HAS_WALLET_MSG_2, messageThreadId);
+      await sleep(2000);
+      await sendPhoto(chatId, "case1_deposit.png", HAS_WALLET_MSG_3, messageThreadId);
+      await sleep(2000);
+      safeSetSession(chatId, "awaiting_wallet_address", session.player_id, session.expected_tg_id, "wallet_has");
+      await safeSend(chatId, HAS_WALLET_MSG_4, messageThreadId, "HAS_4");
+    }
+
+    // ── Needs wallet help ──
+    else if (data === "onboard_wallet_help") {
+      if (session.step !== "signed_active") {
+        console.warn(`[PITCH] wallet_help: wrong step "${session.step}", expected "signed_active"`);
+        return;
+      }
+      console.log(`[PITCH] → branch: needs wallet help`);
+      await safeSend(chatId, HELP_WALLET_MSG_1, messageThreadId, "HELP_1");
+      await sleep(2000);
+      await sendPhoto(chatId, "case2_step1_download.png", HELP_WALLET_MSG_2, messageThreadId);
+      await sleep(2500);
+      await safeSend(chatId, HELP_WALLET_MSG_3, messageThreadId, "HELP_3");
+      await sleep(2500);
+      await sendPhoto(chatId, "case2_step3_gasfree.png", HELP_WALLET_MSG_4, messageThreadId);
+      await sleep(2500);
+      await sendPhoto(chatId, "case2_step5_wallet.png", HELP_WALLET_MSG_5, messageThreadId);
+      await sleep(2000);
+      await safeSend(chatId, HELP_WALLET_MSG_6, messageThreadId, "HELP_6");
+      await sleep(2500);
+      safeSetSession(chatId, "awaiting_wallet_address", session.player_id, session.expected_tg_id, "wallet_help");
+      await safeSend(chatId, HELP_WALLET_MSG_7, messageThreadId, "HELP_7");
     }
 
     // ── J'ai des questions ──

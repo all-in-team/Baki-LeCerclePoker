@@ -9,6 +9,7 @@ export const GAME_NAMES = ["tele", "wepoker", "xpoker", "clubgg"];
 export const TRC20_RE = /^T[a-zA-Z0-9]{33}$/;
 export const AGENT_CHAT_ID = process.env.AGENT_TELEGRAM_CHAT_ID ?? "-4846690641";
 export const WALLET_GAME_PHOTO_URL = "https://lecerclepoker-production.up.railway.app/tele-wallet-guide.jpg";
+const BASE_URL = "https://lecerclepoker-production.up.railway.app";
 
 // ── Telegram API ──────────────────────────────────────────
 export async function sendMsg(chatId: number | string, text: string, messageThreadId?: number) {
@@ -38,6 +39,23 @@ export async function sendMsgKeyboard(chatId: number | string, text: string, key
     body: JSON.stringify(body),
   });
   if (!res.ok) console.error("[TG sendMsgKeyboard]", chatId, res.status, await res.text());
+}
+
+export async function sendPhoto(chatId: number | string, photoPath: string, caption: string, messageThreadId?: number) {
+  const token = process.env.TELEGRAM_BOT_TOKEN;
+  if (!token) return;
+  const photoUrl = `${BASE_URL}/onboarding/${photoPath}`;
+  const body: Record<string, any> = { chat_id: chatId, photo: photoUrl, caption, parse_mode: "HTML" };
+  if (messageThreadId) body.message_thread_id = messageThreadId;
+  const res = await fetch(`https://api.telegram.org/bot${token}/sendPhoto`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    console.error("[TG sendPhoto]", chatId, res.status, await res.text());
+    await sendMsg(chatId, caption, messageThreadId);
+  }
 }
 
 export async function answerCbQuery(id: string, text?: string) {
@@ -73,7 +91,7 @@ export async function askWalletGame(chatId: number | string, mention: string, me
 }
 
 // ── Session helpers ───────────────────────────────────────
-export type Step = "pitch_sent" | "solo_declined" | "contract_shown" | "signed_active" | "contract_questions" | "awaiting_deposit_wallet" | "awaiting_cashout_wallet" | "wallets_complete" | "waiting_action_pct" | "waiting_wallet_game" | "waiting_wallet_cashout" | "waiting_game" | "waiting_player";
+export type Step = "pitch_sent" | "solo_declined" | "contract_shown" | "signed_active" | "contract_questions" | "awaiting_wallet_address" | "onboarding_complete" | "awaiting_deposit_wallet" | "awaiting_cashout_wallet" | "wallets_complete" | "waiting_action_pct" | "waiting_wallet_game" | "waiting_wallet_cashout" | "waiting_game" | "waiting_player";
 
 export function getSession(chatId: string | number): { step: Step; player_id: number; expected_tg_id: number | null; pending_cmd: string | null } | null {
   return getDb().prepare(
@@ -381,7 +399,29 @@ export async function handleRawMessage(text: string, chatId: number, messageThre
   const db = getDb();
   const teleGame = findGame("TELE");
 
-  // ── Player-facing wallet collection (from pitch flow) ──
+  // ── Unified wallet collection (new onboarding — single address) ──
+  if (session.step === "awaiting_wallet_address") {
+    if (!TRC20_RE.test(text)) {
+      await reply(`Cette adresse ne semble pas être au bon format. Une adresse TRON commence par <b>T</b> et fait 34 caractères. Réessaie.`);
+      return;
+    }
+    db.prepare(`UPDATE players SET tron_address = ?, tele_wallet_cashout = ? WHERE id = ?`).run(text, text, player.id);
+    setSession(chatId, "onboarding_complete", player.id, session.expected_tg_id);
+    await reply(
+      `✅ Adresse enregistrée.\n\n` +
+      `Tu es prêt à jouer 🎰\n` +
+      `Ton support reste disponible ici 24/7 pour toute question.`
+    );
+    await sendMsg(AGENT_CHAT_ID,
+      `🎉 <b>Onboarding complet — ${player.name}</b>\n` +
+      `Deal : 60/20/20\n` +
+      `Wallet : <code>${text}</code>\n` +
+      `Groupe : <code>${chatId}</code>`
+    );
+    return;
+  }
+
+  // ── Legacy: two-step wallet collection (from old pitch flow) ──
   if (session.step === "awaiting_deposit_wallet") {
     if (!TRC20_RE.test(text)) {
       await reply(`Cette adresse ne semble pas être au bon format. Une adresse TRON commence par <b>T</b> et fait 34 caractères. Réessaie.`);
