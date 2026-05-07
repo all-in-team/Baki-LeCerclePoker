@@ -5,7 +5,7 @@ import {
   handleCheck, handlePnl, handleSolde, handleTodo, handleHistorique,
   handleKickstart, handleAide, handleRapports, handleStart,
   handlePlayerSelfService, handleNewMembers,
-  handleOnboard, handleOnboardCallback,
+  handleOnboard, handleOnboardCallback, handlePitchCallback,
   sendMsg, answerCbQuery, getSession, handleRawMessage, registerCommandHandlers,
   OWNER_IDS, AGENT_CHAT_ID,
 } from "@/lib/telegram-commands";
@@ -35,6 +35,8 @@ export async function POST(req: NextRequest) {
 
     if (cbData.startsWith("onboard:")) {
       await handleOnboardCallback(cb.id, cbData, cbChatId, cbThreadId);
+    } else if (cbData.startsWith("onboard_")) {
+      await handlePitchCallback(cb.id, cbData, cbChatId, cbThreadId, cb.from);
     } else {
       await answerCbQuery(cb.id);
     }

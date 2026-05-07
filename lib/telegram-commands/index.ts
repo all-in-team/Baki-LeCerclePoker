@@ -17,6 +17,7 @@ export { handlePlayerSelfService } from "./player-self-service";
 export { handleNewMembers } from "./new-members";
 export { handleOnboardingDirect } from "./onboarding";
 export { handleOnboard, handleOnboardCallback } from "./onboard";
+export { handlePitchCallback } from "./pitch";
 
 // Re-export helpers needed by route.ts
 export {

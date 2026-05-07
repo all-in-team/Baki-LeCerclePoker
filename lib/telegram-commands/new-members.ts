@@ -1,5 +1,8 @@
 import { getDb } from "@/lib/db";
-import { sendMsg, setSession } from "./helpers";
+import { sendMsg, sendMsgKeyboard, setSession } from "./helpers";
+import { PITCH_MSG_1, PITCH_MSG_2, PITCH_MSG_3, PITCH_MSG_4 } from "./onboarding-script";
+
+const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
 
 export async function handleNewMembers(members: any[], chatTitle: string, chatId: number) {
   const db = getDb();
@@ -27,19 +30,18 @@ export async function handleNewMembers(members: any[], chatTitle: string, chatId
     }
 
     if (isNew) {
-      const mention = `<a href="tg://user?id=${member.id}">${name}</a>`;
-      await sendMsg(chatId,
-        `🃏 Bienvenue ${mention} !\n\n` +
-        `C'est ici que tu peux discuter avec ton support dédié.\n` +
-        `Toutes les infos importantes sont dans les topics ci-dessous.\n\n` +
-        `👉 Questions ? → envoie un message ici.`
-      );
+      setSession(chatId, "pitch_sent", playerId, member.id);
 
-      setSession(chatId, "waiting_action_pct", playerId);
-      await sendMsg(chatId,
-        `📋 <b>Étape 1/3</b> — Quel est ton <b>% action sur TELE</b> ?\n` +
-        `<i>(envoie juste le chiffre, ex : <b>40</b> — ou <b>40 5</b> pour 40% action + 5% RB)</i>`
-      );
+      await sendMsg(chatId, PITCH_MSG_1(member.first_name ?? name));
+      await sleep(2000);
+      await sendMsg(chatId, PITCH_MSG_2);
+      await sleep(2000);
+      await sendMsg(chatId, PITCH_MSG_3);
+      await sleep(3000);
+      await sendMsgKeyboard(chatId, PITCH_MSG_4, [
+        [{ text: "🎲 Solo", callback_data: "onboard_choice_solo" }],
+        [{ text: "🤝 Avec vous", callback_data: "onboard_choice_with_us" }],
+      ]);
     }
   }
 }
