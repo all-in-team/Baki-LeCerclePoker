@@ -2,7 +2,7 @@ import { getDb } from "@/lib/db";
 import { sendMsg, sendMsgKeyboard, answerCbQuery, getSession, setSession, AGENT_CHAT_ID } from "./helpers";
 import {
   SOLO_RESPONSE, CONTRACT_MSG_1, CONTRACT_MSG_2, CONTRACT_MSG_3, CONTRACT_MSG_4,
-  SIGNED_RESPONSE, STEP_1_ACTION_PCT, QUESTIONS_RESPONSE,
+  SIGNED_RESPONSE, QUESTIONS_RESPONSE,
 } from "./onboarding-script";
 
 const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
@@ -99,11 +99,28 @@ export async function handlePitchCallback(
         console.warn(`[PITCH] sign: wrong step "${session.step}", expected "contract_shown"`);
         return;
       }
-      console.log(`[PITCH] → branch: contract_signed → waiting_action_pct`);
-      safeSetSession(chatId, "waiting_action_pct", session.player_id, session.expected_tg_id, "signed");
+      console.log(`[PITCH] → branch: signed_active`);
+      safeSetSession(chatId, "signed_active", session.player_id, session.expected_tg_id, "signed");
+
+      // Mark player as active
+      if (session.player_id) {
+        try {
+          db.prepare(`UPDATE players SET status = 'active' WHERE id = ?`).run(session.player_id);
+          console.log(`[PITCH] player ${session.player_id} status → active`);
+        } catch (e: any) {
+          console.error(`[PITCH] failed to update player status:`, e?.message ?? e);
+        }
+      }
+
       await safeSend(chatId, SIGNED_RESPONSE, messageThreadId, "SIGNED_RESPONSE");
-      await sleep(1000);
-      await safeSend(chatId, STEP_1_ACTION_PCT, messageThreadId, "STEP_1_ACTION_PCT");
+
+      // Alert ops
+      await sendMsg(AGENT_CHAT_ID,
+        `🎉 <b>Nouveau joueur signé</b>\n` +
+        `Nom : <b>${playerName}</b>\n` +
+        `Deal : 60/20/20\n` +
+        `Groupe : <code>${chatId}</code>`
+      );
     }
 
     // ── J'ai des questions ──
