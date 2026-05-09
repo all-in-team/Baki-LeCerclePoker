@@ -644,6 +644,85 @@ export async function promoteBot(chatId: number): Promise<{ ok: boolean; error: 
   }
 }
 
+// ── inviteAndPromoteBot ─────────────────────────────────
+
+export async function inviteAndPromoteBot(chatId: number): Promise<{
+  ok: boolean;
+  invited: boolean;
+  promoted: boolean;
+  error: string | null;
+}> {
+  const client = await getClient();
+  if (!client) return { ok: false, invited: false, promoted: false, error: "Userbot not connected" };
+
+  try {
+    const channelId = -(chatId + 1000000000000);
+    const channelPeer = await client.getInputEntity(
+      new Api.PeerChannel({ channelId: BigInt(channelId) as any })
+    ) as unknown as Api.InputChannel;
+
+    const botEntity = await client.getInputEntity("LeCercle_Lebot");
+
+    let invited = false;
+    try {
+      await client.invoke(
+        new Api.channels.InviteToChannel({
+          channel: channelPeer,
+          users: [botEntity as unknown as Api.TypeInputUser],
+        })
+      );
+      invited = true;
+      console.log(`[USERBOT] bot invited to ${chatId}`);
+    } catch (e: any) {
+      const msg = errMsg(e);
+      if (msg.includes("USER_ALREADY_PARTICIPANT")) {
+        invited = true;
+        console.log(`[USERBOT] bot already in ${chatId}`);
+      } else {
+        return { ok: false, invited: false, promoted: false, error: `Invite: ${msg}` };
+      }
+    }
+
+    await sleep(800);
+
+    let promoted = false;
+    try {
+      await retry(async () => {
+        await client.invoke(
+          new Api.channels.EditAdmin({
+            channel: channelPeer,
+            userId: botEntity as unknown as Api.TypeInputUser,
+            adminRights: new Api.ChatAdminRights({
+              postMessages: true,
+              editMessages: true,
+              deleteMessages: true,
+              banUsers: true,
+              inviteUsers: true,
+              changeInfo: true,
+              manageTopics: true,
+            }),
+            rank: "",
+          })
+        );
+      }, "EditAdmin", 2, [1000]);
+      promoted = true;
+      console.log(`[USERBOT] bot promoted in ${chatId}`);
+    } catch (e: any) {
+      const msg = errMsg(e);
+      if (msg.includes("USER_NOT_MUTUAL_CONTACT") || msg.includes("ADMIN_RANK_EMOJI_NOT_ALLOWED")) {
+        promoted = true;
+      } else {
+        return { ok: false, invited, promoted: false, error: `Promote: ${msg}` };
+      }
+    }
+
+    await sleep(800);
+    return { ok: true, invited, promoted, error: null };
+  } catch (e: any) {
+    return { ok: false, invited: false, promoted: false, error: errMsg(e) };
+  }
+}
+
 // ── ensureAlertesTopic ──────────────────────────────────
 
 const ALERTES_DEF = TOPIC_DEFS.find(d => d.key === "alertes")!;
