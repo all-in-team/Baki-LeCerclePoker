@@ -15,9 +15,10 @@ export { handleRapports } from "./rapports";
 export { handleStart } from "./start";
 export { handlePlayerSelfService } from "./player-self-service";
 export { handleNewMembers } from "./new-members";
-export { handleOnboardingDirect } from "./onboarding";
+export { handleOnboardingDirect, consumePendingGroupData } from "./onboarding";
 export { handleOnboard, handleOnboardCallback } from "./onboard";
 export { handlePitchCallback } from "./pitch";
+export { handleBroadcast, handleBroadcastCallback } from "./broadcast";
 
 // Re-export helpers needed by route.ts
 export {

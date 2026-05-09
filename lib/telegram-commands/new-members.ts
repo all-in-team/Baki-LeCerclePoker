@@ -1,6 +1,7 @@
 import { getDb } from "@/lib/db";
 import { sendMsg, sendMsgKeyboard, setSession } from "./helpers";
 import { PITCH_MSG_1, PITCH_MSG_2, PITCH_MSG_3, PITCH_MSG_4 } from "./onboarding-script";
+import { consumePendingGroupData } from "./onboarding";
 
 const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
 
@@ -18,6 +19,13 @@ export async function handleNewMembers(members: any[], chatTitle: string, chatId
         .run({ name, handle: member.username ?? null, telegram_id: member.id, chat_id: String(chatId) });
       playerId = Number(r.lastInsertRowid);
       isNew = true;
+    }
+
+    // Save group data from onboarding flow (if group was just created for this player)
+    const groupData = consumePendingGroupData(member.id);
+    if (groupData) {
+      db.prepare(`UPDATE players SET telegram_group_id = ?, alertes_topic_id = ? WHERE id = ?`)
+        .run(String(groupData.groupId), groupData.alertesTopicId, playerId);
     }
 
     if (!existing) {

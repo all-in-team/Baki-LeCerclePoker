@@ -742,4 +742,8 @@ function initSchema(db: Database.Database) {
   if (fix4.changes > 0) {
     db.exec(`ALTER TABLE weekly_settlement_periods ADD COLUMN note TEXT;`);
   }
+
+  // Broadcast: store player group chat ID + Alertes topic ID
+  try { db.exec(`ALTER TABLE players ADD COLUMN telegram_group_id TEXT`); } catch {}
+  try { db.exec(`ALTER TABLE players ADD COLUMN alertes_topic_id INTEGER`); } catch {}
 }

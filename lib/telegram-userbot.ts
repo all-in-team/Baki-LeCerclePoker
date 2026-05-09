@@ -95,6 +95,7 @@ const TOPIC_DEFS = [
   { key: "depot", title: "Dépôt", iconColor: 0xFF93B2, emojis: ["💰", "💳", "🏦", "💵"] },
   { key: "liveplay", title: "Liveplay", iconColor: 0xFB6F5F, emojis: ["🔴", "🎥", "📺", "▶️"] },
   { key: "onboarding", title: "Onboarding", iconColor: 0xCB86DB, emojis: ["🚀", "✅", "📌", "⚡"] },
+  { key: "alertes", title: "Alertes", iconColor: 0xFFD67E, emojis: ["📢", "🔔", "⚡", "📣"] },
 ];
 
 // ── Retry helper ─────────────────────────────────────────
@@ -640,5 +641,52 @@ export async function promoteBot(chatId: number): Promise<{ ok: boolean; error: 
     return { ok: true, error: null };
   } catch (e: any) {
     return { ok: false, error: errMsg(e) };
+  }
+}
+
+// ── ensureAlertesTopic ──────────────────────────────────
+
+const ALERTES_DEF = TOPIC_DEFS.find(d => d.key === "alertes")!;
+
+export async function ensureAlertesTopic(chatId: number): Promise<{
+  ok: boolean;
+  topicId: number | null;
+  created: boolean;
+  error: string | null;
+}> {
+  const client = await getClient();
+  if (!client) return { ok: false, topicId: null, created: false, error: "Userbot not connected" };
+
+  try {
+    const channelId = -(chatId + 1000000000000);
+    const channelPeer = await client.getInputEntity(
+      new Api.PeerChannel({ channelId: BigInt(channelId) as any })
+    ) as unknown as Api.InputChannel;
+
+    const existing = await client.invoke(
+      new Api.channels.GetForumTopics({
+        channel: channelPeer,
+        offsetDate: 0,
+        offsetId: 0,
+        offsetTopic: 0,
+        limit: 100,
+      })
+    );
+
+    const topics = ((existing as any).topics ?? []) as any[];
+    const alertesTopic = topics.find((t: any) =>
+      t.title?.toLowerCase() === "alertes"
+    );
+
+    if (alertesTopic) {
+      const topicId = toNum(alertesTopic.id);
+      return { ok: true, topicId, created: false, error: null };
+    }
+
+    const iconMap = await fetchTopicIcons(client);
+    const { topicId } = await createSingleTopic(client, channelPeer, ALERTES_DEF, iconMap);
+    return { ok: true, topicId, created: true, error: null };
+  } catch (e: any) {
+    return { ok: false, topicId: null, created: false, error: errMsg(e) };
   }
 }

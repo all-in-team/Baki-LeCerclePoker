@@ -2,6 +2,15 @@ import { getDb } from "@/lib/db";
 import { sendMsg, AGENT_CHAT_ID } from "./helpers";
 import { isUserbotConfigured, createPlayerGroup } from "@/lib/telegram-userbot";
 
+// Temporary map: telegram_id → group data, consumed by handleNewMembers when the player joins
+const pendingGroupData = new Map<number, { groupId: number; alertesTopicId: number | null }>();
+
+export function consumePendingGroupData(telegramId: number) {
+  const data = pendingGroupData.get(telegramId);
+  if (data) pendingGroupData.delete(telegramId);
+  return data ?? null;
+}
+
 const TOPIC_MESSAGES: Record<string, string> = {
   accounting:
     `📊 <b>Accounting</b>\n\n` +
@@ -68,6 +77,15 @@ const TOPIC_MESSAGES: Record<string, string> = {
     `• Wallet game (adresse de dépôt)\n` +
     `• Wallet cashout (adresse de retrait)\n\n` +
     `👉 Suis les instructions ici pour être 100% opérationnel.`,
+
+  alertes:
+    `📢 <b>Alertes</b>\n\n` +
+    `Ce canal sert aux annonces importantes de Le Cercle.\n\n` +
+    `Tu y recevras :\n` +
+    `• Nouvelles tables\n` +
+    `• Changements importants\n` +
+    `• Annonces spéciales\n\n` +
+    `👉 Active les notifications pour ne rien rater.`,
 };
 
 /**
@@ -116,6 +134,11 @@ export async function handleOnboardingDirect(
       const result = await createPlayerGroup(from.id, fullName, botToken, username ?? undefined);
       if (result) {
         groupCreated = true;
+
+        pendingGroupData.set(from.id, {
+          groupId: result.chatId,
+          alertesTopicId: result.topicIds.alertes ?? null,
+        });
 
         // Send topic welcome messages into the group (bot is already in it)
         for (const [key, msg] of Object.entries(TOPIC_MESSAGES)) {

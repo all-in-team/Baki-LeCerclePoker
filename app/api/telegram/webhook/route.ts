@@ -6,6 +6,7 @@ import {
   handleKickstart, handleAide, handleRapports, handleStart,
   handlePlayerSelfService, handleNewMembers,
   handleOnboard, handleOnboardCallback, handlePitchCallback,
+  handleBroadcast, handleBroadcastCallback,
   sendMsg, answerCbQuery, getSession, handleRawMessage, registerCommandHandlers,
   OWNER_IDS, AGENT_CHAT_ID,
 } from "@/lib/telegram-commands";
@@ -41,6 +42,8 @@ export async function POST(req: NextRequest) {
       await handleOnboardCallback(cb.id, cbData, cbChatId, cbThreadId);
     } else if (cbData.startsWith("onboard_")) {
       await handlePitchCallback(cb.id, cbData, cbChatId, cbThreadId, cb.from);
+    } else if (cbData.startsWith("bc_")) {
+      await handleBroadcastCallback(cb.id, cbData, cb.message);
     } else {
       await answerCbQuery(cb.id);
     }
@@ -109,6 +112,7 @@ export async function POST(req: NextRequest) {
       else if (cmd === "/historique")   await handleHistorique(rawArgs, chatId);
       else if (cmd === "/rapports")     await handleRapports(chatId);
       else if (cmd === "/aide" || cmd === "/help") await handleAide(chatId);
+      else if (cmd === "/broadcast")   await handleBroadcast(msg, chatId);
     } catch (e: any) {
       console.error("[TG CMD]", e);
       await sendMsg(chatId, `❌ Erreur : ${e.message}`);
