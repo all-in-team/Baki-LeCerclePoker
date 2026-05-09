@@ -3,7 +3,11 @@ import { sendMsg, AGENT_CHAT_ID } from "./helpers";
 import { isUserbotConfigured, createPlayerGroup } from "@/lib/telegram-userbot";
 
 // Temporary map: telegram_id → group data, consumed by handleNewMembers when the player joins
-const pendingGroupData = new Map<number, { groupId: number; alertesTopicId: number | null }>();
+const pendingGroupData = new Map<number, {
+  groupId: number;
+  alertesTopicId: number | null;
+  liveplayTopicId: number | null;
+}>();
 
 export function consumePendingGroupData(telegramId: number) {
   const data = pendingGroupData.get(telegramId);
@@ -138,6 +142,7 @@ export async function handleOnboardingDirect(
         pendingGroupData.set(from.id, {
           groupId: result.chatId,
           alertesTopicId: result.topicIds.alertes ?? null,
+          liveplayTopicId: result.topicIds.liveplay ?? null,
         });
 
         // Send topic welcome messages into the group (bot is already in it)

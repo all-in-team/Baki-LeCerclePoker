@@ -24,8 +24,8 @@ export async function handleNewMembers(members: any[], chatTitle: string, chatId
     // Save group data from onboarding flow (if group was just created for this player)
     const groupData = consumePendingGroupData(member.id);
     if (groupData) {
-      db.prepare(`UPDATE players SET telegram_group_id = ?, alertes_topic_id = ? WHERE id = ?`)
-        .run(String(groupData.groupId), groupData.alertesTopicId, playerId);
+      db.prepare(`UPDATE players SET telegram_group_id = ?, alertes_topic_id = ?, liveplay_topic_id = ? WHERE id = ?`)
+        .run(String(groupData.groupId), groupData.alertesTopicId, groupData.liveplayTopicId, playerId);
     }
 
     if (!existing) {

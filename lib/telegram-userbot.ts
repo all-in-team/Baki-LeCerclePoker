@@ -723,16 +723,19 @@ export async function inviteAndPromoteBot(chatId: number): Promise<{
   }
 }
 
-// ── ensureAlertesTopic ──────────────────────────────────
+// ── ensureTopic (generic) ────────────────────────────────
 
-const ALERTES_DEF = TOPIC_DEFS.find(d => d.key === "alertes")!;
+export type TopicKey = "alertes" | "liveplay";
 
-export async function ensureAlertesTopic(chatId: number): Promise<{
+export async function ensureTopic(chatId: number, key: TopicKey): Promise<{
   ok: boolean;
   topicId: number | null;
   created: boolean;
   error: string | null;
 }> {
+  const def = TOPIC_DEFS.find(d => d.key === key);
+  if (!def) return { ok: false, topicId: null, created: false, error: `Unknown topic key: ${key}` };
+
   const client = await getClient();
   if (!client) return { ok: false, topicId: null, created: false, error: "Userbot not connected" };
 
@@ -753,19 +756,23 @@ export async function ensureAlertesTopic(chatId: number): Promise<{
     );
 
     const topics = ((existing as any).topics ?? []) as any[];
-    const alertesTopic = topics.find((t: any) =>
-      t.title?.toLowerCase() === "alertes"
+    const found = topics.find((t: any) =>
+      t.title?.toLowerCase() === def.title.toLowerCase()
     );
 
-    if (alertesTopic) {
-      const topicId = toNum(alertesTopic.id);
+    if (found) {
+      const topicId = toNum(found.id);
       return { ok: true, topicId, created: false, error: null };
     }
 
     const iconMap = await fetchTopicIcons(client);
-    const { topicId } = await createSingleTopic(client, channelPeer, ALERTES_DEF, iconMap);
+    const { topicId } = await createSingleTopic(client, channelPeer, def, iconMap);
     return { ok: true, topicId, created: true, error: null };
   } catch (e: any) {
     return { ok: false, topicId: null, created: false, error: errMsg(e) };
   }
+}
+
+export async function ensureAlertesTopic(chatId: number) {
+  return ensureTopic(chatId, "alertes");
 }

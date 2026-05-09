@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getDb } from "@/lib/db";
-import { listGroups, ensureAlertesTopic } from "@/lib/telegram-userbot";
+import { listGroups, ensureTopic } from "@/lib/telegram-userbot";
 
 export async function POST(req: NextRequest) {
   const token = process.env.ADMIN_RECONCILE_TOKEN;
@@ -67,7 +67,7 @@ export async function POST(req: NextRequest) {
       continue;
     }
 
-    const result = await ensureAlertesTopic(chatId);
+    const result = await ensureTopic(chatId, "alertes");
     if (result.ok && result.topicId) {
       db.prepare(`UPDATE players SET alertes_topic_id = ? WHERE id = ?`)
         .run(result.topicId, player.id);
