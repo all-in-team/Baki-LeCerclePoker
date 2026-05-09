@@ -41,6 +41,9 @@ Quand un joueur rejoint → auto-créé. Puis :
 <b>— Rapports —</b>
 <code>/rapports</code> — vérifie les rapports en retard
 
+<b>— Broadcast —</b>
+<code>/broadcast</code> — réponds à un message avec /broadcast pour le diffuser à tous les joueurs actifs (dans leur topic Alertes)
+
 <b>— Onboarding en attente —</b>
 <code>/todo</code> — liste les joueurs incomplets
 <code>/kickstart</code> — collecte les wallets TELE manquants (joueur par joueur)
