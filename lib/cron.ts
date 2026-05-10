@@ -14,6 +14,11 @@ export function initCronJobs() {
   if (initialized) return;
   initialized = true;
 
+  if (process.env.CASHOUT_CRONS_ENABLED !== "true") {
+    console.log("[CRON] cashout crons DISABLED (set CASHOUT_CRONS_ENABLED=true to enable)");
+    return;
+  }
+
   // Sunday 12h00 — initial cashout reminder
   cron.schedule("0 12 * * 0", async () => {
     console.log("[CRON] cashout-reminder-initial firing");
