@@ -3,6 +3,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getDb } from "@/lib/db";
 import { listGroups, syncGroupStructure } from "@/lib/telegram-userbot";
 import { normalizeForMatch } from "@/lib/normalize";
+import { isPlayerGroup } from "@/lib/group-guard";
 
 const TOPIC_COLUMN_MAP: Record<string, string> = {
   accounting: "accounting_topic_id",
@@ -22,26 +23,40 @@ export async function POST(req: NextRequest) {
 
   const body = await req.json().catch(() => ({}));
   const singleChatId = body.chat_id ? Number(body.chat_id) : null;
+  const forceAll: boolean = body.force_all === true;
 
   const db = getDb();
   const updatedPlayers = new Set<number>();
   const results: any[] = [];
+  const skipped: string[] = [];
 
   let targetGroups: { chat_id: string; title: string; member_count: number }[];
 
   if (singleChatId) {
     targetGroups = [{ chat_id: String(singleChatId), title: "", member_count: 0 }];
-  } else {
+  } else if (forceAll) {
     const groupList = await listGroups();
     if (!groupList.ok) {
       return NextResponse.json({ error: "Failed to list groups", detail: groupList.error }, { status: 500 });
     }
     targetGroups = groupList.groups.sort((a, b) => b.member_count - a.member_count);
+  } else {
+    // DEFAULT (safe): only groups already linked to a player row
+    const linked = db.prepare(
+      `SELECT DISTINCT telegram_group_id FROM players WHERE telegram_group_id IS NOT NULL`
+    ).all() as { telegram_group_id: string }[];
+    targetGroups = linked.map(r => ({ chat_id: r.telegram_group_id, title: "", member_count: 0 }));
   }
 
   for (const group of targetGroups) {
     const chatId = parseInt(group.chat_id);
     if (isNaN(chatId)) continue;
+
+    // Safety gate: skip non-player groups unless explicitly targeted
+    if (!singleChatId && !isPlayerGroup(group.title, group.chat_id)) {
+      skipped.push(`${group.chat_id} "${group.title}" — non-player group, skipped for safety`);
+      continue;
+    }
 
     console.log(`[SYNC] processing group ${group.chat_id} "${group.title}"`);
 
@@ -55,7 +70,6 @@ export async function POST(req: NextRequest) {
       const extractedName = titleMatch[1].trim();
       const normalizedExtracted = normalizeForMatch(extractedName);
 
-      // Match players using accent-insensitive comparison
       const allActive = db.prepare(
         `SELECT id, name FROM players WHERE status IN ('active', 'signed') ORDER BY name`
       ).all() as { id: number; name: string }[];
@@ -69,7 +83,6 @@ export async function POST(req: NextRequest) {
         const player = candidates[0];
         matchedPlayer = player.name;
 
-        // Build COALESCE update — only fill NULL fields
         const sets: string[] = [`telegram_group_id = COALESCE(telegram_group_id, ?)`];
         const values: any[] = [String(chatId)];
 
@@ -111,7 +124,9 @@ export async function POST(req: NextRequest) {
   return NextResponse.json({
     ok: true,
     groups_processed: results.length,
+    groups_skipped: skipped.length,
     players_updated: updatedPlayers.size,
+    skipped,
     results,
   });
 }
