@@ -747,4 +747,38 @@ function initSchema(db: Database.Database) {
   try { db.exec(`ALTER TABLE players ADD COLUMN telegram_group_id TEXT`); } catch {}
   try { db.exec(`ALTER TABLE players ADD COLUMN alertes_topic_id INTEGER`); } catch {}
   try { db.exec(`ALTER TABLE players ADD COLUMN liveplay_topic_id INTEGER`); } catch {}
+
+  // Cashout reminder: accounting topic for weekly cashout flow
+  try { db.exec(`ALTER TABLE players ADD COLUMN accounting_topic_id INTEGER`); } catch {}
+
+  // Weekly cashout state tracking
+  const fixCashoutState = db.prepare(`INSERT OR IGNORE INTO _applied_fixes (name) VALUES (?)`).run("weekly_cashout_state_v1");
+  if (fixCashoutState.changes > 0) {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS weekly_cashout_state (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        player_id INTEGER NOT NULL REFERENCES players(id) ON DELETE CASCADE,
+        week_start TEXT NOT NULL,
+        reminder_sent_at TEXT,
+        cashout_confirmed INTEGER DEFAULT 0,
+        confirmed_at TEXT,
+        escalation_count INTEGER DEFAULT 0,
+        ops_alerted INTEGER DEFAULT 0,
+        UNIQUE(player_id, week_start)
+      );
+    `);
+  }
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS weekly_cashout_state (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      player_id INTEGER NOT NULL REFERENCES players(id) ON DELETE CASCADE,
+      week_start TEXT NOT NULL,
+      reminder_sent_at TEXT,
+      cashout_confirmed INTEGER DEFAULT 0,
+      confirmed_at TEXT,
+      escalation_count INTEGER DEFAULT 0,
+      ops_alerted INTEGER DEFAULT 0,
+      UNIQUE(player_id, week_start)
+    );
+  `);
 }

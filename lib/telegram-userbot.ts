@@ -725,7 +725,7 @@ export async function inviteAndPromoteBot(chatId: number): Promise<{
 
 // ── ensureTopic (generic) ────────────────────────────────
 
-export type TopicKey = "alertes" | "liveplay";
+export type TopicKey = "alertes" | "liveplay" | "accounting";
 
 export async function ensureTopic(chatId: number, key: TopicKey): Promise<{
   ok: boolean;

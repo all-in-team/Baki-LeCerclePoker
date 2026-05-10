@@ -7,6 +7,7 @@ import {
   handlePlayerSelfService, handleNewMembers,
   handleOnboard, handleOnboardCallback, handlePitchCallback,
   handleBroadcast, handleBroadcastCallback,
+  handleCashoutDoneCallback,
   sendMsg, answerCbQuery, getSession, handleRawMessage, registerCommandHandlers,
   OWNER_IDS, AGENT_CHAT_ID,
 } from "@/lib/telegram-commands";
@@ -42,6 +43,8 @@ export async function POST(req: NextRequest) {
       await handleOnboardCallback(cb.id, cbData, cbChatId, cbThreadId);
     } else if (cbData.startsWith("onboard_")) {
       await handlePitchCallback(cb.id, cbData, cbChatId, cbThreadId, cb.from);
+    } else if (cbData.startsWith("cashout_done:")) {
+      await handleCashoutDoneCallback(cb.id, cbData, cbChatId, cb.message?.message_id, cbThreadId);
     } else if (cbData.startsWith("bc_")) {
       await handleBroadcastCallback(cb.id, cbData, cb.message);
     } else {
