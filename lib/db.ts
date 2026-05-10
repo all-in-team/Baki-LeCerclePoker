@@ -748,8 +748,12 @@ function initSchema(db: Database.Database) {
   try { db.exec(`ALTER TABLE players ADD COLUMN alertes_topic_id INTEGER`); } catch {}
   try { db.exec(`ALTER TABLE players ADD COLUMN liveplay_topic_id INTEGER`); } catch {}
 
-  // Cashout reminder: accounting topic for weekly cashout flow
+  // All 7 standard topic columns for player groups
   try { db.exec(`ALTER TABLE players ADD COLUMN accounting_topic_id INTEGER`); } catch {}
+  try { db.exec(`ALTER TABLE players ADD COLUMN deals_topic_id INTEGER`); } catch {}
+  try { db.exec(`ALTER TABLE players ADD COLUMN clubs_topic_id INTEGER`); } catch {}
+  try { db.exec(`ALTER TABLE players ADD COLUMN depot_topic_id INTEGER`); } catch {}
+  try { db.exec(`ALTER TABLE players ADD COLUMN onboarding_topic_id INTEGER`); } catch {}
 
   // Weekly cashout state tracking
   const fixCashoutState = db.prepare(`INSERT OR IGNORE INTO _applied_fixes (name) VALUES (?)`).run("weekly_cashout_state_v1");

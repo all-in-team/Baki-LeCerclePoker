@@ -776,3 +776,173 @@ export async function ensureTopic(chatId: number, key: TopicKey): Promise<{
 export async function ensureAlertesTopic(chatId: number) {
   return ensureTopic(chatId, "alertes");
 }
+
+// ── syncGroupStructure (full group upgrade) ─────────────
+
+export interface SyncGroupResult {
+  chat_id: number;
+  title: string;
+  member_count: number;
+  bot_invited: boolean;
+  bot_promoted: boolean;
+  topics_created: string[];
+  topics_skipped: string[];
+  topic_ids: Record<string, number>;
+  errors: string[];
+}
+
+export async function syncGroupStructure(chatId: number): Promise<SyncGroupResult> {
+  const result: SyncGroupResult = {
+    chat_id: chatId,
+    title: "",
+    member_count: 0,
+    bot_invited: false,
+    bot_promoted: false,
+    topics_created: [],
+    topics_skipped: [],
+    topic_ids: {},
+    errors: [],
+  };
+
+  const client = await getClient();
+  if (!client) {
+    result.errors.push("Userbot not connected");
+    return result;
+  }
+
+  try {
+    const channelId = -(chatId + 1000000000000);
+    const channelPeer = await client.getInputEntity(
+      new Api.PeerChannel({ channelId: BigInt(channelId) as any })
+    ) as unknown as Api.InputChannel;
+
+    // Resolve title + member count
+    try {
+      const entity = await client.getEntity(
+        new Api.PeerChannel({ channelId: BigInt(channelId) as any })
+      );
+      result.title = (entity as any).title ?? "(untitled)";
+      result.member_count = (entity as any).participantsCount ?? 0;
+    } catch {
+      result.title = "(could not resolve)";
+    }
+
+    // ── Step 1-2: Bot invite ──
+    const botEntity = await client.getInputEntity("LeCercle_Lebot");
+
+    try {
+      await client.invoke(
+        new Api.channels.InviteToChannel({
+          channel: channelPeer,
+          users: [botEntity as unknown as Api.TypeInputUser],
+        })
+      );
+      result.bot_invited = true;
+      console.log(`[SYNC] bot invited to ${chatId}`);
+    } catch (e: any) {
+      const msg = errMsg(e);
+      if (!msg.includes("USER_ALREADY_PARTICIPANT")) {
+        result.errors.push(`Invite: ${msg}`);
+      }
+    }
+
+    await sleep(800);
+
+    // ── Step 3: Bot promote ──
+    try {
+      await retry(async () => {
+        await client.invoke(
+          new Api.channels.EditAdmin({
+            channel: channelPeer,
+            userId: botEntity as unknown as Api.TypeInputUser,
+            adminRights: new Api.ChatAdminRights({
+              postMessages: true,
+              editMessages: true,
+              deleteMessages: true,
+              banUsers: true,
+              inviteUsers: true,
+              changeInfo: true,
+              manageTopics: true,
+            }),
+            rank: "",
+          })
+        );
+      }, "EditAdmin", 2, [1000]);
+      result.bot_promoted = true;
+      console.log(`[SYNC] bot promoted in ${chatId}`);
+    } catch (e: any) {
+      result.errors.push(`Promote: ${errMsg(e)}`);
+    }
+
+    await sleep(800);
+
+    // ── Step 4: List existing topics (enable forum mode if needed) ──
+    let existingTopics: any[] = [];
+    try {
+      const topicsResult = await client.invoke(
+        new Api.channels.GetForumTopics({
+          channel: channelPeer,
+          offsetDate: 0,
+          offsetId: 0,
+          offsetTopic: 0,
+          limit: 100,
+        })
+      );
+      existingTopics = ((topicsResult as any).topics ?? []) as any[];
+    } catch {
+      // Forum mode likely not enabled — try to enable and retry
+      try {
+        await retry(async () => {
+          await client.invoke(
+            new Api.channels.ToggleForum({ channel: channelPeer, enabled: true })
+          );
+        }, "ToggleForum", 3, [1000, 2000, 4000]);
+        await sleep(800);
+        const topicsResult = await client.invoke(
+          new Api.channels.GetForumTopics({
+            channel: channelPeer,
+            offsetDate: 0,
+            offsetId: 0,
+            offsetTopic: 0,
+            limit: 100,
+          })
+        );
+        existingTopics = ((topicsResult as any).topics ?? []) as any[];
+      } catch (e2: any) {
+        result.errors.push(`Forum/Topics: ${errMsg(e2)}`);
+        return result;
+      }
+    }
+
+    // ── Step 5-6: Create missing topics ──
+    const existingMap = new Map<string, number>();
+    for (const t of existingTopics) {
+      if (t.title) existingMap.set(t.title.toLowerCase(), toNum(t.id));
+    }
+
+    const iconMap = await fetchTopicIcons(client);
+
+    for (const def of TOPIC_DEFS) {
+      const existingId = existingMap.get(def.title.toLowerCase());
+      if (existingId) {
+        result.topic_ids[def.key] = existingId;
+        result.topics_skipped.push(def.title);
+        continue;
+      }
+
+      try {
+        const { topicId } = await createSingleTopic(client, channelPeer, def, iconMap);
+        result.topic_ids[def.key] = topicId;
+        result.topics_created.push(def.title);
+      } catch (e: any) {
+        result.errors.push(`topic:${def.title}: ${errMsg(e)}`);
+      }
+      await sleep(300);
+    }
+
+    return result;
+  } catch (e: any) {
+    result.errors.push(errMsg(e));
+    return result;
+  }
+}
