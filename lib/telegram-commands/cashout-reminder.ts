@@ -132,7 +132,6 @@ function markOpsAlerted(weekStart: string) {
   `).run(weekStart);
 }
 
-const DEDUP_INITIAL_MINUTES = 60;
 const DEDUP_ESCALATION_MINUTES = 25;
 
 function minutesSinceLastMessage(playerId: number, weekStart: string): number | null {
@@ -236,9 +235,9 @@ export async function sendInitialReminders(playerIds?: number[], dryRun = false)
 
     ensureCashoutState(player.id, weekStart);
 
-    const minSince = minutesSinceLastMessage(player.id, weekStart);
-    if (minSince !== null && minSince < DEDUP_INITIAL_MINUTES) {
-      wouldSkip.push({ player_id: player.id, name: player.name, reason: `dedup: last message ${Math.round(minSince)}min ago (threshold ${DEDUP_INITIAL_MINUTES}min)` });
+    const lastAt = getLastMessageAt(player.id, weekStart);
+    if (lastAt !== null) {
+      wouldSkip.push({ player_id: player.id, name: player.name, reason: "already sent initial this week" });
       skipped++;
       continue;
     }
