@@ -34,6 +34,7 @@ function getPendingPlayers(weekStart: string): CashoutPlayer[] {
     FROM players p
     JOIN weekly_cashout_state wcs ON wcs.player_id = p.id AND wcs.week_start = ?
     WHERE wcs.cashout_confirmed = 0
+      AND wcs.not_played = 0
       AND p.telegram_group_id IS NOT NULL
       AND p.accounting_topic_id IS NOT NULL
   `).all(weekStart) as CashoutPlayer[];
@@ -54,12 +55,28 @@ function markConfirmed(playerId: number, weekStart: string) {
   `).run(playerId, weekStart);
 }
 
-function isConfirmed(playerId: number, weekStart: string): boolean {
+function isResolved(playerId: number, weekStart: string): boolean {
   const row = getDb().prepare(`
-    SELECT cashout_confirmed FROM weekly_cashout_state
+    SELECT cashout_confirmed, not_played FROM weekly_cashout_state
     WHERE player_id = ? AND week_start = ?
-  `).get(playerId, weekStart) as { cashout_confirmed: number } | undefined;
-  return !!row?.cashout_confirmed;
+  `).get(playerId, weekStart) as { cashout_confirmed: number; not_played: number } | undefined;
+  return !!(row?.cashout_confirmed || row?.not_played);
+}
+
+function markNotPlayed(playerId: number, weekStart: string) {
+  getDb().prepare(`
+    UPDATE weekly_cashout_state
+    SET not_played = 1, confirmed_at = datetime('now')
+    WHERE player_id = ? AND week_start = ?
+  `).run(playerId, weekStart);
+}
+
+function getNotPlayedCount(weekStart: string): number {
+  const row = getDb().prepare(`
+    SELECT COUNT(*) AS n FROM weekly_cashout_state
+    WHERE week_start = ? AND not_played = 1
+  `).get(weekStart) as { n: number };
+  return row.n;
 }
 
 function incrementEscalation(playerId: number, weekStart: string) {
@@ -129,11 +146,11 @@ Tu pourras recommencer à jouer <b>après 00h heure de Paris</b> (lundi).
 
 Quand c'est fait, clique sur le bouton ci-dessous \u{1F447}`;
 
-function makeButton(playerId: number, weekStart: string) {
-  return [[{
-    text: "✅ C'est fait, j'ai tout envoyé",
-    callback_data: `cashout_done:${playerId}:${weekStart}`,
-  }]];
+function makeButtons(playerId: number, weekStart: string) {
+  return [
+    [{ text: "✅ C'est fait, j'ai tout envoyé", callback_data: `cashout_done:${playerId}:${weekStart}` }],
+    [{ text: "⏸️ Je n'ai pas joué cette semaine", callback_data: `cashout_skipped:${playerId}:${weekStart}` }],
+  ];
 }
 
 // ── Public API ───────────────────────────────────────────
@@ -150,7 +167,7 @@ export async function sendInitialReminders(playerIds?: number[]): Promise<{ sent
   const errors: string[] = [];
 
   for (const player of players) {
-    if (isConfirmed(player.id, weekStart)) {
+    if (isResolved(player.id, weekStart)) {
       skipped++;
       continue;
     }
@@ -160,7 +177,7 @@ export async function sendInitialReminders(playerIds?: number[]): Promise<{ sent
     const ok = await sendTgMsgWithButton(
       player.telegram_group_id,
       INITIAL_MESSAGE,
-      makeButton(player.id, weekStart),
+      makeButtons(player.id, weekStart),
       player.accounting_topic_id
     );
 
@@ -183,7 +200,7 @@ export async function sendEscalationReminders(playerIds?: number[]): Promise<{ s
   const errors: string[] = [];
 
   for (const player of pending) {
-    if (isConfirmed(player.id, weekStart)) {
+    if (isResolved(player.id, weekStart)) {
       skipped++;
       continue;
     }
@@ -193,7 +210,7 @@ export async function sendEscalationReminders(playerIds?: number[]): Promise<{ s
     const ok = await sendTgMsgWithButton(
       player.telegram_group_id,
       "⏰ Reminder : on attend ton cashout + screen recording. Ping-moi quand c'est fait.",
-      makeButton(player.id, weekStart),
+      makeButtons(player.id, weekStart),
       player.accounting_topic_id
     );
 
@@ -204,12 +221,13 @@ export async function sendEscalationReminders(playerIds?: number[]): Promise<{ s
   return { sent, skipped, errors };
 }
 
-export async function sendFinalAlert(): Promise<{ pending_count: number; alerted: boolean }> {
+export async function sendFinalAlert(): Promise<{ pending_count: number; not_played_count: number; alerted: boolean }> {
   const weekStart = getCurrentWeekStart();
   const pending = getPendingPlayers(weekStart);
+  const notPlayedCount = getNotPlayedCount(weekStart);
 
   if (pending.length === 0) {
-    return { pending_count: 0, alerted: false };
+    return { pending_count: 0, not_played_count: notPlayedCount, alerted: false };
   }
 
   const lines = pending.map(p => {
@@ -218,13 +236,14 @@ export async function sendFinalAlert(): Promise<{ pending_count: number; alerted
     return `• ${p.name} (<a href="${link}">groupe</a>)`;
   });
 
-  await sendMsg(
-    AGENT_CHAT_ID,
-    `⚠️ <b>Joueurs en retard cashout (${pending.length})</b>\n\n${lines.join("\n")}\n\nAction manuelle requise.`
-  );
+  let msg = `⚠️ <b>Joueurs en retard cashout (${pending.length})</b>\n\n${lines.join("\n")}\n\nAction manuelle requise.`;
+  if (notPlayedCount > 0) {
+    msg += `\n\n⏸️ Joueurs qui n'ont pas joué cette semaine : ${notPlayedCount}`;
+  }
 
+  await sendMsg(AGENT_CHAT_ID, msg);
   markOpsAlerted(weekStart);
-  return { pending_count: pending.length, alerted: true };
+  return { pending_count: pending.length, not_played_count: notPlayedCount, alerted: true };
 }
 
 export async function handleCashoutDoneCallback(
@@ -243,7 +262,7 @@ export async function handleCashoutDoneCallback(
   const playerId = parseInt(match[1]);
   const weekStart = match[2];
 
-  if (isConfirmed(playerId, weekStart)) {
+  if (isResolved(playerId, weekStart)) {
     await answerCbQuery(callbackId, "Déjà confirmé ✅");
     return;
   }
@@ -259,6 +278,42 @@ export async function handleCashoutDoneCallback(
   await sendMsg(
     chatId,
     "✅ Reçu, ton settlement sera calculé demain. Bonne soirée \u{1F0CF}",
+    threadId
+  );
+}
+
+export async function handleCashoutSkippedCallback(
+  callbackId: string,
+  data: string,
+  chatId: number | string,
+  messageId: number,
+  threadId?: number
+) {
+  const match = data.match(/^cashout_skipped:(\d+):(.+)$/);
+  if (!match) {
+    await answerCbQuery(callbackId, "Données invalides");
+    return;
+  }
+
+  const playerId = parseInt(match[1]);
+  const weekStart = match[2];
+
+  if (isResolved(playerId, weekStart)) {
+    await answerCbQuery(callbackId, "Déjà pris en compte ✅");
+    return;
+  }
+
+  ensureCashoutState(playerId, weekStart);
+  markNotPlayed(playerId, weekStart);
+  await answerCbQuery(callbackId, "⏸️ Noté !");
+
+  await editTgMessage(chatId, messageId,
+    "\u{1F3AC} <b>Cashout de la semaine</b>\n\n⏸️ <b>Pas joué cette semaine</b>"
+  );
+
+  await sendMsg(
+    chatId,
+    "Reçu, on te ping à nouveau dimanche prochain. Bon week-end \u{1F0CF}",
     threadId
   );
 }

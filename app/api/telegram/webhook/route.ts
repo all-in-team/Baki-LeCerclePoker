@@ -8,6 +8,7 @@ import {
   handleOnboard, handleOnboardCallback, handlePitchCallback,
   handleBroadcast, handleBroadcastCallback,
   handleCashoutDoneCallback,
+  handleCashoutSkippedCallback,
   sendMsg, answerCbQuery, getSession, handleRawMessage, registerCommandHandlers,
   OWNER_IDS, AGENT_CHAT_ID,
 } from "@/lib/telegram-commands";
@@ -45,6 +46,8 @@ export async function POST(req: NextRequest) {
       await handlePitchCallback(cb.id, cbData, cbChatId, cbThreadId, cb.from);
     } else if (cbData.startsWith("cashout_done:")) {
       await handleCashoutDoneCallback(cb.id, cbData, cbChatId, cb.message?.message_id, cbThreadId);
+    } else if (cbData.startsWith("cashout_skipped:")) {
+      await handleCashoutSkippedCallback(cb.id, cbData, cbChatId, cb.message?.message_id, cbThreadId);
     } else if (cbData.startsWith("bc_")) {
       await handleBroadcastCallback(cb.id, cbData, cb.message);
     } else {

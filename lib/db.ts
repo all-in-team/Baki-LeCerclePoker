@@ -782,7 +782,14 @@ function initSchema(db: Database.Database) {
       confirmed_at TEXT,
       escalation_count INTEGER DEFAULT 0,
       ops_alerted INTEGER DEFAULT 0,
+      not_played INTEGER DEFAULT 0,
       UNIQUE(player_id, week_start)
     );
   `);
+
+  // Add not_played column to existing weekly_cashout_state tables
+  const fixNotPlayed = db.prepare(`INSERT OR IGNORE INTO _applied_fixes (name) VALUES (?)`).run("weekly_cashout_not_played_v1");
+  if (fixNotPlayed.changes > 0) {
+    try { db.exec(`ALTER TABLE weekly_cashout_state ADD COLUMN not_played INTEGER DEFAULT 0`); } catch {}
+  }
 }
