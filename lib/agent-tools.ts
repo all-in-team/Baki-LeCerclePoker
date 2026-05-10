@@ -2,6 +2,10 @@ import Anthropic from "@anthropic-ai/sdk";
 import { getDb } from "./db";
 import { todayCost, usageBetween } from "./agent-cost";
 import { dispatchFix, isWithinBudget, recentDoerSessions, looksMoneyFlow } from "./agent-doer";
+import { getCurrentWeekStart } from "./telegram-commands/cashout-reminder";
+import { getWeekBounds, toUTCISO, toParisDate } from "./date-utils";
+import { getLockAwareSummaryByPlayer, getLockAwareKPIs } from "./queries";
+import { checkUserbotHealth, listGroups } from "./telegram-userbot";
 
 // ────────────────────────────────────────────────────────────
 // Period parsing — accepts: today | yesterday | week | month |
@@ -98,6 +102,21 @@ export function buildSnapshot(): string {
 // ────────────────────────────────────────────────────────────
 export const TOOLS: Anthropic.Tool[] = [
   {
+    name: "bot_health",
+    description: "Santé du système : session userbot Telegram, nombre de groupes, dernière sync wallet, erreurs récentes.",
+    input_schema: { type: "object", properties: {}, required: [] },
+  },
+  {
+    name: "cashout_status_this_week",
+    description: "État des cashouts de la semaine : combien confirmé, pas joué, en attente de réponse, pas encore relancé.",
+    input_schema: { type: "object", properties: {}, required: [] },
+  },
+  {
+    name: "find_orphan_groups",
+    description: "Trouve les groupes Telegram 'x LeCercle' visibles au userbot qui ne sont associés à aucun joueur en base.",
+    input_schema: { type: "object", properties: {}, required: [] },
+  },
+  {
     name: "get_apps_overview",
     description: "Liste tous les poker apps configurés (TELE, Wepoker, Xpoker, ClubGG, et tout club ajouté) avec le nombre de joueurs actifs sur chacun.",
     input_schema: { type: "object", properties: {}, required: [] },
@@ -173,12 +192,33 @@ export const TOOLS: Anthropic.Tool[] = [
     },
   },
   {
+    name: "onboarding_funnel",
+    description: "Comptage du funnel : leads par stage (welcome/discovered/joined) + joueurs par status (active/inactive/churned).",
+    input_schema: { type: "object", properties: {}, required: [] },
+  },
+  {
+    name: "pending_cashouts_now",
+    description: "Liste les joueurs en attente de cashout cette semaine : nom, nombre de relances, temps écoulé depuis le dernier message.",
+    input_schema: { type: "object", properties: {}, required: [] },
+  },
+  {
     name: "list_doer_sessions",
     description: "Liste les dernières sessions du doer agent (PRs en cours, terminées, échouées) — utile quand l'opérateur demande 'où en est le fix de tout à l'heure ?'.",
     input_schema: {
       type: "object",
       properties: {
         limit: { type: "integer", description: "Nombre max (défaut 5)" },
+      },
+      required: [],
+    },
+  },
+  {
+    name: "revenue_breakdown",
+    description: "Décomposition du revenu opérateur par joueur : dépôts, retraits, net joueur, mon P&L (action %) en USDT. Optionnel: période.",
+    input_schema: {
+      type: "object",
+      properties: {
+        period: { type: "string", description: "today, yesterday, week, month, ytd, YYYY-MM-DD, ou YYYY-MM-DD..YYYY-MM-DD. Défaut: week." },
       },
       required: [],
     },
@@ -199,6 +239,29 @@ export const TOOLS: Anthropic.Tool[] = [
         },
       },
       required: ["description"],
+    },
+  },
+  {
+    name: "top_players_this_week",
+    description: "Top N gagnants ou perdants de la semaine (P&L joueur). Défaut: top 5 winners.",
+    input_schema: {
+      type: "object",
+      properties: {
+        side: { type: "string", enum: ["winners", "losers"], description: "winners (défaut) ou losers" },
+        limit: { type: "integer", description: "Nombre (défaut 5)" },
+      },
+      required: [],
+    },
+  },
+  {
+    name: "weekly_settlement_summary",
+    description: "Résumé du settlement hebdo : dépôts totaux, retraits totaux, net, mon P&L, par joueur. Optionnel : week_offset (0=cette semaine, -1=dernière, etc.).",
+    input_schema: {
+      type: "object",
+      properties: {
+        week_offset: { type: "integer", description: "0 = semaine en cours, -1 = semaine dernière. Défaut 0." },
+      },
+      required: [],
     },
   },
 ];
@@ -418,6 +481,143 @@ export async function executeTool(name: string, input: any): Promise<string> {
       return rows.map(r =>
         `${r.tier ?? "?"} · ${r.name}${r.telegram_handle ? ` @${r.telegram_handle}` : ""} · ${r.status} · solde net: ${fmtAmount(r.net_balance)} USDT`
       ).join("\n");
+    }
+
+    if (name === "bot_health") {
+      const health = await checkUserbotHealth();
+      const lastSync = db.prepare(
+        `SELECT MAX(created_at) AS ts FROM wallet_transactions WHERE tron_tx_hash IS NOT NULL`
+      ).get() as { ts: string | null };
+      const groupCount = health.connected ? (await listGroups()).groups.length : null;
+      const lines = [
+        `Userbot: ${health.connected ? "✅ connecté" : "❌ déconnecté"}${health.username ? ` (@${health.username})` : ""}`,
+        health.error ? `Erreur: ${health.error}` : null,
+        `Groupes visibles: ${groupCount ?? "N/A"}`,
+        `Dernière sync wallet: ${lastSync.ts ? lastSync.ts.replace("T", " ").slice(0, 16) : "jamais"}`,
+      ].filter(Boolean);
+      return lines.join("\n");
+    }
+
+    if (name === "cashout_status_this_week") {
+      const weekStart = getCurrentWeekStart();
+      const stats = db.prepare(`
+        SELECT
+          COALESCE(SUM(cashout_confirmed = 1), 0) AS confirmed,
+          COALESCE(SUM(not_played = 1), 0) AS not_played,
+          COALESCE(SUM(cashout_confirmed = 0 AND not_played = 0), 0) AS pending
+        FROM weekly_cashout_state WHERE week_start = ?
+      `).get(weekStart) as { confirmed: number; not_played: number; pending: number };
+      const totalEligible = (db.prepare(`
+        SELECT COUNT(*) AS n FROM players
+        WHERE status IN ('active', 'signed') AND telegram_group_id IS NOT NULL AND accounting_topic_id IS NOT NULL
+      `).get() as { n: number }).n;
+      const notReminded = totalEligible - stats.confirmed - stats.not_played - stats.pending;
+      return `Cashout semaine du ${weekStart}:\n✅ Confirmé: ${stats.confirmed}\n⏸️ Pas joué: ${stats.not_played}\n⏳ En attente: ${stats.pending}\n🔇 Pas encore relancé: ${notReminded < 0 ? 0 : notReminded}\nTotal éligibles: ${totalEligible}`;
+    }
+
+    if (name === "find_orphan_groups") {
+      const groupList = await listGroups();
+      if (!groupList.ok) return `Erreur listGroups: ${groupList.error}`;
+      const linkedIds = new Set(
+        (db.prepare(`SELECT telegram_group_id FROM players WHERE telegram_group_id IS NOT NULL`).all() as { telegram_group_id: string }[])
+          .map(r => r.telegram_group_id)
+      );
+      const orphans = groupList.groups.filter(g =>
+        g.title.toLowerCase().includes("x lecercle") && !linkedIds.has(g.chat_id)
+      );
+      if (orphans.length === 0) return "Aucun groupe orphelin trouvé.";
+      return `Groupes orphelins (${orphans.length}):\n${orphans.map(g => `• ${g.title} (${g.chat_id}, ${g.member_count} membres)`).join("\n")}`;
+    }
+
+    if (name === "onboarding_funnel") {
+      const leads = db.prepare(`SELECT stage, COUNT(*) AS n FROM onboarding_leads GROUP BY stage`).all() as { stage: string; n: number }[];
+      const players = db.prepare(`SELECT status, COUNT(*) AS n FROM players GROUP BY status`).all() as { status: string; n: number }[];
+      const leadMap = Object.fromEntries(leads.map(l => [l.stage, l.n]));
+      const playerMap = Object.fromEntries(players.map(p => [p.status, p.n]));
+      return [
+        `Funnel leads:`,
+        `  welcome: ${leadMap.welcome ?? 0}`,
+        `  discovered: ${leadMap.discovered ?? 0}`,
+        `  joined: ${leadMap.joined ?? 0}`,
+        `Joueurs:`,
+        `  active: ${playerMap.active ?? 0}`,
+        `  inactive: ${playerMap.inactive ?? 0}`,
+        `  churned: ${playerMap.churned ?? 0}`,
+      ].join("\n");
+    }
+
+    if (name === "pending_cashouts_now") {
+      const weekStart = getCurrentWeekStart();
+      const rows = db.prepare(`
+        SELECT p.name, p.telegram_handle, wcs.escalation_count, wcs.last_message_at
+        FROM weekly_cashout_state wcs
+        JOIN players p ON p.id = wcs.player_id
+        WHERE wcs.week_start = ? AND wcs.cashout_confirmed = 0 AND wcs.not_played = 0
+        ORDER BY wcs.last_message_at ASC
+      `).all(weekStart) as { name: string; telegram_handle: string | null; escalation_count: number; last_message_at: string | null }[];
+      if (rows.length === 0) return "Aucun joueur en attente de cashout.";
+      const lines = rows.map(r => {
+        const minAgo = r.last_message_at ? Math.round((Date.now() - new Date(r.last_message_at + "Z").getTime()) / 60_000) : null;
+        const timeStr = minAgo !== null ? (minAgo >= 60 ? `${Math.floor(minAgo / 60)}h${minAgo % 60}min` : `${minAgo}min`) : "jamais";
+        return `• ${r.name}${r.telegram_handle ? ` @${r.telegram_handle}` : ""} — ${r.escalation_count} relances, dernier msg il y a ${timeStr}`;
+      });
+      return `En attente (${rows.length}):\n${lines.join("\n")}`;
+    }
+
+    if (name === "revenue_breakdown") {
+      const { start, end, label } = parsePeriod(input?.period ?? "week");
+      const rows = db.prepare(`
+        SELECT p.name, pgd.action_pct,
+          COALESCE(SUM(CASE WHEN wt.type='deposit' THEN wt.amount ELSE 0 END), 0) AS deposited,
+          COALESCE(SUM(CASE WHEN wt.type='withdrawal' THEN wt.amount ELSE 0 END), 0) AS withdrawn,
+          COALESCE(SUM(CASE WHEN wt.type='withdrawal' THEN wt.amount ELSE -wt.amount END), 0) AS net,
+          COALESCE(SUM(CASE WHEN wt.type='withdrawal' THEN wt.amount ELSE -wt.amount END), 0) * pgd.action_pct / 100.0 AS my_pnl
+        FROM players p
+        JOIN player_game_deals pgd ON pgd.player_id = p.id
+        JOIN games g ON g.id = pgd.game_id
+        LEFT JOIN wallet_transactions wt ON wt.player_id = p.id AND wt.game_id = pgd.game_id
+          AND date(wt.created_at) BETWEEN ? AND ?
+          AND (wt.source IS NULL OR wt.source != 'unknown')
+        GROUP BY p.id, pgd.game_id HAVING (deposited > 0 OR withdrawn > 0)
+        ORDER BY my_pnl DESC
+      `).all(start, end) as any[];
+      if (rows.length === 0) return `Aucun revenu sur ${label}.`;
+      const total = rows.reduce((s: number, r: any) => s + r.my_pnl, 0);
+      const lines = rows.map((r: any) => `${r.name} [${r.action_pct}%] — dép:${r.deposited.toFixed(0)} ret:${r.withdrawn.toFixed(0)} net:${fmtAmount(r.net)} mon P&L:${fmtAmount(r.my_pnl)}`);
+      return `Revenu (${label}):\n${lines.join("\n")}\nTotal mon P&L: ${fmtAmount(total)} USDT`;
+    }
+
+    if (name === "top_players_this_week") {
+      const { start, end } = getWeekBounds(0);
+      const rows = getLockAwareSummaryByPlayer({ since_date: toUTCISO(start), end_date: toUTCISO(end) }) as any[];
+      const side = input?.side ?? "winners";
+      const limit = Math.min(input?.limit ?? 5, 20);
+      const sorted = rows
+        .filter((r: any) => side === "winners" ? r.net > 0 : r.net < 0)
+        .sort((a: any, b: any) => side === "winners" ? b.net - a.net : a.net - b.net)
+        .slice(0, limit);
+      if (sorted.length === 0) return `Aucun ${side === "winners" ? "gagnant" : "perdant"} cette semaine.`;
+      return `Top ${sorted.length} ${side === "winners" ? "gagnants" : "perdants"} (semaine):\n${sorted.map((r: any, i: number) => `${i + 1}. ${r.player_name ?? r.name ?? "?"} — net: ${fmtAmount(r.net)} USDT`).join("\n")}`;
+    }
+
+    if (name === "weekly_settlement_summary") {
+      const offset = input?.week_offset ?? 0;
+      const { start, end } = getWeekBounds(offset);
+      const since = toUTCISO(start);
+      const until = toUTCISO(end);
+      const kpis = getLockAwareKPIs({ since_date: since, end_date: until }) as any;
+      const rows = getLockAwareSummaryByPlayer({ since_date: since, end_date: until }) as any[];
+      const weekLabel = `${toParisDate(since)} → ${toParisDate(until)}`;
+      if (rows.length === 0) return `Aucune donnée settlement pour ${weekLabel}.`;
+      const playerLines = rows
+        .filter((r: any) => (r.deposited ?? 0) > 0 || (r.withdrawn ?? 0) > 0)
+        .map((r: any) => `  ${r.player_name ?? r.name ?? "?"}: dép ${(r.deposited ?? 0).toFixed(0)} · ret ${(r.withdrawn ?? 0).toFixed(0)} · net ${fmtAmount(r.net ?? 0)} · mon P&L ${fmtAmount(r.my_pnl ?? 0)}`);
+      return [
+        `Settlement ${weekLabel}:`,
+        `Totaux: dépôts ${(kpis.total_deposited ?? 0).toFixed(0)} · retraits ${(kpis.total_withdrawn ?? 0).toFixed(0)} · net ${fmtAmount(kpis.total_net ?? 0)} · mon P&L ${fmtAmount(kpis.total_my_pnl ?? kpis.my_total_pnl ?? 0)} USDT`,
+        `\nPar joueur:`,
+        ...playerLines,
+      ].join("\n");
     }
 
     return `Tool inconnu: ${name}`;
