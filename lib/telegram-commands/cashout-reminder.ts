@@ -146,6 +146,12 @@ Tu pourras recommencer à jouer <b>après 00h heure de Paris</b> (lundi).
 
 Quand c'est fait, clique sur le bouton ci-dessous \u{1F447}`;
 
+function playerTag(player: CashoutPlayer): string {
+  if (player.telegram_handle) return `@${player.telegram_handle}`;
+  if (player.telegram_id) return `<a href="tg://user?id=${player.telegram_id}">${player.name.split(" ")[0]}</a>`;
+  return `<b>${player.name}</b>`;
+}
+
 function makeButtons(playerId: number, weekStart: string) {
   return [
     [{ text: "✅ C'est fait, j'ai tout envoyé", callback_data: `cashout_done:${playerId}:${weekStart}` }],
@@ -176,7 +182,7 @@ export async function sendInitialReminders(playerIds?: number[]): Promise<{ sent
 
     const ok = await sendTgMsgWithButton(
       player.telegram_group_id,
-      INITIAL_MESSAGE,
+      `${playerTag(player)}\n\n${INITIAL_MESSAGE}`,
       makeButtons(player.id, weekStart),
       player.accounting_topic_id
     );
@@ -209,7 +215,7 @@ export async function sendEscalationReminders(playerIds?: number[]): Promise<{ s
 
     const ok = await sendTgMsgWithButton(
       player.telegram_group_id,
-      "⏰ Reminder : on attend ton cashout + screen recording. Ping-moi quand c'est fait.",
+      `${playerTag(player)}\n\n⏰ Reminder : on attend ton cashout + screen recording. Ping-moi quand c'est fait.`,
       makeButtons(player.id, weekStart),
       player.accounting_topic_id
     );
