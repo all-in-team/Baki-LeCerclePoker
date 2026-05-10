@@ -1,5 +1,8 @@
 export async function register() {
   if (process.env.NEXT_RUNTIME === "nodejs") {
+    const { initCronJobs } = await import("./lib/cron");
+    initCronJobs();
+
     // Node v25+ ships a built-in localStorage Proxy that throws on getItem/setItem
     // when no --localstorage-file path is configured. Replace it with a simple in-memory map.
     if (typeof localStorage !== "undefined" && typeof localStorage.getItem !== "function") {
