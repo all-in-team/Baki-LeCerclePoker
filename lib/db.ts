@@ -792,4 +792,11 @@ function initSchema(db: Database.Database) {
   if (fixNotPlayed.changes > 0) {
     try { db.exec(`ALTER TABLE weekly_cashout_state ADD COLUMN not_played INTEGER DEFAULT 0`); } catch {}
   }
+
+  // DB-backed dedup: track last message timestamp to prevent double sends
+  const fixLastMsg = db.prepare(`INSERT OR IGNORE INTO _applied_fixes (name) VALUES (?)`).run("weekly_cashout_last_message_v1");
+  if (fixLastMsg.changes > 0) {
+    try { db.exec(`ALTER TABLE weekly_cashout_state ADD COLUMN last_message_at TEXT`); } catch {}
+  }
+  try { db.exec(`ALTER TABLE weekly_cashout_state ADD COLUMN last_message_at TEXT`); } catch {}
 }

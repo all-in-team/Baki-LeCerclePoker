@@ -2,12 +2,7 @@ import { getDb } from "@/lib/db";
 import { sendMsg, answerCbQuery, AGENT_CHAT_ID } from "./helpers";
 import { getWeekBounds, toParisDate, toUTCISO } from "@/lib/date-utils";
 
-// ── Helpers ──────────────────────────────────────────────
-
-export function getCurrentWeekStart(): string {
-  const { start } = getWeekBounds(0);
-  return toParisDate(toUTCISO(start));
-}
+// ── Types ────────────────────────────────────────────────
 
 type CashoutPlayer = {
   id: number;
@@ -17,6 +12,26 @@ type CashoutPlayer = {
   telegram_group_id: string;
   accounting_topic_id: number;
 };
+
+type SkipEntry = { player_id: number; name: string; reason: string };
+type SendEntry = { player_id: number; name: string; topic_id: number; username: string | null };
+
+export interface CashoutResult {
+  sent: number;
+  skipped: number;
+  errors: string[];
+  dry_run?: boolean;
+  would_send_to?: SendEntry[];
+  would_skip?: SkipEntry[];
+  summary?: { would_send: number; would_skip: number };
+}
+
+// ── Helpers ──────────────────────────────────────────────
+
+export function getCurrentWeekStart(): string {
+  const { start } = getWeekBounds(0);
+  return toParisDate(toUTCISO(start));
+}
 
 function getActivePlayersForCashout(): CashoutPlayer[] {
   return getDb().prepare(`
@@ -63,6 +78,22 @@ function isResolved(playerId: number, weekStart: string): boolean {
   return !!(row?.cashout_confirmed || row?.not_played);
 }
 
+function getLastMessageAt(playerId: number, weekStart: string): string | null {
+  const row = getDb().prepare(`
+    SELECT last_message_at FROM weekly_cashout_state
+    WHERE player_id = ? AND week_start = ?
+  `).get(playerId, weekStart) as { last_message_at: string | null } | undefined;
+  return row?.last_message_at ?? null;
+}
+
+function touchLastMessage(playerId: number, weekStart: string) {
+  getDb().prepare(`
+    UPDATE weekly_cashout_state
+    SET last_message_at = datetime('now'), reminder_sent_at = COALESCE(reminder_sent_at, datetime('now'))
+    WHERE player_id = ? AND week_start = ?
+  `).run(playerId, weekStart);
+}
+
 function markNotPlayed(playerId: number, weekStart: string) {
   getDb().prepare(`
     UPDATE weekly_cashout_state
@@ -82,9 +113,16 @@ function getNotPlayedCount(weekStart: string): number {
 function incrementEscalation(playerId: number, weekStart: string) {
   getDb().prepare(`
     UPDATE weekly_cashout_state
-    SET escalation_count = escalation_count + 1
+    SET escalation_count = escalation_count + 1, last_message_at = datetime('now')
     WHERE player_id = ? AND week_start = ?
   `).run(playerId, weekStart);
+}
+
+function isOpsAlerted(weekStart: string): boolean {
+  const row = getDb().prepare(`
+    SELECT MAX(ops_alerted) AS alerted FROM weekly_cashout_state WHERE week_start = ?
+  `).get(weekStart) as { alerted: number } | undefined;
+  return !!(row?.alerted);
 }
 
 function markOpsAlerted(weekStart: string) {
@@ -92,6 +130,17 @@ function markOpsAlerted(weekStart: string) {
     UPDATE weekly_cashout_state SET ops_alerted = 1
     WHERE week_start = ? AND cashout_confirmed = 0
   `).run(weekStart);
+}
+
+const DEDUP_INITIAL_MINUTES = 60;
+const DEDUP_ESCALATION_MINUTES = 25;
+
+function minutesSinceLastMessage(playerId: number, weekStart: string): number | null {
+  const lastAt = getLastMessageAt(playerId, weekStart);
+  if (!lastAt) return null;
+  const lastMs = new Date(lastAt + "Z").getTime();
+  const nowMs = Date.now();
+  return (nowMs - lastMs) / 60_000;
 }
 
 // ── Telegram API wrappers ────────────────────────────────
@@ -159,26 +208,45 @@ function makeButtons(playerId: number, weekStart: string) {
   ];
 }
 
+function toSendEntry(p: CashoutPlayer): SendEntry {
+  return { player_id: p.id, name: p.name, topic_id: p.accounting_topic_id, username: p.telegram_handle };
+}
+
 // ── Public API ───────────────────────────────────────────
 
-export async function sendInitialReminders(playerIds?: number[]): Promise<{ sent: number; skipped: number; errors: string[] }> {
+export async function sendInitialReminders(playerIds?: number[], dryRun = false): Promise<CashoutResult> {
   const weekStart = getCurrentWeekStart();
   let players = getActivePlayersForCashout();
   if (playerIds && playerIds.length > 0) {
     players = players.filter(p => playerIds.includes(p.id));
   }
 
+  const wouldSend: SendEntry[] = [];
+  const wouldSkip: SkipEntry[] = [];
   let sent = 0;
   let skipped = 0;
   const errors: string[] = [];
 
   for (const player of players) {
     if (isResolved(player.id, weekStart)) {
+      wouldSkip.push({ player_id: player.id, name: player.name, reason: "already resolved (confirmed or not_played)" });
       skipped++;
       continue;
     }
 
     ensureCashoutState(player.id, weekStart);
+
+    const minSince = minutesSinceLastMessage(player.id, weekStart);
+    if (minSince !== null && minSince < DEDUP_INITIAL_MINUTES) {
+      wouldSkip.push({ player_id: player.id, name: player.name, reason: `dedup: last message ${Math.round(minSince)}min ago (threshold ${DEDUP_INITIAL_MINUTES}min)` });
+      skipped++;
+      continue;
+    }
+
+    if (dryRun) {
+      wouldSend.push(toSendEntry(player));
+      continue;
+    }
 
     const ok = await sendTgMsgWithButton(
       player.telegram_group_id,
@@ -187,27 +255,56 @@ export async function sendInitialReminders(playerIds?: number[]): Promise<{ sent
       player.accounting_topic_id
     );
 
-    if (ok) sent++;
-    else errors.push(`${player.name}: send failed`);
+    if (ok) {
+      touchLastMessage(player.id, weekStart);
+      sent++;
+    } else {
+      errors.push(`${player.name}: send failed`);
+    }
+  }
+
+  if (dryRun) {
+    return {
+      sent: 0, skipped, errors: [],
+      dry_run: true,
+      would_send_to: wouldSend,
+      would_skip: wouldSkip,
+      summary: { would_send: wouldSend.length, would_skip: wouldSkip.length },
+    };
   }
 
   return { sent, skipped, errors };
 }
 
-export async function sendEscalationReminders(playerIds?: number[]): Promise<{ sent: number; skipped: number; errors: string[] }> {
+export async function sendEscalationReminders(playerIds?: number[], dryRun = false): Promise<CashoutResult> {
   const weekStart = getCurrentWeekStart();
   let pending = getPendingPlayers(weekStart);
   if (playerIds && playerIds.length > 0) {
     pending = pending.filter(p => playerIds.includes(p.id));
   }
 
+  const wouldSend: SendEntry[] = [];
+  const wouldSkip: SkipEntry[] = [];
   let sent = 0;
   let skipped = 0;
   const errors: string[] = [];
 
   for (const player of pending) {
     if (isResolved(player.id, weekStart)) {
+      wouldSkip.push({ player_id: player.id, name: player.name, reason: "already resolved" });
       skipped++;
+      continue;
+    }
+
+    const minSince = minutesSinceLastMessage(player.id, weekStart);
+    if (minSince !== null && minSince < DEDUP_ESCALATION_MINUTES) {
+      wouldSkip.push({ player_id: player.id, name: player.name, reason: `dedup: last message ${Math.round(minSince)}min ago (threshold ${DEDUP_ESCALATION_MINUTES}min)` });
+      skipped++;
+      continue;
+    }
+
+    if (dryRun) {
+      wouldSend.push(toSendEntry(player));
       continue;
     }
 
@@ -224,16 +321,34 @@ export async function sendEscalationReminders(playerIds?: number[]): Promise<{ s
     else errors.push(`${player.name}: send failed`);
   }
 
+  if (dryRun) {
+    return {
+      sent: 0, skipped, errors: [],
+      dry_run: true,
+      would_send_to: wouldSend,
+      would_skip: wouldSkip,
+      summary: { would_send: wouldSend.length, would_skip: wouldSkip.length },
+    };
+  }
+
   return { sent, skipped, errors };
 }
 
-export async function sendFinalAlert(): Promise<{ pending_count: number; not_played_count: number; alerted: boolean }> {
+export async function sendFinalAlert(dryRun = false): Promise<{ pending_count: number; not_played_count: number; alerted: boolean; dry_run?: boolean }> {
   const weekStart = getCurrentWeekStart();
   const pending = getPendingPlayers(weekStart);
   const notPlayedCount = getNotPlayedCount(weekStart);
 
   if (pending.length === 0) {
     return { pending_count: 0, not_played_count: notPlayedCount, alerted: false };
+  }
+
+  if (isOpsAlerted(weekStart)) {
+    return { pending_count: pending.length, not_played_count: notPlayedCount, alerted: false };
+  }
+
+  if (dryRun) {
+    return { pending_count: pending.length, not_played_count: notPlayedCount, alerted: false, dry_run: true };
   }
 
   const lines = pending.map(p => {
@@ -251,6 +366,8 @@ export async function sendFinalAlert(): Promise<{ pending_count: number; not_pla
   markOpsAlerted(weekStart);
   return { pending_count: pending.length, not_played_count: notPlayedCount, alerted: true };
 }
+
+// ── Callback handlers ────────────────────────────────────
 
 export async function handleCashoutDoneCallback(
   callbackId: string,
