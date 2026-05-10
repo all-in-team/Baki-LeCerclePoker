@@ -3,6 +3,9 @@ import { NextRequest, NextResponse } from "next/server";
 import { sendInitialReminders } from "@/lib/telegram-commands/cashout-reminder";
 
 export async function POST(req: NextRequest) {
+  if (process.env.CASHOUT_CRONS_ENABLED !== "true") {
+    return NextResponse.json({ error: "Cashout crons disabled" }, { status: 503 });
+  }
   const secret = req.headers.get("x-cron-secret");
   const expected = process.env.AGENT_REPORT_SECRET;
   if (expected && secret !== expected) {
