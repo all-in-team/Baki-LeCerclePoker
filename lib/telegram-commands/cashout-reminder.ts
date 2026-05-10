@@ -1,6 +1,7 @@
 import { getDb } from "@/lib/db";
 import { sendMsg, answerCbQuery, AGENT_CHAT_ID } from "./helpers";
 import { getWeekBounds, toParisDate, toUTCISO } from "@/lib/date-utils";
+import { notifyCashoutConfirmed, notifyCashoutSkipped } from "@/lib/ops-notifications";
 
 // ── Types ────────────────────────────────────────────────
 
@@ -393,6 +394,9 @@ export async function handleCashoutDoneCallback(
   markConfirmed(playerId, weekStart);
   await answerCbQuery(callbackId, "✅ Confirmé !");
 
+  const playerRow = getDb().prepare(`SELECT name FROM players WHERE id = ?`).get(playerId) as { name: string } | undefined;
+  if (playerRow) notifyCashoutConfirmed(playerRow.name);
+
   await editTgMessage(chatId, messageId,
     "\u{1F3AC} <b>Cashout de la semaine</b>\n\n✅ <b>Confirmé</b>"
   );
@@ -428,6 +432,9 @@ export async function handleCashoutSkippedCallback(
   ensureCashoutState(playerId, weekStart);
   markNotPlayed(playerId, weekStart);
   await answerCbQuery(callbackId, "⏸️ Noté !");
+
+  const playerRow2 = getDb().prepare(`SELECT name FROM players WHERE id = ?`).get(playerId) as { name: string } | undefined;
+  if (playerRow2) notifyCashoutSkipped(playerRow2.name);
 
   await editTgMessage(chatId, messageId,
     "\u{1F3AC} <b>Cashout de la semaine</b>\n\n⏸️ <b>Pas joué cette semaine</b>"

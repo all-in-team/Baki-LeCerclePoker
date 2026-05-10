@@ -3,7 +3,10 @@ import {
   sendInitialReminders,
   sendEscalationReminders,
   sendFinalAlert,
+  getCurrentWeekStart,
 } from "./telegram-commands/cashout-reminder";
+import { notifyOps } from "./ops-notifications";
+import { getDb } from "./db";
 
 const TZ = "Europe/Paris";
 const opts = { timezone: TZ };
@@ -13,6 +16,20 @@ let initialized = false;
 export function initCronJobs() {
   if (initialized) return;
   initialized = true;
+
+  // Daily summary at 9h Paris — always on, not gated by CASHOUT_CRONS_ENABLED
+  cron.schedule("0 9 * * *", async () => {
+    console.log("[CRON] daily-summary firing");
+    try {
+      const { sendDailySummary } = await import("./daily-summary");
+      await sendDailySummary();
+      console.log("[CRON] daily-summary sent");
+    } catch (e: any) {
+      console.error("[CRON] daily-summary failed:", e);
+    }
+  }, opts);
+
+  console.log("[CRON] daily-summary registered (9h Paris, every day)");
 
   if (process.env.CASHOUT_CRONS_ENABLED !== "true") {
     console.log("[CRON] cashout crons DISABLED (set CASHOUT_CRONS_ENABLED=true to enable)");
@@ -76,5 +93,32 @@ export function initCronJobs() {
     console.log("[CRON] cashout-final-alert done:", { escalation, alert });
   }, opts);
 
-  console.log("[CRON] 8 cashout reminder jobs registered (Europe/Paris)");
+  // Sunday 14h, 16h, 18h — 6h pending cashout alert
+  cron.schedule("0 14,16,18 * * 0", async () => {
+    console.log("[CRON] 6h-pending-check firing");
+    try {
+      const weekStart = getCurrentWeekStart();
+      const rows = getDb().prepare(`
+        SELECT p.name,
+          ROUND((julianday('now') - julianday(wcs.reminder_sent_at)) * 24, 1) AS hours_since
+        FROM weekly_cashout_state wcs
+        JOIN players p ON p.id = wcs.player_id
+        WHERE wcs.week_start = ?
+          AND wcs.cashout_confirmed = 0
+          AND wcs.not_played = 0
+          AND wcs.reminder_sent_at IS NOT NULL
+          AND (julianday('now') - julianday(wcs.reminder_sent_at)) * 24 >= 6
+      `).all(weekStart) as Array<{ name: string; hours_since: number }>;
+
+      if (rows.length > 0) {
+        const lines = rows.map(r => `• ${r.name} — ${r.hours_since.toFixed(0)}h`);
+        await notifyOps(`⏰ <b>${rows.length} joueur(s) en attente depuis 6h+</b>\n\n${lines.join("\n")}`);
+      }
+      console.log("[CRON] 6h-pending-check done:", rows.length, "pending");
+    } catch (e: any) {
+      console.error("[CRON] 6h-pending-check failed:", e);
+    }
+  }, opts);
+
+  console.log("[CRON] 8 cashout + 1 pending-alert jobs registered (Europe/Paris)");
 }

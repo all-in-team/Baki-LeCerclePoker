@@ -79,6 +79,8 @@ export async function POST(req: NextRequest) {
     } catch (e: any) {
       console.error("[TG AGENT CHAT]", e);
       await sendMsg(chatId, `❌ Erreur agent : ${e.message ?? String(e)}`);
+      const { notifyOpsError } = await import("@/lib/ops-notifications");
+      await notifyOpsError("agent-chat", e.message ?? String(e)).catch(() => {});
     }
     return NextResponse.json({ ok: true });
   }
