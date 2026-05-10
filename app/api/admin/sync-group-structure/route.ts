@@ -2,6 +2,7 @@ export const dynamic = "force-dynamic";
 import { NextRequest, NextResponse } from "next/server";
 import { getDb } from "@/lib/db";
 import { listGroups, syncGroupStructure } from "@/lib/telegram-userbot";
+import { normalizeForMatch } from "@/lib/normalize";
 
 const TOPIC_COLUMN_MAP: Record<string, string> = {
   accounting: "accounting_topic_id",
@@ -52,16 +53,16 @@ export async function POST(req: NextRequest) {
 
     if (titleMatch) {
       const extractedName = titleMatch[1].trim();
+      const normalizedExtracted = normalizeForMatch(extractedName);
 
-      // Exact match first, then starts-with fallback
-      let candidates = db.prepare(
-        `SELECT id, name FROM players WHERE LOWER(name) = LOWER(?) AND status IN ('active', 'signed')`
-      ).all(extractedName) as { id: number; name: string }[];
+      // Match players using accent-insensitive comparison
+      const allActive = db.prepare(
+        `SELECT id, name FROM players WHERE status IN ('active', 'signed') ORDER BY name`
+      ).all() as { id: number; name: string }[];
 
+      let candidates = allActive.filter(p => normalizeForMatch(p.name) === normalizedExtracted);
       if (candidates.length === 0) {
-        candidates = db.prepare(
-          `SELECT id, name FROM players WHERE LOWER(name) LIKE LOWER(?) AND status IN ('active', 'signed') ORDER BY name`
-        ).all(`${extractedName}%`) as { id: number; name: string }[];
+        candidates = allActive.filter(p => normalizeForMatch(p.name).startsWith(normalizedExtracted));
       }
 
       if (candidates.length === 1 && !updatedPlayers.has(candidates[0].id)) {

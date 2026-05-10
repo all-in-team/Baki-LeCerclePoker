@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getDb } from "@/lib/db";
 import { listGroups, ensureTopic } from "@/lib/telegram-userbot";
+import { normalizeForMatch } from "@/lib/normalize";
 
 export async function POST(req: NextRequest) {
   const token = process.env.ADMIN_RECONCILE_TOKEN;
@@ -24,11 +25,11 @@ export async function POST(req: NextRequest) {
     const groupList = await listGroups();
     if (groupList.ok) {
       for (const player of playersWithoutGroup) {
-        const firstName = player.name.split(" ")[0];
-        const matched = groupList.groups.find(g =>
-          g.title.toLowerCase().startsWith(firstName.toLowerCase()) &&
-          g.title.toLowerCase().includes("x lecercle")
-        );
+        const normalizedName = normalizeForMatch(player.name.split(" ")[0]);
+        const matched = groupList.groups.find(g => {
+          const normalizedTitle = normalizeForMatch(g.title.split(/\s*x\s*/i)[0]);
+          return normalizedTitle === normalizedName && g.title.toLowerCase().includes("x lecercle");
+        });
         if (matched) {
           db.prepare(`UPDATE players SET telegram_group_id = ? WHERE id = ?`)
             .run(matched.chat_id, player.id);
