@@ -83,9 +83,10 @@ export default function SettlementsClient({ weekStart, weekEnd, period, rows, ra
   const allEditable = [...autoSettled, ...pendingManual];
   const canLock = period && !isLocked && pendingManual.length === 0 && rows.filter(r => r.status === "conflict").length === 0;
 
-  const paidCount = settled.filter(r => r.payment_received).length;
-  const unpaidSettled = settled.filter(r => !r.payment_received);
-  const unpaidTotal = unpaidSettled.reduce((s, r) => s + Math.abs(r.pnl_player ?? 0), 0);
+  const payableRows = rows.filter(r => r.status === "auto_settled" || r.status === "settled" || r.status === "carry_over");
+  const paidCount = payableRows.filter(r => r.payment_received).length;
+  const unpaidPayable = payableRows.filter(r => !r.payment_received);
+  const unpaidTotal = unpaidPayable.reduce((s, r) => s + Math.abs(r.pnl_player ?? 0), 0);
 
   const filteredSettled = payFilter === "all" ? settled
     : payFilter === "paid" ? settled.filter(r => r.payment_received)
@@ -360,31 +361,34 @@ export default function SettlementsClient({ weekStart, weekEnd, period, rows, ra
         </Section>
       )}
 
+      {/* Payment summary — always visible if any payable rows exist */}
+      {payableRows.length > 0 && (
+        <div style={{ marginBottom: 16, padding: "10px 16px", background: "var(--bg-raised)", border: "1px solid var(--border)", borderRadius: 8, display: "flex", alignItems: "center", gap: 16, fontSize: 13 }}>
+          <span style={{ color: "var(--text-muted)" }}>
+            {paidCount} payé{paidCount !== 1 ? "s" : ""} / {unpaidPayable.length} restant{unpaidPayable.length !== 1 ? "s" : ""}
+            {unpaidPayable.length > 0 && <> · Total à envoyer: <b style={{ color: "var(--text)" }}>{unpaidTotal.toFixed(0)} USDT</b></>}
+          </span>
+        </div>
+      )}
+
       {/* Locked / terminal rows */}
       {settled.length > 0 && (
         <Section title={`Locked (${settled.length})`} color="var(--green)" emoji={"✅"}>
-          {/* Payment summary */}
-          <div style={{ marginBottom: 12, display: "flex", alignItems: "center", gap: 16, fontSize: 13 }}>
-            <span style={{ color: "var(--text-muted)" }}>
-              {paidCount} payé{paidCount !== 1 ? "s" : ""} / {unpaidSettled.length} restant{unpaidSettled.length !== 1 ? "s" : ""}
-              {unpaidSettled.length > 0 && <> · Total à envoyer: <b style={{ color: "var(--text)" }}>{unpaidTotal.toFixed(0)} USDT</b></>}
-            </span>
-            <span style={{ marginLeft: "auto", display: "flex", gap: 4 }}>
-              {(["all", "unpaid", "paid"] as const).map(f => (
-                <button
-                  key={f}
-                  onClick={() => setPayFilter(f)}
-                  style={{
-                    padding: "4px 10px", borderRadius: 4, border: "1px solid var(--border)", fontSize: 11, cursor: "pointer",
-                    background: payFilter === f ? "var(--gold)" : "transparent",
-                    color: payFilter === f ? "#000" : "var(--text-muted)",
-                    fontWeight: payFilter === f ? 600 : 400,
-                  }}
-                >
-                  {f === "all" ? "Tous" : f === "unpaid" ? "Pas payés" : "Payés"}
-                </button>
-              ))}
-            </span>
+          <div style={{ marginBottom: 12, display: "flex", justifyContent: "flex-end", gap: 4 }}>
+            {(["all", "unpaid", "paid"] as const).map(f => (
+              <button
+                key={f}
+                onClick={() => setPayFilter(f)}
+                style={{
+                  padding: "4px 10px", borderRadius: 4, border: "1px solid var(--border)", fontSize: 11, cursor: "pointer",
+                  background: payFilter === f ? "var(--gold)" : "transparent",
+                  color: payFilter === f ? "#000" : "var(--text-muted)",
+                  fontWeight: payFilter === f ? 600 : 400,
+                }}
+              >
+                {f === "all" ? "Tous" : f === "unpaid" ? "Pas payés" : "Payés"}
+              </button>
+            ))}
           </div>
 
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
@@ -492,7 +496,7 @@ function PlayerRow({ row, isExpanded, isLocked, txList, availableTxs, loading, m
           )}
         </td>
         <td style={{ padding: "8px", textAlign: "center" }}>
-          {row.status === "settled" || row.status === "carry_over" ? (
+          {row.status === "auto_settled" || row.status === "settled" || row.status === "carry_over" ? (
             <button
               onClick={(e) => { e.stopPropagation(); onTogglePayment(); }}
               disabled={loading === `pay-${row.id}`}
@@ -507,7 +511,7 @@ function PlayerRow({ row, isExpanded, isLocked, txList, availableTxs, loading, m
               {row.payment_received ? `✅ ${relativeTime(row.received_at)}` : "Pas payé"}
             </button>
           ) : (
-            <span style={{ fontSize: 11, color: "var(--text-dim)" }} title="Lock le settlement d'abord">—</span>
+            <span style={{ fontSize: 11, color: "var(--text-dim)" }} title="P&L pas encore calculé">—</span>
           )}
         </td>
       </tr>
