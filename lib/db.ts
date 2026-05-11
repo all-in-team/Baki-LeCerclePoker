@@ -815,4 +815,11 @@ function initSchema(db: Database.Database) {
   try { db.exec(`ALTER TABLE weekly_settlements ADD COLUMN payment_received INTEGER DEFAULT 0`); } catch {}
   try { db.exec(`ALTER TABLE weekly_settlements ADD COLUMN received_at TEXT`); } catch {}
   try { db.exec(`ALTER TABLE weekly_settlements ADD COLUMN received_by TEXT`); } catch {}
+
+  // Drop unused legacy tables (0 rows in production — never populated)
+  const fixDropLegacy = db.prepare(`INSERT OR IGNORE INTO _applied_fixes (name) VALUES (?)`).run("drop_unused_legacy_tables_v1");
+  if (fixDropLegacy.changes > 0) {
+    db.exec(`DROP TABLE IF EXISTS accounting_entries`);
+    db.exec(`DROP TABLE IF EXISTS reports`);
+  }
 }

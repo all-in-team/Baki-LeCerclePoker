@@ -44,7 +44,7 @@ export default async function SettlementsPage({ searchParams }: { searchParams: 
 
   return (
     <>
-      <PageHeader title="Settlements" subtitle="Validation hebdomadaire des P&L wallet par joueur" />
+      <PageHeader title="AKPOKER — Settlements" subtitle="Validation hebdomadaire des P&L wallet par joueur" />
       <SettlementsClient
         weekStart={weekStart}
         weekEnd={period?.week_end ?? ""}

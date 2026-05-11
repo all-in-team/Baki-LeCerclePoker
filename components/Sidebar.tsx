@@ -2,20 +2,35 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { LayoutDashboard, AppWindow, FileText, MessageSquare, TrendingUp, Zap, Wallet, ContactRound, Settings, BarChart3, ArrowRightLeft, Scale } from "lucide-react";
+import { LayoutDashboard, FileText, ContactRound, Settings, BarChart3, Scale, Wallet, Users } from "lucide-react";
 
-const NAV = [
-  { href: "/", label: "Dashboard", icon: LayoutDashboard },
-  { href: "/finance", label: "Finance", icon: BarChart3 },
-  { href: "/crm", label: "CRM Joueurs", icon: ContactRound },
-  { href: "/apps", label: "Apps", icon: AppWindow },
-  { href: "/tele", label: "TELE AKPOKER", icon: Wallet },
-  { href: "/cashouts", label: "Cashouts", icon: ArrowRightLeft },
-  { href: "/settlements", label: "Settlements", icon: Scale },
-  { href: "/reports", label: "Reports", icon: FileText },
-  { href: "/ledger", label: "Telegram Ledger", icon: MessageSquare },
-  { href: "/signals", label: "Weekly Signal", icon: Zap },
-  { href: "/settings", label: "Settings", icon: Settings },
+type NavItem = { href: string; label: string; icon: any };
+type NavSection = { label: string; items: NavItem[] };
+
+const SECTIONS: NavSection[] = [
+  {
+    label: "",
+    items: [
+      { href: "/", label: "Dashboard", icon: LayoutDashboard },
+      { href: "/crm", label: "CRM Joueurs", icon: ContactRound },
+      { href: "/players", label: "Joueurs", icon: Users },
+      { href: "/settings", label: "Settings", icon: Settings },
+    ],
+  },
+  {
+    label: "AKPOKER",
+    items: [
+      { href: "/akpoker/pnl", label: "P&L", icon: Wallet },
+      { href: "/akpoker/settlements", label: "Settlements", icon: Scale },
+    ],
+  },
+  {
+    label: "WEPOKER",
+    items: [
+      { href: "/wepoker/pnl", label: "P&L", icon: BarChart3 },
+      { href: "/wepoker/settlements", label: "Settlements", icon: FileText },
+    ],
+  },
 ];
 
 export default function Sidebar() {
@@ -53,25 +68,40 @@ export default function Sidebar() {
 
       {/* Nav */}
       <nav style={{ flex: 1, padding: "12px 10px" }}>
-        {NAV.map(({ href, label, icon: Icon }) => {
-          const active = path === href;
-          return (
-            <Link key={href} href={href} style={{
-              display: "flex", alignItems: "center", gap: 10,
-              padding: "9px 10px", borderRadius: 7, marginBottom: 2,
-              textDecoration: "none",
-              background: active ? "rgba(34,197,94,0.12)" : "transparent",
-              color: active ? "var(--green)" : "var(--text-muted)",
-              fontWeight: active ? 600 : 400,
-              fontSize: 13,
-              transition: "all 0.15s",
-              borderLeft: active ? "2px solid var(--green)" : "2px solid transparent",
-            }}>
-              <Icon size={16} strokeWidth={active ? 2.2 : 1.8} />
-              {label}
-            </Link>
-          );
-        })}
+        {SECTIONS.map((section) => (
+          <div key={section.label || "_top"} style={{ marginBottom: section.label ? 4 : 0 }}>
+            {section.label && (
+              <div style={{
+                fontSize: 10, fontWeight: 700, color: "var(--text-dim)",
+                letterSpacing: "0.08em", textTransform: "uppercase",
+                padding: "12px 10px 4px", marginTop: 4,
+                borderTop: "1px solid var(--border)",
+              }}>
+                {section.label}
+              </div>
+            )}
+            {section.items.map(({ href, label, icon: Icon }) => {
+              const active = path === href || (href !== "/" && path.startsWith(href));
+              return (
+                <Link key={href} href={href} style={{
+                  display: "flex", alignItems: "center", gap: 10,
+                  padding: section.label ? "7px 10px 7px 18px" : "9px 10px",
+                  borderRadius: 7, marginBottom: 1,
+                  textDecoration: "none",
+                  background: active ? "rgba(34,197,94,0.12)" : "transparent",
+                  color: active ? "var(--green)" : "var(--text-muted)",
+                  fontWeight: active ? 600 : 400,
+                  fontSize: section.label ? 12 : 13,
+                  transition: "all 0.15s",
+                  borderLeft: active ? "2px solid var(--green)" : "2px solid transparent",
+                }}>
+                  <Icon size={section.label ? 14 : 16} strokeWidth={active ? 2.2 : 1.8} />
+                  {label}
+                </Link>
+              );
+            })}
+          </div>
+        ))}
       </nav>
 
       {/* Footer */}

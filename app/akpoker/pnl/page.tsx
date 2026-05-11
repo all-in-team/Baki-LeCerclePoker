@@ -99,7 +99,7 @@ export default async function TELEPage({ searchParams }: { searchParams: Promise
   return (
     <>
       <PageHeader
-        title="TELE AKPOKER"
+        title="AKPOKER — P&L"
         subtitle="Dépôts & retraits par joueur — P&L calculé selon le deal de chaque joueur"
       />
       <TELEClient
