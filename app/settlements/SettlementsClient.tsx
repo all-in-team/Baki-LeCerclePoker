@@ -326,6 +326,7 @@ export default function SettlementsClient({ weekStart, weekEnd, period, rows, ra
                 <th style={{ textAlign: "right", padding: "6px 8px" }}>Op. PnL</th>
                 <th style={{ textAlign: "left", padding: "6px 8px" }}>Anchor</th>
                 <th style={{ textAlign: "center", padding: "6px 8px" }}>Edits</th>
+                <th style={{ textAlign: "center", padding: "6px 8px" }}>Payé</th>
               </tr>
             </thead>
             <tbody>
@@ -347,9 +348,11 @@ export default function SettlementsClient({ weekStart, weekEnd, period, rows, ra
                   onCloseAdd={() => setAvailableTxs(null)}
                   onValidate={(action, payload) => handleValidate(row.player_id, action, payload)}
                   onManualAmountChange={(v) => setManualAmounts(prev => ({ ...prev, [row.player_id]: v }))}
+                  onTogglePayment={() => handleTogglePayment(row)}
                   fmt={fmt}
                   fmtDate={fmtDate}
                   statusEmoji={statusEmoji}
+                  relativeTime={relativeTime}
                 />
               ))}
             </tbody>
@@ -432,7 +435,7 @@ export default function SettlementsClient({ weekStart, weekEnd, period, rows, ra
 
 // ── PlayerRow component ──────────────────────────────────
 
-function PlayerRow({ row, isExpanded, isLocked, txList, availableTxs, loading, manualAmount, onToggleExpand, onExclude, onRemoveOverride, onInclude, onOpenAdd, onCloseAdd, onValidate, onManualAmountChange, fmt, fmtDate, statusEmoji }: {
+function PlayerRow({ row, isExpanded, isLocked, txList, availableTxs, loading, manualAmount, onToggleExpand, onExclude, onRemoveOverride, onInclude, onOpenAdd, onCloseAdd, onValidate, onManualAmountChange, onTogglePayment, fmt, fmtDate, statusEmoji, relativeTime }: {
   row: SettlementRow;
   isExpanded: boolean;
   isLocked: boolean;
@@ -448,9 +451,11 @@ function PlayerRow({ row, isExpanded, isLocked, txList, availableTxs, loading, m
   onCloseAdd: () => void;
   onValidate: (action: "carry_over" | "manual_close", payload?: { amount?: number }) => void;
   onManualAmountChange: (v: string) => void;
+  onTogglePayment: () => void;
   fmt: (n: number | null) => string;
   fmtDate: (s: string | null) => string;
   statusEmoji: (s: string) => string;
+  relativeTime: (iso: string | null) => string;
 }) {
   return (
     <>
@@ -486,11 +491,30 @@ function PlayerRow({ row, isExpanded, isLocked, txList, availableTxs, loading, m
             </span>
           )}
         </td>
+        <td style={{ padding: "8px", textAlign: "center" }}>
+          {row.status === "settled" || row.status === "carry_over" ? (
+            <button
+              onClick={(e) => { e.stopPropagation(); onTogglePayment(); }}
+              disabled={loading === `pay-${row.id}`}
+              title={row.payment_received ? `${row.received_by} · ${relativeTime(row.received_at)}` : "Marquer comme payé"}
+              style={{
+                padding: "4px 10px", borderRadius: 5, border: "1px solid var(--border)", fontSize: 11, cursor: "pointer",
+                background: row.payment_received ? "rgba(34,197,94,0.15)" : "transparent",
+                color: row.payment_received ? "var(--green)" : "var(--text-muted)",
+                fontWeight: row.payment_received ? 600 : 400,
+              }}
+            >
+              {row.payment_received ? `✅ ${relativeTime(row.received_at)}` : "Pas payé"}
+            </button>
+          ) : (
+            <span style={{ fontSize: 11, color: "var(--text-dim)" }} title="Lock le settlement d'abord">—</span>
+          )}
+        </td>
       </tr>
 
       {isExpanded && (
         <tr>
-          <td colSpan={8} style={{ padding: "0 8px 16px 40px", background: "var(--bg-raised)" }}>
+          <td colSpan={9} style={{ padding: "0 8px 16px 40px", background: "var(--bg-raised)" }}>
             {/* Transaction list */}
             {txList.length > 0 && (
               <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12, marginTop: 8 }}>
