@@ -4,7 +4,7 @@ import { todayCost, usageBetween } from "./agent-cost";
 import { dispatchFix, isWithinBudget, recentDoerSessions, looksMoneyFlow } from "./agent-doer";
 import { getCurrentWeekStart } from "./telegram-commands/cashout-reminder";
 import { getWeekBounds, toUTCISO, toParisDate } from "./date-utils";
-import { getLockAwareSummaryByPlayer, getLockAwareKPIs } from "./queries";
+import { getLockAwareSummaryByPlayer, getLockAwareKPIs, getWalletSummaryByPlayer } from "./queries";
 import { checkUserbotHealth, listGroups } from "./telegram-userbot";
 
 // ────────────────────────────────────────────────────────────
@@ -337,28 +337,18 @@ export async function executeTool(name: string, input: any): Promise<string> {
       }
 
       const playerId = playerFilter?.[0]?.id ?? null;
-      const params: any[] = [start, end];
-      let sql = `
-        SELECT p.name AS player, g.name AS game, pgd.action_pct,
-          COALESCE(SUM(CASE WHEN wt.type='deposit' THEN wt.amount ELSE 0 END), 0) AS deposited,
-          COALESCE(SUM(CASE WHEN wt.type='withdrawal' THEN wt.amount ELSE 0 END), 0) AS withdrawn,
-          COALESCE(SUM(CASE WHEN wt.type='withdrawal' THEN wt.amount ELSE -wt.amount END), 0) AS net,
-          COALESCE(SUM(CASE WHEN wt.type='withdrawal' THEN wt.amount ELSE -wt.amount END), 0) * pgd.action_pct / 100.0 AS my_pnl
-        FROM players p
-        JOIN player_game_deals pgd ON pgd.player_id = p.id
-        JOIN games g ON g.id = pgd.game_id
-        LEFT JOIN wallet_transactions wt ON wt.player_id = p.id AND wt.game_id = pgd.game_id
-          AND date(wt.created_at) BETWEEN ? AND ?
-      `;
-      if (playerId) { sql += ` WHERE p.id = ?`; params.push(playerId); }
-      sql += ` GROUP BY p.id, pgd.game_id HAVING (deposited > 0 OR withdrawn > 0) ORDER BY my_pnl DESC`;
-      const rows = db.prepare(sql).all(...params) as any[];
+      let rows = getLockAwareSummaryByPlayer({
+        since_date: start + "T00:00:00Z",
+        end_date: end + "T23:59:59Z",
+      }) as any[];
+      if (playerId) rows = rows.filter((r: any) => r.player_id === playerId);
+      rows = rows.filter((r: any) => (r.total_deposited ?? 0) > 0 || (r.total_withdrawn ?? 0) > 0);
 
       if (rows.length === 0) return `P&L (${label}): aucune transaction sur cette période${playerId ? ` pour ${playerFilter![0].name}` : ""}.`;
 
-      const total = rows.reduce((acc, r) => acc + r.my_pnl, 0);
-      const lines = rows.map(r =>
-        `${r.player}/${r.game} [${r.action_pct}%] — déposé:${r.deposited.toFixed(0)} retiré:${r.withdrawn.toFixed(0)} net:${fmtAmount(r.net)} mon P&L:${fmtAmount(r.my_pnl)} USDT`
+      const total = rows.reduce((acc: number, r: any) => acc + (r.my_pnl ?? 0), 0);
+      const lines = rows.map((r: any) =>
+        `${r.player_name}/${r.game_name} [${r.action_pct}%] — déposé:${(r.total_deposited ?? 0).toFixed(0)} retiré:${(r.total_withdrawn ?? 0).toFixed(0)} net:${fmtAmount(r.net ?? 0)} mon P&L:${fmtAmount(r.my_pnl ?? 0)} USDT`
       );
       return `P&L (${label}):\n${lines.join("\n")}\nTotal mon P&L: ${fmtAmount(total)} USDT`;
     }
@@ -380,26 +370,25 @@ export async function executeTool(name: string, input: any): Promise<string> {
          WHERE pgd.player_id = ?`
       ).all(pid) as any[];
 
-      const balances = db.prepare(
-        `SELECT g.name AS game,
-                COALESCE(SUM(CASE WHEN wt.type='deposit' THEN wt.amount ELSE -wt.amount END), 0) AS net
-         FROM wallet_transactions wt JOIN games g ON g.id = wt.game_id
-         WHERE wt.player_id = ?
-         GROUP BY g.id`
-      ).all(pid) as any[];
+      const balances = (getWalletSummaryByPlayer() as any[]).filter((r: any) => r.player_id === pid);
 
       const recentTx = db.prepare(
-        `SELECT g.name AS game, wt.type, wt.amount, wt.created_at
+        `SELECT g.name AS game, wt.type, wt.amount, wt.tx_datetime
          FROM wallet_transactions wt LEFT JOIN games g ON g.id = wt.game_id
-         WHERE wt.player_id = ? ORDER BY wt.created_at DESC LIMIT 10`
+         WHERE wt.player_id = ? AND (wt.source IS NULL OR wt.source != 'unknown')
+         ORDER BY wt.tx_datetime DESC LIMIT 10`
       ).all(pid) as any[];
+
+      const totalNet = balances.reduce((s: number, b: any) => s + (b.net ?? 0), 0);
+      const totalMyPnl = balances.reduce((s: number, b: any) => s + (b.my_pnl ?? 0), 0);
 
       const out = [
         `👤 ${player.name} ${player.telegram_handle ? `@${player.telegram_handle}` : ""} — tier ${player.tier ?? "?"}, status ${player.status}`,
         player.tron_address ? `Wallet TELE: ${player.tron_address}` : "Wallet TELE: non configuré",
         deals.length ? `\nDeals:\n${deals.map(d => `  ${d.game}: ${d.action_pct}% action, ${d.rakeback_pct}% RB${d.insurance_pct ? `, ${d.insurance_pct}% ins` : ""}`).join("\n")}` : "\nAucun deal configuré",
-        balances.length ? `\nSoldes nets (joueur me doit si négatif):\n${balances.map(b => `  ${b.game}: ${fmtAmount(b.net)} USDT`).join("\n")}` : "",
-        recentTx.length ? `\n10 dernières tx:\n${recentTx.map(t => `  ${t.created_at.slice(0, 10)} ${t.game ?? "?"} ${t.type} ${t.amount.toFixed(0)}`).join("\n")}` : "",
+        balances.length ? `\nSoldes par game:\n${balances.map((b: any) => `  ${b.game_name}: dép ${(b.total_deposited ?? 0).toFixed(0)} · ret ${(b.total_withdrawn ?? 0).toFixed(0)} · net ${fmtAmount(b.net ?? 0)} · mon P&L ${fmtAmount(b.my_pnl ?? 0)} USDT`).join("\n")}` : "",
+        balances.length ? `\nTotal: net ${fmtAmount(totalNet)} USDT · mon P&L ${fmtAmount(totalMyPnl)} USDT` : "",
+        recentTx.length ? `\n10 dernières tx:\n${recentTx.map(t => `  ${(t.tx_datetime ?? "?").slice(0, 10)} ${t.game ?? "?"} ${t.type} ${t.amount.toFixed(0)}`).join("\n")}` : "",
         player.notes ? `\nNotes: ${player.notes}` : "",
       ].filter(Boolean).join("\n");
       return out;
@@ -467,19 +456,18 @@ export async function executeTool(name: string, input: any): Promise<string> {
     }
 
     if (name === "list_players") {
-      const params: any[] = [];
-      let where = "1=1";
-      if (input?.status) { where += ` AND p.status = ?`; params.push(input.status); }
-      const rows = db.prepare(
-        `SELECT p.id, p.name, p.tier, p.status, p.telegram_handle,
-                COALESCE(SUM(CASE WHEN wt.type='deposit' THEN wt.amount ELSE -wt.amount END), 0) AS net_balance
-         FROM players p LEFT JOIN wallet_transactions wt ON wt.player_id = p.id
-         WHERE ${where}
-         GROUP BY p.id ORDER BY p.tier, p.name`
-      ).all(...params) as any[];
-      if (rows.length === 0) return "Aucun joueur.";
-      return rows.map(r =>
-        `${r.tier ?? "?"} · ${r.name}${r.telegram_handle ? ` @${r.telegram_handle}` : ""} · ${r.status} · solde net: ${fmtAmount(r.net_balance)} USDT`
+      const statusFilter = input?.status ?? null;
+      const allPlayers = db.prepare(
+        `SELECT id, name, tier, status, telegram_handle FROM players${statusFilter ? ` WHERE status = ?` : ""} ORDER BY tier, name`
+      ).all(...(statusFilter ? [statusFilter] : [])) as any[];
+      if (allPlayers.length === 0) return "Aucun joueur.";
+
+      const balanceRows = getWalletSummaryByPlayer() as any[];
+      const netByPlayer = new Map<number, number>();
+      for (const r of balanceRows) netByPlayer.set(r.player_id, (netByPlayer.get(r.player_id) ?? 0) + (r.net ?? 0));
+
+      return allPlayers.map((p: any) =>
+        `${p.tier ?? "?"} · ${p.name}${p.telegram_handle ? ` @${p.telegram_handle}` : ""} · ${p.status} · solde net: ${fmtAmount(netByPlayer.get(p.id) ?? 0)} USDT`
       ).join("\n");
     }
 
@@ -566,24 +554,14 @@ export async function executeTool(name: string, input: any): Promise<string> {
 
     if (name === "revenue_breakdown") {
       const { start, end, label } = parsePeriod(input?.period ?? "week");
-      const rows = db.prepare(`
-        SELECT p.name, pgd.action_pct,
-          COALESCE(SUM(CASE WHEN wt.type='deposit' THEN wt.amount ELSE 0 END), 0) AS deposited,
-          COALESCE(SUM(CASE WHEN wt.type='withdrawal' THEN wt.amount ELSE 0 END), 0) AS withdrawn,
-          COALESCE(SUM(CASE WHEN wt.type='withdrawal' THEN wt.amount ELSE -wt.amount END), 0) AS net,
-          COALESCE(SUM(CASE WHEN wt.type='withdrawal' THEN wt.amount ELSE -wt.amount END), 0) * pgd.action_pct / 100.0 AS my_pnl
-        FROM players p
-        JOIN player_game_deals pgd ON pgd.player_id = p.id
-        JOIN games g ON g.id = pgd.game_id
-        LEFT JOIN wallet_transactions wt ON wt.player_id = p.id AND wt.game_id = pgd.game_id
-          AND date(wt.created_at) BETWEEN ? AND ?
-          AND (wt.source IS NULL OR wt.source != 'unknown')
-        GROUP BY p.id, pgd.game_id HAVING (deposited > 0 OR withdrawn > 0)
-        ORDER BY my_pnl DESC
-      `).all(start, end) as any[];
+      let rows = getLockAwareSummaryByPlayer({
+        since_date: start + "T00:00:00Z",
+        end_date: end + "T23:59:59Z",
+      }) as any[];
+      rows = rows.filter((r: any) => (r.total_deposited ?? 0) > 0 || (r.total_withdrawn ?? 0) > 0);
       if (rows.length === 0) return `Aucun revenu sur ${label}.`;
-      const total = rows.reduce((s: number, r: any) => s + r.my_pnl, 0);
-      const lines = rows.map((r: any) => `${r.name} [${r.action_pct}%] — dép:${r.deposited.toFixed(0)} ret:${r.withdrawn.toFixed(0)} net:${fmtAmount(r.net)} mon P&L:${fmtAmount(r.my_pnl)}`);
+      const total = rows.reduce((s: number, r: any) => s + (r.my_pnl ?? 0), 0);
+      const lines = rows.map((r: any) => `${r.player_name} [${r.action_pct}%] — dép:${(r.total_deposited ?? 0).toFixed(0)} ret:${(r.total_withdrawn ?? 0).toFixed(0)} net:${fmtAmount(r.net ?? 0)} mon P&L:${fmtAmount(r.my_pnl ?? 0)}`);
       return `Revenu (${label}):\n${lines.join("\n")}\nTotal mon P&L: ${fmtAmount(total)} USDT`;
     }
 
