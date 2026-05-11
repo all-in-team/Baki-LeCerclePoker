@@ -4,7 +4,7 @@ import { todayCost, usageBetween } from "./agent-cost";
 import { dispatchFix, isWithinBudget, recentDoerSessions, looksMoneyFlow } from "./agent-doer";
 import { getCurrentWeekStart } from "./telegram-commands/cashout-reminder";
 import { getWeekBounds, toUTCISO, toParisDate } from "./date-utils";
-import { getLockAwareSummaryByPlayer, getLockAwareKPIs, getWalletSummaryByPlayer } from "./queries";
+import { getLockAwareSummaryByPlayer, getLockAwareKPIs, getWalletSummaryByPlayer, getAkpokerPnL, getWepokerPnL, getAgencyTotalPnL, getTopContributors, getActivePlayersCount, type Period } from "./queries";
 import { checkUserbotHealth, listGroups } from "./telegram-userbot";
 
 // ────────────────────────────────────────────────────────────
@@ -347,21 +347,26 @@ export async function executeTool(name: string, input: any): Promise<string> {
         return `Plusieurs joueurs correspondent à "${input.player}":\n${playerFilter.map(p => `- ${p.name}`).join("\n")}\nPrécise.`;
       }
 
-      const playerId = playerFilter?.[0]?.id ?? null;
-      let rows = getLockAwareSummaryByPlayer({
-        since_date: start + "T00:00:00Z",
-        end_date: end + "T23:59:59Z",
-      }) as any[];
-      if (playerId) rows = rows.filter((r: any) => r.player_id === playerId);
-      rows = rows.filter((r: any) => (r.total_deposited ?? 0) > 0 || (r.total_withdrawn ?? 0) > 0);
+      const playerId = playerFilter?.[0]?.id ?? undefined;
+      const period: Period = { from: start, to: end };
+      const total = getAgencyTotalPnL(period);
+      const ak = getAkpokerPnL(playerId, period);
+      const wp = getWepokerPnL(playerId, period);
 
-      if (rows.length === 0) return `P&L (${label}): aucune transaction sur cette période${playerId ? ` pour ${playerFilter![0].name}` : ""}.`;
-
-      const total = rows.reduce((acc: number, r: any) => acc + (r.my_pnl ?? 0), 0);
-      const lines = rows.map((r: any) =>
-        `${r.player_name}/${r.game_name} [${r.action_pct}%] — déposé:${(r.total_deposited ?? 0).toFixed(0)} retiré:${(r.total_withdrawn ?? 0).toFixed(0)} net:${fmtAmount(r.net ?? 0)} mon P&L:${fmtAmount(r.my_pnl ?? 0)} USDT`
-      );
-      return `P&L (${label}):\n${lines.join("\n")}\nTotal mon P&L: ${fmtAmount(total)} USDT`;
+      const lines: string[] = [`P&L (${label}):`];
+      if (ak.length) {
+        lines.push(`\nAKPOKER:`);
+        ak.forEach(r => lines.push(`  ${r.player_name} [${r.action_pct}%] — dép:${r.deposited.toFixed(0)} ret:${r.withdrawn.toFixed(0)} net:${fmtAmount(r.net_usdt)} agency:${fmtAmount(r.agency_cut_usdt)} USDT`));
+      }
+      if (wp.length) {
+        lines.push(`\nWEPOKER:`);
+        wp.forEach(r => lines.push(`  ${r.player_name} [${r.action_pct}%] — agency: winnings ${fmtAmount(r.agency_winnings_split_cny)} + RB ${fmtAmount(r.agency_rakeback_split_cny)} + ins ${fmtAmount(r.agency_insurance_split_cny)} = ${fmtAmount(r.total_agency_cny)} CNY (${fmtAmount(r.total_agency_usdt)} USDT)`));
+      }
+      if (!playerId) {
+        lines.push(`\nTotal agency: ${fmtAmount(total.total_usdt)} USDT (AK: ${fmtAmount(total.akpoker_usdt)}, WP: ${fmtAmount(total.wepoker_usdt)})`);
+      }
+      if (ak.length === 0 && wp.length === 0) return `P&L (${label}): aucune donnée${playerId ? ` pour ${playerFilter![0].name}` : ""}.`;
+      return lines.join("\n");
     }
 
     if (name === "get_player_detail") {
@@ -371,17 +376,18 @@ export async function executeTool(name: string, input: any): Promise<string> {
       const pid = matches[0].id;
 
       const player = db.prepare(
-        `SELECT id, name, telegram_handle, telegram_phone, status, tier, notes, tron_address, tele_wallet_cashout, created_at
+        `SELECT id, name, telegram_handle, telegram_phone, status, tier, notes, created_at
          FROM players WHERE id = ?`
       ).get(pid) as any;
 
       const deals = db.prepare(
-        `SELECT g.name AS game, pgd.action_pct, pgd.rakeback_pct, pgd.insurance_pct
+        `SELECT g.name AS game, pgd.action_pct, pgd.rakeback_pct, pgd.insurance_pct, pgd.start_date
          FROM player_game_deals pgd JOIN games g ON g.id = pgd.game_id
          WHERE pgd.player_id = ?`
       ).all(pid) as any[];
 
-      const balances = (getWalletSummaryByPlayer() as any[]).filter((r: any) => r.player_id === pid);
+      const ak = getAkpokerPnL(pid);
+      const wp = getWepokerPnL(pid);
 
       const recentTx = db.prepare(
         `SELECT g.name AS game, wt.type, wt.amount, wt.tx_datetime
@@ -390,19 +396,40 @@ export async function executeTool(name: string, input: any): Promise<string> {
          ORDER BY wt.tx_datetime DESC LIMIT 10`
       ).all(pid) as any[];
 
-      const totalNet = balances.reduce((s: number, b: any) => s + (b.net ?? 0), 0);
-      const totalMyPnl = balances.reduce((s: number, b: any) => s + (b.my_pnl ?? 0), 0);
-
-      const out = [
+      const out: string[] = [
         `👤 ${player.name} ${player.telegram_handle ? `@${player.telegram_handle}` : ""} — tier ${player.tier ?? "?"}, status ${player.status}`,
-        player.tron_address ? `Wallet TELE: ${player.tron_address}` : "Wallet TELE: non configuré",
-        deals.length ? `\nDeals:\n${deals.map(d => `  ${d.game}: ${d.action_pct}% action, ${d.rakeback_pct}% RB${d.insurance_pct ? `, ${d.insurance_pct}% ins` : ""}`).join("\n")}` : "\nAucun deal configuré",
-        balances.length ? `\nSoldes par game:\n${balances.map((b: any) => `  ${b.game_name}: dép ${(b.total_deposited ?? 0).toFixed(0)} · ret ${(b.total_withdrawn ?? 0).toFixed(0)} · net ${fmtAmount(b.net ?? 0)} · mon P&L ${fmtAmount(b.my_pnl ?? 0)} USDT`).join("\n")}` : "",
-        balances.length ? `\nTotal: net ${fmtAmount(totalNet)} USDT · mon P&L ${fmtAmount(totalMyPnl)} USDT` : "",
-        recentTx.length ? `\n10 dernières tx:\n${recentTx.map(t => `  ${(t.tx_datetime ?? "?").slice(0, 10)} ${t.game ?? "?"} ${t.type} ${t.amount.toFixed(0)}`).join("\n")}` : "",
-        player.notes ? `\nNotes: ${player.notes}` : "",
-      ].filter(Boolean).join("\n");
-      return out;
+      ];
+
+      if (deals.length) {
+        out.push(`\nDeals:`);
+        deals.forEach(d => out.push(`  ${d.game}: ${d.action_pct}% action${d.rakeback_pct ? `, ${d.rakeback_pct}% RB` : ""}${d.insurance_pct ? `, ${d.insurance_pct}% ins` : ""}${d.start_date ? ` · depuis ${d.start_date}` : ""}`));
+      }
+
+      if (ak.length) {
+        const a = ak[0];
+        out.push(`\nAKPOKER:`);
+        out.push(`  dép ${a.deposited.toFixed(0)} · ret ${a.withdrawn.toFixed(0)} · net ${fmtAmount(a.net_usdt)} · agency ${fmtAmount(a.agency_cut_usdt)} USDT`);
+      }
+
+      if (wp.length) {
+        const w = wp[0];
+        out.push(`\nWEPOKER:`);
+        out.push(`  Player P&L: ${fmtAmount(w.player_pnl_cny)} CNY`);
+        out.push(`  Agency: winnings ${fmtAmount(w.agency_winnings_split_cny)} · RB ${fmtAmount(w.agency_rakeback_split_cny)} · ins ${fmtAmount(w.agency_insurance_split_cny)}`);
+        out.push(`  Total agency: ${fmtAmount(w.total_agency_cny)} CNY = ${fmtAmount(w.total_agency_usdt)} USDT`);
+      }
+
+      const totalAgency = ak.reduce((s, r) => s + r.agency_cut_usdt, 0) + wp.reduce((s, r) => s + r.total_agency_usdt, 0);
+      if (ak.length || wp.length) out.push(`\nTotal agency (all games): ${fmtAmount(totalAgency)} USDT`);
+
+      if (recentTx.length) {
+        out.push(`\n10 dernières tx:`);
+        recentTx.forEach(t => out.push(`  ${(t.tx_datetime ?? "?").slice(0, 10)} ${t.game ?? "?"} ${t.type} ${t.amount.toFixed(0)}`));
+      }
+
+      if (player.notes) out.push(`\nNotes: ${player.notes}`);
+
+      return out.join("\n");
     }
 
     if (name === "get_recent_transactions") {
@@ -473,12 +500,16 @@ export async function executeTool(name: string, input: any): Promise<string> {
       ).all(...(statusFilter ? [statusFilter] : [])) as any[];
       if (allPlayers.length === 0) return "Aucun joueur.";
 
-      const balanceRows = getWalletSummaryByPlayer() as any[];
-      const netByPlayer = new Map<number, number>();
-      for (const r of balanceRows) netByPlayer.set(r.player_id, (netByPlayer.get(r.player_id) ?? 0) + (r.net ?? 0));
+      const contributors = getTopContributors({}, 100);
+      const agencyByPlayer = new Map<number, number>();
+      for (const c of contributors) agencyByPlayer.set(c.player_id, c.agency_usdt);
+
+      const games = db.prepare(`SELECT player_id, GROUP_CONCAT(g.name, ', ') AS game_names FROM player_game_deals pgd JOIN games g ON g.id = pgd.game_id GROUP BY player_id`).all() as any[];
+      const gamesByPlayer = new Map<number, string>();
+      for (const g of games) gamesByPlayer.set(g.player_id, g.game_names);
 
       return allPlayers.map((p: any) =>
-        `${p.tier ?? "?"} · ${p.name}${p.telegram_handle ? ` @${p.telegram_handle}` : ""} · ${p.status} · solde net: ${fmtAmount(netByPlayer.get(p.id) ?? 0)} USDT`
+        `${p.tier ?? "?"} · ${p.name}${p.telegram_handle ? ` @${p.telegram_handle}` : ""} · ${p.status} · games: ${gamesByPlayer.get(p.id) ?? "aucun"} · agency P&L: ${fmtAmount(agencyByPlayer.get(p.id) ?? 0)} USDT`
       ).join("\n");
     }
 
@@ -586,28 +617,26 @@ export async function executeTool(name: string, input: any): Promise<string> {
 
     if (name === "revenue_breakdown") {
       const { start, end, label } = parsePeriod(input?.period ?? "week");
-      let rows = getLockAwareSummaryByPlayer({
-        since_date: start + "T00:00:00Z",
-        end_date: end + "T23:59:59Z",
-      }) as any[];
-      rows = rows.filter((r: any) => (r.total_deposited ?? 0) > 0 || (r.total_withdrawn ?? 0) > 0);
-      if (rows.length === 0) return `Aucun revenu sur ${label}.`;
-      const total = rows.reduce((s: number, r: any) => s + (r.my_pnl ?? 0), 0);
-      const lines = rows.map((r: any) => `${r.player_name} [${r.action_pct}%] — dép:${(r.total_deposited ?? 0).toFixed(0)} ret:${(r.total_withdrawn ?? 0).toFixed(0)} net:${fmtAmount(r.net ?? 0)} mon P&L:${fmtAmount(r.my_pnl ?? 0)}`);
-      return `Revenu (${label}):\n${lines.join("\n")}\nTotal mon P&L: ${fmtAmount(total)} USDT`;
+      const period: Period = { from: start, to: end };
+      const total = getAgencyTotalPnL(period);
+      const contributors = getTopContributors(period, 20);
+      if (contributors.length === 0) return `Aucun revenu sur ${label}.`;
+      const lines = contributors.map(c => `${c.player_name} — AK: ${fmtAmount(c.akpoker_usdt)} · WP: ${fmtAmount(c.wepoker_usdt)} · total: ${fmtAmount(c.agency_usdt)} USDT`);
+      return `Revenu (${label}):\n${lines.join("\n")}\nTotal: ${fmtAmount(total.total_usdt)} USDT (AK: ${fmtAmount(total.akpoker_usdt)}, WP: ${total.wepoker_cny.toFixed(0)} CNY = ${fmtAmount(total.wepoker_usdt)})`;
     }
 
     if (name === "top_players_this_week") {
       const { start, end } = getWeekBounds(0);
-      const rows = getLockAwareSummaryByPlayer({ since_date: toUTCISO(start), end_date: toUTCISO(end) }) as any[];
+      const period: Period = { from: toParisDate(toUTCISO(start)), to: toParisDate(toUTCISO(end)) };
       const side = input?.side ?? "winners";
       const limit = Math.min(input?.limit ?? 5, 20);
-      const sorted = rows
-        .filter((r: any) => side === "winners" ? r.net > 0 : r.net < 0)
-        .sort((a: any, b: any) => side === "winners" ? b.net - a.net : a.net - b.net)
-        .slice(0, limit);
-      if (sorted.length === 0) return `Aucun ${side === "winners" ? "gagnant" : "perdant"} cette semaine.`;
-      return `Top ${sorted.length} ${side === "winners" ? "gagnants" : "perdants"} (semaine):\n${sorted.map((r: any, i: number) => `${i + 1}. ${r.player_name ?? r.name ?? "?"} — net: ${fmtAmount(r.net)} USDT`).join("\n")}`;
+      const contributors = getTopContributors(period, 100);
+      const filtered = side === "winners"
+        ? contributors.filter(c => c.agency_usdt > 0)
+        : contributors.filter(c => c.agency_usdt < 0).reverse();
+      const top = filtered.slice(0, limit);
+      if (top.length === 0) return `Aucun ${side === "winners" ? "gagnant" : "perdant"} cette semaine.`;
+      return `Top ${top.length} ${side === "winners" ? "gagnants" : "perdants"} (semaine, agency cut):\n${top.map((c, i) => `${i + 1}. ${c.player_name} — ${fmtAmount(c.agency_usdt)} USDT (AK: ${fmtAmount(c.akpoker_usdt)}, WP: ${fmtAmount(c.wepoker_usdt)})`).join("\n")}`;
     }
 
     if (name === "weekly_settlement_summary") {
