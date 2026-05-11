@@ -990,3 +990,275 @@ export function getLockAwareKPIs(filters?: { game_name?: string; since_date?: st
   }
   return getWalletKPIs(filters);
 }
+
+// ════════════════════════════════════════════════════════════
+// CANONICAL P&L FUNCTIONS — single source of truth
+// Every page, tool, and bot MUST use these. No ad-hoc P&L SQL.
+// ════════════════════════════════════════════════════════════
+
+import { convertCnyToUsdt, getCnyRate } from "./currency";
+
+export interface Period { from?: string; to?: string }
+
+function periodToDateRange(period?: Period): { since?: string; until?: string } {
+  if (!period) return {};
+  return { since: period.from ? period.from + "T00:00:00Z" : undefined, until: period.to ? period.to + "T23:59:59Z" : undefined };
+}
+
+function daysAgo(n: number): string {
+  const d = new Date(); d.setDate(d.getDate() - n);
+  return d.toISOString().slice(0, 10);
+}
+
+// A) Deal lookup
+export function getPlayerDealsForGame(playerId: number, gameKey: string) {
+  return getDb().prepare(`
+    SELECT pgd.*, g.name AS game_name
+    FROM player_game_deals pgd
+    JOIN games g ON g.id = pgd.game_id
+    WHERE pgd.player_id = ? AND LOWER(g.name) = LOWER(?)
+  `).get(playerId, gameKey) as any | undefined;
+}
+
+// B) AKPOKER P&L (wallet-based, USDT)
+export interface AkpokerPnLRow {
+  player_id: number; player_name: string; action_pct: number;
+  deposited: number; withdrawn: number; net_usdt: number; agency_cut_usdt: number;
+}
+export function getAkpokerPnL(playerId?: number, period?: Period): AkpokerPnLRow[] {
+  const { since, until } = periodToDateRange(period);
+  const rows = getWalletSummaryByPlayer({
+    game_name: "TELE",
+    since_date: since,
+    end_date: until,
+  }) as any[];
+  let filtered = rows;
+  if (playerId) filtered = rows.filter((r: any) => r.player_id === playerId);
+  return filtered.map((r: any) => ({
+    player_id: r.player_id,
+    player_name: r.player_name,
+    action_pct: r.action_pct ?? 0,
+    deposited: r.total_deposited ?? 0,
+    withdrawn: r.total_withdrawn ?? 0,
+    net_usdt: r.net ?? 0,
+    agency_cut_usdt: r.my_pnl ?? 0,
+  }));
+}
+
+// C) WEPOKER P&L (rakeback-based, CNY, 3-component)
+export interface WepokerPnLRow {
+  player_id: number; player_name: string;
+  action_pct: number; rakeback_pct: number; insurance_pct: number;
+  winnings_cny: number; rake_cny: number; insurance_cny: number;
+  player_pnl_cny: number;
+  agency_winnings_split_cny: number;
+  agency_rakeback_split_cny: number;
+  agency_insurance_split_cny: number;
+  total_agency_cny: number;
+  total_agency_usdt: number;
+}
+export function getWepokerPnL(playerId?: number, period?: Period): WepokerPnLRow[] {
+  const db = getDb();
+  const params: any[] = [];
+  let dateFilter = "";
+  if (period?.from) { dateFilter += ` AND COALESCE(rr.report_date, substr(rr.created_at, 1, 10)) >= ?`; params.push(period.from); }
+  if (period?.to) { dateFilter += ` AND COALESCE(rr.report_date, substr(rr.created_at, 1, 10)) <= ?`; params.push(period.to); }
+  let playerFilter = "";
+  if (playerId) { playerFilter = ` AND re.player_id = ?`; params.push(playerId); }
+
+  const rows = db.prepare(`
+    SELECT
+      re.player_id,
+      p.name AS player_name,
+      COALESCE(pgd.action_pct, 0) AS action_pct,
+      COALESCE(pgd.rakeback_pct, 0) AS rakeback_pct,
+      COALESCE(pgd.insurance_pct, 0) AS insurance_pct,
+      COALESCE(SUM(re.winnings_amount), 0) AS winnings_cny,
+      COALESCE(SUM(re.amount), 0) AS rake_cny,
+      COALESCE(SUM(re.insurance_amount), 0) AS insurance_cny
+    FROM rakeback_entries re
+    JOIN rakeback_reports rr ON rr.id = re.report_id
+    JOIN players p ON p.id = re.player_id
+    LEFT JOIN player_game_deals pgd ON pgd.player_id = re.player_id AND pgd.game_id = rr.game_id
+    WHERE re.player_id IS NOT NULL
+      AND (pgd.start_date IS NULL OR COALESCE(rr.report_date, substr(rr.created_at, 1, 10)) >= pgd.start_date)
+      ${dateFilter}${playerFilter}
+    GROUP BY re.player_id
+  `).all(...params) as any[];
+
+  const rate = getCnyRate();
+  return rows.map((r: any) => {
+    const agencyWinnings = r.winnings_cny * (r.action_pct / 100);
+    const agencyRakeback = r.rake_cny * (r.rakeback_pct / 100);
+    const agencyInsurance = r.insurance_cny * (r.insurance_pct / 100);
+    const totalAgency = agencyWinnings + agencyRakeback + agencyInsurance;
+    const playerPnl = r.winnings_cny * (1 - r.action_pct / 100);
+    return {
+      player_id: r.player_id,
+      player_name: r.player_name,
+      action_pct: r.action_pct,
+      rakeback_pct: r.rakeback_pct,
+      insurance_pct: r.insurance_pct,
+      winnings_cny: r.winnings_cny,
+      rake_cny: r.rake_cny,
+      insurance_cny: r.insurance_cny,
+      player_pnl_cny: playerPnl,
+      agency_winnings_split_cny: agencyWinnings,
+      agency_rakeback_split_cny: agencyRakeback,
+      agency_insurance_split_cny: agencyInsurance,
+      total_agency_cny: totalAgency,
+      total_agency_usdt: convertCnyToUsdt(totalAgency, rate),
+    };
+  });
+}
+
+// D) Total agency P&L across all games
+export interface AgencyTotalPnL {
+  total_usdt: number;
+  akpoker_usdt: number;
+  wepoker_cny: number;
+  wepoker_usdt: number;
+}
+export function getAgencyTotalPnL(period?: Period): AgencyTotalPnL {
+  const ak = getAkpokerPnL(undefined, period);
+  const wp = getWepokerPnL(undefined, period);
+  const akTotal = ak.reduce((s, r) => s + r.agency_cut_usdt, 0);
+  const wpTotalCny = wp.reduce((s, r) => s + r.total_agency_cny, 0);
+  const wpTotalUsdt = wp.reduce((s, r) => s + r.total_agency_usdt, 0);
+  return {
+    total_usdt: akTotal + wpTotalUsdt,
+    akpoker_usdt: akTotal,
+    wepoker_cny: wpTotalCny,
+    wepoker_usdt: wpTotalUsdt,
+  };
+}
+
+// E) Active player count in a period
+export function getActivePlayersCount(period: Period): number {
+  const db = getDb();
+  const { since, until } = periodToDateRange(period);
+  let akCount = 0;
+  let wpCount = 0;
+
+  if (since && until) {
+    akCount = (db.prepare(`
+      SELECT COUNT(DISTINCT wt.player_id) AS n
+      FROM wallet_transactions wt
+      JOIN games g ON g.id = wt.game_id AND LOWER(g.name) = 'tele'
+      WHERE wt.tx_datetime >= ? AND wt.tx_datetime <= ?
+        AND (wt.source IS NULL OR wt.source != 'unknown')
+    `).get(since, until) as { n: number }).n;
+  }
+
+  if (period.from && period.to) {
+    wpCount = (db.prepare(`
+      SELECT COUNT(DISTINCT re.player_id) AS n
+      FROM rakeback_entries re
+      JOIN rakeback_reports rr ON rr.id = re.report_id
+      WHERE COALESCE(rr.report_date, substr(rr.created_at, 1, 10)) >= ?
+        AND COALESCE(rr.report_date, substr(rr.created_at, 1, 10)) <= ?
+        AND re.player_id IS NOT NULL
+    `).get(period.from, period.to) as { n: number }).n;
+  }
+
+  const combined = new Set<number>();
+  if (since && until) {
+    const akPlayers = db.prepare(`
+      SELECT DISTINCT wt.player_id FROM wallet_transactions wt
+      JOIN games g ON g.id = wt.game_id AND LOWER(g.name) = 'tele'
+      WHERE wt.tx_datetime >= ? AND wt.tx_datetime <= ?
+        AND (wt.source IS NULL OR wt.source != 'unknown')
+    `).all(since, until) as { player_id: number }[];
+    akPlayers.forEach(r => combined.add(r.player_id));
+  }
+  if (period.from && period.to) {
+    const wpPlayers = db.prepare(`
+      SELECT DISTINCT re.player_id FROM rakeback_entries re
+      JOIN rakeback_reports rr ON rr.id = re.report_id
+      WHERE COALESCE(rr.report_date, substr(rr.created_at, 1, 10)) >= ?
+        AND COALESCE(rr.report_date, substr(rr.created_at, 1, 10)) <= ?
+        AND re.player_id IS NOT NULL
+    `).all(period.from, period.to) as { player_id: number }[];
+    wpPlayers.forEach(r => combined.add(r.player_id));
+  }
+
+  return combined.size;
+}
+
+// F) Top contributors by agency cut
+export interface ContributorRow {
+  player_id: number; player_name: string; agency_usdt: number;
+  akpoker_usdt: number; wepoker_usdt: number;
+}
+export function getTopContributors(period: Period, limit = 5): ContributorRow[] {
+  const ak = getAkpokerPnL(undefined, period);
+  const wp = getWepokerPnL(undefined, period);
+
+  const byPlayer = new Map<number, ContributorRow>();
+  for (const r of ak) {
+    const existing = byPlayer.get(r.player_id) ?? { player_id: r.player_id, player_name: r.player_name, agency_usdt: 0, akpoker_usdt: 0, wepoker_usdt: 0 };
+    existing.akpoker_usdt += r.agency_cut_usdt;
+    existing.agency_usdt += r.agency_cut_usdt;
+    byPlayer.set(r.player_id, existing);
+  }
+  for (const r of wp) {
+    const existing = byPlayer.get(r.player_id) ?? { player_id: r.player_id, player_name: r.player_name, agency_usdt: 0, akpoker_usdt: 0, wepoker_usdt: 0 };
+    existing.wepoker_usdt += r.total_agency_usdt;
+    existing.agency_usdt += r.total_agency_usdt;
+    byPlayer.set(r.player_id, existing);
+  }
+
+  return [...byPlayer.values()].sort((a, b) => b.agency_usdt - a.agency_usdt).slice(0, limit);
+}
+
+// G) P&L time series for charts
+export interface PnLTimePoint {
+  date: string; akpoker_usdt: number; wepoker_usdt: number; total_usdt: number;
+}
+export function getPnLOverTime(period: Period): PnLTimePoint[] {
+  const db = getDb();
+  const { since, until } = periodToDateRange(period);
+
+  const akDaily = db.prepare(`
+    SELECT substr(wt.tx_datetime, 1, 10) AS day,
+      COALESCE(SUM(CASE WHEN wt.type='withdrawal' THEN wt.amount ELSE -wt.amount END) * pgd.action_pct / 100.0, 0) AS agency
+    FROM wallet_transactions wt
+    JOIN player_game_deals pgd ON pgd.player_id = wt.player_id AND pgd.game_id = wt.game_id
+    JOIN games g ON g.id = wt.game_id AND LOWER(g.name) = 'tele'
+    WHERE (wt.source IS NULL OR wt.source != 'unknown')
+      AND (pgd.start_date IS NULL OR wt.tx_datetime >= pgd.start_date)
+      ${since ? "AND wt.tx_datetime >= ?" : ""}
+      ${until ? "AND wt.tx_datetime <= ?" : ""}
+    GROUP BY day ORDER BY day
+  `).all(...[since, until].filter(Boolean)) as { day: string; agency: number }[];
+
+  const rate = getCnyRate();
+  const wpDaily = db.prepare(`
+    SELECT COALESCE(rr.report_date, substr(rr.created_at, 1, 10)) AS day,
+      COALESCE(SUM(re.winnings_amount * COALESCE(pgd.action_pct, 0) / 100.0), 0) AS wl_agency,
+      COALESCE(SUM(re.amount * COALESCE(pgd.rakeback_pct, 0) / 100.0), 0) AS rb_agency,
+      COALESCE(SUM(re.insurance_amount * COALESCE(pgd.insurance_pct, 0) / 100.0), 0) AS ins_agency
+    FROM rakeback_entries re
+    JOIN rakeback_reports rr ON rr.id = re.report_id
+    LEFT JOIN player_game_deals pgd ON pgd.player_id = re.player_id AND pgd.game_id = rr.game_id
+    WHERE re.player_id IS NOT NULL
+      AND (pgd.start_date IS NULL OR COALESCE(rr.report_date, substr(rr.created_at, 1, 10)) >= pgd.start_date)
+      ${period?.from ? "AND COALESCE(rr.report_date, substr(rr.created_at, 1, 10)) >= ?" : ""}
+      ${period?.to ? "AND COALESCE(rr.report_date, substr(rr.created_at, 1, 10)) <= ?" : ""}
+    GROUP BY day ORDER BY day
+  `).all(...[period?.from, period?.to].filter(Boolean)) as any[];
+
+  const dayMap = new Map<string, PnLTimePoint>();
+  for (const r of akDaily) {
+    dayMap.set(r.day, { date: r.day, akpoker_usdt: r.agency, wepoker_usdt: 0, total_usdt: r.agency });
+  }
+  for (const r of wpDaily) {
+    const wpUsdt = convertCnyToUsdt(r.wl_agency + r.rb_agency + r.ins_agency, rate);
+    const existing = dayMap.get(r.day) ?? { date: r.day, akpoker_usdt: 0, wepoker_usdt: 0, total_usdt: 0 };
+    existing.wepoker_usdt += wpUsdt;
+    existing.total_usdt += wpUsdt;
+    dayMap.set(r.day, existing);
+  }
+
+  return [...dayMap.values()].sort((a, b) => a.date.localeCompare(b.date));
+}
