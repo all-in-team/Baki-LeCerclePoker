@@ -58,8 +58,7 @@ export default function CRMPage() {
               const agency30 = agencyByPlayer.get(p.id) ?? 0;
               const badges = gamesByPlayer.get(p.id) ?? "";
               return (
-                <tr key={p.id} style={{ borderBottom: "1px solid var(--border)", cursor: "pointer" }}
-                  onClick={() => {}} >
+                <tr key={p.id} style={{ borderBottom: "1px solid var(--border)" }}>
                   <td style={{ padding: "10px 8px" }}>
                     <Link href={`/crm/${p.id}`} style={{ fontWeight: 600, color: "var(--text)", textDecoration: "none" }}>
                       {p.name}
