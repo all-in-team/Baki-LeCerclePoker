@@ -25,6 +25,9 @@ export interface SettlementRow {
   manual_close_amount: number | null;
   note: string | null;
   override_count: number;
+  payment_received: number;
+  received_at: string | null;
+  received_by: string | null;
 }
 
 export interface PeriodRow {

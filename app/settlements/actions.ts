@@ -52,3 +52,14 @@ export async function getTransactionsForSettlement(settlementId: number): Promis
 export async function getAvailableTransactionsAction(playerId: number, weekStart: string, settlementId: number): Promise<TxRow[]> {
   return getAvailableTransactions(playerId, weekStart, settlementId);
 }
+
+export async function togglePayment(settlementId: number, received: boolean, receivedBy: string) {
+  const { getDb } = await import("@/lib/db");
+  const db = getDb();
+  if (received) {
+    db.prepare(`UPDATE weekly_settlements SET payment_received = 1, received_at = datetime('now'), received_by = ? WHERE id = ?`).run(receivedBy, settlementId);
+  } else {
+    db.prepare(`UPDATE weekly_settlements SET payment_received = 0, received_at = NULL, received_by = NULL WHERE id = ?`).run(settlementId);
+  }
+  return { ok: true };
+}

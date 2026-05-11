@@ -804,4 +804,15 @@ function initSchema(db: Database.Database) {
   if (fixBackfillLastMsg.changes > 0) {
     db.exec(`UPDATE weekly_cashout_state SET last_message_at = reminder_sent_at WHERE last_message_at IS NULL AND reminder_sent_at IS NOT NULL`);
   }
+
+  // Settlement payment tracking
+  const fixPayment = db.prepare(`INSERT OR IGNORE INTO _applied_fixes (name) VALUES (?)`).run("weekly_settlement_payment_v1");
+  if (fixPayment.changes > 0) {
+    try { db.exec(`ALTER TABLE weekly_settlements ADD COLUMN payment_received INTEGER DEFAULT 0`); } catch {}
+    try { db.exec(`ALTER TABLE weekly_settlements ADD COLUMN received_at TEXT`); } catch {}
+    try { db.exec(`ALTER TABLE weekly_settlements ADD COLUMN received_by TEXT`); } catch {}
+  }
+  try { db.exec(`ALTER TABLE weekly_settlements ADD COLUMN payment_received INTEGER DEFAULT 0`); } catch {}
+  try { db.exec(`ALTER TABLE weekly_settlements ADD COLUMN received_at TEXT`); } catch {}
+  try { db.exec(`ALTER TABLE weekly_settlements ADD COLUMN received_by TEXT`); } catch {}
 }

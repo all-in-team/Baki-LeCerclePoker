@@ -12,6 +12,7 @@ import {
   removeOverrideAction,
   getTransactionsForSettlement,
   getAvailableTransactionsAction,
+  togglePayment,
 } from "./actions";
 
 interface SettlementRow {
@@ -30,6 +31,9 @@ interface SettlementRow {
   manual_close_amount: number | null;
   note: string | null;
   override_count: number;
+  payment_received: number;
+  received_at: string | null;
+  received_by: string | null;
 }
 
 interface TxRow {
@@ -69,6 +73,7 @@ export default function SettlementsClient({ weekStart, weekEnd, period, rows, ra
   const [txList, setTxList] = useState<TxRow[]>([]);
   const [availableTxs, setAvailableTxs] = useState<TxRow[] | null>(null);
   const [manualAmounts, setManualAmounts] = useState<Record<number, string>>({});
+  const [payFilter, setPayFilter] = useState<"all" | "unpaid" | "paid">("all");
 
   const isLocked = period?.status === "locked";
 
@@ -77,6 +82,35 @@ export default function SettlementsClient({ weekStart, weekEnd, period, rows, ra
   const settled = rows.filter(r => r.status === "settled" || r.status === "carry_over");
   const allEditable = [...autoSettled, ...pendingManual];
   const canLock = period && !isLocked && pendingManual.length === 0 && rows.filter(r => r.status === "conflict").length === 0;
+
+  const paidCount = settled.filter(r => r.payment_received).length;
+  const unpaidSettled = settled.filter(r => !r.payment_received);
+  const unpaidTotal = unpaidSettled.reduce((s, r) => s + Math.abs(r.pnl_player ?? 0), 0);
+
+  const filteredSettled = payFilter === "all" ? settled
+    : payFilter === "paid" ? settled.filter(r => r.payment_received)
+    : settled.filter(r => !r.payment_received);
+
+  async function handleTogglePayment(row: SettlementRow) {
+    const newVal = !row.payment_received;
+    setLoading(`pay-${row.id}`);
+    try {
+      await togglePayment(row.id, newVal, "Baki");
+      startTransition(() => router.refresh());
+    } finally {
+      setLoading(null);
+    }
+  }
+
+  function relativeTime(iso: string | null) {
+    if (!iso) return "";
+    const ms = Date.now() - new Date(iso + "Z").getTime();
+    const min = Math.floor(ms / 60_000);
+    if (min < 60) return `il y a ${min}min`;
+    const h = Math.floor(min / 60);
+    if (h < 24) return `il y a ${h}h`;
+    return `il y a ${Math.floor(h / 24)}j`;
+  }
 
   async function handleCompute() {
     setLoading("compute");
@@ -326,6 +360,30 @@ export default function SettlementsClient({ weekStart, weekEnd, period, rows, ra
       {/* Locked / terminal rows */}
       {settled.length > 0 && (
         <Section title={`Locked (${settled.length})`} color="var(--green)" emoji={"✅"}>
+          {/* Payment summary */}
+          <div style={{ marginBottom: 12, display: "flex", alignItems: "center", gap: 16, fontSize: 13 }}>
+            <span style={{ color: "var(--text-muted)" }}>
+              {paidCount} payé{paidCount !== 1 ? "s" : ""} / {unpaidSettled.length} restant{unpaidSettled.length !== 1 ? "s" : ""}
+              {unpaidSettled.length > 0 && <> · Total à envoyer: <b style={{ color: "var(--text)" }}>{unpaidTotal.toFixed(0)} USDT</b></>}
+            </span>
+            <span style={{ marginLeft: "auto", display: "flex", gap: 4 }}>
+              {(["all", "unpaid", "paid"] as const).map(f => (
+                <button
+                  key={f}
+                  onClick={() => setPayFilter(f)}
+                  style={{
+                    padding: "4px 10px", borderRadius: 4, border: "1px solid var(--border)", fontSize: 11, cursor: "pointer",
+                    background: payFilter === f ? "var(--gold)" : "transparent",
+                    color: payFilter === f ? "#000" : "var(--text-muted)",
+                    fontWeight: payFilter === f ? 600 : 400,
+                  }}
+                >
+                  {f === "all" ? "Tous" : f === "unpaid" ? "Pas payés" : "Payés"}
+                </button>
+              ))}
+            </span>
+          </div>
+
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
             <thead>
               <tr style={{ borderBottom: "1px solid var(--border)", color: "var(--text-muted)", fontSize: 11, textTransform: "uppercase" as const, letterSpacing: "0.05em" }}>
@@ -334,11 +392,12 @@ export default function SettlementsClient({ weekStart, weekEnd, period, rows, ra
                 <th style={{ textAlign: "right", padding: "6px 8px" }}>Action %</th>
                 <th style={{ textAlign: "right", padding: "6px 8px" }}>Op. PnL</th>
                 <th style={{ textAlign: "left", padding: "6px 8px" }}>Locked</th>
+                <th style={{ textAlign: "center", padding: "6px 8px" }}>Payé</th>
               </tr>
             </thead>
             <tbody>
-              {settled.map(row => (
-                <tr key={row.id} style={{ borderBottom: "1px solid var(--border)" }}>
+              {filteredSettled.map(row => (
+                <tr key={row.id} style={{ borderBottom: "1px solid var(--border)", background: row.payment_received ? "rgba(34,197,94,0.06)" : undefined }}>
                   <td style={{ padding: "8px", fontWeight: 500 }}>
                     {statusEmoji(row.status)} {row.player_name}
                   </td>
@@ -346,6 +405,21 @@ export default function SettlementsClient({ weekStart, weekEnd, period, rows, ra
                   <td style={{ padding: "8px", textAlign: "right" }}>{row.action_pct_snapshot}%</td>
                   <td style={{ padding: "8px", textAlign: "right", color: (row.pnl_operator ?? 0) >= 0 ? "var(--green)" : "#ef4444" }}>{fmt(row.pnl_operator)} USDT</td>
                   <td style={{ padding: "8px", fontSize: 11, color: "var(--text-muted)" }}>{row.locked_by ?? "—"} {fmtDate(row.locked_at)}</td>
+                  <td style={{ padding: "8px", textAlign: "center" }}>
+                    <button
+                      onClick={() => handleTogglePayment(row)}
+                      disabled={loading === `pay-${row.id}`}
+                      title={row.payment_received ? `${row.received_by} · ${relativeTime(row.received_at)}` : "Marquer comme payé"}
+                      style={{
+                        padding: "4px 10px", borderRadius: 5, border: "1px solid var(--border)", fontSize: 11, cursor: "pointer",
+                        background: row.payment_received ? "rgba(34,197,94,0.15)" : "transparent",
+                        color: row.payment_received ? "var(--green)" : "var(--text-muted)",
+                        fontWeight: row.payment_received ? 600 : 400,
+                      }}
+                    >
+                      {row.payment_received ? `✅ ${relativeTime(row.received_at)}` : "Pas payé"}
+                    </button>
+                  </td>
                 </tr>
               ))}
             </tbody>

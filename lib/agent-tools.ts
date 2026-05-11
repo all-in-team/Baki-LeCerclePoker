@@ -192,6 +192,17 @@ export const TOOLS: Anthropic.Tool[] = [
     },
   },
   {
+    name: "get_unpaid_settlements",
+    description: "Liste les settlements non payés pour une semaine donnée : joueur, montant dû, wallet cashout. Défaut: semaine en cours.",
+    input_schema: {
+      type: "object",
+      properties: {
+        week_offset: { type: "integer", description: "0 = semaine en cours, -1 = semaine dernière. Défaut 0." },
+      },
+      required: [],
+    },
+  },
+  {
     name: "onboarding_funnel",
     description: "Comptage du funnel : leads par stage (welcome/discovered/joined) + joueurs par status (active/inactive/churned).",
     input_schema: { type: "object", properties: {}, required: [] },
@@ -515,6 +526,27 @@ export async function executeTool(name: string, input: any): Promise<string> {
       );
       if (orphans.length === 0) return "Aucun groupe orphelin trouvé.";
       return `Groupes orphelins (${orphans.length}):\n${orphans.map(g => `• ${g.title} (${g.chat_id}, ${g.member_count} membres)`).join("\n")}`;
+    }
+
+    if (name === "get_unpaid_settlements") {
+      const offset = input?.week_offset ?? 0;
+      const { start, end } = getWeekBounds(offset);
+      const weekStart = toParisDate(toUTCISO(start));
+      const rows = db.prepare(`
+        SELECT ws.id, ws.pnl_player, ws.pnl_operator, ws.action_pct_snapshot,
+               p.name, p.tele_wallet_cashout
+        FROM weekly_settlements ws
+        JOIN players p ON p.id = ws.player_id
+        WHERE ws.week_start = ? AND ws.payment_received = 0
+          AND ws.status IN ('settled', 'auto_settled')
+        ORDER BY p.name
+      `).all(weekStart) as any[];
+      if (rows.length === 0) return `Aucun settlement non payé pour la semaine du ${weekStart}.`;
+      const total = rows.reduce((s: number, r: any) => s + Math.abs(r.pnl_player ?? 0), 0);
+      const lines = rows.map((r: any) =>
+        `• ${r.name}: ${fmtAmount(r.pnl_player ?? 0)} USDT (action ${r.action_pct_snapshot}%) · wallet: ${r.tele_wallet_cashout ? r.tele_wallet_cashout.slice(0, 8) + "..." : "non configuré"}`
+      );
+      return `Non payés (${rows.length}) — semaine ${weekStart}:\n${lines.join("\n")}\nTotal: ${total.toFixed(0)} USDT`;
     }
 
     if (name === "onboarding_funnel") {
