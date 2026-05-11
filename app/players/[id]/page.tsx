@@ -28,7 +28,7 @@ export default async function PlayerDetailPage({ params }: { params: Promise<{ i
     <>
       <PageHeader
         title={player.name}
-        subtitle={player.tron_address ? `Wallet TELE : ${player.tron_address}` : undefined}
+        subtitle={`${player.status} · ${player.tier ?? ""} tier`}
       />
       <PlayerDetailClient
         player={player}

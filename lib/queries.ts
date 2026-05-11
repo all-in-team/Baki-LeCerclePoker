@@ -421,17 +421,13 @@ export function getCrmOverview() {
   const db = getDb();
   return db.prepare(`
     SELECT
-      p.id, p.name, p.telegram_handle, p.telegram_phone, p.status, p.tier, p.action_pct, p.notes,
+      p.id, p.name, p.telegram_handle, p.telegram_phone, p.status, p.tier, p.notes,
       (SELECT content FROM crm_notes WHERE player_id = p.id ORDER BY created_at DESC LIMIT 1) AS last_note,
       (SELECT created_at FROM crm_notes WHERE player_id = p.id ORDER BY created_at DESC LIMIT 1) AS last_activity,
       (SELECT COUNT(*) FROM crm_notes WHERE player_id = p.id) AS note_count,
-      COALESCE(SUM(CASE WHEN wt.type='withdrawal' THEN wt.amount ELSE -wt.amount END), 0) AS wallet_net,
-      COALESCE(SUM(CASE WHEN wt.type='withdrawal' THEN wt.amount ELSE -wt.amount END) * p.action_pct / 100, 0) AS my_pnl,
       (SELECT COUNT(*) FROM tg_messages WHERE player_id = p.id) AS msg_count,
-      (SELECT msg_date FROM tg_messages WHERE player_id = p.id ORDER BY msg_date DESC LIMIT 1) AS last_msg_date,
-      COALESCE((SELECT SUM(CASE WHEN direction='in' THEN amount ELSE -amount END) FROM telegram_transactions WHERE player_id = p.id), 0) AS balance_du
+      (SELECT msg_date FROM tg_messages WHERE player_id = p.id ORDER BY msg_date DESC LIMIT 1) AS last_msg_date
     FROM players p
-    LEFT JOIN wallet_transactions wt ON wt.player_id = p.id AND (wt.source IS NULL OR wt.source != 'unknown')
     GROUP BY p.id ORDER BY p.name
   `).all();
 }
