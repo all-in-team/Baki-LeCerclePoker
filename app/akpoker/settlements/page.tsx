@@ -30,11 +30,13 @@ function weekStartToOffset(weekStartDate: string): number {
   return offset;
 }
 
-export default async function SettlementsPage({ searchParams }: { searchParams: Promise<{ week?: string }> }) {
+export default async function SettlementsPage({ searchParams }: { searchParams: Promise<{ week?: string; player?: string }> }) {
   const params = await searchParams;
+  const playerFilter = params.player ? parseInt(params.player) : undefined;
   const weekStart = resolveWeekStart(params.week);
 
-  const { period, rows } = getQueue(weekStart);
+  let { period, rows } = getQueue(weekStart);
+  if (playerFilter) rows = rows.filter(r => r.player_id === playerFilter);
 
   const offset = weekStartToOffset(weekStart);
   const { start, end } = getWeekBounds(offset);
@@ -42,9 +44,19 @@ export default async function SettlementsPage({ searchParams }: { searchParams: 
 
   const weeks = getLast12Weeks();
 
+  const filterPlayerName = playerFilter ? (rows.find(r => r.player_id === playerFilter)?.player_name ?? `#${playerFilter}`) : null;
+
   return (
     <>
       <PageHeader title="AKPOKER — Settlements" subtitle="Validation hebdomadaire des P&L wallet par joueur" />
+      {filterPlayerName && (
+        <div style={{ padding: "0 28px 12px", display: "flex", alignItems: "center", gap: 8 }}>
+          <span style={{ background: "rgba(212,175,55,0.15)", color: "#D4AF37", padding: "4px 12px", borderRadius: 6, fontSize: 12, fontWeight: 600 }}>
+            Filtré : {filterPlayerName}
+          </span>
+          <a href="/akpoker/settlements" style={{ fontSize: 11, color: "var(--text-muted)", textDecoration: "none" }}>✕ Retirer le filtre</a>
+        </div>
+      )}
       <SettlementsClient
         weekStart={weekStart}
         weekEnd={period?.week_end ?? ""}
