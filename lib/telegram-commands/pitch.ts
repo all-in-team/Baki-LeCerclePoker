@@ -1,7 +1,7 @@
 import { getDb } from "@/lib/db";
-import { sendMsg, sendMsgKeyboard, sendPhoto, answerCbQuery, getSession, setSession, AGENT_CHAT_ID } from "./helpers";
+import { sendMsg, sendMsgKeyboard, sendPhoto, answerCbQuery, editMessageReplyMarkup, chatLink, getSession, setSession, AGENT_CHAT_ID } from "./helpers";
 import {
-  SOLO_RESPONSE, CONTRACT_MSG_1, CONTRACT_MSG_2, CONTRACT_MSG_3, CONTRACT_MSG_4,
+  SOLO_RESPONSE, QUESTION_ASKED_RESPONSE, CONTRACT_MSG_1, CONTRACT_MSG_2, CONTRACT_MSG_3, CONTRACT_MSG_4,
   SIGNED_MSG_1, SIGNED_MSG_2, SIGNED_MSG_3, SIGNED_MSG_4, QUESTIONS_RESPONSE,
   HAS_WALLET_MSG_1, HAS_WALLET_DEPOSIT_CAPTION_1, HAS_WALLET_DEPOSIT_CAPTION_2, HAS_WALLET_ASK_DEPOSIT,
   HELP_WALLET_MSG_1, HELP_WALLET_STEP_1_CAPTION, HELP_WALLET_STEP_2,
@@ -37,7 +37,8 @@ export async function handlePitchCallback(
   data: string,
   chatId: number,
   messageThreadId?: number,
-  from?: any
+  from?: any,
+  messageId?: number,
 ) {
   console.log(`[PITCH] callback received: data="${data}" chatId=${chatId} threadId=${messageThreadId} from=${from?.id}`);
 
@@ -61,15 +62,22 @@ export async function handlePitchCallback(
     const playerName = player?.name ?? from?.first_name ?? "Joueur";
     console.log(`[PITCH] player: id=${player?.id ?? "NULL"} name="${playerName}"`);
 
-    // ── Solo ──
-    if (data === "onboard_choice_solo") {
+    // ── J'ai une question ──
+    if (data === "onboard_choice_question") {
       if (session.step !== "pitch_sent") {
-        console.warn(`[PITCH] solo: wrong step "${session.step}", expected "pitch_sent"`);
+        console.warn(`[PITCH] question: wrong step "${session.step}", expected "pitch_sent"`);
         return;
       }
-      console.log(`[PITCH] → branch: solo_declined`);
-      safeSetSession(chatId, "solo_declined", session.player_id, session.expected_tg_id, "solo");
-      await safeSend(chatId, SOLO_RESPONSE, messageThreadId, "SOLO_RESPONSE");
+      console.log(`[PITCH] → branch: awaiting_human_response`);
+      if (messageId) await editMessageReplyMarkup(chatId, messageId).catch(() => {});
+      safeSetSession(chatId, "awaiting_human_response", session.player_id, session.expected_tg_id, "question_pending");
+      await safeSend(chatId, QUESTION_ASKED_RESPONSE, messageThreadId, "QUESTION_ASKED_RESPONSE");
+      const groupUrl = chatLink(chatId);
+      await sendMsg(AGENT_CHAT_ID,
+        `❓ <b>${playerName} a une question</b>\n` +
+        `Groupe : ${groupUrl}\n\n` +
+        `<i>En attente de sa question...</i>`
+      );
     }
 
     // ── Avec vous ──

@@ -15,22 +15,20 @@ export const PITCH_MSG_2 =
   `Si tu te fais flag, c'est à vie : tu ne pourras <b>plus jamais recréer de compte</b> sur cette plateforme.`;
 
 export const PITCH_MSG_3 =
-  `Donc tu as 2 options.\n\n` +
-  `🎲 <b>Deal 1 — Solo</b>\n` +
-  `Tu joues seul, tu prends 100% de tes gains.\n` +
-  `Mais tu perds l'opportunité qu'on t'offre : protection longterm, structure, couverture.\n` +
-  `Le jour où le compte est ban, tu es flag à vie. Fini.\n\n` +
-  `🤝 <b>Deal 2 — Avec nous</b>\n` +
-  `Tu joues 60% de ton action.\n` +
+  `Voilà le deal qu'on propose :\n\n` +
+  `🤝 Tu joues <b>60%</b> de ton action.\n` +
   `On prend 20%, les boss de la game prennent 20%.\n\n` +
   `C'est de l'action symétrique : <b>win/win, lose/lose</b>.\n` +
   `L'avantage : tu peux simplement jouer plus cher. Ça ne te pénalise pas, ça te protège.`;
 
-export const PITCH_MSG_4 = `Tu choisis quoi ?`;
+export const PITCH_MSG_4 = `Qu'est-ce que tu en penses ?`;
 
 export const SOLO_RESPONSE =
   `Reçu, bon choix si tu te sens.\n` +
   `Bonne chance sur les tables. Si un jour tu changes d'avis, tu sais où nous trouver.`;
+
+export const QUESTION_ASKED_RESPONSE =
+  `Pas de souci, pose ta question ici. Je transmets à l'équipe et on te répond rapidement 👇`;
 
 // ── Contract messages ────────────────────────────────────
 

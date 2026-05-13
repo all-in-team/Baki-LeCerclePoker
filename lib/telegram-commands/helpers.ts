@@ -68,6 +68,22 @@ export async function answerCbQuery(id: string, text?: string) {
   });
 }
 
+export async function editMessageReplyMarkup(chatId: number | string, messageId: number) {
+  const token = process.env.TELEGRAM_BOT_TOKEN;
+  if (!token) return;
+  await fetch(`https://api.telegram.org/bot${token}/editMessageReplyMarkup`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ chat_id: chatId, message_id: messageId, reply_markup: JSON.stringify({ inline_keyboard: [] }) }),
+  });
+}
+
+export function chatLink(chatId: number | string): string {
+  const s = String(chatId);
+  if (s.startsWith("-100")) return `https://t.me/c/${s.slice(4)}/1`;
+  return `(chat ${s})`;
+}
+
 export async function askWalletGame(chatId: number | string, mention: string, messageThreadId?: number) {
   const token = process.env.TELEGRAM_BOT_TOKEN;
   if (!token) return;
@@ -91,7 +107,7 @@ export async function askWalletGame(chatId: number | string, mention: string, me
 }
 
 // ── Session helpers ───────────────────────────────────────
-export type Step = "pitch_sent" | "solo_declined" | "contract_shown" | "signed_active" | "contract_questions" | "awaiting_wallet_address" | "onboarding_complete" | "awaiting_deposit_wallet" | "awaiting_cashout_wallet" | "wallets_complete" | "waiting_action_pct" | "waiting_wallet_game" | "waiting_wallet_cashout" | "waiting_game" | "waiting_player";
+export type Step = "pitch_sent" | "solo_declined" | "contract_shown" | "signed_active" | "contract_questions" | "awaiting_wallet_address" | "onboarding_complete" | "awaiting_deposit_wallet" | "awaiting_cashout_wallet" | "wallets_complete" | "waiting_action_pct" | "waiting_wallet_game" | "waiting_wallet_cashout" | "waiting_game" | "waiting_player" | "awaiting_human_response";
 
 export function getSession(chatId: string | number): { step: Step; player_id: number; expected_tg_id: number | null; pending_cmd: string | null } | null {
   return getDb().prepare(
@@ -398,6 +414,21 @@ export async function handleRawMessage(text: string, chatId: number, messageThre
 
   const db = getDb();
   const teleGame = findGame("TELE");
+
+  // ── Question forwarding (first message only after "J'ai une question") ──
+  if (session.step === "awaiting_human_response" && session.pending_cmd === "question_pending") {
+    const username = db.prepare(`SELECT telegram_handle FROM players WHERE id = ?`).get(session.player_id) as { telegram_handle: string | null } | undefined;
+    const handle = username?.telegram_handle ? `@${username.telegram_handle}` : "n/a";
+    const groupLink = chatLink(chatId);
+    setSession(chatId, "awaiting_human_response", session.player_id, session.expected_tg_id, "question_forwarded");
+    await sendMsg(AGENT_CHAT_ID,
+      `💬 <b>Question d'un nouveau joueur</b> (${player.name}, ${handle}) :\n` +
+      `${text}\n\n` +
+      `Réponds-lui dans son groupe → ${groupLink}`
+    );
+    return;
+  }
+  if (session.step === "awaiting_human_response") return;
 
   // ── Deposit wallet collection (pitch flow — step 1 of 2) ──
   if (session.step === "awaiting_deposit_wallet") {

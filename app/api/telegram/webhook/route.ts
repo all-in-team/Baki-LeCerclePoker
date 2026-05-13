@@ -43,7 +43,7 @@ export async function POST(req: NextRequest) {
     if (cbData.startsWith("onboard:")) {
       await handleOnboardCallback(cb.id, cbData, cbChatId, cbThreadId);
     } else if (cbData.startsWith("onboard_")) {
-      await handlePitchCallback(cb.id, cbData, cbChatId, cbThreadId, cb.from);
+      await handlePitchCallback(cb.id, cbData, cbChatId, cbThreadId, cb.from, cb.message?.message_id);
     } else if (cbData.startsWith("cashout_done:")) {
       await handleCashoutDoneCallback(cb.id, cbData, cbChatId, cb.message?.message_id, cbThreadId);
     } else if (cbData.startsWith("cashout_skipped:")) {
