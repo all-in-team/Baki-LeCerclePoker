@@ -822,4 +822,19 @@ function initSchema(db: Database.Database) {
     db.exec(`DROP TABLE IF EXISTS accounting_entries`);
     db.exec(`DROP TABLE IF EXISTS reports`);
   }
+
+  // Onboarding reminder tracking columns
+  const fixOnboardReminders = db.prepare(`INSERT OR IGNORE INTO _applied_fixes (name) VALUES (?)`).run("onboarding_reminders_v1");
+  if (fixOnboardReminders.changes > 0) {
+    try { db.exec(`ALTER TABLE onboarding_leads ADD COLUMN step_entered_at TEXT`); } catch {}
+    try { db.exec(`ALTER TABLE onboarding_leads ADD COLUMN reminders_sent INTEGER DEFAULT 0`); } catch {}
+    try { db.exec(`ALTER TABLE onboarding_leads ADD COLUMN last_reminder_at TEXT`); } catch {}
+    try { db.exec(`ALTER TABLE onboarding_leads ADD COLUMN ops_alerted INTEGER DEFAULT 0`); } catch {}
+    try { db.exec(`ALTER TABLE onboarding_leads ADD COLUMN ops_alerted_at TEXT`); } catch {}
+  }
+  try { db.exec(`ALTER TABLE onboarding_leads ADD COLUMN step_entered_at TEXT`); } catch {}
+  try { db.exec(`ALTER TABLE onboarding_leads ADD COLUMN reminders_sent INTEGER DEFAULT 0`); } catch {}
+  try { db.exec(`ALTER TABLE onboarding_leads ADD COLUMN last_reminder_at TEXT`); } catch {}
+  try { db.exec(`ALTER TABLE onboarding_leads ADD COLUMN ops_alerted INTEGER DEFAULT 0`); } catch {}
+  try { db.exec(`ALTER TABLE onboarding_leads ADD COLUMN ops_alerted_at TEXT`); } catch {}
 }

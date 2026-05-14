@@ -1,5 +1,5 @@
 import { getDb } from "@/lib/db";
-import { sendMsg, sendMsgKeyboard, setSession, mentionOf } from "./helpers";
+import { sendMsg, sendMsgKeyboard, setSession, mentionOf, trackOnboardingStep } from "./helpers";
 import { PITCH_MSG_1, PITCH_MSG_2, PITCH_MSG_3, PITCH_MSG_4 } from "./onboarding-script";
 import { consumePendingGroupData } from "./onboarding";
 
@@ -39,6 +39,7 @@ export async function handleNewMembers(members: any[], chatTitle: string, chatId
 
     if (isNew) {
       setSession(chatId, "pitch_sent", playerId, member.id);
+      trackOnboardingStep(member.id, "pitch_sent");
 
       const tag = mentionOf({ name: member.first_name ?? name, telegram_handle: member.username ?? null, telegram_id: member.id });
       await sendMsg(chatId, `${tag}\n\n${PITCH_MSG_1(member.first_name ?? name)}`);

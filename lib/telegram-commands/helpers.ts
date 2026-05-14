@@ -124,6 +124,18 @@ export function clearSession(chatId: string | number) {
   getDb().prepare(`DELETE FROM telegram_sessions WHERE chat_id = ?`).run(String(chatId));
 }
 
+const TRACKABLE_STEPS = new Set(["pitch_sent", "contract_shown", "awaiting_deposit_wallet", "awaiting_cashout_wallet", "awaiting_human_response", "onboarding_complete"]);
+
+export function trackOnboardingStep(telegramId: number, step: string) {
+  if (!TRACKABLE_STEPS.has(step)) return;
+  const db = getDb();
+  if (step === "onboarding_complete") {
+    db.prepare(`UPDATE onboarding_leads SET stage = 'joined', step_entered_at = datetime('now'), reminders_sent = 0, ops_alerted = 0 WHERE telegram_id = ?`).run(telegramId);
+    return;
+  }
+  db.prepare(`UPDATE onboarding_leads SET step_entered_at = datetime('now'), reminders_sent = 0, last_reminder_at = NULL, ops_alerted = 0, ops_alerted_at = NULL WHERE telegram_id = ?`).run(telegramId);
+}
+
 export async function promptGame(chatId: number, cmd: string, args: string) {
   setSession(chatId, "waiting_game", null, null, `${cmd}:${args}`);
   await sendMsg(chatId, `🎮 Quelle game ?\n\n<b>TELE · Wepoker · Xpoker · ClubGG</b>`);
@@ -438,6 +450,7 @@ export async function handleRawMessage(text: string, chatId: number, messageThre
     }
     db.prepare(`UPDATE players SET tron_address = ? WHERE id = ?`).run(text, player.id);
     setSession(chatId, "awaiting_cashout_wallet", player.id, session.expected_tg_id);
+    if (session.expected_tg_id) trackOnboardingStep(session.expected_tg_id, "awaiting_cashout_wallet");
     await reply(`✅ Adresse de dépôt enregistrée.`);
     await new Promise(r => setTimeout(r, 1500));
     const cashoutPrompt =
@@ -471,6 +484,7 @@ export async function handleRawMessage(text: string, chatId: number, messageThre
     }
     db.prepare(`UPDATE players SET tele_wallet_cashout = ? WHERE id = ?`).run(cashoutAddress, player.id);
     setSession(chatId, "onboarding_complete", player.id, session.expected_tg_id);
+    if (session.expected_tg_id) trackOnboardingStep(session.expected_tg_id, "onboarding_complete");
     await reply(
       `✅ Tes 2 adresses sont enregistrées.\n\n` +
       `Tu es prêt à jouer 🎰\n` +

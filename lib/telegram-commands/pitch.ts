@@ -1,5 +1,5 @@
 import { getDb } from "@/lib/db";
-import { sendMsg, sendMsgKeyboard, sendPhoto, answerCbQuery, editMessageReplyMarkup, chatLink, getSession, setSession, AGENT_CHAT_ID, mentionOf } from "./helpers";
+import { sendMsg, sendMsgKeyboard, sendPhoto, answerCbQuery, editMessageReplyMarkup, chatLink, getSession, setSession, AGENT_CHAT_ID, mentionOf, trackOnboardingStep } from "./helpers";
 import {
   QUESTION_ASKED_RESPONSE, CONTRACT_MSG_1, CONTRACT_MSG_2, CONTRACT_MSG_3, CONTRACT_MSG_4,
   SIGNED_MSG_1, SIGNED_MSG_2, SIGNED_MSG_3, SIGNED_MSG_4,
@@ -62,6 +62,7 @@ export async function handlePitchCallback(
       ? db.prepare(`SELECT id, name FROM players WHERE id = ?`).get(session.player_id) as { id: number; name: string } | undefined
       : null;
     const playerName = player?.name ?? from?.first_name ?? "Joueur";
+    const tgId = session.expected_tg_id ?? from?.id;
     console.log(`[PITCH] player: id=${player?.id ?? "NULL"} name="${playerName}"`);
 
     // ── J'ai une question (available at every step) ──
@@ -76,6 +77,7 @@ export async function handlePitchCallback(
       console.log(`[PITCH] → branch: awaiting_human_response (from ${previousStep})`);
       if (messageId) await editMessageReplyMarkup(chatId, messageId).catch(() => {});
       safeSetSession(chatId, "awaiting_human_response", session.player_id, session.expected_tg_id, "question_pending", "question_pending");
+      if (tgId) trackOnboardingStep(tgId, "awaiting_human_response");
       await safeSend(chatId, QUESTION_ASKED_RESPONSE, messageThreadId, "QUESTION_ASKED_RESPONSE");
       const groupUrl = chatLink(chatId);
       const handle = from?.username ? `@${from.username}` : "";
@@ -94,6 +96,7 @@ export async function handlePitchCallback(
       }
       console.log(`[PITCH] → branch: contract_shown`);
       safeSetSession(chatId, "contract_shown", session.player_id, session.expected_tg_id, "contract");
+      if (tgId) trackOnboardingStep(tgId, "contract_shown");
       await safeSend(chatId, CONTRACT_MSG_1, messageThreadId, "CONTRACT_1");
       await sleep(2000);
       await safeSend(chatId, CONTRACT_MSG_2, messageThreadId, "CONTRACT_2");
@@ -168,6 +171,7 @@ export async function handlePitchCallback(
       await sendPhoto(chatId, "case1_deposit.png", HAS_WALLET_DEPOSIT_CAPTION_2, messageThreadId);
       await sleep(2000);
       safeSetSession(chatId, "awaiting_deposit_wallet", session.player_id, session.expected_tg_id, "deposit_A");
+      if (tgId) trackOnboardingStep(tgId, "awaiting_deposit_wallet");
       try {
         await sendMsgKeyboard(chatId, HAS_WALLET_ASK_DEPOSIT, [...QUESTION_KB], messageThreadId);
       } catch { await safeSend(chatId, HAS_WALLET_ASK_DEPOSIT, messageThreadId, "HAS_ASK_DEPOSIT"); }
@@ -199,6 +203,7 @@ export async function handlePitchCallback(
       await sendPhoto(chatId, "case1_deposit.png", HELP_WALLET_DEPOSIT_CAPTION_2, messageThreadId);
       await sleep(2000);
       safeSetSession(chatId, "awaiting_deposit_wallet", session.player_id, session.expected_tg_id, "deposit_B");
+      if (tgId) trackOnboardingStep(tgId, "awaiting_deposit_wallet");
       try {
         await sendMsgKeyboard(chatId, HELP_WALLET_ASK_DEPOSIT, [...QUESTION_KB], messageThreadId);
       } catch { await safeSend(chatId, HELP_WALLET_ASK_DEPOSIT, messageThreadId, "HELP_ASK_DEPOSIT"); }
