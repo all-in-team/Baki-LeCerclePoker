@@ -31,6 +31,23 @@ export function initCronJobs() {
 
   console.log("[CRON] daily-summary registered (9h Paris, every day)");
 
+  // Onboarding auto-reminders — every 30 min
+  if (process.env.ONBOARDING_REMINDERS_ENABLED !== "false") {
+    cron.schedule("*/30 * * * *", async () => {
+      console.log("[CRON] onboarding-reminders firing");
+      try {
+        const { runOnboardingReminders } = await import("./onboarding-reminders");
+        const results = await runOnboardingReminders();
+        console.log("[CRON] onboarding-reminders done:", results.length, "actions");
+      } catch (e: any) {
+        console.error("[CRON] onboarding-reminders failed:", e);
+      }
+    }, opts);
+    console.log("[CRON] onboarding-reminders registered (every 30 min)");
+  } else {
+    console.log("[CRON] onboarding-reminders DISABLED");
+  }
+
   if (process.env.CASHOUT_CRONS_ENABLED !== "true") {
     console.log("[CRON] cashout crons DISABLED (set CASHOUT_CRONS_ENABLED=true to enable)");
     return;
