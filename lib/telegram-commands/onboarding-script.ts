@@ -28,7 +28,7 @@ export const SOLO_RESPONSE =
   `Bonne chance sur les tables. Si un jour tu changes d'avis, tu sais où nous trouver.`;
 
 export const QUESTION_ASKED_RESPONSE =
-  `Pas de souci, pose ta question ici. Je transmets à l'équipe et on te répond rapidement 👇`;
+  `Pas de souci, pose ta question ici. Baki et Hugo viennent voir 👇`;
 
 // ── Contract messages ────────────────────────────────────
 

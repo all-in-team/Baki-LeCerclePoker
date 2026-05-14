@@ -440,12 +440,14 @@ export async function handleRawMessage(text: string, chatId: number, messageThre
     setSession(chatId, "awaiting_cashout_wallet", player.id, session.expected_tg_id);
     await reply(`✅ Adresse de dépôt enregistrée.`);
     await new Promise(r => setTimeout(r, 1500));
-    await reply(
+    const cashoutPrompt =
       `Maintenant ton adresse de <b>CASHOUT</b> — c'est ta wallet perso (TronLink ou autre) où tu recevras tes gains.\n\n` +
       `Envoie-moi ton <b>adresse de CASHOUT</b> ici 👇\n` +
       `(format : commence par T, 34 caractères)\n\n` +
-      `Si c'est la même adresse que ta wallet de dépôt, écris "<b>même</b>".`
-    );
+      `Si c'est la même adresse que ta wallet de dépôt, écris "<b>même</b>".`;
+    try {
+      await sendMsgKeyboard(chatId, cashoutPrompt, [[{ text: "❓ J'ai une question", callback_data: "onboard_choice_question" }]], messageThreadId);
+    } catch { await reply(cashoutPrompt); }
     return;
   }
 
