@@ -47,7 +47,7 @@ export async function handleNewMembers(members: any[], chatTitle: string, chatId
       await sendMsg(chatId, PITCH_MSG_3);
       await sleep(3000);
       await sendMsgKeyboard(chatId, PITCH_MSG_4, [
-        [{ text: "🤝 Avec vous", callback_data: "onboard_choice_with_us" }],
+        [{ text: "🤝 J'accepte le deal", callback_data: "onboard_choice_with_us" }],
         [{ text: "❓ J'ai une question", callback_data: "onboard_choice_question" }],
       ]);
     }

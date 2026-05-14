@@ -80,7 +80,7 @@ export async function handlePitchCallback(
       );
     }
 
-    // ── Avec vous ──
+    // ── J'accepte le deal ──
     else if (data === "onboard_choice_with_us") {
       if (session.step !== "pitch_sent") {
         console.warn(`[PITCH] with_us: wrong step "${session.step}", expected "pitch_sent"`);
