@@ -1108,11 +1108,32 @@ export function getWepokerPnL(playerId?: number, period?: Period): WepokerPnLRow
   });
 }
 
-// D) Total agency P&L across all games
+// D) Agency extras helper
+export interface AgencyExtra {
+  id: number; game_key: string; type: string; amount: number; currency: string;
+  description: string | null; recorded_at: string; recorded_by: string | null; notes: string | null;
+}
+export function getAgencyExtras(gameKey: string, period?: Period): AgencyExtra[] {
+  const db = getDb();
+  let sql = `SELECT * FROM agency_extras WHERE game_key = ? AND deleted_at IS NULL`;
+  const params: any[] = [gameKey];
+  if (period?.from) { sql += ` AND substr(recorded_at, 1, 10) >= ?`; params.push(period.from); }
+  if (period?.to) { sql += ` AND substr(recorded_at, 1, 10) <= ?`; params.push(period.to); }
+  sql += ` ORDER BY recorded_at DESC`;
+  return db.prepare(sql).all(...params) as AgencyExtra[];
+}
+export function getAgencyExtrasNet(gameKey: string, period?: Period): number {
+  const extras = getAgencyExtras(gameKey, period);
+  return extras.reduce((s, e) => s + (e.type === "win" ? e.amount : -e.amount), 0);
+}
+
+// E) Total agency P&L across all games
 export interface AgencyTotalPnL {
   total_usdt: number;
   akpoker_usdt: number;
+  akpoker_extras_usdt: number;
   wepoker_cny: number;
+  wepoker_extras_cny: number;
   wepoker_usdt: number;
 }
 export function getAgencyTotalPnL(period?: Period): AgencyTotalPnL {
@@ -1121,11 +1142,17 @@ export function getAgencyTotalPnL(period?: Period): AgencyTotalPnL {
   const akTotal = ak.reduce((s, r) => s + r.agency_cut_usdt, 0);
   const wpTotalCny = wp.reduce((s, r) => s + r.total_agency_cny, 0);
   const wpTotalUsdt = wp.reduce((s, r) => s + r.total_agency_usdt, 0);
+  const akExtras = getAgencyExtrasNet("akpoker", period);
+  const wpExtrasCny = getAgencyExtrasNet("wepoker", period);
+  const rate = getCnyRate();
+  const wpExtrasUsdt = convertCnyToUsdt(wpExtrasCny, rate);
   return {
-    total_usdt: akTotal + wpTotalUsdt,
-    akpoker_usdt: akTotal,
-    wepoker_cny: wpTotalCny,
-    wepoker_usdt: wpTotalUsdt,
+    total_usdt: akTotal + akExtras + wpTotalUsdt + wpExtrasUsdt,
+    akpoker_usdt: akTotal + akExtras,
+    akpoker_extras_usdt: akExtras,
+    wepoker_cny: wpTotalCny + wpExtrasCny,
+    wepoker_extras_cny: wpExtrasCny,
+    wepoker_usdt: wpTotalUsdt + wpExtrasUsdt,
   };
 }
 
@@ -1254,6 +1281,27 @@ export function getPnLOverTime(period: Period): PnLTimePoint[] {
     existing.wepoker_usdt += wpUsdt;
     existing.total_usdt += wpUsdt;
     dayMap.set(r.day, existing);
+  }
+
+  // Add agency extras to the time series
+  const akExtras = getAgencyExtras("akpoker", period);
+  for (const e of akExtras) {
+    const day = e.recorded_at.slice(0, 10);
+    const val = e.type === "win" ? e.amount : -e.amount;
+    const existing = dayMap.get(day) ?? { date: day, akpoker_usdt: 0, wepoker_usdt: 0, total_usdt: 0 };
+    existing.akpoker_usdt += val;
+    existing.total_usdt += val;
+    dayMap.set(day, existing);
+  }
+  const wpExtras = getAgencyExtras("wepoker", period);
+  for (const e of wpExtras) {
+    const day = e.recorded_at.slice(0, 10);
+    const valCny = e.type === "win" ? e.amount : -e.amount;
+    const valUsdt = convertCnyToUsdt(valCny, rate);
+    const existing = dayMap.get(day) ?? { date: day, akpoker_usdt: 0, wepoker_usdt: 0, total_usdt: 0 };
+    existing.wepoker_usdt += valUsdt;
+    existing.total_usdt += valUsdt;
+    dayMap.set(day, existing);
   }
 
   return [...dayMap.values()].sort((a, b) => a.date.localeCompare(b.date));
