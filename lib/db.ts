@@ -837,4 +837,39 @@ function initSchema(db: Database.Database) {
   try { db.exec(`ALTER TABLE onboarding_leads ADD COLUMN last_reminder_at TEXT`); } catch {}
   try { db.exec(`ALTER TABLE onboarding_leads ADD COLUMN ops_alerted INTEGER DEFAULT 0`); } catch {}
   try { db.exec(`ALTER TABLE onboarding_leads ADD COLUMN ops_alerted_at TEXT`); } catch {}
+
+  // Agency extras — one-off wins/fees per game (global, not player-level)
+  const fixAgencyExtras = db.prepare(`INSERT OR IGNORE INTO _applied_fixes (name) VALUES (?)`).run("agency_extras_v1");
+  if (fixAgencyExtras.changes > 0) {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS agency_extras (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        game_key TEXT NOT NULL,
+        type TEXT NOT NULL CHECK(type IN ('win', 'fee')),
+        amount REAL NOT NULL,
+        currency TEXT NOT NULL,
+        description TEXT,
+        recorded_at TEXT NOT NULL DEFAULT (datetime('now')),
+        recorded_by TEXT,
+        notes TEXT,
+        deleted_at TEXT
+      );
+      CREATE INDEX IF NOT EXISTS idx_agency_extras_game ON agency_extras(game_key, recorded_at);
+    `);
+  }
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS agency_extras (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      game_key TEXT NOT NULL,
+      type TEXT NOT NULL CHECK(type IN ('win', 'fee')),
+      amount REAL NOT NULL,
+      currency TEXT NOT NULL,
+      description TEXT,
+      recorded_at TEXT NOT NULL DEFAULT (datetime('now')),
+      recorded_by TEXT,
+      notes TEXT,
+      deleted_at TEXT
+    );
+  `);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_agency_extras_game ON agency_extras(game_key, recorded_at)`);
 }
