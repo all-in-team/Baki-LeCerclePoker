@@ -157,6 +157,18 @@ export const TOOLS: Anthropic.Tool[] = [
     },
   },
   {
+    name: "get_recent_agency_extras",
+    description: "Liste les extras agency récents (wins et fees one-off non liés à un joueur, inclus automatiquement dans tous les P&L). Optionnel: filtrer par game (akpoker/wepoker).",
+    input_schema: {
+      type: "object",
+      properties: {
+        game_key: { type: "string", enum: ["akpoker", "wepoker"], description: "Filtre par game" },
+        limit: { type: "integer", description: "Nombre max (défaut 10)" },
+      },
+      required: [],
+    },
+  },
+  {
     name: "get_player_detail",
     description: "Profil complet d'un joueur : tier, status, deals par game, balance par game, 10 dernières transactions, wallets Tron. Recherche par nom ou @handle (matching partiel).",
     input_schema: {
@@ -364,8 +376,32 @@ export async function executeTool(name: string, input: any): Promise<string> {
       }
       if (!playerId) {
         lines.push(`\nTotal agency: ${fmtAmount(total.total_usdt)} USDT (AK: ${fmtAmount(total.akpoker_usdt)}, WP: ${fmtAmount(total.wepoker_usdt)})`);
+        if (total.akpoker_extras_usdt) lines.push(`  dont extras AK: ${fmtAmount(total.akpoker_extras_usdt)} USDT`);
+        if (total.wepoker_extras_cny) lines.push(`  dont extras WP: ${fmtAmount(total.wepoker_extras_cny)} CNY`);
       }
       if (ak.length === 0 && wp.length === 0) return `P&L (${label}): aucune donnée${playerId ? ` pour ${playerFilter![0].name}` : ""}.`;
+      return lines.join("\n");
+    }
+
+    if (name === "get_recent_agency_extras") {
+      const gk = input?.game_key;
+      const lim = Math.min(input?.limit ?? 10, 50);
+      const games = gk ? [gk] : ["akpoker", "wepoker"];
+      const lines: string[] = ["📒 Extras agency récents:"];
+      for (const g of games) {
+        const rows = db.prepare(
+          `SELECT * FROM agency_extras WHERE game_key = ? AND deleted_at IS NULL ORDER BY recorded_at DESC LIMIT ?`
+        ).all(g, lim) as any[];
+        if (rows.length === 0) { lines.push(`\n${g.toUpperCase()}: aucun`); continue; }
+        const cur = g === "akpoker" ? "USDT" : "CNY";
+        lines.push(`\n${g.toUpperCase()} (${cur}):`);
+        for (const r of rows) {
+          const sign = r.type === "win" ? "+" : "-";
+          lines.push(`  ${r.recorded_at.slice(0, 10)} ${sign}${r.amount} ${cur} — ${r.description ?? "(sans description)"}`);
+        }
+        const net = rows.reduce((s: number, r: any) => s + (r.type === "win" ? r.amount : -r.amount), 0);
+        lines.push(`  Net: ${net >= 0 ? "+" : ""}${net.toFixed(2)} ${cur}`);
+      }
       return lines.join("\n");
     }
 
