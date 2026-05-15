@@ -3,6 +3,7 @@ import { getWalletTransactions, getPlayers, getGames, getPlayerCashouts, getPlay
 import { getWeekBounds, getLast12Weeks, toUTCISO, toParisDate, formatRangeLabel, isoWeekToOffset } from "@/lib/date-utils";
 import PageHeader from "@/components/PageHeader";
 import TELEClient from "./TELEClient";
+import AgencyExtras from "@/components/AgencyExtras";
 
 function computeFilter(filter: string | undefined) {
   const f = filter ?? "current";
@@ -138,6 +139,7 @@ export default async function TELEPage({ searchParams }: { searchParams: Promise
         rangeLabel={rangeLabel}
         weeks={weeks.map(w => ({ isoWeek: w.isoWeek, label: w.label }))}
       />
+      <AgencyExtras gameKey="akpoker" />
     </>
   );
 }

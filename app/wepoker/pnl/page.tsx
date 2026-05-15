@@ -1,6 +1,7 @@
 export const dynamic = "force-dynamic";
 import PageHeader from "@/components/PageHeader";
 import FinanceClient from "./FinanceClient";
+import AgencyExtras from "@/components/AgencyExtras";
 import { getDb } from "@/lib/db";
 
 export default async function WepokerPnlPage({ searchParams }: { searchParams: Promise<{ player?: string }> }) {
@@ -24,6 +25,7 @@ export default async function WepokerPnlPage({ searchParams }: { searchParams: P
         </div>
       )}
       <FinanceClient />
+      <AgencyExtras gameKey="wepoker" />
     </>
   );
 }
