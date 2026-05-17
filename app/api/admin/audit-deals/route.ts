@@ -49,6 +49,8 @@ export async function POST(req: NextRequest) {
   const kkGame = db.prepare(`SELECT id FROM games WHERE name = 'KKPOKER'`).get() as { id: number } | undefined;
   if (!kkGame) return NextResponse.json({ error: "KKPOKER game not found" }, { status: 500 });
 
+  const allGames = db.prepare(`SELECT id, name, status FROM games`).all();
+
   const today = new Date().toISOString().slice(0, 10);
   const akDeals = db.prepare(`
     SELECT pgd.player_id, pgd.action_pct, pgd.rakeback_pct, COALESCE(pgd.insurance_pct, 0) AS insurance_pct
@@ -57,19 +59,31 @@ export async function POST(req: NextRequest) {
     WHERE g.name = 'TELE'
   `).all() as { player_id: number; action_pct: number; rakeback_pct: number; insurance_pct: number }[];
 
-  const ins = db.prepare(`
-    INSERT OR IGNORE INTO player_game_deals (player_id, game_id, action_pct, rakeback_pct, insurance_pct, start_date)
-    VALUES (?, ?, ?, ?, ?, ?)
-  `);
+  // Check FK enforcement
+  const fkStatus = db.prepare(`PRAGMA foreign_keys`).get() as any;
 
   let inserted = 0;
-  const tx = db.transaction(() => {
-    for (const d of akDeals) {
-      const r = ins.run(d.player_id, kkGame.id, d.action_pct, d.rakeback_pct, d.insurance_pct, today);
+  const errors: string[] = [];
+  for (const d of akDeals) {
+    try {
+      const r = db.prepare(`
+        INSERT OR IGNORE INTO player_game_deals (player_id, game_id, action_pct, rakeback_pct, insurance_pct, start_date)
+        VALUES (?, ?, ?, ?, ?, ?)
+      `).run(d.player_id, kkGame.id, d.action_pct, d.rakeback_pct, d.insurance_pct, today);
       if (r.changes > 0) inserted++;
+    } catch (e: any) {
+      errors.push(`player_id=${d.player_id}: ${e.message}`);
     }
-  });
-  tx();
+  }
 
-  return NextResponse.json({ ok: true, akpoker_count: akDeals.length, inserted, skipped: akDeals.length - inserted });
+  return NextResponse.json({
+    ok: errors.length === 0,
+    kkpoker_game_id: kkGame.id,
+    all_games: allGames,
+    fk_enabled: fkStatus,
+    akpoker_count: akDeals.length,
+    inserted,
+    skipped: akDeals.length - inserted - errors.length,
+    errors,
+  });
 }
