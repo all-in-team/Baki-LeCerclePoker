@@ -1,7 +1,15 @@
 import type { NextConfig } from "next";
+import { execSync } from "child_process";
+
+let gitSha = "local-dev";
+try { gitSha = execSync("git rev-parse HEAD").toString().trim(); } catch {}
 
 const nextConfig: NextConfig = {
   serverExternalPackages: ["better-sqlite3"],
+  env: {
+    BUILD_GIT_SHA: process.env.RAILWAY_GIT_COMMIT_SHA ?? gitSha,
+    BUILD_TIME: new Date().toISOString(),
+  },
   async redirects() {
     return [
       { source: "/tele", destination: "/akpoker/pnl", permanent: true },
