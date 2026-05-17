@@ -96,24 +96,16 @@ export async function POST(req: NextRequest) {
         db.exec(`DROP TABLE wallet_transactions`);
         db.exec(`ALTER TABLE wallet_transactions_new RENAME TO wallet_transactions`);
 
-        // ── Recreate indexes ──
-        db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_wallet_tron_hash ON wallet_transactions(tron_tx_hash) WHERE tron_tx_hash IS NOT NULL`);
-        db.exec(`CREATE INDEX IF NOT EXISTS idx_wt_player ON wallet_transactions(player_id)`);
-        db.exec(`CREATE INDEX IF NOT EXISTS idx_wt_game ON wallet_transactions(game_id)`);
-        db.exec(`CREATE INDEX IF NOT EXISTS idx_wt_date ON wallet_transactions(tx_date)`);
-        db.exec(`CREATE INDEX IF NOT EXISTS idx_wt_datetime ON wallet_transactions(tx_datetime)`);
+        // ── Recreate indexes (exact match to production) ──
+        db.exec(`CREATE UNIQUE INDEX idx_wallet_tron_hash ON wallet_transactions(tron_tx_hash, player_id) WHERE tron_tx_hash IS NOT NULL`);
 
-        // ── Recreate trigger ──
+        // ── Recreate trigger (exact match to production) ──
         db.exec(`
-          CREATE TRIGGER IF NOT EXISTS trg_wallet_tx_source_check
-          BEFORE INSERT ON wallet_transactions
+          CREATE TRIGGER wallet_tx_source_check BEFORE INSERT ON wallet_transactions
           BEGIN
-            SELECT CASE
-              WHEN NEW.source = 'sync' AND (NEW.tron_tx_hash IS NULL OR NEW.tron_tx_hash = '') THEN
-                RAISE(ABORT, 'source=sync requires tron_tx_hash')
-              WHEN NEW.source NOT IN ('sync','manual','unknown') THEN
-                RAISE(ABORT, 'source must be sync, manual, or unknown')
-            END;
+            SELECT RAISE(ABORT, 'wallet_transactions: source must be sync (with tron_tx_hash) or manual')
+            WHERE (NEW.source = 'sync' AND (NEW.tron_tx_hash IS NULL OR NEW.tron_tx_hash = ''))
+               OR NEW.source NOT IN ('sync', 'manual', 'unknown');
           END
         `);
       });
