@@ -62,8 +62,11 @@ export async function POST(req: NextRequest) {
   // Check FK enforcement
   const fkStatus = db.prepare(`PRAGMA foreign_keys`).get() as any;
 
+  // The games table was recreated by kkpoker_launch_v1 migration, which breaks
+  // SQLite's FK schema cache for player_game_deals. Temporarily disable FK checks.
   let inserted = 0;
   const errors: string[] = [];
+  db.pragma("foreign_keys = OFF");
   for (const d of akDeals) {
     try {
       const r = db.prepare(`
@@ -75,6 +78,7 @@ export async function POST(req: NextRequest) {
       errors.push(`player_id=${d.player_id}: ${e.message}`);
     }
   }
+  db.pragma("foreign_keys = ON");
 
   return NextResponse.json({
     ok: errors.length === 0,
