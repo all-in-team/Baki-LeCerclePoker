@@ -1,5 +1,95 @@
 # LeCerclePoker — Claude Code Instructions
 
+# 🛑 OPERATING RULES — READ BEFORE EVERY TASK
+
+These rules override default behavior. Violation = stop and report.
+
+## HARD LIMITS (numeric, no exceptions)
+- **Max 2 retries** on any failing operation. 3rd attempt = STOP, report, ask.
+- **Max 3 calls** to any single endpoint per task. Same result twice = STOP, reassess.
+- **NO `until` / `while` polling loops.** Single check, report result, move on.
+- **NO background-waiting** for deploys, queues, or state changes to settle.
+- **Max 10 min wall-clock** per task before mandatory user checkpoint.
+- **Max 1 deploy per task.** No speculative `railway up`.
+
+## FORBIDDEN PATTERNS (specific failures observed in this repo)
+- ❌ `until [ ... /api/version ... ]` polling — endpoint can return stale "local-dev" forever
+- ❌ `railway up` when no code changed this session — SQL cleanup, env edits, queue drains, manual DB ops do NOT need deploys
+- ❌ Polling Telegram `getWebhookInfo` more than once per task
+- ❌ Auto-retry after failure — STOP, report, ask
+- ❌ Claiming "live" / "working" / "deployed" without runtime curl + logs verification
+- ❌ Chaining phases — execute ONE phase, report, wait for next prompt from user
+- ❌ "Should propagate in a minute" / "should be fine" — verify or explicitly say "unknown / not verified"
+- ❌ Inferring runtime state from git/commit logic ("commit X is deployed therefore commit Y is too")
+
+## CONFIRMATION REQUIRED before:
+- DELETE on production tables
+- ALTER TABLE / schema migration
+- UPDATE affecting >10 rows
+- Touching: `wallet_transactions`, `weekly_settlements`, `player_game_deals`, `wallet_meres`, `player_wallet_games`, `player_wallet_cashouts`, financial columns in `players`
+- Force-push, history rewrite, branch deletion
+- Modifying env vars or Railway config
+- Any operation that cannot be reverted with a simple `git revert`
+
+## BEFORE CLAIMING "WORKING" / "LIVE" / "DEPLOYED"
+Mandatory sequence — no shortcuts:
+1. Code change committed + `railway up --ci --detach`
+2. ONE check that deploy landed (single curl to `/api/version`, max 60s wait, no loop)
+3. Runtime verify the CHANGED BEHAVIOR end-to-end (curl real endpoint, hit webhook with test payload, etc.)
+4. `railway logs 2>&1 | tail -50` — scan for errors related to the change
+5. THEN report "verified working" with the actual command output pasted as evidence
+
+If any step fails → report "NOT verified, blocked by X". Never claim success on inference.
+
+## MONEY-CRITICAL — MUST run `money-auditor` subagent before completing any task touching:
+- wallet sync logic (`lib/queries.ts` wallet functions)
+- `wallet_transactions` / `wallet_meres` reads or writes
+- P&L computation (any `getPnl*` / `computePnl*` function)
+- `weekly_settlements` table or settlements UI
+- `player_game_deals` math (action_pct, rb_pct, ins_pct usage)
+
+No exceptions. No "this is just a small change". Run money-auditor and paste its verdict in your final report.
+
+## ESCALATION — STOP IMMEDIATELY when:
+- Same endpoint returns the same result on 2 consecutive calls
+- Deploy hasn't propagated 60s after `railway up --ci --detach`
+- Any test fails (DO NOT auto-retry — report and ask)
+- FK / CHECK / UNIQUE constraint error during DB op
+- Unexpected schema state (column missing, table missing, type mismatch)
+- 10+ min spent without measurable progress
+- About to delete or modify production data outside the original task scope
+
+When stopping: state current situation, list 2-3 options for proceeding, wait for user choice. Do NOT pick an option yourself.
+
+## RAILWAY DEPLOY RULES
+- Git auto-deploy is UNRELIABLE on this project (silently skips commits). Always use `railway up --ci --detach` to force.
+- NEVER ask the user to check the Railway dashboard. Use Railway CLI from terminal.
+- After `railway up --ci --detach`: ONE curl check on `/api/version`, accept the result. Do not loop.
+
+## ONE PHASE AT A TIME
+User gives ONE phase prompt. You execute. You report. You STOP. You wait for the next prompt.
+- Do not anticipate the next phase
+- Do not chain phases ("while I'm at it...")
+- Do not deploy "to be safe"
+- Do not start adjacent fixes
+- Even if "obvious" — stop and wait
+
+## END EVERY RESPONSE WITH THIS BLOCK:
+
+```
+## STATUS REPORT
+
+**Did:** [exact files modified, commits, queries run, commands executed — concrete]
+
+**Verified with evidence:** [test command + actual output pasted; if nothing verified, write "nothing verified this turn"]
+
+**NOT verified / Unknown:** [explicit gaps — list them, don't hide them]
+
+**Blocking issues:** [or "none"]
+
+**Next user action required:** [exact phrase user should paste, OR "task complete, safe to proceed"]
+```
+
 ## What this is
 Internal ops + accounting tool for a single-operator poker affiliation business (Baki). NOT a SaaS. Audience = Baki only. Optimize for throughput and clarity over generality.
 
