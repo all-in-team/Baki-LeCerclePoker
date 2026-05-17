@@ -7,7 +7,7 @@ Internal ops + accounting tool for a single-operator poker affiliation business 
 - Next.js 15 App Router · React 19 · TS strict · Tailwind v4
 - DB: better-sqlite3, raw SQL, no ORM. File: `data/lecercle.db` (local) / `/data/lecercle.db` (Railway volume)
 - Charts: Recharts · Telegram: GramJS + Bot API · AI: @anthropic-ai/sdk · XLS: xlsx
-- Deploy: Railway, auto-deploy from `main`. No Docker. Node 20.
+- Deploy: Railway via `npm run deploy` (force-deploy + verify). Node 20.
 - No auth (v1). No tests. No staging — `main` is prod.
 
 ## File routing — where things live
@@ -64,14 +64,9 @@ Full glossary including currencies, exchange rates, club logic, legacy-vs-new ac
 ## Workflow rules
 
 - **AUTO-COMMIT RULE.** After completing any feature, fix, or meaningful change, always run `git add` + `git commit` + `git push` automatically before declaring the work done. Never leave uncommitted work waiting for user approval to commit. The user will catch problems by testing on Railway, not by reviewing local commits.
-- **Deploy without asking.** After any change that compiles, push to `main`. Commit style: `fix:` or `feat:` prefix, lowercase, single line.
-- **Verify before saying "try it."** Workflow:
-  1. `git push`
-  2. Wait for Railway, then `curl -s https://lecerclepoker-production.up.railway.app/api/version`
-  3. Confirm the returned SHA matches `git rev-parse HEAD`
-  4. *Then* tell Baki to test
-  
-  If the deploy hasn't propagated, wait and retry. Don't punt verification to Baki.
+- **Deploy without asking.** After any change that compiles, deploy to prod. Commit style: `fix:` or `feat:` prefix, lowercase, single line.
+- **ALWAYS use `npm run deploy` to ship changes.** Never rely on `git push` alone — Railway's auto-deploy silently skips builds. The script handles: push → `railway up --ci` → verify `/api/version` matches HEAD (5-min cap).
+- If deploy script reports "❌" → check Railway build logs. Otherwise never needed.
 - **Maximum work yourself.** Run lints, builds, curls, log inspections. Only ask Baki for credentials, 2FA codes, on-device approvals, physical actions.
 - **Ask before acting** ONLY for:
   - DB-destructive ops (DROP, TRUNCATE, DELETE without WHERE)
@@ -98,7 +93,64 @@ When summarizing this conversation:
 
 - Host: Railway (project `LeCerclePoker`)
 - Production URL: https://lecerclepoker-production.up.railway.app
-- Verify deploy: `curl .../api/version` returns deployed commit SHA
-- Auto-deploy: GitHub `all-in-team/Baki-LeCerclePoker` `main`. Fallback if broken: `railway up --ci --detach`
+- **Deploy command: `npm run deploy`** (push + `railway up --ci` + verify `/api/version`)
+- Verify deploy: `curl .../api/version` returns build-time git SHA (baked in at `next build` via `next.config.ts`)
 - CLI auth: `contact.baki77777@gmail.com`. Re-link: `railway link --project LeCerclePoker --service lecerclepoker`
 - Key env vars: `TRONGRID_API_KEY`, `TELEGRAM_BOT_TOKEN`, `ANTHROPIC_API_KEY`, `ADMIN_RECONCILE_TOKEN`
+
+## Hard limits on retries
+
+- NEVER poll the same endpoint more than 3 times in any tool call.
+- If a tool returns the same result twice, STOP and reassess.
+- Background "wait for deploy" loops are FORBIDDEN. The deploy script handles waiting with a hard 5-min cap.
+
+## Money-critical commits
+
+- Any commit touching wallet sync, wallet_transactions, P&L math, wallet_meres, settlements → MUST run money-auditor before push.
+
+## Project gotchas
+
+### Game ID conventions
+- Internal `TELE` = user-facing `AKPOKER` (legacy product name)
+- `KKPOKER` = same internal/external name
+- ALWAYS: `SELECT id FROM games WHERE name='X'` — never hardcode integer game_ids
+
+### Player wallets — 2 storage systems
+- **LEGACY (AKPOKER bot):** `players.tron_address`, `players.tele_wallet_cashout` — single pair, game-agnostic
+- **NEW (KKPOKER+ future games):** `player_wallet_games` and `player_wallet_cashouts` tables with `game_id INTEGER`, `UNIQUE(player_id, address, game_id)`
+- KKPOKER pages do NOT read legacy columns (`useLegacyWalletFallback=false` prop)
+
+### Shared multi-game components
+`TELEClient` and `SettlementsClient` are multi-game via props:
+- `gameLabel`: `"TELE AKPOKER"` (default) or `"KKPOKER"`
+- `basePath`: `"/tele"` (default) or `"/kkpoker/pnl"`
+- `useLegacyWalletFallback`: `true` (default) or `false` (KKPOKER)
+- Pass `game_id` explicitly in wallet queries
+
+### Wallet mères
+- Table: `wallet_meres` (`game_id`, `address`, `status`, `label`)
+- Helpers in `lib/queries.ts`:
+  - `getActiveWalletMeresForGame(gameId)` → `Set<string>` for sync logic
+  - `getWalletMeresForGame(gameId)` → `WalletMere[]` for UI display
+- INVARIANT: withdrawals are ONLY tx FROM wallet_mère of that game to cashout wallets
+
+### Archived games
+- AKPOKER (TELE) is archived. `status='archived'` in games table.
+- Backend mutations on archived games return 403 (`isGameArchived` guard).
+- AKPOKER UI must remain byte-for-byte identical. Historical data is sacred.
+
+### Adding a new game (multi-game pattern)
+1. `INSERT` row in `games` table with new name + `status='active'`
+2. Create `lib/games/<game>/config.ts`: gameLink, defaultDeal
+3. Seed wallet_mère via UI or direct INSERT
+4. Routes: `app/<game>/pnl/page.tsx` + `app/<game>/settlements/page.tsx` (pass game-specific props to TELEClient/SettlementsClient)
+5. Bot: `lib/games/<game>/onboarding.ts` triggered by `?start=<game>`
+6. Clone `player_game_deals` if applicable
+7. Update sidebar to include new game
+
+### Bot onboarding
+- AKPOKER bot writes to legacy columns (unchanged)
+- KKPOKER+ bots write to `player_wallet_games`/`player_wallet_cashouts` with `game_id`
+- `?start=<game>` deep link routes to game-specific flow
+- Re-onboarding edge case: block + alert AGENT_CHAT_ID (no silent overwrite)
+- TRC20 only — validate `^T[A-Za-z0-9]{33}$`

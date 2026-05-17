@@ -1,8 +1,8 @@
 #!/bin/bash
 set -e
 
-if [[ -n $(git status --porcelain) ]]; then
-  echo "❌ Working tree dirty. Commit or stash first."
+if [[ -n $(git diff --cached --name-only) ]]; then
+  echo "❌ Staged changes not committed. Commit first."
   exit 1
 fi
 
