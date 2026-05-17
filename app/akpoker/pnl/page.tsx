@@ -1,5 +1,6 @@
 export const dynamic = "force-dynamic";
-import { getWalletTransactions, getPlayers, getGames, getPlayerCashouts, getPlayerGameWallets, getWalletMeres, getLockAwareSummaryByPlayer, getLockAwareKPIs } from "@/lib/queries";
+import { getDb } from "@/lib/db";
+import { getWalletTransactions, getPlayers, getGames, getPlayerCashouts, getPlayerGameWallets, getWalletMeresForGame, getLockAwareSummaryByPlayer, getLockAwareKPIs } from "@/lib/queries";
 import { getWeekBounds, getLast12Weeks, toUTCISO, toParisDate, formatRangeLabel, isoWeekToOffset } from "@/lib/date-utils";
 import PageHeader from "@/components/PageHeader";
 import TELEClient from "./TELEClient";
@@ -101,7 +102,8 @@ export default async function TELEPage({ searchParams }: { searchParams: Promise
   }
   const players = getPlayers() as any[];
   const games = (getGames() as any[]).filter((g) => g.name === "TELE");
-  const walletMeres = getWalletMeres();
+  const teleGameId = (getDb().prepare(`SELECT id FROM games WHERE name = 'TELE'`).get() as { id: number } | undefined)?.id;
+  const walletMeres = teleGameId ? getWalletMeresForGame(teleGameId) : [];
 
   const cashoutsByPlayer: Record<number, { id: number; address: string; label: string | null }[]> = {};
   const gameWalletsByPlayer: Record<number, { id: number; address: string; label: string | null }[]> = {};

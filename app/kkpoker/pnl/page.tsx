@@ -1,6 +1,6 @@
 export const dynamic = "force-dynamic";
 import { getDb } from "@/lib/db";
-import { getWalletTransactions, getPlayers, getGames, getPlayerCashouts, getPlayerGameWallets, getWalletMeres, getLockAwareSummaryByPlayer, getLockAwareKPIs } from "@/lib/queries";
+import { getWalletTransactions, getPlayers, getGames, getPlayerCashouts, getPlayerGameWallets, getWalletMeresForGame, getLockAwareSummaryByPlayer, getLockAwareKPIs } from "@/lib/queries";
 import { getWeekBounds, getLast12Weeks, toUTCISO, toParisDate, formatRangeLabel, isoWeekToOffset } from "@/lib/date-utils";
 import PageHeader from "@/components/PageHeader";
 import TELEClient from "@/app/akpoker/pnl/TELEClient";
@@ -65,8 +65,8 @@ export default async function KKPOKERPage({ searchParams }: { searchParams: Prom
   }
   const players = getPlayers() as any[];
   const games = (getGames() as any[]).filter((g) => g.name === "KKPOKER");
-  const walletMeres = getWalletMeres();
   const kkGameId = (getDb().prepare(`SELECT id FROM games WHERE name = 'KKPOKER'`).get() as { id: number } | undefined)?.id;
+  const walletMeres = kkGameId ? getWalletMeresForGame(kkGameId) : [];
 
   const cashoutsByPlayer: Record<number, { id: number; address: string; label: string | null }[]> = {};
   const gameWalletsByPlayer: Record<number, { id: number; address: string; label: string | null }[]> = {};
