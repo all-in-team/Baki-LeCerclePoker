@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { getDb } from "@/lib/db";
-import { insertWalletTransactionByHash, getWalletMeres, getAllTeleCashoutsByPlayer, getAllTeleGameWalletsByPlayer, isGameArchived } from "@/lib/queries";
+import { insertWalletTransactionByHash, getActiveWalletMeresForGame, getAllTeleCashoutsByPlayer, getAllTeleGameWalletsByPlayer, isGameArchived } from "@/lib/queries";
 
 const USDT_CONTRACT = "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t";
 
@@ -112,8 +112,10 @@ export async function POST() {
   if (players.length === 0)
     return NextResponse.json({ ok: true, imported: 0, message: "Aucun joueur avec un Wallet Game configuré." });
 
-  const walletMeres = getWalletMeres();
-  const mereAddrs = new Set(walletMeres.map(wm => wm.address.toLowerCase()));
+  const mereAddrs = getActiveWalletMeresForGame(teleGameId);
+  if (mereAddrs.size === 0) {
+    console.warn("[SYNC] No active wallet_mère for game=TELE, withdrawals cannot be detected");
+  }
 
   // Build game-wallet map: player_id → [address, ...] (deduped by lowercase)
   const gameWalletEntries = getAllTeleGameWalletsByPlayer();
