@@ -153,10 +153,11 @@ export function addPlayerCashout(playerId: number, address: string, gameId: numb
 export function getAllTeleGameWalletsByPlayer() {
   return getDb().prepare(`
     SELECT player_id, address FROM player_wallet_games
-    WHERE player_id IN (
-      SELECT pgd.player_id FROM player_game_deals pgd
-      JOIN games g ON g.id = pgd.game_id AND g.name = 'TELE'
-    )
+    WHERE (game_id IS NULL OR game_id = (SELECT id FROM games WHERE name = 'TELE'))
+      AND player_id IN (
+        SELECT pgd.player_id FROM player_game_deals pgd
+        JOIN games g ON g.id = pgd.game_id AND g.name = 'TELE'
+      )
     UNION
     SELECT p.id AS player_id, p.tron_address AS address FROM players p
     JOIN player_game_deals pgd ON pgd.player_id = p.id
@@ -166,9 +167,9 @@ export function getAllTeleGameWalletsByPlayer() {
 }
 
 export function getAllTeleCashoutsByPlayer() {
-  // Returns one row per (player_id, address). Includes both new-table entries and the legacy single column.
   return getDb().prepare(`
     SELECT player_id, address FROM player_wallet_cashouts
+    WHERE game_id IS NULL OR game_id = (SELECT id FROM games WHERE name = 'TELE')
     UNION
     SELECT id AS player_id, tele_wallet_cashout AS address FROM players
     WHERE tele_wallet_cashout IS NOT NULL AND tele_wallet_cashout != ''
