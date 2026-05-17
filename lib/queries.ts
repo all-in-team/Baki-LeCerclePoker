@@ -557,6 +557,15 @@ export function getWalletMeres(): WalletMere[] {
   `).all() as WalletMere[];
 }
 
+export function getWalletMeresForGame(gameId: number): WalletMere[] {
+  return getDb().prepare(`
+    SELECT wm.id, wm.address, wm.label, wm.game_id, wm.status, wm.created_at, g.name AS game_name
+    FROM wallet_meres wm LEFT JOIN games g ON g.id = wm.game_id
+    WHERE wm.status = 'active' AND wm.game_id = ?
+    ORDER BY wm.id
+  `).all(gameId) as WalletMere[];
+}
+
 export function getActiveWalletMeresForGame(gameId: number): Set<string> {
   const rows = getDb().prepare(`
     SELECT address FROM wallet_meres WHERE game_id = ? AND status = 'active'
