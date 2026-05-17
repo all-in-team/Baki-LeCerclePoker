@@ -9,6 +9,7 @@ import {
   handleBroadcast, handleBroadcastCallback,
   handleCashoutDoneCallback,
   handleCashoutSkippedCallback,
+  handleKkpokerCallback,
   sendMsg, answerCbQuery, getSession, handleRawMessage, registerCommandHandlers,
   OWNER_IDS, AGENT_CHAT_ID,
 } from "@/lib/telegram-commands";
@@ -40,7 +41,9 @@ export async function POST(req: NextRequest) {
     const cbChatId = cb.message?.chat?.id;
     const cbThreadId = cb.message?.message_thread_id;
 
-    if (cbData.startsWith("onboard:")) {
+    if (cbData.startsWith("kk_")) {
+      await handleKkpokerCallback(cb.id, cbData, cbChatId, cbThreadId, cb.from, cb.message?.message_id);
+    } else if (cbData.startsWith("onboard:")) {
       await handleOnboardCallback(cb.id, cbData, cbChatId, cbThreadId);
     } else if (cbData.startsWith("onboard_")) {
       await handlePitchCallback(cb.id, cbData, cbChatId, cbThreadId, cb.from, cb.message?.message_id);
@@ -88,7 +91,10 @@ export async function POST(req: NextRequest) {
   // /start is available to ALL users
   if (msg?.text?.startsWith("/start")) {
     const fromName = [msg.from?.first_name, msg.from?.last_name].filter(Boolean).join(" ") || "Utilisateur";
-    await handleStart(chatId, msg.from?.id, fromName, msg.from);
+    // Extract deep-link payload: "/start kkpoker" → payload = "kkpoker"
+    const startParts = msg.text.split(/\s+/);
+    const payload = startParts.length > 1 ? startParts[1].toLowerCase() : undefined;
+    await handleStart(chatId, msg.from?.id, fromName, msg.from, payload);
     return NextResponse.json({ ok: true });
   }
 

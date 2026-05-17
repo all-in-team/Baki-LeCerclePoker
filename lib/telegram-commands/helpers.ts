@@ -107,7 +107,7 @@ export async function askWalletGame(chatId: number | string, mention: string, me
 }
 
 // ── Session helpers ───────────────────────────────────────
-export type Step = "pitch_sent" | "solo_declined" | "contract_shown" | "signed_active" | "contract_questions" | "awaiting_wallet_address" | "onboarding_complete" | "awaiting_deposit_wallet" | "awaiting_cashout_wallet" | "wallets_complete" | "waiting_action_pct" | "waiting_wallet_game" | "waiting_wallet_cashout" | "waiting_game" | "waiting_player" | "awaiting_human_response";
+export type Step = "pitch_sent" | "solo_declined" | "contract_shown" | "signed_active" | "contract_questions" | "awaiting_wallet_address" | "onboarding_complete" | "awaiting_deposit_wallet" | "awaiting_cashout_wallet" | "wallets_complete" | "waiting_action_pct" | "waiting_wallet_game" | "waiting_wallet_cashout" | "waiting_game" | "waiting_player" | "awaiting_human_response" | "kkpoker_pitch_sent" | "kkpoker_contract_shown" | "awaiting_kkpoker_cashout_wallet" | "awaiting_kkpoker_game_wallet";
 
 export function getSession(chatId: string | number): { step: Step; player_id: number; expected_tg_id: number | null; pending_cmd: string | null } | null {
   return getDb().prepare(
@@ -421,6 +421,14 @@ export async function handleRawMessage(text: string, chatId: number, messageThre
   }
 
   if (!session.player_id) { clearSession(chatId); return; }
+
+  // KKPOKER wallet collection states — delegate to KKPOKER module
+  if (session.step === "awaiting_kkpoker_cashout_wallet" || session.step === "awaiting_kkpoker_game_wallet") {
+    const { handleKkpokerRawMessage } = await import("@/lib/games/kkpoker/onboarding");
+    const handled = await handleKkpokerRawMessage(text, chatId, session, messageThreadId);
+    if (handled) return;
+  }
+
   const player = getPlayerFull(session.player_id);
   if (!player) { clearSession(chatId); return; }
 
