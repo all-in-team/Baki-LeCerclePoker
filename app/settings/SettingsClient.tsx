@@ -52,18 +52,22 @@ export default function SettingsClient({
   const [error, setError]  = useState<string | null>(null);
 
   // Wallet mères state
-  type WM = { id: number; address: string; label: string | null; created_at: string };
+  type WM = { id: number; address: string; label: string | null; game_id: number | null; game_name?: string; status?: string; retired_at?: string | null; created_at: string };
+  type GameInfo = { id: number; name: string; status?: string };
   const [walletMeres, setWalletMeres] = useState<WM[]>([]);
+  const [games, setGames] = useState<GameInfo[]>([]);
   const [wmAddr, setWmAddr] = useState("");
   const [wmLabel, setWmLabel] = useState("");
+  const [wmGameId, setWmGameId] = useState<number | null>(null);
   const [wmAdding, setWmAdding] = useState(false);
   const [wmError, setWmError] = useState<string | null>(null);
   const [wmShowForm, setWmShowForm] = useState(false);
 
   const loadWalletMeres = useCallback(async () => {
     try {
-      const res = await fetch("/api/wallet-meres");
-      if (res.ok) { const j = await res.json(); setWalletMeres(j.wallets); }
+      const [wmRes, gRes] = await Promise.all([fetch("/api/wallet-meres"), fetch("/api/games")]);
+      if (wmRes.ok) { const j = await wmRes.json(); setWalletMeres(j.wallets); }
+      if (gRes.ok) { const g = await gRes.json(); setGames(Array.isArray(g) ? g : []); }
     } catch {}
   }, []);
 
@@ -72,22 +76,27 @@ export default function SettingsClient({
   async function addWalletMere() {
     const addr = wmAddr.trim();
     if (!isTronAddr(addr)) { setWmError("Adresse invalide (T + 33 caractères)"); return; }
+    if (!wmGameId) { setWmError("Sélectionne un game"); return; }
     setWmAdding(true); setWmError(null);
     try {
       const res = await fetch("/api/wallet-meres", {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ address: addr, label: wmLabel.trim() || null }),
+        body: JSON.stringify({ address: addr, label: wmLabel.trim() || null, game_id: wmGameId }),
       });
       if (!res.ok) { const j = await res.json(); setWmError(j.error ?? "Erreur"); return; }
-      setWmAddr(""); setWmLabel(""); setWmShowForm(false);
+      setWmAddr(""); setWmLabel(""); setWmShowForm(false); setWmGameId(null);
       await loadWalletMeres();
     } catch (e: any) { setWmError(e.message); }
     finally { setWmAdding(false); }
   }
 
-  async function deleteWalletMere(id: number) {
+  async function retireWalletMere(id: number) {
+    if (!confirm("Retirer cette wallet mère ? Elle ne sera plus utilisée pour détecter les cashouts.")) return;
     try {
-      await fetch(`/api/wallet-meres/${id}`, { method: "DELETE" });
+      await fetch("/api/wallet-meres", {
+        method: "PATCH", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id, action: "retire" }),
+      });
       await loadWalletMeres();
     } catch {}
   }
@@ -242,106 +251,87 @@ export default function SettingsClient({
         </div>
       </div>
 
-      {/* Wallets mères section */}
+      {/* Wallets mères section — grouped by game */}
       <div style={{ background: "var(--bg-raised)", border: "1px solid var(--border)", borderRadius: 10, marginBottom: 24 }}>
         <div style={{ padding: "16px 20px", borderBottom: "1px solid var(--border)", display: "flex", alignItems: "center", gap: 10 }}>
           <Wallet size={16} color="#4ade80" />
           <span style={{ fontSize: 13, fontWeight: 700, color: "var(--text)" }}>Wallets mères</span>
-          <span style={{ fontSize: 11, color: "var(--text-dim)" }}>— Adresses de trésorerie qui envoient les cashouts</span>
-          {walletMeres.length > 0 && (
+          <span style={{ fontSize: 11, color: "var(--text-dim)" }}>— Adresses de trésorerie par game</span>
+          {walletMeres.filter(w => w.status === "active").length > 0 && (
             <span style={{ marginLeft: "auto", fontSize: 11, fontWeight: 600, padding: "3px 8px", borderRadius: 20, background: "rgba(74,222,128,0.12)", color: "#4ade80", display: "flex", alignItems: "center", gap: 4 }}>
-              <CheckCircle size={11} /> {walletMeres.length} configuré{walletMeres.length > 1 ? "s" : ""}
+              <CheckCircle size={11} /> {walletMeres.filter(w => w.status === "active").length} active
             </span>
           )}
         </div>
         <div style={{ padding: 20 }}>
           <div style={{ background: "rgba(74,222,128,0.07)", border: "1px solid rgba(74,222,128,0.18)", borderRadius: 8, padding: "12px 14px", marginBottom: 20, fontSize: 12, color: "var(--text-muted)", lineHeight: 1.6 }}>
             <Shield size={12} style={{ display: "inline", marginRight: 6, color: "#4ade80" }} />
-            Le sync ne reconnaît un cashout que si l{"'"}expéditeur est l{"'"}une de ces adresses ET le destinataire est un wallet cashout connu.
+            Le sync ne reconnaît un cashout que si l{"'"}expéditeur est une wallet mère active pour ce game ET le destinataire est un wallet cashout connu.
           </div>
 
-          {walletMeres.length === 0 && !wmShowForm && (
-            <div style={{ fontSize: 12, color: "var(--text-dim)", marginBottom: 16 }}>Aucune wallet mère configurée.</div>
-          )}
-
-          {walletMeres.map(wm => (
-            <div key={wm.id} style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 14px", background: "var(--bg-surface)", borderRadius: 8, marginBottom: 8, border: "1px solid var(--border)" }}>
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ fontSize: 12, fontWeight: 600, color: "var(--text)", marginBottom: 2 }}>
-                  {wm.label || "Sans label"}
+          {games.filter(g => ["TELE", "KKPOKER"].includes(g.name)).map(game => {
+            const gameWMs = walletMeres.filter(w => w.game_id === game.id);
+            const isArchived = game.status === "archived";
+            return (
+              <div key={game.id} style={{ marginBottom: 20 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
+                  <span style={{ fontSize: 12, fontWeight: 700, color: "var(--text)", opacity: isArchived ? 0.5 : 1 }}>
+                    {game.name === "TELE" ? "AKPOKER" : game.name}
+                  </span>
+                  {isArchived && (
+                    <span style={{ fontSize: 9, padding: "1px 6px", borderRadius: 3, background: "rgba(255,255,255,0.08)", color: "var(--text-dim)", fontWeight: 600 }}>ARCHIVED</span>
+                  )}
                 </div>
-                <div style={{ fontSize: 11, fontFamily: "monospace", color: "var(--text-muted)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                  {wm.address}
-                </div>
+                {gameWMs.length === 0 && (
+                  <div style={{ fontSize: 11, color: "var(--text-dim)", padding: "8px 14px", background: "var(--bg-surface)", borderRadius: 6, marginBottom: 8 }}>Aucune wallet mère</div>
+                )}
+                {gameWMs.map(wm => (
+                  <div key={wm.id} style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 14px", background: "var(--bg-surface)", borderRadius: 8, marginBottom: 6, border: "1px solid var(--border)", opacity: wm.status === "retired" ? 0.4 : 1 }}>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 2 }}>
+                        <span style={{ fontSize: 12, fontWeight: 600, color: "var(--text)" }}>{wm.label || "Sans label"}</span>
+                        <span style={{ fontSize: 9, padding: "1px 6px", borderRadius: 3, background: wm.status === "active" ? "rgba(74,222,128,0.12)" : "rgba(248,113,113,0.12)", color: wm.status === "active" ? "#4ade80" : "#f87171", fontWeight: 600 }}>
+                          {wm.status === "active" ? "ACTIVE" : "RETIRED"}
+                        </span>
+                      </div>
+                      <div style={{ fontSize: 11, fontFamily: "monospace", color: "var(--text-muted)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{wm.address}</div>
+                    </div>
+                    {wm.status === "active" && (
+                      <button onClick={() => retireWalletMere(wm.id)} style={{ background: "none", border: "none", cursor: "pointer", padding: 6, borderRadius: 6, color: "var(--text-dim)", fontSize: 11 }} title="Retirer">Retire</button>
+                    )}
+                  </div>
+                ))}
               </div>
-              <button
-                onClick={() => deleteWalletMere(wm.id)}
-                style={{ background: "none", border: "none", cursor: "pointer", padding: 6, borderRadius: 6, color: "var(--text-dim)", display: "flex" }}
-                title="Supprimer"
-              >
-                <Trash2 size={14} />
-              </button>
-            </div>
-          ))}
+            );
+          })}
 
           {wmShowForm ? (
             <div style={{ padding: 14, background: "var(--bg-surface)", borderRadius: 8, border: "1px solid var(--border)", marginTop: 8 }}>
               <div style={{ marginBottom: 10 }}>
-                <label style={{ fontSize: 11, fontWeight: 700, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.07em", display: "block", marginBottom: 6 }}>
-                  Adresse TRON
-                </label>
-                <input
-                  value={wmAddr}
-                  onChange={e => { setWmAddr(e.target.value); setWmError(null); }}
-                  placeholder="TXxxx... (adresse TRC20)"
-                  spellCheck={false}
-                  style={{
-                    width: "100%", padding: "9px 12px", borderRadius: 7, fontSize: 12, fontFamily: "monospace",
-                    background: "var(--bg-raised)", color: "var(--text)",
-                    border: `1px solid ${wmAddr && !isTronAddr(wmAddr) ? "#f87171" : "var(--border)"}`,
-                    outline: "none", boxSizing: "border-box",
-                  }}
-                />
+                <label style={{ fontSize: 11, fontWeight: 700, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.07em", display: "block", marginBottom: 6 }}>Game</label>
+                <select value={wmGameId ?? ""} onChange={e => setWmGameId(e.target.value ? Number(e.target.value) : null)} style={{ width: "100%", padding: "9px 12px", borderRadius: 7, fontSize: 12, background: "var(--bg-raised)", color: "var(--text)", border: "1px solid var(--border)", outline: "none" }}>
+                  <option value="">Choisir...</option>
+                  {games.filter(g => g.status === "active" && ["TELE", "KKPOKER"].includes(g.name)).map(g => (
+                    <option key={g.id} value={g.id}>{g.name === "TELE" ? "AKPOKER" : g.name}</option>
+                  ))}
+                </select>
+              </div>
+              <div style={{ marginBottom: 10 }}>
+                <label style={{ fontSize: 11, fontWeight: 700, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.07em", display: "block", marginBottom: 6 }}>Adresse TRON</label>
+                <input value={wmAddr} onChange={e => { setWmAddr(e.target.value); setWmError(null); }} placeholder="TXxxx... (adresse TRC20)" spellCheck={false} style={{ width: "100%", padding: "9px 12px", borderRadius: 7, fontSize: 12, fontFamily: "monospace", background: "var(--bg-raised)", color: "var(--text)", border: `1px solid ${wmAddr && !isTronAddr(wmAddr) ? "#f87171" : "var(--border)"}`, outline: "none", boxSizing: "border-box" }} />
               </div>
               <div style={{ marginBottom: 12 }}>
-                <label style={{ fontSize: 11, fontWeight: 700, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.07em", display: "block", marginBottom: 6 }}>
-                  Label (optionnel)
-                </label>
-                <input
-                  value={wmLabel}
-                  onChange={e => setWmLabel(e.target.value)}
-                  placeholder="Ex: WM principal, WM backup…"
-                  style={{
-                    width: "100%", padding: "9px 12px", borderRadius: 7, fontSize: 12,
-                    background: "var(--bg-raised)", color: "var(--text)",
-                    border: "1px solid var(--border)", outline: "none", boxSizing: "border-box",
-                  }}
-                />
+                <label style={{ fontSize: 11, fontWeight: 700, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.07em", display: "block", marginBottom: 6 }}>Label (optionnel)</label>
+                <input value={wmLabel} onChange={e => setWmLabel(e.target.value)} placeholder="Ex: main, backup…" style={{ width: "100%", padding: "9px 12px", borderRadius: 7, fontSize: 12, background: "var(--bg-raised)", color: "var(--text)", border: "1px solid var(--border)", outline: "none", boxSizing: "border-box" }} />
               </div>
-              {wmError && (
-                <div style={{ fontSize: 11, color: "#f87171", marginBottom: 10 }}>{wmError}</div>
-              )}
+              {wmError && <div style={{ fontSize: 11, color: "#f87171", marginBottom: 10 }}>{wmError}</div>}
               <div style={{ display: "flex", gap: 8 }}>
-                <Btn onClick={addWalletMere} disabled={wmAdding}>
-                  {wmAdding ? "Ajout…" : "Ajouter"}
-                </Btn>
-                <button
-                  onClick={() => { setWmShowForm(false); setWmAddr(""); setWmLabel(""); setWmError(null); }}
-                  style={{ background: "none", border: "1px solid var(--border)", borderRadius: 7, padding: "6px 14px", fontSize: 12, color: "var(--text-muted)", cursor: "pointer" }}
-                >
-                  Annuler
-                </button>
+                <Btn onClick={addWalletMere} disabled={wmAdding}>{wmAdding ? "Ajout…" : "Ajouter"}</Btn>
+                <button onClick={() => { setWmShowForm(false); setWmAddr(""); setWmLabel(""); setWmError(null); setWmGameId(null); }} style={{ background: "none", border: "1px solid var(--border)", borderRadius: 7, padding: "6px 14px", fontSize: 12, color: "var(--text-muted)", cursor: "pointer" }}>Annuler</button>
               </div>
             </div>
           ) : (
-            <button
-              onClick={() => setWmShowForm(true)}
-              style={{
-                display: "flex", alignItems: "center", gap: 6, marginTop: 8,
-                background: "none", border: "1px dashed var(--border)", borderRadius: 8,
-                padding: "10px 14px", fontSize: 12, color: "var(--text-muted)", cursor: "pointer", width: "100%",
-              }}
-            >
+            <button onClick={() => setWmShowForm(true)} style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 8, background: "none", border: "1px dashed var(--border)", borderRadius: 8, padding: "10px 14px", fontSize: 12, color: "var(--text-muted)", cursor: "pointer", width: "100%" }}>
               <Plus size={14} /> Ajouter une wallet mère
             </button>
           )}
