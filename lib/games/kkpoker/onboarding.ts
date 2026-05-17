@@ -4,7 +4,7 @@ import {
   getSession, setSession, TRC20_RE, AGENT_CHAT_ID,
   type Step,
 } from "@/lib/telegram-commands/helpers";
-import { getPlayerCashouts, getPlayerGameWallets, addPlayerCashout, addPlayerGameWallet } from "@/lib/queries";
+import { addPlayerCashout, addPlayerGameWallet } from "@/lib/queries";
 import { KKPOKER_GAME_NAME, KKPOKER_GAME_LINK } from "./config";
 
 const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
@@ -20,109 +20,6 @@ function getKkpokerDeal(playerId: number): { action_pct: number; rakeback_pct: n
   return getDb().prepare(
     `SELECT action_pct, rakeback_pct FROM player_game_deals WHERE player_id = ? AND game_id = ?`
   ).get(playerId, gameId) as { action_pct: number; rakeback_pct: number } | undefined ?? null;
-}
-
-// ── Entry point: called from /start when payload=kkpoker ──
-
-export async function handleKkpokerOnboarding(
-  chatId: number,
-  from: { id: number; first_name?: string; last_name?: string; username?: string }
-) {
-  const db = getDb();
-  const firstName = from.first_name ?? "Joueur";
-  const fullName = [from.first_name, from.last_name].filter(Boolean).join(" ") || firstName;
-  const gameId = getKkpokerGameId();
-
-  // Check if player already exists
-  const existing = db.prepare(`SELECT id, name FROM players WHERE telegram_id = ?`).get(from.id) as { id: number; name: string } | undefined;
-
-  if (existing && gameId) {
-    // Re-onboarding edge case: check if player already has KKPOKER wallets
-    const existingGameWallets = getPlayerGameWallets(existing.id, gameId);
-    const existingCashouts = getPlayerCashouts(existing.id, gameId);
-    if (existingGameWallets.length > 0 || existingCashouts.length > 0) {
-      await sendMsg(chatId,
-        `👋 <b>${existing.name}</b>, tu es déjà inscrit sur KKPOKER !\n\n` +
-        `Si tu as besoin de modifier tes infos, contacte @baki77777`
-      );
-      await sendMsg(AGENT_CHAT_ID,
-        `⚠️ <b>Re-onboarding KKPOKER bloqué</b>\n` +
-        `Joueur : <b>${existing.name}</b> (ID ${existing.id})\n` +
-        `🆔 TG: <code>${from.id}</code>\n` +
-        `Wallets KKPOKER existants — intervention manuelle requise si le joueur veut changer.`
-      );
-      return;
-    }
-  }
-
-  // Upsert onboarding lead
-  db.prepare(`
-    INSERT INTO onboarding_leads (telegram_id, telegram_username, first_name, stage)
-    VALUES (?, ?, ?, 'joined')
-    ON CONFLICT(telegram_id) DO UPDATE SET
-      telegram_username = excluded.telegram_username,
-      first_name = excluded.first_name,
-      stage = 'joined',
-      last_seen = datetime('now')
-  `).run(from.id, from.username ?? null, firstName);
-
-  // Send pitch
-  await sendMsg(chatId,
-    `🃏 <b>Bienvenue sur Le Cercle — KKPOKER !</b>\n\n` +
-    `On t'explique comment ça marche et on te setup en quelques minutes.`
-  );
-
-  await sleep(2000);
-
-  // Get deal terms dynamically
-  let actionPctDisplay = "40";
-  let playerPctDisplay = "60";
-  if (existing) {
-    const deal = getKkpokerDeal(existing.id);
-    if (deal) {
-      actionPctDisplay = String(deal.action_pct);
-      playerPctDisplay = String(100 - deal.action_pct);
-    }
-  }
-
-  await sendMsg(chatId,
-    `Voilà le deal qu'on propose :\n\n` +
-    `🤝 Tu joues <b>${playerPctDisplay}%</b> de ton action.\n` +
-    `On prend les ${actionPctDisplay}% restants.\n\n` +
-    `C'est de l'action symétrique : <b>win/win, lose/lose</b>.\n` +
-    `L'avantage : tu peux simplement jouer plus cher. Ça ne te pénalise pas, ça te protège.`
-  );
-
-  await sleep(3000);
-
-  // Create or get player
-  let playerId: number;
-  if (existing) {
-    playerId = existing.id;
-  } else {
-    const result = db.prepare(
-      `INSERT INTO players (name, telegram_id, telegram_handle, telegram_chat_id, status) VALUES (?, ?, ?, ?, 'active')`
-    ).run(fullName, from.id, from.username ?? null, String(chatId));
-    playerId = Number(result.lastInsertRowid);
-  }
-
-  // Ensure player has KKPOKER deal (should already exist from Phase 1.5 cloning, but safety net)
-  if (gameId) {
-    db.prepare(`
-      INSERT OR IGNORE INTO player_game_deals (player_id, game_id, action_pct, rakeback_pct)
-      VALUES (?, ?, 40, 0)
-    `).run(playerId, gameId);
-  }
-
-  setSession(chatId, "kkpoker_pitch_sent" as Step, playerId, from.id);
-
-  await sendMsgKeyboard(chatId,
-    `Qu'est-ce que tu en penses ?`,
-    [
-      [{ text: "🤝 Avec vous", callback_data: "kk_choice_with_us" }],
-      [{ text: "❓ J'ai une question", callback_data: "kk_choice_question" }],
-    ]
-  );
 }
 
 // ── Callback handler for KKPOKER onboarding buttons ──

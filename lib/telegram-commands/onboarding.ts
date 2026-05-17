@@ -7,6 +7,7 @@ const pendingGroupData = new Map<number, {
   groupId: number;
   alertesTopicId: number | null;
   liveplayTopicId: number | null;
+  gameName?: string;
 }>();
 
 export function consumePendingGroupData(telegramId: number) {
@@ -94,10 +95,12 @@ const TOPIC_MESSAGES: Record<string, string> = {
 
 /**
  * Direct onboarding: /start → create group immediately → send presentation in group.
+ * gameName: undefined = AKPOKER (default), "KKPOKER" = KKPOKER-specific flow
  */
 export async function handleOnboardingDirect(
   chatId: number,
-  from: { id: number; first_name?: string; last_name?: string; username?: string }
+  from: { id: number; first_name?: string; last_name?: string; username?: string },
+  gameName?: string,
 ) {
   const db = getDb();
   const firstName = from.first_name ?? "Joueur";
@@ -117,8 +120,31 @@ export async function handleOnboardingDirect(
   `).run(from.id, username, firstName);
 
   // Already has a group? Don't create another
-  const existingPlayer = db.prepare(`SELECT id FROM players WHERE telegram_id = ?`).get(from.id);
-  if (existingPlayer) {
+  const existingPlayer = db.prepare(`SELECT id, name FROM players WHERE telegram_id = ?`).get(from.id) as { id: number; name: string } | undefined;
+
+  if (existingPlayer && gameName === "KKPOKER") {
+    const { getPlayerGameWallets, getPlayerCashouts } = await import("@/lib/queries");
+    const kkGameId = (db.prepare(`SELECT id FROM games WHERE name = 'KKPOKER'`).get() as { id: number } | undefined)?.id;
+    if (kkGameId) {
+      const existingGameWallets = getPlayerGameWallets(existingPlayer.id, kkGameId);
+      const existingCashouts = getPlayerCashouts(existingPlayer.id, kkGameId);
+      if (existingGameWallets.length > 0 || existingCashouts.length > 0) {
+        await sendMsg(chatId,
+          `👋 <b>${existingPlayer.name}</b>, tu es déjà inscrit sur KKPOKER !\n\n` +
+          `Si tu as besoin de modifier tes infos, contacte @baki77777`
+        );
+        await sendMsg(AGENT_CHAT_ID,
+          `⚠️ <b>Re-onboarding KKPOKER bloqué</b>\n` +
+          `Joueur : <b>${existingPlayer.name}</b> (ID ${existingPlayer.id})\n` +
+          `🆔 TG: <code>${from.id}</code>\n` +
+          `Wallets KKPOKER existants — intervention manuelle requise si le joueur veut changer.`
+        );
+        return;
+      }
+    }
+  }
+
+  if (existingPlayer && !gameName) {
     await sendMsg(chatId, `✅ Tu es déjà inscrit ! Ton groupe est prêt.\n\nQuestions ? → @baki77777`);
     return;
   }
@@ -143,6 +169,7 @@ export async function handleOnboardingDirect(
           groupId: result.chatId,
           alertesTopicId: result.topicIds.alertes ?? null,
           liveplayTopicId: result.topicIds.liveplay ?? null,
+          gameName,
         });
 
         // Send topic welcome messages into the group (bot is already in it)

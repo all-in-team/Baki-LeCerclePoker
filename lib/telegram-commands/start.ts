@@ -1,19 +1,18 @@
 import { getDb } from "@/lib/db";
 import { sendMsg, OWNER_IDS } from "./helpers";
 import { handleOnboardingDirect } from "./onboarding";
-import { handleKkpokerOnboarding } from "@/lib/games/kkpoker/onboarding";
 
 export async function handleStart(chatId: number, fromId: number, fromName: string, from?: any, payload?: string) {
   const db = getDb();
 
-  // Deep-link routing: ?start=kkpoker → KKPOKER onboarding
+  // Deep-link routing: ?start=kkpoker → KKPOKER onboarding (shared group flow)
   if (payload === "kkpoker") {
-    await handleKkpokerOnboarding(chatId, {
+    await handleOnboardingDirect(chatId, {
       id: fromId,
       first_name: from?.first_name ?? fromName,
       last_name: from?.last_name,
       username: from?.username,
-    });
+    }, "KKPOKER");
     return;
   }
 
