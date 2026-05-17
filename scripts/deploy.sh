@@ -12,6 +12,10 @@ echo "🚀 Deploying $SHORT_SHA"
 
 git push origin main
 
+# Write SHA to file so railway up snapshot includes it (no .git dir in snapshot)
+echo "$CURRENT_SHA" > .git-sha
+trap 'rm -f .git-sha' EXIT
+
 echo "📦 Triggering Railway build..."
 railway up --ci --detach
 

@@ -1,8 +1,12 @@
 import type { NextConfig } from "next";
+import { readFileSync } from "fs";
 import { execSync } from "child_process";
 
 let gitSha = "local-dev";
-try { gitSha = execSync("git rev-parse HEAD").toString().trim(); } catch {}
+try { gitSha = readFileSync(".git-sha", "utf-8").trim(); } catch {}
+if (gitSha === "local-dev") {
+  try { gitSha = execSync("git rev-parse HEAD").toString().trim(); } catch {}
+}
 
 const nextConfig: NextConfig = {
   serverExternalPackages: ["better-sqlite3"],
