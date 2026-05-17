@@ -11,6 +11,18 @@ export async function POST(req: NextRequest) {
   const log: string[] = [];
 
   try {
+    // Pre-clean: remove leftover fake player from previous failed test
+    const stale = db.prepare(`SELECT id FROM players WHERE telegram_id = 999999999`).get() as any;
+    if (stale) {
+      db.prepare(`DELETE FROM telegram_sessions WHERE chat_id = '999999999'`).run();
+      db.prepare(`DELETE FROM player_game_deals WHERE player_id = ?`).run(stale.id);
+      db.prepare(`DELETE FROM player_wallet_games WHERE player_id = ?`).run(stale.id);
+      db.prepare(`DELETE FROM player_wallet_cashouts WHERE player_id = ?`).run(stale.id);
+      db.prepare(`DELETE FROM players WHERE id = ?`).run(stale.id);
+      log.push(`pre-clean: removed stale player id=${stale.id}`);
+    }
+    db.prepare(`DELETE FROM onboarding_leads WHERE telegram_id = 999999999`).run();
+
     // Step 1: Check games table
     const kkGame = db.prepare(`SELECT id FROM games WHERE name = 'KKPOKER'`).get() as any;
     log.push(`kkpoker game: ${JSON.stringify(kkGame)}`);
