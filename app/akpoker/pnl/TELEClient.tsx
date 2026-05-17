@@ -49,6 +49,7 @@ export default function TELEClient({
   archived = false,
   basePath = "/tele",
   gameLabel = "TELE AKPOKER",
+  useLegacyWalletFallback = true,
 }: {
   initialSummary: PlayerGameRow[];
   kpis: KPIs;
@@ -64,6 +65,7 @@ export default function TELEClient({
   archived?: boolean;
   basePath?: string;
   gameLabel?: string;
+  useLegacyWalletFallback?: boolean;
 }) {
   const router = useRouter();
   const [syncing, setSyncing] = useState(false);
@@ -143,7 +145,7 @@ export default function TELEClient({
     const existingCashouts = cashoutsByPlayer[p.id]?.map(c => c.address) ?? [];
     const existingGameWallets = gameWalletsByPlayer[p.id]?.map(c => c.address) ?? [];
     setWalletInlineVals({
-      game_wallets: existingGameWallets.length > 0 ? existingGameWallets : [p.tron_address ?? ""],
+      game_wallets: existingGameWallets.length > 0 ? existingGameWallets : [useLegacyWalletFallback ? (p.tron_address ?? "") : ""],
       cashouts: existingCashouts.length > 0 ? existingCashouts : [""],
     });
   }
@@ -392,7 +394,7 @@ export default function TELEClient({
                 const isExpanded = expandedWallet === row.player_id;
                 const isTxOpen = expandedTx === row.player_id;
                 const player = players.find(p => p.id === row.player_id);
-                const walletGame = player?.tron_address ?? null;
+                const walletGame = useLegacyWalletFallback ? (player?.tron_address ?? null) : null;
                 const playerTxs = scopedTransactions.filter(t => t.player_id === row.player_id);
                 const rowOpen = isExpanded || isTxOpen;
                 return (

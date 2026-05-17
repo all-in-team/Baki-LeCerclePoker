@@ -105,6 +105,7 @@ export default async function KKPOKERPage({ searchParams }: { searchParams: Prom
         weeks={weeks.map(w => ({ isoWeek: w.isoWeek, label: w.label }))}
         basePath="/kkpoker/pnl"
         gameLabel="KKPOKER"
+        useLegacyWalletFallback={false}
       />
       <AgencyExtras gameKey="kkpoker" />
     </>
