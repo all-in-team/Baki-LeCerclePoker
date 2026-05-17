@@ -56,6 +56,24 @@ export async function POST(req: NextRequest) {
     }
   }
 
+  if (action === "reset-player") {
+    const pid = body.player_id as number;
+    if (!pid) return NextResponse.json({ error: "player_id required" }, { status: 400 });
+    const player = db.prepare(`SELECT id, name, telegram_id, telegram_chat_id FROM players WHERE id = ?`).get(pid) as any;
+    if (!player) return NextResponse.json({ error: "player not found" }, { status: 404 });
+    const tx = db.transaction(() => {
+      if (player.telegram_chat_id) db.prepare(`DELETE FROM telegram_sessions WHERE chat_id = ?`).run(player.telegram_chat_id);
+      db.prepare(`DELETE FROM player_wallet_games WHERE player_id = ?`).run(pid);
+      db.prepare(`DELETE FROM player_wallet_cashouts WHERE player_id = ?`).run(pid);
+      db.prepare(`DELETE FROM player_game_deals WHERE player_id = ?`).run(pid);
+      db.prepare(`DELETE FROM crm_notes WHERE player_id = ?`).run(pid);
+      db.prepare(`DELETE FROM players WHERE id = ?`).run(pid);
+      if (player.telegram_id) db.prepare(`DELETE FROM onboarding_leads WHERE telegram_id = ?`).run(player.telegram_id);
+    });
+    tx();
+    return NextResponse.json({ ok: true, deleted: player.name, id: pid, telegram_id: player.telegram_id });
+  }
+
   if (action === "migrate") {
     try {
       db.pragma("foreign_keys = OFF");
