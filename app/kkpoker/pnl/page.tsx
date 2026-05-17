@@ -1,4 +1,5 @@
 export const dynamic = "force-dynamic";
+import { getDb } from "@/lib/db";
 import { getWalletTransactions, getPlayers, getGames, getPlayerCashouts, getPlayerGameWallets, getWalletMeres, getLockAwareSummaryByPlayer, getLockAwareKPIs } from "@/lib/queries";
 import { getWeekBounds, getLast12Weeks, toUTCISO, toParisDate, formatRangeLabel, isoWeekToOffset } from "@/lib/date-utils";
 import PageHeader from "@/components/PageHeader";
@@ -65,12 +66,13 @@ export default async function KKPOKERPage({ searchParams }: { searchParams: Prom
   const players = getPlayers() as any[];
   const games = (getGames() as any[]).filter((g) => g.name === "KKPOKER");
   const walletMeres = getWalletMeres();
+  const kkGameId = (getDb().prepare(`SELECT id FROM games WHERE name = 'KKPOKER'`).get() as { id: number } | undefined)?.id;
 
   const cashoutsByPlayer: Record<number, { id: number; address: string; label: string | null }[]> = {};
   const gameWalletsByPlayer: Record<number, { id: number; address: string; label: string | null }[]> = {};
   for (const p of players) {
-    cashoutsByPlayer[p.id] = getPlayerCashouts(p.id);
-    gameWalletsByPlayer[p.id] = getPlayerGameWallets(p.id);
+    cashoutsByPlayer[p.id] = kkGameId ? getPlayerCashouts(p.id, kkGameId) : [];
+    gameWalletsByPlayer[p.id] = kkGameId ? getPlayerGameWallets(p.id, kkGameId) : [];
   }
 
   const filterPlayerName = playerFilter ? (players.find((p: any) => p.id === playerFilter)?.name ?? `#${playerFilter}`) : null;
@@ -101,6 +103,8 @@ export default async function KKPOKERPage({ searchParams }: { searchParams: Prom
         activeFilter={key}
         rangeLabel={rangeLabel}
         weeks={weeks.map(w => ({ isoWeek: w.isoWeek, label: w.label }))}
+        basePath="/kkpoker/pnl"
+        gameLabel="KKPOKER"
       />
       <AgencyExtras gameKey="kkpoker" />
     </>

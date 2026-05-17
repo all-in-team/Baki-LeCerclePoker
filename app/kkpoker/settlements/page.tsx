@@ -62,6 +62,7 @@ export default async function KKPOKERSettlementsPage({ searchParams }: { searchP
         rows={rows}
         rangeLabel={rangeLabel}
         weeks={weeks.map(w => ({ isoWeek: w.isoWeek, label: w.label }))}
+        basePath="/kkpoker/settlements"
       />
     </>
   );

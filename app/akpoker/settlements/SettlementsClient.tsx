@@ -63,9 +63,10 @@ interface Props {
   rows: SettlementRow[];
   rangeLabel: string;
   weeks: { isoWeek: string; label: string }[];
+  basePath?: string;
 }
 
-export default function SettlementsClient({ weekStart, weekEnd, period, rows, rangeLabel, weeks }: Props) {
+export default function SettlementsClient({ weekStart, weekEnd, period, rows, rangeLabel, weeks, basePath = "/settlements" }: Props) {
   const router = useRouter();
   const [loading, setLoading] = useState<string | null>(null);
   const [isPending, startTransition] = useTransition();
@@ -255,7 +256,7 @@ export default function SettlementsClient({ weekStart, weekEnd, period, rows, ra
       <div style={{ display: "flex", alignItems: "center", gap: 16, marginBottom: 24 }}>
         <select
           value={weekStart}
-          onChange={e => { setExpandedRow(null); router.push(`/settlements?week=${e.target.value}`); }}
+          onChange={e => { setExpandedRow(null); router.push(`${basePath}?week=${e.target.value}`); }}
           style={{ padding: "8px 12px", borderRadius: 6, border: "1px solid var(--border)", background: "var(--bg-raised)", color: "var(--text)", fontSize: 13 }}
         >
           {weeks.map(w => (

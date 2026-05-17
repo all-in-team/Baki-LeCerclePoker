@@ -47,6 +47,8 @@ export default function TELEClient({
   walletMeres = [],
   activeFilter, rangeLabel, weeks,
   archived = false,
+  basePath = "/tele",
+  gameLabel = "TELE AKPOKER",
 }: {
   initialSummary: PlayerGameRow[];
   kpis: KPIs;
@@ -60,6 +62,8 @@ export default function TELEClient({
   rangeLabel: string;
   weeks: WeekOpt[];
   archived?: boolean;
+  basePath?: string;
+  gameLabel?: string;
 }) {
   const router = useRouter();
   const [syncing, setSyncing] = useState(false);
@@ -91,7 +95,7 @@ export default function TELEClient({
 
   function navigate(filter: string) {
     setWeekOpen(false);
-    router.push(filter === "current" ? "/tele" : `/tele?filter=${filter}`);
+    router.push(filter === "current" ? basePath : `${basePath}?filter=${filter}`);
   }
 
   const isWeekPick = /^\d{4}-W\d{2}$/.test(activeFilter);
@@ -174,7 +178,7 @@ export default function TELEClient({
   }
 
   async function deleteDeal(dealId: number, playerName: string) {
-    if (!confirm(`Retirer "${playerName}" de TELE AKPOKER ?\n\nLes transactions existantes restent en base.`)) return;
+    if (!confirm(`Retirer "${playerName}" de ${gameLabel} ?\n\nLes transactions existantes restent en base.`)) return;
     await fetch(`/api/games/deals/${dealId}`, { method: "DELETE" });
     window.location.reload();
   }
@@ -359,7 +363,7 @@ export default function TELEClient({
       {/* Summary table */}
       <div style={{ background: "var(--bg-raised)", border: "1px solid var(--border)", borderRadius: 10, marginBottom: 28 }}>
         <div style={{ padding: "14px 20px", borderBottom: "1px solid var(--border)", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
-          <span style={{ fontSize: 13, fontWeight: 700, color: "var(--text)" }}>Joueurs TELE AKPOKER</span>
+          <span style={{ fontSize: 13, fontWeight: 700, color: "var(--text)" }}>Joueurs {gameLabel}</span>
           {!archived && (
             <Btn variant="primary" size="sm" onClick={() => setAddPlayerModal(true)}>
               <Plus size={14} /> Ajouter joueur
@@ -378,7 +382,7 @@ export default function TELEClient({
             <tbody>
               {summaryByPlayer.length === 0 ? (
                 <tr><td colSpan={8} style={{ padding: 32, textAlign: "center", color: "var(--text-dim)", fontSize: 13 }}>
-                  Aucun joueur TELE — ajoute un deal TELE à un joueur depuis son profil
+                  Aucun joueur {gameLabel} — ajoute un deal à un joueur depuis son profil
                 </td></tr>
               ) : summaryByPlayer.map(row => {
                 const netC = row.net > 0 ? "var(--green)" : row.net < 0 ? "#f87171" : "var(--text-muted)";
@@ -550,7 +554,7 @@ export default function TELEClient({
       </div>
 
       {/* Add Player Modal */}
-      <Modal open={addPlayerModal} onClose={() => setAddPlayerModal(false)} title="Ajouter un joueur TELE AKPOKER">
+      <Modal open={addPlayerModal} onClose={() => setAddPlayerModal(false)} title={`Ajouter un joueur ${gameLabel}`}>
         <Field label="Joueur *">
           <select value={selectedPlayerId} onChange={e => onSelectPlayer(e.target.value)}>
             <option value="">Sélectionne un joueur…</option>
@@ -581,13 +585,13 @@ export default function TELEClient({
         <div style={{ display: "flex", gap: 10, justifyContent: "flex-end", marginTop: 8 }}>
           <Btn variant="secondary" onClick={() => setAddPlayerModal(false)}>Annuler</Btn>
           <Btn variant="primary" disabled={addPlayerBusy || !selectedPlayerId || (isNewPlayer && (!newPlayer.name.trim() || !newPlayer.telegram_handle.trim()))} onClick={addNewPlayer}>
-            {addPlayerBusy ? "Enregistrement…" : isNewPlayer ? "Créer le joueur" : "Lier à TELE AKPOKER"}
+            {addPlayerBusy ? "Enregistrement…" : isNewPlayer ? "Créer le joueur" : `Lier à ${gameLabel}`}
           </Btn>
         </div>
       </Modal>
 
       {/* Config Wallets Modal */}
-      <Modal open={walletModal} onClose={() => { setWalletModal(false); setEditingWallet(null); }} title="Config Wallets TELE">
+      <Modal open={walletModal} onClose={() => { setWalletModal(false); setEditingWallet(null); }} title={`Config Wallets ${gameLabel}`}>
         <div style={{ marginBottom: 20 }}>
           <div style={{ fontSize: 11, fontWeight: 700, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.07em", marginBottom: 8 }}>WALLET MÈRE (global)</div>
           <div style={{ background: "var(--bg-surface)", border: "1px solid rgba(74,222,128,0.3)", borderRadius: 8, padding: "10px 14px", display: "flex", alignItems: "center", gap: 10 }}>
