@@ -522,16 +522,46 @@ export interface WalletMere {
   id: number;
   address: string;
   label: string | null;
+  game_id: number | null;
+  game_name?: string;
+  status?: string;
+  retired_at?: string | null;
   created_at: string;
 }
 
 export function getWalletMeres(): WalletMere[] {
-  return getDb().prepare(`SELECT id, address, label, created_at FROM wallet_meres ORDER BY id`).all() as WalletMere[];
+  return getDb().prepare(`
+    SELECT wm.id, wm.address, wm.label, wm.game_id, wm.status, wm.created_at, g.name AS game_name
+    FROM wallet_meres wm LEFT JOIN games g ON g.id = wm.game_id
+    WHERE wm.status = 'active'
+    ORDER BY wm.id
+  `).all() as WalletMere[];
 }
 
-export function addWalletMere(address: string, label: string | null): WalletMere {
-  const result = getDb().prepare(`INSERT INTO wallet_meres (address, label) VALUES (?, ?)`).run(address, label || null);
-  return { id: Number(result.lastInsertRowid), address, label: label || null, created_at: new Date().toISOString() };
+export function getActiveWalletMeresForGame(gameId: number): Set<string> {
+  const rows = getDb().prepare(`
+    SELECT address FROM wallet_meres WHERE game_id = ? AND status = 'active'
+  `).all(gameId) as { address: string }[];
+  return new Set(rows.map(r => r.address.toLowerCase()));
+}
+
+export function listAllWalletMeres(): WalletMere[] {
+  return getDb().prepare(`
+    SELECT wm.id, wm.address, wm.label, wm.game_id, wm.status, wm.retired_at, wm.created_at, g.name AS game_name
+    FROM wallet_meres wm LEFT JOIN games g ON g.id = wm.game_id
+    ORDER BY g.name, wm.status, wm.id
+  `).all() as WalletMere[];
+}
+
+export function addWalletMere(address: string, label: string | null, gameId?: number): WalletMere {
+  const result = getDb().prepare(`INSERT INTO wallet_meres (address, label, game_id, status) VALUES (?, ?, ?, 'active')`)
+    .run(address, label || null, gameId ?? null);
+  return { id: Number(result.lastInsertRowid), address, label: label || null, game_id: gameId ?? null, status: "active", created_at: new Date().toISOString() };
+}
+
+export function retireWalletMere(id: number): boolean {
+  const result = getDb().prepare(`UPDATE wallet_meres SET status = 'retired', retired_at = datetime('now') WHERE id = ? AND status = 'active'`).run(id);
+  return result.changes > 0;
 }
 
 export function deleteWalletMere(id: number): boolean {

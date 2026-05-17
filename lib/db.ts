@@ -899,4 +899,26 @@ function initSchema(db: Database.Database) {
   try { db.prepare(`INSERT OR IGNORE INTO games (name, status) VALUES ('KKPOKER', 'active')`).run(); } catch {}
   // Ensure status column exists (idempotent for fresh DBs)
   try { db.exec(`ALTER TABLE games ADD COLUMN status TEXT NOT NULL DEFAULT 'active'`); } catch {}
+
+  // Extend wallet_meres with game_id + status columns, seed KKPOKER wallet_mère
+  const fixWmGameId = db.prepare(`INSERT OR IGNORE INTO _applied_fixes (name) VALUES (?)`).run("wallet_meres_game_id_v1");
+  if (fixWmGameId.changes > 0) {
+    try { db.exec(`ALTER TABLE wallet_meres ADD COLUMN game_id INTEGER REFERENCES games(id)`); } catch {}
+    try { db.exec(`ALTER TABLE wallet_meres ADD COLUMN status TEXT NOT NULL DEFAULT 'active'`); } catch {}
+    try { db.exec(`ALTER TABLE wallet_meres ADD COLUMN retired_at TEXT`); } catch {}
+    // Tag existing rows as TELE (game id=1)
+    const teleGame = db.prepare(`SELECT id FROM games WHERE name = 'TELE'`).get() as { id: number } | undefined;
+    if (teleGame) {
+      db.prepare(`UPDATE wallet_meres SET game_id = ? WHERE game_id IS NULL`).run(teleGame.id);
+    }
+    // Seed KKPOKER wallet_mère
+    const kkGame = db.prepare(`SELECT id FROM games WHERE name = 'KKPOKER'`).get() as { id: number } | undefined;
+    if (kkGame) {
+      db.prepare(`INSERT OR IGNORE INTO wallet_meres (address, label, game_id, status) VALUES (?, ?, ?, 'active')`)
+        .run("TRWyGmpLeJAH8TSUr8WzA2KRuNUUaTMAdA", "main", kkGame.id);
+    }
+  }
+  try { db.exec(`ALTER TABLE wallet_meres ADD COLUMN game_id INTEGER REFERENCES games(id)`); } catch {}
+  try { db.exec(`ALTER TABLE wallet_meres ADD COLUMN status TEXT NOT NULL DEFAULT 'active'`); } catch {}
+  try { db.exec(`ALTER TABLE wallet_meres ADD COLUMN retired_at TEXT`); } catch {}
 }
