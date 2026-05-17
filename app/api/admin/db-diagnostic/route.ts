@@ -35,10 +35,18 @@ export async function POST(req: NextRequest) {
 
   if (action === "backup") {
     const ts = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
-    const backupPath = `/data/lecercle-backup-fkfix.db`;
     try {
-      await db.backup(backupPath);
       const fs = await import("fs");
+      const path = await import("path");
+      const dbPath = process.env.NODE_ENV === "production" ? "/data/lecercle.db" : "data/lecercle.db";
+      const dir = path.dirname(dbPath);
+      const backupPath = path.join(dir, "lecercle-backup-fkfix.db");
+      const dirExists = fs.existsSync(dir);
+      const dbExists = fs.existsSync(dbPath);
+      if (!dirExists || !dbExists) {
+        return NextResponse.json({ ok: false, error: `dir=${dirExists} db=${dbExists} dbPath=${dbPath}` }, { status: 500 });
+      }
+      await db.backup(backupPath);
       const stat = fs.statSync(backupPath);
       const pgdCount = (db.prepare("SELECT COUNT(*) AS n FROM player_game_deals").get() as any).n;
       const wtCount = (db.prepare("SELECT COUNT(*) AS n FROM wallet_transactions").get() as any).n;
