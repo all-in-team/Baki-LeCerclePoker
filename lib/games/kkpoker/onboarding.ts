@@ -58,11 +58,11 @@ export async function handleKkpokerOnboarding(
   // Upsert onboarding lead
   db.prepare(`
     INSERT INTO onboarding_leads (telegram_id, telegram_username, first_name, stage)
-    VALUES (?, ?, ?, 'kkpoker_started')
+    VALUES (?, ?, ?, 'joined')
     ON CONFLICT(telegram_id) DO UPDATE SET
       telegram_username = excluded.telegram_username,
       first_name = excluded.first_name,
-      stage = 'kkpoker_started',
+      stage = 'joined',
       last_seen = datetime('now')
   `).run(from.id, from.username ?? null, firstName);
 
