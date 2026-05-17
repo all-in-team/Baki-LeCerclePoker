@@ -921,4 +921,57 @@ function initSchema(db: Database.Database) {
   try { db.exec(`ALTER TABLE wallet_meres ADD COLUMN game_id INTEGER REFERENCES games(id)`); } catch {}
   try { db.exec(`ALTER TABLE wallet_meres ADD COLUMN status TEXT NOT NULL DEFAULT 'active'`); } catch {}
   try { db.exec(`ALTER TABLE wallet_meres ADD COLUMN retired_at TEXT`); } catch {}
+
+  // Per-game wallet support: add game_id to player_wallet_games and player_wallet_cashouts
+  try { db.exec(`ALTER TABLE player_wallet_games ADD COLUMN game_id INTEGER REFERENCES games(id)`); } catch {}
+  try { db.exec(`ALTER TABLE player_wallet_cashouts ADD COLUMN game_id INTEGER REFERENCES games(id)`); } catch {}
+
+  const fixPerGameWallets = db.prepare(`INSERT OR IGNORE INTO _applied_fixes (name) VALUES (?)`).run("per_game_wallets_v1");
+  if (fixPerGameWallets.changes > 0) {
+    const teleGame = db.prepare(`SELECT id FROM games WHERE name = 'TELE'`).get() as { id: number } | undefined;
+    if (teleGame) {
+      db.prepare(`UPDATE player_wallet_games SET game_id = ? WHERE game_id IS NULL`).run(teleGame.id);
+      db.prepare(`UPDATE player_wallet_cashouts SET game_id = ? WHERE game_id IS NULL`).run(teleGame.id);
+    }
+
+    // Rebuild player_wallet_games with UNIQUE(player_id, address, game_id)
+    db.exec(`
+      CREATE TABLE player_wallet_games_new (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        player_id INTEGER NOT NULL REFERENCES players(id) ON DELETE CASCADE,
+        address TEXT NOT NULL,
+        label TEXT,
+        game_id INTEGER REFERENCES games(id),
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        UNIQUE(player_id, address, game_id)
+      );
+      INSERT INTO player_wallet_games_new (id, player_id, address, label, game_id, created_at)
+        SELECT id, player_id, address, label, game_id, created_at FROM player_wallet_games;
+      DROP TABLE player_wallet_games;
+      ALTER TABLE player_wallet_games_new RENAME TO player_wallet_games;
+      CREATE INDEX IF NOT EXISTS idx_pwg_player ON player_wallet_games(player_id);
+      CREATE INDEX IF NOT EXISTS idx_pwg_address ON player_wallet_games(address);
+      CREATE INDEX IF NOT EXISTS idx_pwg_game ON player_wallet_games(game_id);
+    `);
+
+    // Rebuild player_wallet_cashouts with UNIQUE(player_id, address, game_id)
+    db.exec(`
+      CREATE TABLE player_wallet_cashouts_new (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        player_id INTEGER NOT NULL REFERENCES players(id) ON DELETE CASCADE,
+        address TEXT NOT NULL,
+        label TEXT,
+        game_id INTEGER REFERENCES games(id),
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        UNIQUE(player_id, address, game_id)
+      );
+      INSERT INTO player_wallet_cashouts_new (id, player_id, address, label, game_id, created_at)
+        SELECT id, player_id, address, label, game_id, created_at FROM player_wallet_cashouts;
+      DROP TABLE player_wallet_cashouts;
+      ALTER TABLE player_wallet_cashouts_new RENAME TO player_wallet_cashouts;
+      CREATE INDEX IF NOT EXISTS idx_pwc_player ON player_wallet_cashouts(player_id);
+      CREATE INDEX IF NOT EXISTS idx_pwc_address ON player_wallet_cashouts(address);
+      CREATE INDEX IF NOT EXISTS idx_pwc_game ON player_wallet_cashouts(game_id);
+    `);
+  }
 }

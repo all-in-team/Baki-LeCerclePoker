@@ -90,7 +90,10 @@ export function getPlayerGameDeals(playerId: number) {
 }
 
 // ── Player Wallet Cashouts (multi) ───────────────────────
-export function getPlayerCashouts(playerId: number) {
+export function getPlayerCashouts(playerId: number, gameId?: number) {
+  if (gameId != null) {
+    return getDb().prepare(`SELECT id, address, label FROM player_wallet_cashouts WHERE player_id = ? AND game_id = ? ORDER BY id`).all(playerId, gameId) as { id: number; address: string; label: string | null }[];
+  }
   return getDb().prepare(`SELECT id, address, label FROM player_wallet_cashouts WHERE player_id = ? ORDER BY id`).all(playerId) as { id: number; address: string; label: string | null }[];
 }
 
@@ -112,7 +115,10 @@ export function setPlayerCashouts(playerId: number, addresses: { address: string
 }
 
 // ── Player Wallet Games (multi) ──────────────────────────
-export function getPlayerGameWallets(playerId: number) {
+export function getPlayerGameWallets(playerId: number, gameId?: number) {
+  if (gameId != null) {
+    return getDb().prepare(`SELECT id, address, label FROM player_wallet_games WHERE player_id = ? AND game_id = ? ORDER BY id`).all(playerId, gameId) as { id: number; address: string; label: string | null }[];
+  }
   return getDb().prepare(`SELECT id, address, label FROM player_wallet_games WHERE player_id = ? ORDER BY id`).all(playerId) as { id: number; address: string; label: string | null }[];
 }
 
@@ -130,6 +136,18 @@ export function setPlayerGameWallets(playerId: number, addresses: { address: str
     db.prepare(`UPDATE players SET tron_address = ? WHERE id = ?`).run(first ? first.address.trim() : null, playerId);
   });
   tx();
+}
+
+export function addPlayerGameWallet(playerId: number, address: string, gameId: number, label?: string | null) {
+  getDb().prepare(
+    `INSERT OR IGNORE INTO player_wallet_games (player_id, address, game_id, label) VALUES (?, ?, ?, ?)`
+  ).run(playerId, address.trim(), gameId, label ?? null);
+}
+
+export function addPlayerCashout(playerId: number, address: string, gameId: number, label?: string | null) {
+  getDb().prepare(
+    `INSERT OR IGNORE INTO player_wallet_cashouts (player_id, address, game_id, label) VALUES (?, ?, ?, ?)`
+  ).run(playerId, address.trim(), gameId, label ?? null);
 }
 
 export function getAllTeleGameWalletsByPlayer() {
