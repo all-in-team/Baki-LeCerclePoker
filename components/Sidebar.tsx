@@ -5,7 +5,7 @@ import { usePathname } from "next/navigation";
 import { LayoutDashboard, FileText, ContactRound, Settings, BarChart3, Scale, Wallet, Users } from "lucide-react";
 
 type NavItem = { href: string; label: string; icon: any };
-type NavSection = { label: string; items: NavItem[] };
+type NavSection = { label: string; items: NavItem[]; archived?: boolean };
 
 const SECTIONS: NavSection[] = [
   {
@@ -18,10 +18,10 @@ const SECTIONS: NavSection[] = [
     ],
   },
   {
-    label: "AKPOKER",
+    label: "KKPOKER",
     items: [
-      { href: "/akpoker/pnl", label: "P&L", icon: Wallet },
-      { href: "/akpoker/settlements", label: "Settlements", icon: Scale },
+      { href: "/kkpoker/pnl", label: "P&L", icon: Wallet },
+      { href: "/kkpoker/settlements", label: "Settlements", icon: Scale },
     ],
   },
   {
@@ -29,6 +29,14 @@ const SECTIONS: NavSection[] = [
     items: [
       { href: "/wepoker/pnl", label: "P&L", icon: BarChart3 },
       { href: "/wepoker/settlements", label: "Settlements", icon: FileText },
+    ],
+  },
+  {
+    label: "AKPOKER",
+    archived: true,
+    items: [
+      { href: "/akpoker/pnl", label: "P&L", icon: Wallet },
+      { href: "/akpoker/settlements", label: "Settlements", icon: Scale },
     ],
   },
 ];
@@ -76,8 +84,15 @@ export default function Sidebar() {
                 letterSpacing: "0.08em", textTransform: "uppercase",
                 padding: "12px 10px 4px", marginTop: 4,
                 borderTop: "1px solid var(--border)",
+                opacity: section.archived ? 0.5 : 1,
+                display: "flex", alignItems: "center", gap: 6,
               }}>
                 {section.label}
+                {section.archived && (
+                  <span style={{ fontSize: 8, padding: "1px 5px", borderRadius: 3, background: "rgba(255,255,255,0.08)", color: "var(--text-dim)", fontWeight: 600, letterSpacing: "0.04em" }}>
+                    ARCHIVED
+                  </span>
+                )}
               </div>
             )}
             {section.items.map(({ href, label, icon: Icon }) => {
@@ -94,6 +109,7 @@ export default function Sidebar() {
                   fontSize: section.label ? 12 : 13,
                   transition: "all 0.15s",
                   borderLeft: active ? "2px solid var(--green)" : "2px solid transparent",
+                  opacity: section.archived ? 0.5 : 1,
                 }}>
                   <Icon size={section.label ? 14 : 16} strokeWidth={active ? 2.2 : 1.8} />
                   {label}
