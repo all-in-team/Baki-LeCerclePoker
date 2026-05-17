@@ -39,3 +39,37 @@ export async function GET(req: NextRequest) {
 
   return NextResponse.json({ akpoker_deals: akDeals, kkpoker_deals: kkDeals, distribution });
 }
+
+export async function POST(req: NextRequest) {
+  const token = process.env.ADMIN_RECONCILE_TOKEN;
+  if (!token) return NextResponse.json({ error: "not configured" }, { status: 503 });
+  if (req.headers.get("x-admin-token") !== token) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+
+  const db = getDb();
+  const kkGame = db.prepare(`SELECT id FROM games WHERE name = 'KKPOKER'`).get() as { id: number } | undefined;
+  if (!kkGame) return NextResponse.json({ error: "KKPOKER game not found" }, { status: 500 });
+
+  const today = new Date().toISOString().slice(0, 10);
+  const akDeals = db.prepare(`
+    SELECT pgd.player_id, pgd.action_pct, pgd.rakeback_pct, COALESCE(pgd.insurance_pct, 0) AS insurance_pct
+    FROM player_game_deals pgd
+    JOIN games g ON g.id = pgd.game_id
+    WHERE g.name = 'TELE'
+  `).all() as { player_id: number; action_pct: number; rakeback_pct: number; insurance_pct: number }[];
+
+  const ins = db.prepare(`
+    INSERT OR IGNORE INTO player_game_deals (player_id, game_id, action_pct, rakeback_pct, insurance_pct, start_date)
+    VALUES (?, ?, ?, ?, ?, ?)
+  `);
+
+  let inserted = 0;
+  const tx = db.transaction(() => {
+    for (const d of akDeals) {
+      const r = ins.run(d.player_id, kkGame.id, d.action_pct, d.rakeback_pct, d.insurance_pct, today);
+      if (r.changes > 0) inserted++;
+    }
+  });
+  tx();
+
+  return NextResponse.json({ ok: true, akpoker_count: akDeals.length, inserted, skipped: akDeals.length - inserted });
+}
