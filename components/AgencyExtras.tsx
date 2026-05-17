@@ -17,13 +17,13 @@ interface Extra {
   notes: string | null;
 }
 
-const CURRENCY_MAP: Record<string, string> = { akpoker: "USDT", wepoker: "CNY" };
+const CURRENCY_MAP: Record<string, string> = { akpoker: "USDT", wepoker: "CNY", kkpoker: "USDT" };
 
 function fmt(n: number, currency: string) {
   return Math.abs(n).toLocaleString("fr-FR", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + " " + currency;
 }
 
-export default function AgencyExtras({ gameKey }: { gameKey: "akpoker" | "wepoker" }) {
+export default function AgencyExtras({ gameKey }: { gameKey: "akpoker" | "wepoker" | "kkpoker" }) {
   const currency = CURRENCY_MAP[gameKey];
   const [extras, setExtras] = useState<Extra[]>([]);
   const [showAll, setShowAll] = useState(false);
