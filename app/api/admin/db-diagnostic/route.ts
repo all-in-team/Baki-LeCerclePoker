@@ -38,8 +38,8 @@ export async function POST(req: NextRequest) {
     try {
       const fs = await import("fs");
       const path = await import("path");
-      const dbPath = process.env.NODE_ENV === "production" ? "/data/lecercle.db" : "data/lecercle.db";
-      const dir = path.dirname(dbPath);
+      const dir = path.join(process.cwd(), "data");
+      const dbPath = path.join(dir, "lecercle.db");
       const backupPath = path.join(dir, "lecercle-backup-fkfix.db");
       const dirExists = fs.existsSync(dir);
       const dbExists = fs.existsSync(dbPath);
