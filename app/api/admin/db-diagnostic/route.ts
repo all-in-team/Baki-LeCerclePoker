@@ -35,16 +35,14 @@ export async function POST(req: NextRequest) {
 
   if (action === "backup") {
     const ts = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
-    const backupPath = `/data/pre-fkfix-${ts}.db`;
+    const backupPath = `/data/lecercle-backup-fkfix.db`;
     try {
-      db.exec(`VACUUM INTO '${backupPath}'`);
+      await db.backup(backupPath);
       const fs = await import("fs");
       const stat = fs.statSync(backupPath);
-      const bkDb = new (await import("better-sqlite3")).default(backupPath, { readonly: true });
-      const pgd = (bkDb.prepare("SELECT COUNT(*) AS n FROM player_game_deals").get() as any).n;
-      const wt = (bkDb.prepare("SELECT COUNT(*) AS n FROM wallet_transactions").get() as any).n;
-      bkDb.close();
-      return NextResponse.json({ ok: true, backupPath, sizeBytes: stat.size, row_counts: { player_game_deals: pgd, wallet_transactions: wt } });
+      const pgdCount = (db.prepare("SELECT COUNT(*) AS n FROM player_game_deals").get() as any).n;
+      const wtCount = (db.prepare("SELECT COUNT(*) AS n FROM wallet_transactions").get() as any).n;
+      return NextResponse.json({ ok: true, backupPath, sizeBytes: stat.size, row_counts: { player_game_deals: pgdCount, wallet_transactions: wtCount } });
     } catch (e: any) {
       return NextResponse.json({ ok: false, error: e.message }, { status: 500 });
     }
