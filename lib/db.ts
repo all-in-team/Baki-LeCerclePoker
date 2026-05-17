@@ -22,9 +22,10 @@ function initSchema(db: Database.Database) {
   db.exec(`
     CREATE TABLE IF NOT EXISTS games (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
-      name TEXT NOT NULL UNIQUE CHECK(name IN ('TELE','Wepoker','Xpoker','ClubGG'))
+      name TEXT NOT NULL UNIQUE CHECK(name IN ('TELE','Wepoker','Xpoker','ClubGG','KKPOKER')),
+      status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active','archived'))
     );
-    INSERT OR IGNORE INTO games (name) VALUES ('TELE'),('Wepoker'),('Xpoker'),('ClubGG');
+    INSERT OR IGNORE INTO games (name) VALUES ('TELE'),('Wepoker'),('Xpoker'),('ClubGG'),('KKPOKER');
 
     CREATE TABLE IF NOT EXISTS player_game_deals (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -872,4 +873,30 @@ function initSchema(db: Database.Database) {
     );
   `);
   db.exec(`CREATE INDEX IF NOT EXISTS idx_agency_extras_game ON agency_extras(game_key, recorded_at)`);
+
+  // KKPOKER launch: recreate games table with expanded CHECK + status column
+  const fixKkpoker = db.prepare(`INSERT OR IGNORE INTO _applied_fixes (name) VALUES (?)`).run("kkpoker_launch_v1");
+  if (fixKkpoker.changes > 0) {
+    const existing = db.prepare(`SELECT id, name FROM games ORDER BY id`).all() as { id: number; name: string }[];
+    db.exec(`ALTER TABLE games RENAME TO games_old`);
+    db.exec(`
+      CREATE TABLE games (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL UNIQUE CHECK(name IN ('TELE','Wepoker','Xpoker','ClubGG','KKPOKER')),
+        status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active','archived'))
+      )
+    `);
+    const ins = db.prepare(`INSERT INTO games (id, name, status) VALUES (?, ?, ?)`);
+    for (const g of existing) {
+      ins.run(g.id, g.name, g.name === "TELE" ? "archived" : "active");
+    }
+    if (!existing.find(g => g.name === "KKPOKER")) {
+      db.prepare(`INSERT INTO games (name, status) VALUES ('KKPOKER', 'active')`).run();
+    }
+    db.exec(`DROP TABLE games_old`);
+  }
+  // Ensure KKPOKER exists even if migration already ran
+  try { db.prepare(`INSERT OR IGNORE INTO games (name, status) VALUES ('KKPOKER', 'active')`).run(); } catch {}
+  // Ensure status column exists (idempotent for fresh DBs)
+  try { db.exec(`ALTER TABLE games ADD COLUMN status TEXT NOT NULL DEFAULT 'active'`); } catch {}
 }

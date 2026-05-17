@@ -71,7 +71,12 @@ export function upsertPlayerFromTelegram(data: {
 
 // ── Games ─────────────────────────────────────────────────
 export function getGames() {
-  return getDb().prepare(`SELECT * FROM games ORDER BY id`).all() as { id: number; name: string; default_action_pct: number | null }[];
+  return getDb().prepare(`SELECT * FROM games ORDER BY id`).all() as { id: number; name: string; status?: string; default_action_pct: number | null }[];
+}
+
+export function isGameArchived(gameName: string): boolean {
+  const row = getDb().prepare(`SELECT status FROM games WHERE name = ? OR LOWER(name) = LOWER(?)`).get(gameName, gameName) as { status: string } | undefined;
+  return row?.status === "archived";
 }
 
 export function getPlayerGameDeals(playerId: number) {
