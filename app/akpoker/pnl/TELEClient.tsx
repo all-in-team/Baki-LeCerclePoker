@@ -46,6 +46,7 @@ export default function TELEClient({
   cashoutsByPlayer = {}, gameWalletsByPlayer = {},
   walletMeres = [],
   activeFilter, rangeLabel, weeks,
+  archived = false,
 }: {
   initialSummary: PlayerGameRow[];
   kpis: KPIs;
@@ -58,6 +59,7 @@ export default function TELEClient({
   activeFilter: string;
   rangeLabel: string;
   weeks: WeekOpt[];
+  archived?: boolean;
 }) {
   const router = useRouter();
   const [syncing, setSyncing] = useState(false);
@@ -249,11 +251,11 @@ export default function TELEClient({
     <>
       {/* Action buttons */}
       <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 20, flexWrap: "wrap" }}>
-        <Btn variant="secondary" onClick={syncWallets} disabled={syncing}>
+        <Btn variant="secondary" onClick={syncWallets} disabled={syncing || archived} title={archived ? "Game archivée — sync désactivé" : undefined}>
           <RefreshCw size={14} style={{ animation: syncing ? "spin 1s linear infinite" : "none" }} />
-          {syncing ? "Sync en cours…" : "Sync TELE"}
+          {syncing ? "Sync en cours…" : "Sync Wallets"}
         </Btn>
-        <Btn variant="secondary" onClick={() => openWalletConfig()}>
+        <Btn variant="secondary" onClick={() => openWalletConfig()} disabled={archived} title={archived ? "Game archivée" : undefined}>
           <Settings2 size={14} /> Config Wallets
         </Btn>
         {syncResult && (
@@ -358,9 +360,11 @@ export default function TELEClient({
       <div style={{ background: "var(--bg-raised)", border: "1px solid var(--border)", borderRadius: 10, marginBottom: 28 }}>
         <div style={{ padding: "14px 20px", borderBottom: "1px solid var(--border)", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
           <span style={{ fontSize: 13, fontWeight: 700, color: "var(--text)" }}>Joueurs TELE AKPOKER</span>
-          <Btn variant="primary" size="sm" onClick={() => setAddPlayerModal(true)}>
-            <Plus size={14} /> Ajouter joueur
-          </Btn>
+          {!archived && (
+            <Btn variant="primary" size="sm" onClick={() => setAddPlayerModal(true)}>
+              <Plus size={14} /> Ajouter joueur
+            </Btn>
+          )}
         </div>
         <div style={{ overflowX: "auto" }}>
           <table style={{ width: "100%", borderCollapse: "collapse" }}>
@@ -519,6 +523,7 @@ export default function TELEClient({
                             <div style={{ fontSize: 11, color: "var(--text-dim)", marginTop: 8, textAlign: "right" }}>{playerTxs.length} transaction{playerTxs.length > 1 ? "s" : ""}</div>
                           </div>
                         )}
+                        {!archived && (
                         <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 10, paddingTop: 10, borderTop: "1px solid var(--border)" }}>
                           <select value={manualTx.type} onChange={e => setManualTx(v => ({ ...v, type: e.target.value as "deposit" | "withdrawal" }))} style={{ padding: "6px 10px", borderRadius: 6, fontSize: 12, fontWeight: 600, background: "var(--bg-elevated)", border: "1px solid var(--border)", color: manualTx.type === "deposit" ? "#f87171" : "var(--green)", cursor: "pointer" }}>
                             <option value="deposit">Dépôt (cash in)</option>
@@ -527,6 +532,7 @@ export default function TELEClient({
                           <input type="number" min="0" step="0.01" value={manualTx.amount} onChange={e => setManualTx(v => ({ ...v, amount: e.target.value }))} placeholder="Montant USDT" style={{ width: 130, padding: "6px 10px", borderRadius: 6, fontSize: 12, fontWeight: 600, background: "var(--bg-elevated)", border: "1px solid var(--border)", color: "var(--text)", outline: "none" }} />
                           <button onClick={() => addManualTx(row.player_id, row.game_id)} disabled={!manualTx.amount || Number(manualTx.amount) <= 0} style={{ display: "flex", alignItems: "center", gap: 5, padding: "6px 12px", borderRadius: 6, fontSize: 12, fontWeight: 600, background: "rgba(34,197,94,0.12)", color: "var(--green)", border: "1px solid rgba(34,197,94,0.3)", cursor: "pointer", whiteSpace: "nowrap", opacity: !manualTx.amount || Number(manualTx.amount) <= 0 ? 0.4 : 1 }}><Plus size={12} /> Ajouter</button>
                         </div>
+                        )}
                       </td>
                     </tr>
                   )}

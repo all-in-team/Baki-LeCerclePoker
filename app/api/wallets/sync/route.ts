@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { getDb } from "@/lib/db";
-import { insertWalletTransactionByHash, getWalletMeres, getAllTeleCashoutsByPlayer, getAllTeleGameWalletsByPlayer } from "@/lib/queries";
+import { insertWalletTransactionByHash, getWalletMeres, getAllTeleCashoutsByPlayer, getAllTeleGameWalletsByPlayer, isGameArchived } from "@/lib/queries";
 
 const USDT_CONTRACT = "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t";
 
@@ -100,6 +100,10 @@ function toDatetime(tx: any): string {
 }
 
 export async function POST() {
+  if (isGameArchived("TELE")) {
+    return NextResponse.json({ error: "Game archived, mutations disabled" }, { status: 403 });
+  }
+
   const teleGameId = getTeleGameId();
   if (!teleGameId)
     return NextResponse.json({ ok: false, message: "TELE game not found." });
