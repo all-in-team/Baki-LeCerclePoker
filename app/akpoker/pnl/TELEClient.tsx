@@ -174,7 +174,7 @@ export default function TELEClient({
   async function syncWallets() {
     setSyncing(true); setSyncResult(null);
     try {
-      const res = await fetch("/api/wallets/sync", { method: "POST" });
+      const res = await fetch("/api/wallets/sync", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ game_name: games[0]?.name ?? "TELE" }) });
       const data = await res.json();
       if (!res.ok) { alert(data.error ?? "Erreur sync"); return; }
       setSyncResult(data);

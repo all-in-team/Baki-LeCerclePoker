@@ -169,30 +169,69 @@ export function addPlayerCashout(playerId: number, address: string, gameId: numb
   ).run(playerId, address.trim(), gameId, label ?? null);
 }
 
-export function getAllTeleGameWalletsByPlayer() {
+export function getAllGameWalletsByPlayer(gameName: string) {
+  const db = getDb();
+  if (gameName === "TELE") {
+    return db.prepare(`
+      SELECT player_id, address FROM player_wallet_games
+      WHERE (game_id IS NULL OR game_id = (SELECT id FROM games WHERE name = 'TELE'))
+        AND player_id IN (
+          SELECT pgd.player_id FROM player_game_deals pgd
+          JOIN games g ON g.id = pgd.game_id AND g.name = 'TELE'
+        )
+      UNION
+      SELECT p.id AS player_id, p.tron_address AS address FROM players p
+      JOIN player_game_deals pgd ON pgd.player_id = p.id
+      JOIN games g ON g.id = pgd.game_id AND g.name = 'TELE'
+      WHERE p.tron_address IS NOT NULL AND p.tron_address != ''
+    `).all() as { player_id: number; address: string }[];
+  }
+  return db.prepare(`
+    SELECT pwg.player_id, pwg.address FROM player_wallet_games pwg
+    JOIN games g ON g.id = pwg.game_id AND g.name = ?
+    WHERE pwg.player_id IN (
+      SELECT pgd.player_id FROM player_game_deals pgd
+      JOIN games g2 ON g2.id = pgd.game_id AND g2.name = ?
+    )
+  `).all(gameName, gameName) as { player_id: number; address: string }[];
+}
+
+export function getAllCashoutsByPlayer(gameName: string) {
+  const db = getDb();
+  if (gameName === "TELE") {
+    return db.prepare(`
+      SELECT player_id, address FROM player_wallet_cashouts
+      WHERE game_id IS NULL OR game_id = (SELECT id FROM games WHERE name = 'TELE')
+      UNION
+      SELECT id AS player_id, tele_wallet_cashout AS address FROM players
+      WHERE tele_wallet_cashout IS NOT NULL AND tele_wallet_cashout != ''
+    `).all() as { player_id: number; address: string }[];
+  }
+  return db.prepare(`
+    SELECT pwc.player_id, pwc.address FROM player_wallet_cashouts pwc
+    JOIN games g ON g.id = pwc.game_id AND g.name = ?
+    WHERE pwc.player_id IN (
+      SELECT pgd.player_id FROM player_game_deals pgd
+      JOIN games g2 ON g2.id = pgd.game_id AND g2.name = ?
+    )
+  `).all(gameName, gameName) as { player_id: number; address: string }[];
+}
+
+export function getPlayersOnGame(gameName: string) {
   return getDb().prepare(`
-    SELECT player_id, address FROM player_wallet_games
-    WHERE (game_id IS NULL OR game_id = (SELECT id FROM games WHERE name = 'TELE'))
-      AND player_id IN (
-        SELECT pgd.player_id FROM player_game_deals pgd
-        JOIN games g ON g.id = pgd.game_id AND g.name = 'TELE'
-      )
-    UNION
-    SELECT p.id AS player_id, p.tron_address AS address FROM players p
+    SELECT DISTINCT p.id, p.name
+    FROM players p
     JOIN player_game_deals pgd ON pgd.player_id = p.id
-    JOIN games g ON g.id = pgd.game_id AND g.name = 'TELE'
-    WHERE p.tron_address IS NOT NULL AND p.tron_address != ''
-  `).all() as { player_id: number; address: string }[];
+    JOIN games g ON g.id = pgd.game_id AND g.name = ?
+  `).all(gameName) as { id: number; name: string }[];
+}
+
+export function getAllTeleGameWalletsByPlayer() {
+  return getAllGameWalletsByPlayer("TELE");
 }
 
 export function getAllTeleCashoutsByPlayer() {
-  return getDb().prepare(`
-    SELECT player_id, address FROM player_wallet_cashouts
-    WHERE game_id IS NULL OR game_id = (SELECT id FROM games WHERE name = 'TELE')
-    UNION
-    SELECT id AS player_id, tele_wallet_cashout AS address FROM players
-    WHERE tele_wallet_cashout IS NOT NULL AND tele_wallet_cashout != ''
-  `).all() as { player_id: number; address: string }[];
+  return getAllCashoutsByPlayer("TELE");
 }
 
 export function upsertPlayerGameDeal(data: { player_id: number; game_id: number; action_pct: number; rakeback_pct: number; start_date?: string | null }) {
