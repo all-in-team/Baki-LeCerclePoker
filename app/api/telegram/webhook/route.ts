@@ -90,7 +90,7 @@ export async function POST(req: NextRequest) {
   }
 
   // /start is available to ALL users
-  if (msg?.text?.startsWith("/start")) {
+  if (msg?.text?.match(/^\/start(\s|$|@)/)) {
     const fromName = [msg.from?.first_name, msg.from?.last_name].filter(Boolean).join(" ") || "Utilisateur";
     // Extract deep-link payload: "/start kkpoker" → payload = "kkpoker"
     const startParts = msg.text.split(/\s+/);
