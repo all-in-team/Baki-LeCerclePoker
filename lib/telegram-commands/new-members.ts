@@ -41,7 +41,8 @@ export async function handleNewMembers(members: any[], chatTitle: string, chatId
 
     // KKPOKER: insert deal + send KKPOKER-specific pitch
     if (gameName === "KKPOKER") {
-      await sendKkpokerPitch(chatId, playerId, { name, telegram_id: member.id, telegram_handle: member.username ?? null });
+      const topicRow = db.prepare(`SELECT onboarding_topic_id FROM players WHERE id = ?`).get(playerId) as { onboarding_topic_id: number | null } | undefined;
+      await sendKkpokerPitch(chatId, playerId, { name, telegram_id: member.id, telegram_handle: member.username ?? null }, topicRow?.onboarding_topic_id ?? undefined);
       continue;
     }
 
@@ -69,6 +70,7 @@ export async function sendKkpokerPitch(
   chatId: number,
   playerId: number,
   player: { name: string; telegram_id: number | null; telegram_handle: string | null },
+  onboardingTopicId?: number,
 ) {
   const db = getDb();
   const kkGameId = (db.prepare(`SELECT id FROM games WHERE name = 'KKPOKER'`).get() as { id: number } | undefined)?.id;
@@ -79,10 +81,12 @@ export async function sendKkpokerPitch(
   setSession(chatId, "kkpoker_pitch_sent" as Step, playerId, player.telegram_id);
   if (player.telegram_id) trackOnboardingStep(player.telegram_id, "pitch_sent");
 
+  const tid = onboardingTopicId;
   const tag = mentionOf(player);
   await sendMsg(chatId,
     `${tag}\n\n🃏 <b>${player.name}</b> — on te propose KKPOKER !\n\n` +
-    `On t'explique comment ça marche et on te setup en quelques minutes.`
+    `On t'explique comment ça marche et on te setup en quelques minutes.`,
+    tid
   );
   await sleep(2000);
   await sendMsg(chatId,
@@ -90,11 +94,12 @@ export async function sendKkpokerPitch(
     `🤝 Tu joues <b>60%</b> de ton action.\n` +
     `On prend les 40% restants.\n\n` +
     `C'est de l'action symétrique : <b>win/win, lose/lose</b>.\n` +
-    `L'avantage : tu peux simplement jouer plus cher. Ça ne te pénalise pas, ça te protège.`
+    `L'avantage : tu peux simplement jouer plus cher. Ça ne te pénalise pas, ça te protège.`,
+    tid
   );
   await sleep(3000);
   await sendMsgKeyboard(chatId, `Qu'est-ce que tu en penses ?`, [
     [{ text: "🤝 Avec vous", callback_data: "kk_choice_with_us" }],
     [{ text: "❓ J'ai une question", callback_data: "kk_choice_question" }],
-  ]);
+  ], tid);
 }

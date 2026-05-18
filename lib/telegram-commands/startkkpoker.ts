@@ -8,8 +8,8 @@ export async function handleStartKkpoker(chatId: number) {
   const db = getDb();
 
   const player = db.prepare(
-    `SELECT id, name, telegram_id, telegram_handle FROM players WHERE telegram_group_id = ?`
-  ).get(String(chatId)) as { id: number; name: string; telegram_id: number | null; telegram_handle: string | null } | undefined;
+    `SELECT id, name, telegram_id, telegram_handle, onboarding_topic_id FROM players WHERE telegram_group_id = ?`
+  ).get(String(chatId)) as { id: number; name: string; telegram_id: number | null; telegram_handle: string | null; onboarding_topic_id: number | null } | undefined;
 
   if (!player) {
     await sendMsg(chatId, `Ce groupe n'est lié à aucun joueur.`);
@@ -33,5 +33,5 @@ export async function handleStartKkpoker(chatId: number) {
     `🎮 <b>/startkkpoker</b> triggered for <b>${player.name}</b> (id=${player.id}) in group <code>${chatId}</code>`
   );
 
-  await sendKkpokerPitch(chatId, player.id, player);
+  await sendKkpokerPitch(chatId, player.id, player, player.onboarding_topic_id ?? undefined);
 }
