@@ -50,6 +50,7 @@ export default function TELEClient({
   basePath = "/tele",
   gameLabel = "TELE AKPOKER",
   useLegacyWalletFallback = true,
+  gameId,
 }: {
   initialSummary: PlayerGameRow[];
   kpis: KPIs;
@@ -66,6 +67,7 @@ export default function TELEClient({
   basePath?: string;
   gameLabel?: string;
   useLegacyWalletFallback?: boolean;
+  gameId: number;
 }) {
   const router = useRouter();
   const [syncing, setSyncing] = useState(false);
@@ -152,9 +154,9 @@ export default function TELEClient({
 
   async function saveInlineWallet(playerId: number) {
     const gamePayload = walletInlineVals.game_wallets.map(a => ({ address: a.trim() })).filter(a => a.address.length > 0);
-    await fetch(`/api/players/${playerId}/game-wallets`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ addresses: gamePayload }) });
+    await fetch(`/api/players/${playerId}/game-wallets`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ addresses: gamePayload, game_id: gameId }) });
     const cashoutPayload = walletInlineVals.cashouts.map(a => ({ address: a.trim() })).filter(a => a.address.length > 0);
-    const res = await fetch(`/api/players/${playerId}/cashouts`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ addresses: cashoutPayload }) });
+    const res = await fetch(`/api/players/${playerId}/cashouts`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ addresses: cashoutPayload, game_id: gameId }) });
     if (res.ok) { window.location.reload(); } else {
       const err = await res.json().catch(() => null);
       alert(err?.error ?? "Erreur lors de la sauvegarde des wallets cashout");

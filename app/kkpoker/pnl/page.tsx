@@ -106,6 +106,7 @@ export default async function KKPOKERPage({ searchParams }: { searchParams: Prom
         basePath="/kkpoker/pnl"
         gameLabel="KKPOKER"
         useLegacyWalletFallback={false}
+        gameId={kkGameId ?? 5}
       />
       <AgencyExtras gameKey="kkpoker" />
     </>

@@ -37,6 +37,7 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
     }
   }
 
-  setPlayerCashouts(playerId, cleaned);
+  const gameId = typeof body.game_id === "number" ? body.game_id : undefined;
+  setPlayerCashouts(playerId, cleaned, gameId);
   return NextResponse.json({ ok: true, count: cleaned.length });
 }

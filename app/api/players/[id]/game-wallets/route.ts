@@ -12,10 +12,11 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
   if (!Array.isArray(body.addresses)) {
     return NextResponse.json({ error: "addresses array required" }, { status: 400 });
   }
+  const gameId = typeof body.game_id === "number" ? body.game_id : undefined;
   const cleaned = body.addresses
     .filter((a: any) => typeof a === "object" && typeof a.address === "string")
     .map((a: any) => ({ address: a.address.trim(), label: a.label?.trim() || null }))
     .filter((a: any) => a.address.length > 0);
-  setPlayerGameWallets(Number(id), cleaned);
+  setPlayerGameWallets(Number(id), cleaned, gameId);
   return NextResponse.json({ ok: true, count: cleaned.length });
 }

@@ -97,19 +97,28 @@ export function getPlayerCashouts(playerId: number, gameId?: number) {
   return getDb().prepare(`SELECT id, address, label FROM player_wallet_cashouts WHERE player_id = ? ORDER BY id`).all(playerId) as { id: number; address: string; label: string | null }[];
 }
 
-export function setPlayerCashouts(playerId: number, addresses: { address: string; label?: string | null }[]) {
+export function setPlayerCashouts(playerId: number, addresses: { address: string; label?: string | null }[], gameId?: number) {
   const db = getDb();
+  const teleGameId = (db.prepare(`SELECT id FROM games WHERE name = 'TELE'`).get() as { id: number } | undefined)?.id;
   const tx = db.transaction(() => {
-    db.prepare(`DELETE FROM player_wallet_cashouts WHERE player_id = ?`).run(playerId);
-    const ins = db.prepare(`INSERT OR IGNORE INTO player_wallet_cashouts (player_id, address, label) VALUES (?, ?, ?)`);
+    if (gameId != null) {
+      db.prepare(`DELETE FROM player_wallet_cashouts WHERE player_id = ? AND game_id = ?`).run(playerId, gameId);
+    } else {
+      db.prepare(`DELETE FROM player_wallet_cashouts WHERE player_id = ?`).run(playerId);
+    }
+    const ins = gameId != null
+      ? db.prepare(`INSERT OR IGNORE INTO player_wallet_cashouts (player_id, address, label, game_id) VALUES (?, ?, ?, ?)`)
+      : db.prepare(`INSERT OR IGNORE INTO player_wallet_cashouts (player_id, address, label) VALUES (?, ?, ?)`);
     for (const c of addresses) {
       const a = c.address.trim();
       if (!a) continue;
-      ins.run(playerId, a, c.label ?? null);
+      if (gameId != null) ins.run(playerId, a, c.label ?? null, gameId);
+      else ins.run(playerId, a, c.label ?? null);
     }
-    // Mirror the first address into the legacy column for Telegram-bot compatibility
-    const first = addresses.find(c => c.address.trim());
-    db.prepare(`UPDATE players SET tele_wallet_cashout = ? WHERE id = ?`).run(first ? first.address.trim() : null, playerId);
+    if (gameId == null || gameId === teleGameId) {
+      const first = addresses.find(c => c.address.trim());
+      db.prepare(`UPDATE players SET tele_wallet_cashout = ? WHERE id = ?`).run(first ? first.address.trim() : null, playerId);
+    }
   });
   tx();
 }
@@ -122,18 +131,28 @@ export function getPlayerGameWallets(playerId: number, gameId?: number) {
   return getDb().prepare(`SELECT id, address, label FROM player_wallet_games WHERE player_id = ? ORDER BY id`).all(playerId) as { id: number; address: string; label: string | null }[];
 }
 
-export function setPlayerGameWallets(playerId: number, addresses: { address: string; label?: string | null }[]) {
+export function setPlayerGameWallets(playerId: number, addresses: { address: string; label?: string | null }[], gameId?: number) {
   const db = getDb();
+  const teleGameId = (db.prepare(`SELECT id FROM games WHERE name = 'TELE'`).get() as { id: number } | undefined)?.id;
   const tx = db.transaction(() => {
-    db.prepare(`DELETE FROM player_wallet_games WHERE player_id = ?`).run(playerId);
-    const ins = db.prepare(`INSERT OR IGNORE INTO player_wallet_games (player_id, address, label) VALUES (?, ?, ?)`);
+    if (gameId != null) {
+      db.prepare(`DELETE FROM player_wallet_games WHERE player_id = ? AND game_id = ?`).run(playerId, gameId);
+    } else {
+      db.prepare(`DELETE FROM player_wallet_games WHERE player_id = ?`).run(playerId);
+    }
+    const ins = gameId != null
+      ? db.prepare(`INSERT OR IGNORE INTO player_wallet_games (player_id, address, label, game_id) VALUES (?, ?, ?, ?)`)
+      : db.prepare(`INSERT OR IGNORE INTO player_wallet_games (player_id, address, label) VALUES (?, ?, ?)`);
     for (const c of addresses) {
       const a = c.address.trim();
       if (!a) continue;
-      ins.run(playerId, a, c.label ?? null);
+      if (gameId != null) ins.run(playerId, a, c.label ?? null, gameId);
+      else ins.run(playerId, a, c.label ?? null);
     }
-    const first = addresses.find(c => c.address.trim());
-    db.prepare(`UPDATE players SET tron_address = ? WHERE id = ?`).run(first ? first.address.trim() : null, playerId);
+    if (gameId == null || gameId === teleGameId) {
+      const first = addresses.find(c => c.address.trim());
+      db.prepare(`UPDATE players SET tron_address = ? WHERE id = ?`).run(first ? first.address.trim() : null, playerId);
+    }
   });
   tx();
 }

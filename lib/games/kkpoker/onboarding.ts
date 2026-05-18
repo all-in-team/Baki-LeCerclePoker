@@ -111,21 +111,12 @@ export async function handleKkpokerCallback(
     // MSG 1
     await sendMsg(chatId, `✅ <b>Deal accepté !</b>`);
 
-    // MSG 2 — game link or pending
+    // MSG 2 — game link
     await sleep(1500);
-    if (KKPOKER_GAME_LINK !== "<PENDING>") {
-      await sendMsg(chatId,
-        `Voici le lien pour rejoindre la game :\n` +
-        `👉 ${KKPOKER_GAME_LINK}`
-      );
-    } else {
-      await sendMsg(chatId,
-        `Le lien de la game arrive très bientôt, on te tient au courant ici 👍`
-      );
-      await sendMsg(AGENT_CHAT_ID,
-        `⚠️ Player <b>${playerName}</b> onboarded but KKPOKER gameLink is still PENDING — set it in config`
-      );
-    }
+    await sendMsg(chatId,
+      `Voici le lien pour rejoindre la game :\n` +
+      `👉 ${KKPOKER_GAME_LINK}`
+    );
 
     // MSG 3 — wallet explanation
     await sleep(2500);
@@ -256,7 +247,7 @@ export async function handleKkpokerRawMessage(
       `Deal : ${playerPct}/${actionPct} (action_pct=${actionPct})\n` +
       `Wallet retrait : <code>${cashoutAddress}</code>\n` +
       `Wallet game KKPOKER : <code>${text}</code>\n` +
-      `Groupe : ${KKPOKER_GAME_LINK !== "<PENDING>" ? KKPOKER_GAME_LINK : "<PENDING>"}`
+      `Groupe : ${KKPOKER_GAME_LINK}`
     );
 
     return true;

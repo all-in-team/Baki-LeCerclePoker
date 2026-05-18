@@ -141,6 +141,7 @@ export default async function TELEPage({ searchParams }: { searchParams: Promise
         rangeLabel={rangeLabel}
         weeks={weeks.map(w => ({ isoWeek: w.isoWeek, label: w.label }))}
         archived
+        gameId={teleGameId ?? 1}
       />
       <AgencyExtras gameKey="akpoker" />
     </>
