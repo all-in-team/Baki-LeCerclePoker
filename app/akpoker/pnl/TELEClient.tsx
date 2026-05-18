@@ -176,6 +176,7 @@ export default function TELEClient({
     try {
       const res = await fetch("/api/wallets/sync", { method: "POST" });
       const data = await res.json();
+      if (!res.ok) { alert(data.error ?? "Erreur sync"); return; }
       setSyncResult(data);
       if (data.imported > 0) setTimeout(() => window.location.reload(), 1200);
     } finally { setSyncing(false); }
@@ -230,10 +231,10 @@ export default function TELEClient({
         playerId = json.id;
       }
       if (newPlayer.wallet_game.trim()) {
-        await fetch(`/api/players/${playerId}/game-wallets`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ addresses: [{ address: newPlayer.wallet_game.trim() }] }) });
+        await fetch(`/api/players/${playerId}/game-wallets`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ addresses: [{ address: newPlayer.wallet_game.trim() }], game_id: gameId }) });
       }
       if (newPlayer.wallet_cashout.trim()) {
-        await fetch(`/api/players/${playerId}/cashouts`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ addresses: [{ address: newPlayer.wallet_cashout.trim() }] }) });
+        await fetch(`/api/players/${playerId}/cashouts`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ addresses: [{ address: newPlayer.wallet_cashout.trim() }], game_id: gameId }) });
       }
       await fetch("/api/games/deals", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ player_id: playerId, game_id: teleGame.id, action_pct: action, rakeback_pct: rb, start_date: newPlayer.start_date || null }) });
       window.location.reload();
@@ -271,7 +272,7 @@ export default function TELEClient({
             <span style={{ fontSize: 12, fontWeight: 600, padding: "4px 10px", borderRadius: 6, background: syncResult.imported > 0 ? "rgba(34,197,94,0.12)" : "rgba(136,136,160,0.10)", color: syncResult.imported > 0 ? "var(--green)" : "var(--text-muted)" }}>
               {syncResult.imported > 0 ? `+${syncResult.imported} importés` : "Déjà à jour"}
             </span>
-            {syncResult.results.filter(r => r.error).map(r => (
+            {syncResult.results?.filter(r => r.error).map(r => (
               <span key={r.player} style={{ fontSize: 11, color: "#f87171" }}>{r.player}: {r.error}</span>
             ))}
           </div>
