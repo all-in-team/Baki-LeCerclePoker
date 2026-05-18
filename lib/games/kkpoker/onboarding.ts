@@ -47,15 +47,17 @@ export async function handleKkpokerCallback(
   const playerName = player?.name ?? from?.first_name ?? "Joueur";
   const tgId = session.expected_tg_id ?? from?.id;
 
+  const tid = messageThreadId;
+
   // ── Question ──
   if (data === "kk_choice_question") {
     if (session.step === "awaiting_human_response" as Step) {
-      await sendMsg(chatId, "Ta question est en cours de traitement, on te répond bientôt 👍");
+      await sendMsg(chatId, "Ta question est en cours de traitement, on te répond bientôt 👍", tid);
       return;
     }
     if (messageId) await editMessageReplyMarkup(chatId, messageId).catch(() => {});
     setSession(chatId, "awaiting_human_response" as Step, session.player_id, session.expected_tg_id, "question_pending");
-    await sendMsg(chatId, `Pas de souci, pose ta question ici. Baki vient voir 👇`);
+    await sendMsg(chatId, `Pas de souci, pose ta question ici. Baki vient voir 👇`, tid);
     await sendMsg(AGENT_CHAT_ID,
       `💬 <b>Question KKPOKER onboarding — ${playerName}</b>\n` +
       `@baki77777 — réponds dans le chat <code>${chatId}</code>`
@@ -80,13 +82,14 @@ export async function handleKkpokerCallback(
 
     setSession(chatId, "kkpoker_contract_shown" as Step, session.player_id, session.expected_tg_id);
 
-    await sendMsg(chatId, `Bien joué. Voilà le contrat, pas de surprise :`);
+    await sendMsg(chatId, `Bien joué. Voilà le contrat, pas de surprise :`, tid);
     await sleep(2000);
     await sendMsg(chatId,
       `💰 <b>Le deal financier — KKPOKER</b>\n` +
       `Action symétrique ${playerPctDisplay}/${actionPctDisplay} :\n` +
       `- Tu gagnes 1000 → tu nous envoies ${actionPctDisplay}0 (${playerPctDisplay}% pour toi)\n` +
-      `- Tu perds 1000 → on t'envoie ${actionPctDisplay}0 (on couvre ${actionPctDisplay}% de tes pertes)`
+      `- Tu perds 1000 → on t'envoie ${actionPctDisplay}0 (on couvre ${actionPctDisplay}% de tes pertes)`,
+      tid
     );
     await sleep(3000);
     await sendMsgKeyboard(chatId,
@@ -94,7 +97,8 @@ export async function handleKkpokerCallback(
       [
         [{ text: "✅ Je signe", callback_data: "kk_contract_sign" }],
         [{ text: "❓ J'ai une question", callback_data: "kk_choice_question" }],
-      ]
+      ],
+      tid
     );
     return;
   }
@@ -108,17 +112,15 @@ export async function handleKkpokerCallback(
       db.prepare(`UPDATE players SET status = 'active' WHERE id = ?`).run(session.player_id);
     }
 
-    // MSG 1
-    await sendMsg(chatId, `✅ <b>Deal accepté !</b>`);
+    await sendMsg(chatId, `✅ <b>Deal accepté !</b>`, tid);
 
-    // MSG 2 — game link
     await sleep(1500);
     await sendMsg(chatId,
       `Voici le lien pour rejoindre la game :\n` +
-      `👉 ${KKPOKER_GAME_LINK}`
+      `👉 ${KKPOKER_GAME_LINK}`,
+      tid
     );
 
-    // MSG 3 — wallet explanation
     await sleep(2500);
     await sendMsg(chatId,
       `On a besoin de 2 adresses TRON USDT pour te brancher au dashboard :\n\n` +
@@ -126,15 +128,16 @@ export async function handleKkpokerCallback(
       `2️⃣ L'<b>adresse de la game</b> = fournie par KKPOKER dans l'app, tu nous la copies.\n\n` +
       `⚠️ TRC20 (réseau TRON) UNIQUEMENT.\n` +
       `Si tu utilises Binance/Exodus, choisis bien le réseau TRON (TRC20), pas BEP20 ni ERC20 — sinon tes fonds sont perdus.\n\n` +
-      `On y va, étape par étape 👇`
+      `On y va, étape par étape 👇`,
+      tid
     );
 
-    // MSG 4 — ask cashout wallet (step 1)
     await sleep(2000);
     await sendMsg(chatId,
       `<b>Étape 1 — ton adresse de retrait</b>\n\n` +
       `Envoie-moi ton adresse TRC20 USDT (depuis Exodus, Binance, Kraken, etc.).\n` +
-      `Format : commence par T, 34 caractères.`
+      `Format : commence par T, 34 caractères.`,
+      tid
     );
 
     setSession(chatId, "awaiting_kkpoker_cashout_wallet" as Step, session.player_id, session.expected_tg_id);
