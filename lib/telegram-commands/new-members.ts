@@ -41,32 +41,7 @@ export async function handleNewMembers(members: any[], chatTitle: string, chatId
 
     // KKPOKER: insert deal + send KKPOKER-specific pitch
     if (gameName === "KKPOKER") {
-      const kkGameId = (db.prepare(`SELECT id FROM games WHERE name = 'KKPOKER'`).get() as { id: number } | undefined)?.id;
-      if (kkGameId) {
-        db.prepare(`INSERT OR IGNORE INTO player_game_deals (player_id, game_id, action_pct, rakeback_pct) VALUES (?, ?, 40, 0)`).run(playerId, kkGameId);
-      }
-
-      setSession(chatId, "kkpoker_pitch_sent" as Step, playerId, member.id);
-      trackOnboardingStep(member.id, "pitch_sent");
-
-      const tag = mentionOf({ name: member.first_name ?? name, telegram_handle: member.username ?? null, telegram_id: member.id });
-      await sendMsg(chatId,
-        `${tag}\n\n🃏 Bienvenue <b>${member.first_name ?? name}</b> sur Le Cercle — KKPOKER !\n\n` +
-        `On t'explique comment ça marche et on te setup en quelques minutes.`
-      );
-      await sleep(2000);
-      await sendMsg(chatId,
-        `Voilà le deal qu'on propose :\n\n` +
-        `🤝 Tu joues <b>60%</b> de ton action.\n` +
-        `On prend les 40% restants.\n\n` +
-        `C'est de l'action symétrique : <b>win/win, lose/lose</b>.\n` +
-        `L'avantage : tu peux simplement jouer plus cher. Ça ne te pénalise pas, ça te protège.`
-      );
-      await sleep(3000);
-      await sendMsgKeyboard(chatId, `Qu'est-ce que tu en penses ?`, [
-        [{ text: "🤝 Avec vous", callback_data: "kk_choice_with_us" }],
-        [{ text: "❓ J'ai une question", callback_data: "kk_choice_question" }],
-      ]);
+      await sendKkpokerPitch(chatId, playerId, { name, telegram_id: member.id, telegram_handle: member.username ?? null });
       continue;
     }
 
@@ -88,4 +63,38 @@ export async function handleNewMembers(members: any[], chatTitle: string, chatId
       ]);
     }
   }
+}
+
+export async function sendKkpokerPitch(
+  chatId: number,
+  playerId: number,
+  player: { name: string; telegram_id: number | null; telegram_handle: string | null },
+) {
+  const db = getDb();
+  const kkGameId = (db.prepare(`SELECT id FROM games WHERE name = 'KKPOKER'`).get() as { id: number } | undefined)?.id;
+  if (kkGameId) {
+    db.prepare(`INSERT OR IGNORE INTO player_game_deals (player_id, game_id, action_pct, rakeback_pct) VALUES (?, ?, 40, 0)`).run(playerId, kkGameId);
+  }
+
+  setSession(chatId, "kkpoker_pitch_sent" as Step, playerId, player.telegram_id);
+  if (player.telegram_id) trackOnboardingStep(player.telegram_id, "pitch_sent");
+
+  const tag = mentionOf(player);
+  await sendMsg(chatId,
+    `${tag}\n\n🃏 <b>${player.name}</b> — on te propose KKPOKER !\n\n` +
+    `On t'explique comment ça marche et on te setup en quelques minutes.`
+  );
+  await sleep(2000);
+  await sendMsg(chatId,
+    `Voilà le deal qu'on propose :\n\n` +
+    `🤝 Tu joues <b>60%</b> de ton action.\n` +
+    `On prend les 40% restants.\n\n` +
+    `C'est de l'action symétrique : <b>win/win, lose/lose</b>.\n` +
+    `L'avantage : tu peux simplement jouer plus cher. Ça ne te pénalise pas, ça te protège.`
+  );
+  await sleep(3000);
+  await sendMsgKeyboard(chatId, `Qu'est-ce que tu en penses ?`, [
+    [{ text: "🤝 Avec vous", callback_data: "kk_choice_with_us" }],
+    [{ text: "❓ J'ai une question", callback_data: "kk_choice_question" }],
+  ]);
 }

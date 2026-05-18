@@ -21,6 +21,7 @@ export { handlePitchCallback } from "./pitch";
 export { handleBroadcast, handleBroadcastCallback } from "./broadcast";
 export { handleCashoutDoneCallback, handleCashoutSkippedCallback } from "./cashout-reminder";
 export { handleKkpokerCallback } from "@/lib/games/kkpoker/onboarding";
+export { handleStartKkpoker } from "./startkkpoker";
 
 // Re-export helpers needed by route.ts
 export {

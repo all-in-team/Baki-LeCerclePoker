@@ -10,6 +10,7 @@ import {
   handleCashoutDoneCallback,
   handleCashoutSkippedCallback,
   handleKkpokerCallback,
+  handleStartKkpoker,
   sendMsg, answerCbQuery, getSession, handleRawMessage, registerCommandHandlers,
   OWNER_IDS, AGENT_CHAT_ID,
 } from "@/lib/telegram-commands";
@@ -127,6 +128,7 @@ export async function POST(req: NextRequest) {
       else if (cmd === "/rapports")     await handleRapports(chatId);
       else if (cmd === "/aide" || cmd === "/help") await handleAide(chatId);
       else if (cmd === "/broadcast")   await handleBroadcast(msg, chatId);
+      else if (cmd === "/startkkpoker" || cmd === "/start_kkpoker") await handleStartKkpoker(chatId);
     } catch (e: any) {
       console.error("[TG CMD]", e);
       await sendMsg(chatId, `❌ Erreur : ${e.message}`);
