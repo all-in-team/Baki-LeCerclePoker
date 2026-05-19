@@ -56,6 +56,19 @@ export async function POST(req: NextRequest) {
     }
   }
 
+  if (action === "run-sql") {
+    const sql = body.sql as string;
+    if (!sql) return NextResponse.json({ error: "sql required" }, { status: 400 });
+    try {
+      const result = sql.trim().toUpperCase().startsWith("SELECT")
+        ? { rows: db.prepare(sql).all(body.params ?? {}) }
+        : { changes: db.prepare(sql).run(body.params ?? {}).changes };
+      return NextResponse.json({ ok: true, ...result });
+    } catch (e: any) {
+      return NextResponse.json({ ok: false, error: e.message }, { status: 500 });
+    }
+  }
+
   if (action === "reset-player") {
     const pid = body.player_id as number;
     if (!pid) return NextResponse.json({ error: "player_id required" }, { status: 400 });
