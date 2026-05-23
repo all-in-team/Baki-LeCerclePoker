@@ -4,7 +4,7 @@ import { todayCost, usageBetween } from "./agent-cost";
 import { dispatchFix, isWithinBudget, recentDoerSessions, looksMoneyFlow } from "./agent-doer";
 import { getCurrentWeekStart } from "./telegram-commands/cashout-reminder";
 import { getWeekBounds, toUTCISO, toParisDate } from "./date-utils";
-import { getLockAwareSummaryByPlayer, getLockAwareKPIs, getWalletSummaryByPlayer, getAkpokerPnL, getWepokerPnL, getAgencyTotalPnL, getTopContributors, getActivePlayersCount, type Period } from "./queries";
+import { getLockAwareSummaryByPlayer, getLockAwareKPIs, getWalletSummaryByPlayer, getAkpokerPnL, getKkpokerPnL, getWepokerPnL, getAgencyTotalPnL, getTopContributors, getActivePlayersCount, type Period } from "./queries";
 import { checkUserbotHealth, listGroups } from "./telegram-userbot";
 
 // ────────────────────────────────────────────────────────────
@@ -363,6 +363,7 @@ export async function executeTool(name: string, input: any): Promise<string> {
       const period: Period = { from: start, to: end };
       const total = getAgencyTotalPnL(period);
       const ak = getAkpokerPnL(playerId, period);
+      const kk = getKkpokerPnL(playerId, period);
       const wp = getWepokerPnL(playerId, period);
 
       const lines: string[] = [`P&L (${label}):`];
@@ -370,30 +371,35 @@ export async function executeTool(name: string, input: any): Promise<string> {
         lines.push(`\nAKPOKER:`);
         ak.forEach(r => lines.push(`  ${r.player_name} [${r.action_pct}%] — dép:${r.deposited.toFixed(0)} ret:${r.withdrawn.toFixed(0)} net:${fmtAmount(r.net_usdt)} agency:${fmtAmount(r.agency_cut_usdt)} USDT`));
       }
+      if (kk.length) {
+        lines.push(`\nKKPOKER:`);
+        kk.forEach(r => lines.push(`  ${r.player_name} [${r.action_pct}%] — dép:${r.deposited.toFixed(0)} ret:${r.withdrawn.toFixed(0)} net:${fmtAmount(r.net_usdt)} agency:${fmtAmount(r.agency_cut_usdt)} USDT`));
+      }
       if (wp.length) {
         lines.push(`\nWEPOKER:`);
         wp.forEach(r => lines.push(`  ${r.player_name} [${r.action_pct}%] — agency: winnings ${fmtAmount(r.agency_winnings_split_cny)} + RB ${fmtAmount(r.agency_rakeback_split_cny)} + ins ${fmtAmount(r.agency_insurance_split_cny)} = ${fmtAmount(r.total_agency_cny)} CNY (${fmtAmount(r.total_agency_usdt)} USDT)`));
       }
       if (!playerId) {
-        lines.push(`\nTotal agency: ${fmtAmount(total.total_usdt)} USDT (AK: ${fmtAmount(total.akpoker_usdt)}, WP: ${fmtAmount(total.wepoker_usdt)})`);
+        lines.push(`\nTotal agency: ${fmtAmount(total.total_usdt)} USDT (AK: ${fmtAmount(total.akpoker_usdt)}, KK: ${fmtAmount(total.kkpoker_usdt)}, WP: ${fmtAmount(total.wepoker_usdt)})`);
         if (total.akpoker_extras_usdt) lines.push(`  dont extras AK: ${fmtAmount(total.akpoker_extras_usdt)} USDT`);
+        if (total.kkpoker_extras_usdt) lines.push(`  dont extras KK: ${fmtAmount(total.kkpoker_extras_usdt)} USDT`);
         if (total.wepoker_extras_cny) lines.push(`  dont extras WP: ${fmtAmount(total.wepoker_extras_cny)} CNY`);
       }
-      if (ak.length === 0 && wp.length === 0) return `P&L (${label}): aucune donnée${playerId ? ` pour ${playerFilter![0].name}` : ""}.`;
+      if (ak.length === 0 && kk.length === 0 && wp.length === 0) return `P&L (${label}): aucune donnée${playerId ? ` pour ${playerFilter![0].name}` : ""}.`;
       return lines.join("\n");
     }
 
     if (name === "get_recent_agency_extras") {
       const gk = input?.game_key;
       const lim = Math.min(input?.limit ?? 10, 50);
-      const games = gk ? [gk] : ["akpoker", "wepoker"];
+      const games = gk ? [gk] : ["akpoker", "kkpoker", "wepoker"];
       const lines: string[] = ["📒 Extras agency récents:"];
       for (const g of games) {
         const rows = db.prepare(
           `SELECT * FROM agency_extras WHERE game_key = ? AND deleted_at IS NULL ORDER BY recorded_at DESC LIMIT ?`
         ).all(g, lim) as any[];
         if (rows.length === 0) { lines.push(`\n${g.toUpperCase()}: aucun`); continue; }
-        const cur = g === "akpoker" ? "USDT" : "CNY";
+        const cur = g === "wepoker" ? "CNY" : "USDT";
         lines.push(`\n${g.toUpperCase()} (${cur}):`);
         for (const r of rows) {
           const sign = r.type === "win" ? "+" : "-";
@@ -423,6 +429,7 @@ export async function executeTool(name: string, input: any): Promise<string> {
       ).all(pid) as any[];
 
       const ak = getAkpokerPnL(pid);
+      const kk = getKkpokerPnL(pid);
       const wp = getWepokerPnL(pid);
 
       const recentTx = db.prepare(
@@ -447,6 +454,12 @@ export async function executeTool(name: string, input: any): Promise<string> {
         out.push(`  dép ${a.deposited.toFixed(0)} · ret ${a.withdrawn.toFixed(0)} · net ${fmtAmount(a.net_usdt)} · agency ${fmtAmount(a.agency_cut_usdt)} USDT`);
       }
 
+      if (kk.length) {
+        const k = kk[0];
+        out.push(`\nKKPOKER:`);
+        out.push(`  dép ${k.deposited.toFixed(0)} · ret ${k.withdrawn.toFixed(0)} · net ${fmtAmount(k.net_usdt)} · agency ${fmtAmount(k.agency_cut_usdt)} USDT`);
+      }
+
       if (wp.length) {
         const w = wp[0];
         out.push(`\nWEPOKER:`);
@@ -455,8 +468,8 @@ export async function executeTool(name: string, input: any): Promise<string> {
         out.push(`  Total agency: ${fmtAmount(w.total_agency_cny)} CNY = ${fmtAmount(w.total_agency_usdt)} USDT`);
       }
 
-      const totalAgency = ak.reduce((s, r) => s + r.agency_cut_usdt, 0) + wp.reduce((s, r) => s + r.total_agency_usdt, 0);
-      if (ak.length || wp.length) out.push(`\nTotal agency (all games): ${fmtAmount(totalAgency)} USDT`);
+      const totalAgency = ak.reduce((s, r) => s + r.agency_cut_usdt, 0) + kk.reduce((s, r) => s + r.agency_cut_usdt, 0) + wp.reduce((s, r) => s + r.total_agency_usdt, 0);
+      if (ak.length || kk.length || wp.length) out.push(`\nTotal agency (all games): ${fmtAmount(totalAgency)} USDT`);
 
       if (recentTx.length) {
         out.push(`\n10 dernières tx:`);
@@ -657,8 +670,8 @@ export async function executeTool(name: string, input: any): Promise<string> {
       const total = getAgencyTotalPnL(period);
       const contributors = getTopContributors(period, 20);
       if (contributors.length === 0) return `Aucun revenu sur ${label}.`;
-      const lines = contributors.map(c => `${c.player_name} — AK: ${fmtAmount(c.akpoker_usdt)} · WP: ${fmtAmount(c.wepoker_usdt)} · total: ${fmtAmount(c.agency_usdt)} USDT`);
-      return `Revenu (${label}):\n${lines.join("\n")}\nTotal: ${fmtAmount(total.total_usdt)} USDT (AK: ${fmtAmount(total.akpoker_usdt)}, WP: ${total.wepoker_cny.toFixed(0)} CNY = ${fmtAmount(total.wepoker_usdt)})`;
+      const lines = contributors.map(c => `${c.player_name} — AK: ${fmtAmount(c.akpoker_usdt)} · KK: ${fmtAmount(c.kkpoker_usdt)} · WP: ${fmtAmount(c.wepoker_usdt)} · total: ${fmtAmount(c.agency_usdt)} USDT`);
+      return `Revenu (${label}):\n${lines.join("\n")}\nTotal: ${fmtAmount(total.total_usdt)} USDT (AK: ${fmtAmount(total.akpoker_usdt)}, KK: ${fmtAmount(total.kkpoker_usdt)}, WP: ${total.wepoker_cny.toFixed(0)} CNY = ${fmtAmount(total.wepoker_usdt)})`;
     }
 
     if (name === "top_players_this_week") {
@@ -672,7 +685,7 @@ export async function executeTool(name: string, input: any): Promise<string> {
         : contributors.filter(c => c.agency_usdt < 0).reverse();
       const top = filtered.slice(0, limit);
       if (top.length === 0) return `Aucun ${side === "winners" ? "gagnant" : "perdant"} cette semaine.`;
-      return `Top ${top.length} ${side === "winners" ? "gagnants" : "perdants"} (semaine, agency cut):\n${top.map((c, i) => `${i + 1}. ${c.player_name} — ${fmtAmount(c.agency_usdt)} USDT (AK: ${fmtAmount(c.akpoker_usdt)}, WP: ${fmtAmount(c.wepoker_usdt)})`).join("\n")}`;
+      return `Top ${top.length} ${side === "winners" ? "gagnants" : "perdants"} (semaine, agency cut):\n${top.map((c, i) => `${i + 1}. ${c.player_name} — ${fmtAmount(c.agency_usdt)} USDT (AK: ${fmtAmount(c.akpoker_usdt)}, KK: ${fmtAmount(c.kkpoker_usdt)}, WP: ${fmtAmount(c.wepoker_usdt)})`).join("\n")}`;
     }
 
     if (name === "weekly_settlement_summary") {

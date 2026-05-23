@@ -1,6 +1,6 @@
 export const dynamic = "force-dynamic";
 import { getDb } from "@/lib/db";
-import { getWalletTransactions, getPlayers, getGames, getPlayerCashouts, getPlayerGameWallets, getWalletMeresForGame, getLockAwareSummaryByPlayer, getLockAwareKPIs } from "@/lib/queries";
+import { getKkpokerPnL, getWalletTransactions, getPlayers, getGames, getPlayerCashouts, getPlayerGameWallets, getWalletMeresForGame, type Period } from "@/lib/queries";
 import { getWeekBounds, getLast12Weeks, toUTCISO, toParisDate, formatRangeLabel, isoWeekToOffset } from "@/lib/date-utils";
 import PageHeader from "@/components/PageHeader";
 import TELEClient from "@/app/akpoker/pnl/TELEClient";
@@ -48,21 +48,26 @@ export default async function KKPOKERPage({ searchParams }: { searchParams: Prom
   const { key, startDate, endDate, rangeLabel } = computeFilter(params.filter);
   const weeks = getLast12Weeks();
 
-  const filters = { game_name: "KKPOKER" as const, since_date: startDate, end_date: endDate };
-  let summary = getLockAwareSummaryByPlayer(filters) as any[];
-  let kpis = getLockAwareKPIs(filters) ?? { total_deposited: 0, total_withdrawn: 0, total_net: 0, my_total_pnl: 0 };
-  let transactions = getWalletTransactions({ ...filters, limit: 500 }) as any[];
-
+  const period: Period | undefined = startDate || endDate
+    ? { from: startDate?.slice(0, 10), to: endDate?.slice(0, 10) }
+    : undefined;
+  const pnlRows = getKkpokerPnL(playerFilter, period);
+  let summary = pnlRows.map(r => ({
+    player_id: r.player_id, player_name: r.player_name, action_pct: r.action_pct,
+    total_deposited: r.deposited, total_withdrawn: r.withdrawn, net: r.net_usdt, my_pnl: r.agency_cut_usdt,
+  }));
+  let kpis = {
+    total_deposited: summary.reduce((s, r) => s + r.total_deposited, 0),
+    total_withdrawn: summary.reduce((s, r) => s + r.total_withdrawn, 0),
+    total_net: summary.reduce((s, r) => s + r.net, 0),
+    my_total_pnl: summary.reduce((s, r) => s + r.my_pnl, 0),
+  };
+  const txFilters = { game_name: "KKPOKER" as const, since_date: startDate, end_date: endDate };
+  let transactions = getWalletTransactions({ ...txFilters, limit: 500 }) as any[];
   if (playerFilter) {
-    summary = summary.filter((r: any) => r.player_id === playerFilter);
     transactions = transactions.filter((t: any) => t.player_id === playerFilter);
-    kpis = {
-      total_deposited: summary.reduce((s: number, r: any) => s + (r.total_deposited ?? 0), 0),
-      total_withdrawn: summary.reduce((s: number, r: any) => s + (r.total_withdrawn ?? 0), 0),
-      total_net: summary.reduce((s: number, r: any) => s + (r.net ?? 0), 0),
-      my_total_pnl: summary.reduce((s: number, r: any) => s + (r.my_pnl ?? 0), 0),
-    };
   }
+
   const players = getPlayers() as any[];
   const games = (getGames() as any[]).filter((g) => g.name === "KKPOKER");
   const kkGameId = (getDb().prepare(`SELECT id FROM games WHERE name = 'KKPOKER'`).get() as { id: number } | undefined)?.id;

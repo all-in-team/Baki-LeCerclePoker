@@ -1057,7 +1057,8 @@ function getWeekStartFromDates(sinceDate: string, endDate: string): string | nul
   return null;
 }
 
-export function getLockedSummaryByPlayer(weekStart: string) {
+export function getLockedSummaryByPlayer(weekStart: string, gameName?: string) {
+  const gn = gameName ?? "TELE";
   return getDb().prepare(`
     SELECT
       ws.player_id, p.name AS player_name,
@@ -1070,10 +1071,10 @@ export function getLockedSummaryByPlayer(weekStart: string) {
     FROM weekly_settlements ws
     JOIN players p ON p.id = ws.player_id
     JOIN player_game_deals pgd ON pgd.player_id = ws.player_id
-    JOIN games g ON g.id = pgd.game_id AND g.name = 'TELE'
+    JOIN games g ON g.id = pgd.game_id AND g.name = ?
     WHERE ws.week_start = ?
     ORDER BY ws.pnl_operator DESC
-  `).all(weekStart);
+  `).all(gn, weekStart);
 }
 
 export function getLockedKPIs(weekStart: string) {
@@ -1092,7 +1093,7 @@ export function getLockAwareSummaryByPlayer(filters?: { game_name?: string; sinc
   if (filters?.since_date && filters?.end_date) {
     const weekStart = getWeekStartFromDates(filters.since_date, filters.end_date);
     if (weekStart && isWeekLocked(weekStart)) {
-      return getLockedSummaryByPlayer(weekStart);
+      return getLockedSummaryByPlayer(weekStart, filters?.game_name);
     }
   }
   return getWalletSummaryByPlayer(filters);
@@ -1146,6 +1147,27 @@ export function getAkpokerPnL(playerId?: number, period?: Period): AkpokerPnLRow
   const { since, until } = periodToDateRange(period);
   const rows = getWalletSummaryByPlayer({
     game_name: "TELE",
+    since_date: since,
+    end_date: until,
+  }) as any[];
+  let filtered = rows;
+  if (playerId) filtered = rows.filter((r: any) => r.player_id === playerId);
+  return filtered.map((r: any) => ({
+    player_id: r.player_id,
+    player_name: r.player_name,
+    action_pct: r.action_pct ?? 0,
+    deposited: r.total_deposited ?? 0,
+    withdrawn: r.total_withdrawn ?? 0,
+    net_usdt: r.net ?? 0,
+    agency_cut_usdt: r.my_pnl ?? 0,
+  }));
+}
+
+// B2) KKPOKER P&L (wallet-based, USDT) — same pattern as AKPOKER
+export function getKkpokerPnL(playerId?: number, period?: Period): AkpokerPnLRow[] {
+  const { since, until } = periodToDateRange(period);
+  const rows = getWalletSummaryByPlayer({
+    game_name: "KKPOKER",
     since_date: since,
     end_date: until,
   }) as any[];
@@ -1253,24 +1275,31 @@ export interface AgencyTotalPnL {
   total_usdt: number;
   akpoker_usdt: number;
   akpoker_extras_usdt: number;
+  kkpoker_usdt: number;
+  kkpoker_extras_usdt: number;
   wepoker_cny: number;
   wepoker_extras_cny: number;
   wepoker_usdt: number;
 }
 export function getAgencyTotalPnL(period?: Period): AgencyTotalPnL {
   const ak = getAkpokerPnL(undefined, period);
+  const kk = getKkpokerPnL(undefined, period);
   const wp = getWepokerPnL(undefined, period);
   const akTotal = ak.reduce((s, r) => s + r.agency_cut_usdt, 0);
+  const kkTotal = kk.reduce((s, r) => s + r.agency_cut_usdt, 0);
   const wpTotalCny = wp.reduce((s, r) => s + r.total_agency_cny, 0);
   const wpTotalUsdt = wp.reduce((s, r) => s + r.total_agency_usdt, 0);
   const akExtras = getAgencyExtrasNet("akpoker", period);
+  const kkExtras = getAgencyExtrasNet("kkpoker", period);
   const wpExtrasCny = getAgencyExtrasNet("wepoker", period);
   const rate = getCnyRate();
   const wpExtrasUsdt = convertCnyToUsdt(wpExtrasCny, rate);
   return {
-    total_usdt: akTotal + akExtras + wpTotalUsdt + wpExtrasUsdt,
+    total_usdt: akTotal + akExtras + kkTotal + kkExtras + wpTotalUsdt + wpExtrasUsdt,
     akpoker_usdt: akTotal + akExtras,
     akpoker_extras_usdt: akExtras,
+    kkpoker_usdt: kkTotal + kkExtras,
+    kkpoker_extras_usdt: kkExtras,
     wepoker_cny: wpTotalCny + wpExtrasCny,
     wepoker_extras_cny: wpExtrasCny,
     wepoker_usdt: wpTotalUsdt + wpExtrasUsdt,
@@ -1307,13 +1336,12 @@ export function getActivePlayersCount(period: Period): number {
 
   const combined = new Set<number>();
   if (since && until) {
-    const akPlayers = db.prepare(`
+    const walletPlayers = db.prepare(`
       SELECT DISTINCT wt.player_id FROM wallet_transactions wt
-      JOIN games g ON g.id = wt.game_id AND LOWER(g.name) = 'tele'
       WHERE wt.tx_datetime >= ? AND wt.tx_datetime <= ?
         AND (wt.source IS NULL OR wt.source != 'unknown')
     `).all(since, until) as { player_id: number }[];
-    akPlayers.forEach(r => combined.add(r.player_id));
+    walletPlayers.forEach(r => combined.add(r.player_id));
   }
   if (period.from && period.to) {
     const wpPlayers = db.prepare(`
@@ -1332,24 +1360,24 @@ export function getActivePlayersCount(period: Period): number {
 // F) Top contributors by agency cut
 export interface ContributorRow {
   player_id: number; player_name: string; agency_usdt: number;
-  akpoker_usdt: number; wepoker_usdt: number;
+  akpoker_usdt: number; kkpoker_usdt: number; wepoker_usdt: number;
 }
 export function getTopContributors(period: Period, limit = 5): ContributorRow[] {
   const ak = getAkpokerPnL(undefined, period);
+  const kk = getKkpokerPnL(undefined, period);
   const wp = getWepokerPnL(undefined, period);
 
   const byPlayer = new Map<number, ContributorRow>();
+  const get = (r: { player_id: number; player_name: string }) =>
+    byPlayer.get(r.player_id) ?? { player_id: r.player_id, player_name: r.player_name, agency_usdt: 0, akpoker_usdt: 0, kkpoker_usdt: 0, wepoker_usdt: 0 };
   for (const r of ak) {
-    const existing = byPlayer.get(r.player_id) ?? { player_id: r.player_id, player_name: r.player_name, agency_usdt: 0, akpoker_usdt: 0, wepoker_usdt: 0 };
-    existing.akpoker_usdt += r.agency_cut_usdt;
-    existing.agency_usdt += r.agency_cut_usdt;
-    byPlayer.set(r.player_id, existing);
+    const e = get(r); e.akpoker_usdt += r.agency_cut_usdt; e.agency_usdt += r.agency_cut_usdt; byPlayer.set(r.player_id, e);
+  }
+  for (const r of kk) {
+    const e = get(r); e.kkpoker_usdt += r.agency_cut_usdt; e.agency_usdt += r.agency_cut_usdt; byPlayer.set(r.player_id, e);
   }
   for (const r of wp) {
-    const existing = byPlayer.get(r.player_id) ?? { player_id: r.player_id, player_name: r.player_name, agency_usdt: 0, akpoker_usdt: 0, wepoker_usdt: 0 };
-    existing.wepoker_usdt += r.total_agency_usdt;
-    existing.agency_usdt += r.total_agency_usdt;
-    byPlayer.set(r.player_id, existing);
+    const e = get(r); e.wepoker_usdt += r.total_agency_usdt; e.agency_usdt += r.total_agency_usdt; byPlayer.set(r.player_id, e);
   }
 
   return [...byPlayer.values()].sort((a, b) => b.agency_usdt - a.agency_usdt).slice(0, limit);
@@ -1357,24 +1385,27 @@ export function getTopContributors(period: Period, limit = 5): ContributorRow[] 
 
 // G) P&L time series for charts
 export interface PnLTimePoint {
-  date: string; akpoker_usdt: number; wepoker_usdt: number; total_usdt: number;
+  date: string; akpoker_usdt: number; kkpoker_usdt: number; wepoker_usdt: number; total_usdt: number;
 }
 export function getPnLOverTime(period: Period): PnLTimePoint[] {
   const db = getDb();
   const { since, until } = periodToDateRange(period);
 
-  const akDaily = db.prepare(`
+  const walletDailyByGame = (gameName: string) => db.prepare(`
     SELECT substr(wt.tx_datetime, 1, 10) AS day,
       COALESCE(SUM(CASE WHEN wt.type='withdrawal' THEN wt.amount ELSE -wt.amount END) * pgd.action_pct / 100.0, 0) AS agency
     FROM wallet_transactions wt
     JOIN player_game_deals pgd ON pgd.player_id = wt.player_id AND pgd.game_id = wt.game_id
-    JOIN games g ON g.id = wt.game_id AND LOWER(g.name) = 'tele'
+    JOIN games g ON g.id = wt.game_id AND LOWER(g.name) = LOWER(?)
     WHERE (wt.source IS NULL OR wt.source != 'unknown')
       AND (pgd.start_date IS NULL OR wt.tx_datetime >= pgd.start_date)
       ${since ? "AND wt.tx_datetime >= ?" : ""}
       ${until ? "AND wt.tx_datetime <= ?" : ""}
     GROUP BY day ORDER BY day
-  `).all(...[since, until].filter(Boolean)) as { day: string; agency: number }[];
+  `).all(...[gameName, since, until].filter(Boolean)) as { day: string; agency: number }[];
+
+  const akDaily = walletDailyByGame("TELE");
+  const kkDaily = walletDailyByGame("KKPOKER");
 
   const rate = getCnyRate();
   const wpDaily = db.prepare(`
@@ -1393,36 +1424,33 @@ export function getPnLOverTime(period: Period): PnLTimePoint[] {
   `).all(...[period?.from, period?.to].filter(Boolean)) as any[];
 
   const dayMap = new Map<string, PnLTimePoint>();
+  const getDay = (day: string) => dayMap.get(day) ?? { date: day, akpoker_usdt: 0, kkpoker_usdt: 0, wepoker_usdt: 0, total_usdt: 0 };
   for (const r of akDaily) {
-    dayMap.set(r.day, { date: r.day, akpoker_usdt: r.agency, wepoker_usdt: 0, total_usdt: r.agency });
+    const e = getDay(r.day); e.akpoker_usdt += r.agency; e.total_usdt += r.agency; dayMap.set(r.day, e);
+  }
+  for (const r of kkDaily) {
+    const e = getDay(r.day); e.kkpoker_usdt += r.agency; e.total_usdt += r.agency; dayMap.set(r.day, e);
   }
   for (const r of wpDaily) {
     const wpUsdt = convertCnyToUsdt(r.wl_agency + r.rb_agency + r.ins_agency, rate);
-    const existing = dayMap.get(r.day) ?? { date: r.day, akpoker_usdt: 0, wepoker_usdt: 0, total_usdt: 0 };
-    existing.wepoker_usdt += wpUsdt;
-    existing.total_usdt += wpUsdt;
-    dayMap.set(r.day, existing);
+    const e = getDay(r.day); e.wepoker_usdt += wpUsdt; e.total_usdt += wpUsdt; dayMap.set(r.day, e);
   }
 
   // Add agency extras to the time series
-  const akExtras = getAgencyExtras("akpoker", period);
-  for (const e of akExtras) {
-    const day = e.recorded_at.slice(0, 10);
-    const val = e.type === "win" ? e.amount : -e.amount;
-    const existing = dayMap.get(day) ?? { date: day, akpoker_usdt: 0, wepoker_usdt: 0, total_usdt: 0 };
-    existing.akpoker_usdt += val;
-    existing.total_usdt += val;
-    dayMap.set(day, existing);
-  }
-  const wpExtras = getAgencyExtras("wepoker", period);
-  for (const e of wpExtras) {
-    const day = e.recorded_at.slice(0, 10);
-    const valCny = e.type === "win" ? e.amount : -e.amount;
-    const valUsdt = convertCnyToUsdt(valCny, rate);
-    const existing = dayMap.get(day) ?? { date: day, akpoker_usdt: 0, wepoker_usdt: 0, total_usdt: 0 };
-    existing.wepoker_usdt += valUsdt;
-    existing.total_usdt += valUsdt;
-    dayMap.set(day, existing);
+  for (const gk of ["akpoker", "kkpoker", "wepoker"] as const) {
+    const extras = getAgencyExtras(gk, period);
+    const isCny = gk === "wepoker";
+    for (const ex of extras) {
+      const day = ex.recorded_at.slice(0, 10);
+      const raw = ex.type === "win" ? ex.amount : -ex.amount;
+      const val = isCny ? convertCnyToUsdt(raw, rate) : raw;
+      const e = getDay(day);
+      if (gk === "akpoker") e.akpoker_usdt += val;
+      else if (gk === "kkpoker") e.kkpoker_usdt += val;
+      else e.wepoker_usdt += val;
+      e.total_usdt += val;
+      dayMap.set(day, e);
+    }
   }
 
   return [...dayMap.values()].sort((a, b) => a.date.localeCompare(b.date));

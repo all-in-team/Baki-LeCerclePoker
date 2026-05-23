@@ -2,8 +2,8 @@
 
 import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer, PieChart, Pie, Cell } from "recharts";
 
-interface TimePoint { date: string; akpoker_usdt: number; wepoker_usdt: number; total_usdt: number }
-interface BreakdownData { akpoker_usdt: number; wepoker_usdt: number }
+interface TimePoint { date: string; akpoker_usdt: number; kkpoker_usdt: number; wepoker_usdt: number; total_usdt: number }
+interface BreakdownData { akpoker_usdt: number; kkpoker_usdt: number; wepoker_usdt: number }
 
 export function PnLAreaChart({ data }: { data: TimePoint[] }) {
   if (data.length === 0) return <div style={{ padding: 40, color: "var(--text-dim)", textAlign: "center" }}>Pas encore de données</div>;
@@ -32,6 +32,7 @@ export function PnLAreaChart({ data }: { data: TimePoint[] }) {
 export function AppBreakdownDonut({ data }: { data: BreakdownData }) {
   const entries = [
     { name: "AKPOKER", value: Math.abs(data.akpoker_usdt), color: "#D4AF37" },
+    { name: "KKPOKER", value: Math.abs(data.kkpoker_usdt), color: "#3B82F6" },
     { name: "WEPOKER", value: Math.abs(data.wepoker_usdt), color: "#10B981" },
   ].filter(e => e.value > 0);
 
