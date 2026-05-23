@@ -19,6 +19,11 @@ export function getDb(): Database.Database {
 }
 
 function initSchema(db: Database.Database) {
+  console.log(`[BOOT] migrations starting, db=${DB_PATH}`);
+  try {
+    const applied = db.prepare(`SELECT name FROM _applied_fixes ORDER BY name`).all() as { name: string }[];
+    console.log(`[BOOT] already applied:`, applied.map(r => r.name));
+  } catch { console.log(`[BOOT] _applied_fixes table not yet created`); }
   db.exec(`
     CREATE TABLE IF NOT EXISTS games (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -976,29 +981,47 @@ function initSchema(db: Database.Database) {
   }
 
   // Option A: register TVGMzHejH9... as KKPOKER wallet mère (was only registered for TELE)
-  const fixMereKK = db.prepare(`INSERT OR IGNORE INTO _applied_fixes (name) VALUES (?)`).run("wallet_mere_tvgm_kkpoker_v1");
-  if (fixMereKK.changes > 0) {
-    const kkGame = db.prepare(`SELECT id FROM games WHERE name = 'KKPOKER'`).get() as { id: number } | undefined;
-    if (kkGame) {
-      const ins = db.prepare(
-        `INSERT OR IGNORE INTO wallet_meres (address, label, game_id, status) VALUES (?, ?, ?, 'active')`
-      ).run("TVGMzHejH9pbgREEQxCCDK7EzexDCvAKpB", "mere 2 (KK)", kkGame.id);
-      console.log(`[MIGRATION wallet_mere_tvgm_kkpoker_v1] inserted=${ins.changes} game_id=${kkGame.id}`);
+  try {
+    console.log(`[MIGRATION:wallet_mere_tvgm_kkpoker_v1] starting`);
+    const fixMereKK = db.prepare(`INSERT OR IGNORE INTO _applied_fixes (name) VALUES (?)`).run("wallet_mere_tvgm_kkpoker_v1");
+    if (fixMereKK.changes > 0) {
+      const kkGame = db.prepare(`SELECT id FROM games WHERE name = 'KKPOKER'`).get() as { id: number } | undefined;
+      if (kkGame) {
+        const ins = db.prepare(
+          `INSERT OR IGNORE INTO wallet_meres (address, label, game_id, status) VALUES (?, ?, ?, 'active')`
+        ).run("TVGMzHejH9pbgREEQxCCDK7EzexDCvAKpB", "mere 2 (KK)", kkGame.id);
+        console.log(`[MIGRATION:wallet_mere_tvgm_kkpoker_v1] OK, changes=${ins.changes}`);
+      } else {
+        console.log(`[MIGRATION:wallet_mere_tvgm_kkpoker_v1] OK, skipped (KKPOKER game not found)`);
+      }
+    } else {
+      console.log(`[MIGRATION:wallet_mere_tvgm_kkpoker_v1] OK, already applied`);
     }
+  } catch (err: any) {
+    console.error(`[MIGRATION:wallet_mere_tvgm_kkpoker_v1] FAILED:`, err.message);
+    console.error(err.stack);
   }
 
   // Backfill: reclassify deposits that were actually sent by a wallet mère
-  const fixReclass = db.prepare(`INSERT OR IGNORE INTO _applied_fixes (name) VALUES (?)`).run("reclassify_wallet_mere_deposits_v1");
-  if (fixReclass.changes > 0) {
-    const result = db.prepare(`
-      UPDATE wallet_transactions
-      SET type = 'withdrawal'
-      WHERE type = 'deposit'
-        AND source = 'sync'
-        AND LOWER(counterparty_address) IN (
-          SELECT LOWER(address) FROM wallet_meres WHERE status = 'active'
-        )
-    `).run();
-    console.log(`[MIGRATION reclassify_wallet_mere_deposits_v1] rows reclassified=${result.changes}`);
+  try {
+    console.log(`[MIGRATION:reclassify_wallet_mere_deposits_v1] starting`);
+    const fixReclass = db.prepare(`INSERT OR IGNORE INTO _applied_fixes (name) VALUES (?)`).run("reclassify_wallet_mere_deposits_v1");
+    if (fixReclass.changes > 0) {
+      const result = db.prepare(`
+        UPDATE wallet_transactions
+        SET type = 'withdrawal'
+        WHERE type = 'deposit'
+          AND source = 'sync'
+          AND LOWER(counterparty_address) IN (
+            SELECT LOWER(address) FROM wallet_meres WHERE status = 'active'
+          )
+      `).run();
+      console.log(`[MIGRATION:reclassify_wallet_mere_deposits_v1] OK, changes=${result.changes}`);
+    } else {
+      console.log(`[MIGRATION:reclassify_wallet_mere_deposits_v1] OK, already applied`);
+    }
+  } catch (err: any) {
+    console.error(`[MIGRATION:reclassify_wallet_mere_deposits_v1] FAILED:`, err.message);
+    console.error(err.stack);
   }
 }
