@@ -631,6 +631,13 @@ export function getActiveWalletMeresForGame(gameId: number): Set<string> {
   return new Set(rows.map(r => r.address.toLowerCase()));
 }
 
+export function getAllActiveWalletMereAddresses(): Set<string> {
+  const rows = getDb().prepare(
+    `SELECT address FROM wallet_meres WHERE status = 'active'`
+  ).all() as { address: string }[];
+  return new Set(rows.map(r => r.address.toLowerCase()));
+}
+
 export function listAllWalletMeres(): WalletMere[] {
   return getDb().prepare(`
     SELECT wm.id, wm.address, wm.label, wm.game_id, wm.status, wm.retired_at, wm.created_at, g.name AS game_name

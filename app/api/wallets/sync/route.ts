@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getDb } from "@/lib/db";
-import { insertWalletTransactionByHash, getActiveWalletMeresForGame, getAllGameWalletsByPlayer, getAllCashoutsByPlayer, getPlayersOnGame, isGameArchived } from "@/lib/queries";
+import { insertWalletTransactionByHash, getActiveWalletMeresForGame, getAllActiveWalletMereAddresses, getAllGameWalletsByPlayer, getAllCashoutsByPlayer, getPlayersOnGame, isGameArchived } from "@/lib/queries";
 
 const USDT_CONTRACT = "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t";
 
@@ -110,6 +110,7 @@ export async function POST(req: NextRequest) {
   if (mereAddrs.size === 0) {
     console.warn(`[SYNC] No active wallet_mère for game=${gameName}, withdrawals cannot be detected`);
   }
+  const allMereAddrs = getAllActiveWalletMereAddresses();
 
   // Build game-wallet map: player_id → [address, ...] (deduped by lowercase)
   const gameWalletEntries = getAllGameWalletsByPlayer(gameName);
@@ -132,10 +133,11 @@ export async function POST(req: NextRequest) {
   let totalDeposits = 0;
   let totalCashouts = 0;
 
-  // ── Pass 1 : dépôts via WALLET GAME (all wallets per player) ─────────────
+  // ── Pass 1 : scan WALLET GAME — deposits (or withdrawal if sender is any wallet mère)
   for (const player of players) {
     const wallets = gameWalletsByPlayer.get(player.id) ?? [];
     let deposits = 0;
+    let cashouts = 0;
 
     for (const walletAddr of wallets) {
       const gameAddr = walletAddr.toLowerCase();
@@ -143,10 +145,11 @@ export async function POST(req: NextRequest) {
         const txs = await fetchAllTronTxs(walletAddr);
         for (const tx of txs) {
           if ((tx.to ?? "").toLowerCase() !== gameAddr) continue;
+          const fromMere = allMereAddrs.has((tx.from ?? "").toLowerCase());
           const changed = insertWalletTransactionByHash({
             player_id: player.id,
             game_id: gameId,
-            type: "deposit",
+            type: fromMere ? "withdrawal" : "deposit",
             amount: toAmt(tx),
             currency: "USDT",
             tx_date: toDate(tx),
@@ -154,14 +157,18 @@ export async function POST(req: NextRequest) {
             tron_tx_hash: tx.transaction_id,
             counterparty_address: tx.from ?? null,
           });
-          if (changed) deposits++;
+          if (changed) {
+            if (fromMere) cashouts++;
+            else deposits++;
+          }
         }
       } catch (e: any) {
         results.push({ player: player.name, deposits: 0, cashouts: 0, error: `${walletAddr.slice(0, 8)}… ${e.message}` });
       }
     }
     totalDeposits += deposits;
-    results.push({ player: player.name, deposits, cashouts: 0 });
+    totalCashouts += cashouts;
+    results.push({ player: player.name, deposits, cashouts });
   }
 
   // ── Pass 2 : cashouts — scan each WALLET CASHOUT, keep only incoming from WALLET MERE

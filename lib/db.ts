@@ -974,4 +974,31 @@ function initSchema(db: Database.Database) {
       CREATE INDEX IF NOT EXISTS idx_pwc_game ON player_wallet_cashouts(game_id);
     `);
   }
+
+  // Option A: register TVGMzHejH9... as KKPOKER wallet mère (was only registered for TELE)
+  const fixMereKK = db.prepare(`INSERT OR IGNORE INTO _applied_fixes (name) VALUES (?)`).run("wallet_mere_tvgm_kkpoker_v1");
+  if (fixMereKK.changes > 0) {
+    const kkGame = db.prepare(`SELECT id FROM games WHERE name = 'KKPOKER'`).get() as { id: number } | undefined;
+    if (kkGame) {
+      const ins = db.prepare(
+        `INSERT OR IGNORE INTO wallet_meres (address, label, game_id, status) VALUES (?, ?, ?, 'active')`
+      ).run("TVGMzHejH9pbgREEQxCCDK7EzexDCvAKpB", "mere 2 (KK)", kkGame.id);
+      console.log(`[MIGRATION wallet_mere_tvgm_kkpoker_v1] inserted=${ins.changes} game_id=${kkGame.id}`);
+    }
+  }
+
+  // Backfill: reclassify deposits that were actually sent by a wallet mère
+  const fixReclass = db.prepare(`INSERT OR IGNORE INTO _applied_fixes (name) VALUES (?)`).run("reclassify_wallet_mere_deposits_v1");
+  if (fixReclass.changes > 0) {
+    const result = db.prepare(`
+      UPDATE wallet_transactions
+      SET type = 'withdrawal'
+      WHERE type = 'deposit'
+        AND source = 'sync'
+        AND LOWER(counterparty_address) IN (
+          SELECT LOWER(address) FROM wallet_meres WHERE status = 'active'
+        )
+    `).run();
+    console.log(`[MIGRATION reclassify_wallet_mere_deposits_v1] rows reclassified=${result.changes}`);
+  }
 }
