@@ -269,7 +269,7 @@ export default function SettingsClient({
             Le sync ne reconnaît un cashout que si l{"'"}expéditeur est une wallet mère active pour ce game ET le destinataire est un wallet cashout connu.
           </div>
 
-          {games.filter(g => ["TELE", "KKPOKER"].includes(g.name)).map(game => {
+          {games.filter(g => ["TELE", "KKPOKER", "A5POKER"].includes(g.name)).map(game => {
             const gameWMs = walletMeres.filter(w => w.game_id === game.id);
             const isArchived = game.status === "archived";
             return (
@@ -311,7 +311,7 @@ export default function SettingsClient({
                 <label style={{ fontSize: 11, fontWeight: 700, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.07em", display: "block", marginBottom: 6 }}>Game</label>
                 <select value={wmGameId ?? ""} onChange={e => setWmGameId(e.target.value ? Number(e.target.value) : null)} style={{ width: "100%", padding: "9px 12px", borderRadius: 7, fontSize: 12, background: "var(--bg-raised)", color: "var(--text)", border: "1px solid var(--border)", outline: "none" }}>
                   <option value="">Choisir...</option>
-                  {games.filter(g => g.status === "active" && ["TELE", "KKPOKER"].includes(g.name)).map(g => (
+                  {games.filter(g => g.status === "active" && ["TELE", "KKPOKER", "A5POKER"].includes(g.name)).map(g => (
                     <option key={g.id} value={g.id}>{g.name === "TELE" ? "AKPOKER" : g.name}</option>
                   ))}
                 </select>
