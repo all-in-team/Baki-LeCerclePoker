@@ -25,6 +25,13 @@ const SECTIONS: NavSection[] = [
     ],
   },
   {
+    label: "A5POKER",
+    items: [
+      { href: "/a5poker/pnl", label: "P&L", icon: Wallet },
+      { href: "/a5poker/settlements", label: "Settlements", icon: Scale },
+    ],
+  },
+  {
     label: "WEPOKER",
     items: [
       { href: "/wepoker/pnl", label: "P&L", icon: BarChart3 },

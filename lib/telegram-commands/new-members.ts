@@ -46,6 +46,13 @@ export async function handleNewMembers(members: any[], chatTitle: string, chatId
       continue;
     }
 
+    // A5POKER: insert deal + send A5POKER-specific pitch
+    if (gameName === "A5POKER") {
+      const topicRow = db.prepare(`SELECT onboarding_topic_id FROM players WHERE id = ?`).get(playerId) as { onboarding_topic_id: number | null } | undefined;
+      await sendA5pokerPitch(chatId, playerId, { name, telegram_id: member.id, telegram_handle: member.username ?? null }, topicRow?.onboarding_topic_id ?? undefined);
+      continue;
+    }
+
     // AKPOKER (default): existing pitch flow — unchanged
     if (isNew) {
       setSession(chatId, "pitch_sent", playerId, member.id);
@@ -101,5 +108,43 @@ export async function sendKkpokerPitch(
   await sendMsgKeyboard(chatId, `Qu'est-ce que tu en penses ?`, [
     [{ text: "🤝 Avec vous", callback_data: "kk_choice_with_us" }],
     [{ text: "❓ J'ai une question", callback_data: "kk_choice_question" }],
+  ], tid);
+}
+
+export async function sendA5pokerPitch(
+  chatId: number,
+  playerId: number,
+  player: { name: string; telegram_id: number | null; telegram_handle: string | null },
+  onboardingTopicId?: number,
+) {
+  const db = getDb();
+  const a5GameId = (db.prepare(`SELECT id FROM games WHERE name = 'A5POKER'`).get() as { id: number } | undefined)?.id;
+  if (a5GameId) {
+    db.prepare(`INSERT OR IGNORE INTO player_game_deals (player_id, game_id, action_pct, rakeback_pct) VALUES (?, ?, 20, 0)`).run(playerId, a5GameId);
+  }
+
+  setSession(chatId, "a5poker_pitch_sent" as Step, playerId, player.telegram_id);
+  if (player.telegram_id) trackOnboardingStep(player.telegram_id, "pitch_sent");
+
+  const tid = onboardingTopicId;
+  const tag = mentionOf(player);
+  await sendMsg(chatId,
+    `${tag}\n\n🃏 <b>${player.name}</b> — on te propose A5POKER !\n\n` +
+    `Nouveau cercle, fresh action. On t'explique comment ça marche et on te setup en quelques minutes.`,
+    tid
+  );
+  await sleep(2000);
+  await sendMsg(chatId,
+    `Voilà le deal qu'on propose A5POKER :\n\n` +
+    `🎯 <b>Action 80/20</b> — Tu joues 80% de ton action, on prend 20%. C'est symétrique : win/win, lose/lose.\n\n` +
+    `🛡️ <b>1000 USDT de liquidité garantie</b> — On couvre ton float jusqu'à 1K. Tu joues, on gère le risque.\n\n` +
+    `⚡ <b>Règle d'or</b> : max 1K sur le compte. Tout l'extra → cash out direct chez toi. ` +
+    `Pourquoi ? On couvre 1K en cas de bug site / ban / dispute. Au-dessus, c'est ton risque, donc sécurise.`,
+    tid
+  );
+  await sleep(3000);
+  await sendMsgKeyboard(chatId, `Qu'est-ce que tu en penses ?`, [
+    [{ text: "🤝 Avec vous", callback_data: "a5_choice_with_us" }],
+    [{ text: "❓ J'ai une question", callback_data: "a5_choice_question" }],
   ], tid);
 }

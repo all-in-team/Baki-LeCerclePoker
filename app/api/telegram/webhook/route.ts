@@ -11,6 +11,8 @@ import {
   handleCashoutSkippedCallback,
   handleKkpokerCallback,
   handleStartKkpoker,
+  handleA5pokerCallback,
+  handleStartA5poker,
   sendMsg, answerCbQuery, getSession, handleRawMessage, registerCommandHandlers,
   OWNER_IDS, AGENT_CHAT_ID,
 } from "@/lib/telegram-commands";
@@ -44,6 +46,8 @@ export async function POST(req: NextRequest) {
 
     if (cbData.startsWith("kk_")) {
       await handleKkpokerCallback(cb.id, cbData, cbChatId, cbThreadId, cb.from, cb.message?.message_id);
+    } else if (cbData.startsWith("a5_")) {
+      await handleA5pokerCallback(cb.id, cbData, cbChatId, cbThreadId, cb.from, cb.message?.message_id);
     } else if (cbData.startsWith("onboard:")) {
       await handleOnboardCallback(cb.id, cbData, cbChatId, cbThreadId);
     } else if (cbData.startsWith("onboard_")) {
@@ -129,6 +133,7 @@ export async function POST(req: NextRequest) {
       else if (cmd === "/aide" || cmd === "/help") await handleAide(chatId);
       else if (cmd === "/broadcast")   await handleBroadcast(msg, chatId);
       else if (cmd === "/startkkpoker" || cmd === "/start_kkpoker") await handleStartKkpoker(chatId);
+      else if (cmd === "/starta5poker" || cmd === "/start_a5poker") await handleStartA5poker(chatId);
     } catch (e: any) {
       console.error("[TG CMD]", e);
       await sendMsg(chatId, `❌ Erreur : ${e.message}`);

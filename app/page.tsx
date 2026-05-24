@@ -103,7 +103,7 @@ export default function DashboardPage() {
         {/* Breakdown by App */}
         <div style={{ background: "var(--bg-raised)", border: "1px solid var(--border)", borderRadius: 12, padding: 20 }}>
           <div style={{ fontSize: 14, fontWeight: 600, color: "var(--text)", marginBottom: 12 }}>Breakdown by App (all-time)</div>
-          <AppBreakdownDonut data={{ akpoker_usdt: pnlAllTime.akpoker_usdt, kkpoker_usdt: pnlAllTime.kkpoker_usdt, wepoker_usdt: pnlAllTime.wepoker_usdt }} />
+          <AppBreakdownDonut data={{ akpoker_usdt: pnlAllTime.akpoker_usdt, kkpoker_usdt: pnlAllTime.kkpoker_usdt, a5poker_usdt: pnlAllTime.a5poker_usdt, wepoker_usdt: pnlAllTime.wepoker_usdt }} />
           <div style={{ marginTop: 12, fontSize: 13 }}>
             <div style={{ display: "flex", justifyContent: "space-between", padding: "6px 0", borderBottom: "1px solid var(--border)" }}>
               <span style={{ color: "#D4AF37", fontWeight: 600 }}>AKPOKER</span>
@@ -112,6 +112,10 @@ export default function DashboardPage() {
             <div style={{ display: "flex", justifyContent: "space-between", padding: "6px 0", borderBottom: "1px solid var(--border)" }}>
               <span style={{ color: "#3B82F6", fontWeight: 600 }}>KKPOKER</span>
               <span style={{ color: "var(--text)" }}>{fmt(pnlAllTime.kkpoker_usdt)}</span>
+            </div>
+            <div style={{ display: "flex", justifyContent: "space-between", padding: "6px 0", borderBottom: "1px solid var(--border)" }}>
+              <span style={{ color: "#F59E0B", fontWeight: 600 }}>A5POKER</span>
+              <span style={{ color: "var(--text)" }}>{fmt(pnlAllTime.a5poker_usdt)}</span>
             </div>
             <div style={{ display: "flex", justifyContent: "space-between", padding: "6px 0" }}>
               <span style={{ color: "#10B981", fontWeight: 600 }}>WEPOKER</span>

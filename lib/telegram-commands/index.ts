@@ -22,6 +22,8 @@ export { handleBroadcast, handleBroadcastCallback } from "./broadcast";
 export { handleCashoutDoneCallback, handleCashoutSkippedCallback } from "./cashout-reminder";
 export { handleKkpokerCallback } from "@/lib/games/kkpoker/onboarding";
 export { handleStartKkpoker } from "./startkkpoker";
+export { handleA5pokerCallback } from "@/lib/games/a5poker/onboarding";
+export { handleStartA5poker } from "./starta5poker";
 
 // Re-export helpers needed by route.ts
 export {
