@@ -1024,4 +1024,37 @@ function initSchema(db: Database.Database) {
     console.error(`[MIGRATION:reclassify_wallet_mere_deposits_v1] FAILED:`, err.message);
     console.error(err.stack);
   }
+
+  // Add A5POKER to games table (requires recreating table to update CHECK constraint)
+  try {
+    const fixA5 = db.prepare(`INSERT OR IGNORE INTO _applied_fixes (name) VALUES (?)`).run("add_a5poker_game_v1");
+    if (fixA5.changes > 0) {
+      db.pragma("foreign_keys = OFF");
+      try {
+        db.exec(`
+          BEGIN;
+          CREATE TABLE games_backup_20260524_phase1 AS SELECT * FROM games;
+          CREATE TABLE games_new (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL UNIQUE CHECK(name IN ('TELE','Wepoker','Xpoker','ClubGG','KKPOKER','A5POKER')),
+            status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active','archived')),
+            default_action_pct REAL
+          );
+          INSERT INTO games_new (id, name, status, default_action_pct)
+            SELECT id, name, status, default_action_pct FROM games;
+          DROP TABLE games;
+          ALTER TABLE games_new RENAME TO games;
+          INSERT INTO games (name, status, default_action_pct)
+            VALUES ('A5POKER', 'active', 20);
+          COMMIT;
+        `);
+      } finally {
+        db.pragma("foreign_keys = ON");
+      }
+      console.log("[MIGRATION] add_a5poker_game_v1 applied");
+    }
+  } catch (err: any) {
+    console.error(`[MIGRATION:add_a5poker_game_v1] FAILED:`, err.message);
+    console.error(err.stack);
+  }
 }
