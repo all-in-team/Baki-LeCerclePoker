@@ -167,6 +167,8 @@ export default function CRMKanbanView({ players, gamesByPlayer, dealsByPlayer, a
   const [addGameModal, setAddGameModal] = useState<Game | null>(null);
   const [removing, setRemoving] = useState<number | null>(null);
   const [drawerPlayer, setDrawerPlayer] = useState<Player | null>(null);
+  const [archiveGame, setArchiveGame] = useState<Game | null>(null);
+  const [archiving, setArchiving] = useState(false);
 
   const { openEdit, modal: editModal } = useEditModal(players, dealsByPlayer, activeGames);
 
@@ -236,6 +238,9 @@ export default function CRMKanbanView({ players, gamesByPlayer, dealsByPlayer, a
                   <span style={{ background: badge.bg, color: badge.color, padding: "3px 10px", borderRadius: 5, fontSize: 12, fontWeight: 700 }}>{badge.short}</span>
                   <span style={{ fontSize: 14, fontWeight: 700, color: "var(--text)" }}>{game.name}</span>
                   <span style={{ fontSize: 11, color: "var(--text-dim)", marginLeft: "auto" }}>{gamePlayers.length}</span>
+                  <button onClick={() => setArchiveGame(game)} title="Archiver ce game" style={{ background: "none", border: "none", cursor: "pointer", color: "var(--text-dim)", padding: 2, opacity: 0.5 }}>
+                    <Archive size={13} />
+                  </button>
                 </div>
                 {totalCut !== 0 && (
                   <div style={{ fontSize: 11, color: totalCut > 0 ? "#D4AF37" : "#EF4444", fontWeight: 600 }}>
@@ -350,6 +355,52 @@ export default function CRMKanbanView({ players, gamesByPlayer, dealsByPlayer, a
           onEdit={() => { setDrawerPlayer(null); openEdit(drawerPlayer); }}
         />
       )}
+
+      <Modal open={!!archiveGame} onClose={() => setArchiveGame(null)} title={`Archiver ${archiveGame?.name ?? ""} ?`} width={440}>
+        {archiveGame && (() => {
+          const gId = archiveGame.id;
+          const activeDealsCount = Object.values(dealsByPlayer).flat().filter(d => d.game_id === gId && !d.end_date).length;
+          return (
+            <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+              <div style={{ fontSize: 13, color: "var(--text-muted)", lineHeight: 1.6 }}>
+                <p style={{ margin: "0 0 8px" }}><b>{activeDealsCount} deal(s) actif(s)</b> seront archivés (end_date = aujourd&apos;hui). L&apos;historique P&amp;L est préservé.</p>
+                <p style={{ margin: "0 0 8px" }}>Les wallet mères associées seront marquées &quot;retired&quot;.</p>
+                <p style={{ margin: 0 }}>Le game disparaîtra de la Kanban et des dropdowns.</p>
+              </div>
+              <div style={{ display: "flex", justifyContent: "flex-end", gap: 10 }}>
+                <button onClick={() => setArchiveGame(null)} style={{ padding: "8px 18px", borderRadius: 7, fontSize: 13, cursor: "pointer", background: "none", border: "1px solid var(--border)", color: "var(--text-muted)" }}>
+                  Annuler
+                </button>
+                <button
+                  disabled={archiving}
+                  onClick={async () => {
+                    setArchiving(true);
+                    try {
+                      const res = await fetch("/api/games", {
+                        method: "PATCH",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ id: gId, status: "archived" }),
+                      });
+                      const data = await res.json();
+                      if (!res.ok) throw new Error(data.error ?? "Failed");
+                      setArchiveGame(null);
+                      alert(`Archivé. ${data.deals_archived ?? 0} deal(s) fermés, ${data.meres_retired ?? 0} wallet mère(s) retirées.`);
+                      router.refresh();
+                    } catch (e: any) {
+                      alert("Erreur: " + (e.message ?? e));
+                    } finally {
+                      setArchiving(false);
+                    }
+                  }}
+                  style={{ padding: "8px 18px", borderRadius: 7, fontSize: 13, fontWeight: 600, cursor: archiving ? "wait" : "pointer", background: "rgba(239,68,68,0.12)", border: "1px solid rgba(239,68,68,0.3)", color: "#EF4444", opacity: archiving ? 0.5 : 1 }}
+                >
+                  {archiving ? "..." : "Confirmer archivage"}
+                </button>
+              </div>
+            </div>
+          );
+        })()}
+      </Modal>
     </div>
   );
 }
