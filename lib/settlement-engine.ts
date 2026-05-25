@@ -137,7 +137,8 @@ function _computeWeekInternal(weekStart: string, weekEnd: string, startISO: stri
     FROM players p
     JOIN player_game_deals pgd ON pgd.player_id = p.id
     JOIN games g ON g.id = pgd.game_id AND g.name = 'TELE'
-  `).all() as { player_id: number; player_name: string; action_pct: number }[];
+    WHERE pgd.end_date IS NULL OR pgd.end_date >= ?
+  `).all(weekStart) as { player_id: number; player_name: string; action_pct: number }[];
 
   let autoSettled = 0;
   let pendingManual = 0;

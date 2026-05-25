@@ -17,6 +17,7 @@ export async function POST(req: NextRequest) {
     action_pct: Number(body.action_pct),
     rakeback_pct: Number(body.rakeback_pct),
     start_date: body.start_date || null,
+    end_date: body.end_date !== undefined ? (body.end_date || null) : undefined,
   });
   return NextResponse.json({ id }, { status: 201 });
 }

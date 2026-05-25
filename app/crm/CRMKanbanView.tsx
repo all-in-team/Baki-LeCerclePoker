@@ -17,7 +17,7 @@ const GAME_BADGES: Record<string, { short: string; bg: string; color: string }> 
 const BADGE_FALLBACK = { short: "??", bg: "rgba(156,163,175,0.15)", color: "#9CA3AF" };
 
 interface Player { id: number; name: string; telegram_handle: string | null; status: string; tier: string | null; last_note_at: string | null; }
-interface Deal { deal_id: number; player_id: number; game_id: number; action_pct: number; rakeback_pct: number; start_date: string | null; }
+interface Deal { deal_id: number; player_id: number; game_id: number; action_pct: number; rakeback_pct: number; start_date: string | null; end_date: string | null; }
 interface Game { id: number; name: string; default_action_pct: number | null; }
 
 interface Props {
@@ -37,19 +37,19 @@ function useEditModal(players: Player[], dealsByPlayer: Record<number, Deal[]>, 
   const router = useRouter();
   const [editPlayer, setEditPlayer] = useState<Player | null>(null);
   const [form, setForm] = useState({ name: "", tier: "B", status: "active" });
-  const [dealForm, setDealForm] = useState<Record<number, { checked: boolean; action_pct: string; rakeback_pct: string }>>({});
+  const [dealForm, setDealForm] = useState<Record<number, { checked: boolean; action_pct: string; rakeback_pct: string; had_deal: boolean; deal_id: number | null; end_date: string | null }>>({});
   const [saving, setSaving] = useState(false);
 
   function openEdit(p: Player) {
     setEditPlayer(p);
     setForm({ name: p.name, tier: p.tier ?? "B", status: p.status });
     const deals = dealsByPlayer[p.id] ?? [];
-    const df: Record<number, { checked: boolean; action_pct: string; rakeback_pct: string }> = {};
+    const df: Record<number, { checked: boolean; action_pct: string; rakeback_pct: string; had_deal: boolean; deal_id: number | null; end_date: string | null }> = {};
     for (const g of activeGames) {
       const existing = deals.find(d => d.game_id === g.id);
       df[g.id] = existing
-        ? { checked: true, action_pct: String(existing.action_pct), rakeback_pct: String(existing.rakeback_pct) }
-        : { checked: false, action_pct: String(g.default_action_pct ?? 50), rakeback_pct: "0" };
+        ? { checked: !existing.end_date, action_pct: String(existing.action_pct), rakeback_pct: String(existing.rakeback_pct), had_deal: true, deal_id: existing.deal_id, end_date: existing.end_date }
+        : { checked: false, action_pct: String(g.default_action_pct ?? 50), rakeback_pct: "0", had_deal: false, deal_id: null, end_date: null };
     }
     setDealForm(df);
   }
@@ -63,18 +63,22 @@ function useEditModal(players: Player[], dealsByPlayer: Record<number, Deal[]>, 
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ name: form.name, tier: form.tier, status: form.status }),
       });
-      const existingDeals = dealsByPlayer[editPlayer.id] ?? [];
       for (const g of activeGames) {
         const df = dealForm[g.id];
-        const existing = existingDeals.find(d => d.game_id === g.id);
-        if (df?.checked) {
+        if (!df) continue;
+        if (df.checked) {
           await fetch("/api/games/deals", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ player_id: editPlayer.id, game_id: g.id, action_pct: Number(df.action_pct), rakeback_pct: Number(df.rakeback_pct) }),
+            body: JSON.stringify({ player_id: editPlayer.id, game_id: g.id, action_pct: Number(df.action_pct), rakeback_pct: Number(df.rakeback_pct), end_date: null }),
           });
-        } else if (existing) {
-          await fetch(`/api/games/deals/${existing.deal_id}`, { method: "DELETE" });
+        } else if (df.had_deal && !df.end_date) {
+          const today = new Date().toISOString().slice(0, 10);
+          await fetch("/api/games/deals", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ player_id: editPlayer.id, game_id: g.id, action_pct: Number(df.action_pct), rakeback_pct: Number(df.rakeback_pct), end_date: today }),
+          });
         }
       }
       setEditPlayer(null);
@@ -120,6 +124,7 @@ function useEditModal(players: Player[], dealsByPlayer: Record<number, Deal[]>, 
                     <input type="checkbox" checked={df.checked} onChange={e => setDealForm({ ...dealForm, [g.id]: { ...df, checked: e.target.checked } })} style={{ accentColor: badge.color }} />
                     <span style={{ background: badge.bg, color: badge.color, padding: "2px 8px", borderRadius: 4, fontSize: 11, fontWeight: 700 }}>{badge.short}</span>
                     <span style={{ color: "var(--text)", fontWeight: 600 }}>{g.name}</span>
+                    {df.end_date && !df.checked && <span style={{ fontSize: 10, color: "var(--text-dim)", marginLeft: "auto" }}>Archivé le {df.end_date}</span>}
                   </label>
                   {df.checked && (
                     <div style={{ display: "flex", gap: 12, marginTop: 8, paddingLeft: 28 }}>
@@ -172,8 +177,8 @@ export default function CRMKanbanView({ players, gamesByPlayer, dealsByPlayer, a
   });
 
   const playerMap = new Map(filtered.map(p => [p.id, p]));
-  const playersWithDeals = new Set(Object.keys(dealsByPlayer).map(Number).filter(id => (dealsByPlayer[id]?.length ?? 0) > 0));
-  const poolPlayers = filtered.filter(p => !playersWithDeals.has(p.id));
+  const playersWithActiveDeals = new Set(Object.keys(dealsByPlayer).map(Number).filter(id => (dealsByPlayer[id] ?? []).some(d => !d.end_date)));
+  const poolPlayers = filtered.filter(p => !playersWithActiveDeals.has(p.id));
 
   async function removeDeal(dealId: number) {
     if (!confirm("Retirer ce joueur de cette game ?")) return;
@@ -211,7 +216,7 @@ export default function CRMKanbanView({ players, gamesByPlayer, dealsByPlayer, a
       <div style={{ display: "flex", gap: 16, overflowX: "auto", paddingBottom: 20, minHeight: 300 }}>
         {activeGames.map(game => {
           const badge = GAME_BADGES[game.name] ?? BADGE_FALLBACK;
-          const gameDeals = Object.values(dealsByPlayer).flat().filter(d => d.game_id === game.id);
+          const gameDeals = Object.values(dealsByPlayer).flat().filter(d => d.game_id === game.id && !d.end_date);
           const gamePlayers = gameDeals
             .map(d => ({ player: playerMap.get(d.player_id), deal: d }))
             .filter((x): x is { player: Player; deal: Deal } => !!x.player)

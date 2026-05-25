@@ -23,13 +23,15 @@ export default function CRMPage() {
 
   const gameRows = db.prepare(`
     SELECT pgd.player_id, GROUP_CONCAT(g.name, ',') AS game_names
-    FROM player_game_deals pgd JOIN games g ON g.id = pgd.game_id GROUP BY pgd.player_id
+    FROM player_game_deals pgd JOIN games g ON g.id = pgd.game_id
+    WHERE pgd.end_date IS NULL
+    GROUP BY pgd.player_id
   `).all() as any[];
   const gamesByPlayer: Record<number, string[]> = {};
   gameRows.forEach((g: any) => { gamesByPlayer[g.player_id] = (g.game_names as string).split(","); });
 
   const dealRows = db.prepare(`
-    SELECT pgd.id AS deal_id, pgd.player_id, pgd.game_id, pgd.action_pct, pgd.rakeback_pct, pgd.start_date
+    SELECT pgd.id AS deal_id, pgd.player_id, pgd.game_id, pgd.action_pct, pgd.rakeback_pct, pgd.start_date, pgd.end_date
     FROM player_game_deals pgd
   `).all() as any[];
   const dealsByPlayer: Record<number, any[]> = {};

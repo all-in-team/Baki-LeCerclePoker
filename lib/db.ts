@@ -1057,4 +1057,16 @@ function initSchema(db: Database.Database) {
     console.error(`[MIGRATION:add_a5poker_game_v1] FAILED:`, err.message);
     console.error(err.stack);
   }
+
+  // Add end_date to player_game_deals for soft-delete (archiving deals preserves historical P&L)
+  try {
+    const fixEndDate = db.prepare(`INSERT OR IGNORE INTO _applied_fixes (name) VALUES (?)`).run("add_deal_end_date_v1");
+    if (fixEndDate.changes > 0) {
+      db.exec(`ALTER TABLE player_game_deals ADD COLUMN end_date TEXT`);
+      console.log("[MIGRATION] add_deal_end_date_v1 applied");
+    }
+  } catch (err: any) {
+    console.error(`[MIGRATION:add_deal_end_date_v1] FAILED:`, err.message);
+    console.error(err.stack);
+  }
 }

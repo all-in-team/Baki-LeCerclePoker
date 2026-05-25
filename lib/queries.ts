@@ -234,16 +234,17 @@ export function getAllTeleCashoutsByPlayer() {
   return getAllCashoutsByPlayer("TELE");
 }
 
-export function upsertPlayerGameDeal(data: { player_id: number; game_id: number; action_pct: number; rakeback_pct: number; start_date?: string | null }) {
+export function upsertPlayerGameDeal(data: { player_id: number; game_id: number; action_pct: number; rakeback_pct: number; start_date?: string | null; end_date?: string | null }) {
   const db = getDb();
   const r = db.prepare(`
-    INSERT INTO player_game_deals (player_id, game_id, action_pct, rakeback_pct, start_date)
-    VALUES (@player_id, @game_id, @action_pct, @rakeback_pct, @start_date)
+    INSERT INTO player_game_deals (player_id, game_id, action_pct, rakeback_pct, start_date, end_date)
+    VALUES (@player_id, @game_id, @action_pct, @rakeback_pct, @start_date, @end_date)
     ON CONFLICT(player_id, game_id) DO UPDATE SET
       action_pct = excluded.action_pct,
       rakeback_pct = excluded.rakeback_pct,
-      start_date = excluded.start_date
-  `).run({ ...data, start_date: data.start_date ?? null });
+      start_date = excluded.start_date,
+      end_date = excluded.end_date
+  `).run({ ...data, start_date: data.start_date ?? null, end_date: data.end_date ?? null });
   return r.lastInsertRowid;
 }
 
@@ -365,10 +366,11 @@ export function getWalletSummaryByPlayer(filters?: { game_name?: string; since_d
   if (filters?.game_name) { conditions.push(`g.name = @game_name`); params.game_name = filters.game_name; }
   const srcFilter = `AND (wt.source IS NULL OR wt.source != 'unknown')`;
   const startDateCond = `AND (pgd.start_date IS NULL OR wt.tx_datetime >= pgd.start_date)`;
+  const dealEndCond = `AND (pgd.end_date IS NULL OR wt.tx_datetime <= pgd.end_date)`;
   const endDateCond = filters?.end_date ? `AND wt.tx_datetime <= @end_date` : "";
   const dateJoin = filters?.since_date
-    ? `LEFT JOIN wallet_transactions wt ON wt.player_id = p.id AND wt.game_id = pgd.game_id ${srcFilter} AND wt.tx_datetime >= @since_date ${endDateCond} ${startDateCond}`
-    : `LEFT JOIN wallet_transactions wt ON wt.player_id = p.id AND wt.game_id = pgd.game_id ${srcFilter} ${endDateCond} ${startDateCond}`;
+    ? `LEFT JOIN wallet_transactions wt ON wt.player_id = p.id AND wt.game_id = pgd.game_id ${srcFilter} AND wt.tx_datetime >= @since_date ${endDateCond} ${startDateCond} ${dealEndCond}`
+    : `LEFT JOIN wallet_transactions wt ON wt.player_id = p.id AND wt.game_id = pgd.game_id ${srcFilter} ${endDateCond} ${startDateCond} ${dealEndCond}`;
   if (filters?.since_date) params.since_date = filters.since_date;
   if (filters?.end_date) params.end_date = filters.end_date;
   const q = `
@@ -398,10 +400,11 @@ export function getWalletKPIs(filters?: { game_name?: string; since_date?: strin
   if (filters?.game_name) { conditions.push(`g.name = @game_name`); params.game_name = filters.game_name; }
   const srcF = `AND (wt.source IS NULL OR wt.source != 'unknown')`;
   const sdCond = `AND (pgd.start_date IS NULL OR wt.tx_datetime >= pgd.start_date)`;
+  const deCond = `AND (pgd.end_date IS NULL OR wt.tx_datetime <= pgd.end_date)`;
   const edCond = filters?.end_date ? `AND wt.tx_datetime <= @end_date` : "";
   const dateJoin = filters?.since_date
-    ? `LEFT JOIN wallet_transactions wt ON wt.player_id = p.id AND wt.game_id = pgd.game_id ${srcF} AND wt.tx_datetime >= @since_date ${edCond} ${sdCond}`
-    : `LEFT JOIN wallet_transactions wt ON wt.player_id = p.id AND wt.game_id = pgd.game_id ${srcF} ${edCond} ${sdCond}`;
+    ? `LEFT JOIN wallet_transactions wt ON wt.player_id = p.id AND wt.game_id = pgd.game_id ${srcF} AND wt.tx_datetime >= @since_date ${edCond} ${sdCond} ${deCond}`
+    : `LEFT JOIN wallet_transactions wt ON wt.player_id = p.id AND wt.game_id = pgd.game_id ${srcF} ${edCond} ${sdCond} ${deCond}`;
   if (filters?.since_date) params.since_date = filters.since_date;
   if (filters?.end_date) params.end_date = filters.end_date;
   const inner = `
@@ -443,6 +446,7 @@ export function getPlayerWalletStats(playerId: number) {
     WHERE wt.player_id = ?
       AND (wt.source IS NULL OR wt.source != 'unknown')
       AND (pgd.start_date IS NULL OR wt.tx_datetime >= pgd.start_date)
+      AND (pgd.end_date IS NULL OR wt.tx_datetime <= pgd.end_date)
   `).get(playerId) as { deposited: number; withdrawn: number; net: number; my_pnl: number } | undefined;
 }
 
@@ -848,6 +852,7 @@ export function getWalletPnL(playerId?: number): PnLWalletRow[] {
     WHERE wt.game_id IS NOT NULL
       AND (wt.source IS NULL OR wt.source != 'unknown')
       AND (pgd.start_date IS NULL OR wt.tx_datetime >= pgd.start_date)
+      AND (pgd.end_date IS NULL OR wt.tx_datetime <= pgd.end_date)
   `;
   const params: Record<string, unknown> = {};
   if (playerId) { q += ` AND wt.player_id = @playerId`; params.playerId = playerId; }
@@ -1438,6 +1443,7 @@ export function getPnLOverTime(period: Period): PnLTimePoint[] {
     JOIN games g ON g.id = wt.game_id AND LOWER(g.name) = LOWER(?)
     WHERE (wt.source IS NULL OR wt.source != 'unknown')
       AND (pgd.start_date IS NULL OR wt.tx_datetime >= pgd.start_date)
+      AND (pgd.end_date IS NULL OR wt.tx_datetime <= pgd.end_date)
       ${since ? "AND wt.tx_datetime >= ?" : ""}
       ${until ? "AND wt.tx_datetime <= ?" : ""}
     GROUP BY day ORDER BY day
