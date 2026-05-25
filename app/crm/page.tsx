@@ -1,5 +1,5 @@
 export const dynamic = "force-dynamic";
-import { getTopContributors } from "@/lib/queries";
+import { getTopContributors, getWalletSummaryByPlayer } from "@/lib/queries";
 import { getDb } from "@/lib/db";
 import PageHeader from "@/components/PageHeader";
 import CRMViewToggle from "./CRMViewToggle";
@@ -43,6 +43,12 @@ export default function CRMPage() {
   const agencyByPlayer: Record<number, number> = {};
   contributors.forEach(c => { agencyByPlayer[c.player_id] = c.agency_usdt; });
 
+  const pnl30dRows = getWalletSummaryByPlayer({ since_date: d30 + "T00:00:00Z", end_date: today + "T23:59:59Z" }) as any[];
+  const pnlByPlayerGame: Record<string, { player_net: number; agency_pnl: number }> = {};
+  pnl30dRows.forEach((r: any) => {
+    pnlByPlayerGame[`${r.player_id}_${r.game_id}`] = { player_net: r.net ?? 0, agency_pnl: r.my_pnl ?? 0 };
+  });
+
   const sorted = [...allPlayers].sort((a, b) => (agencyByPlayer[b.id] ?? 0) - (agencyByPlayer[a.id] ?? 0));
 
   return (
@@ -53,6 +59,7 @@ export default function CRMPage() {
         gamesByPlayer={gamesByPlayer}
         dealsByPlayer={dealsByPlayer}
         agencyByPlayer={agencyByPlayer}
+        pnlByPlayerGame={pnlByPlayerGame}
         activeGames={activeGames}
       />
     </>

@@ -2,9 +2,10 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { X, Plus, Search } from "lucide-react";
+import { X, Plus, Search, Pencil, Archive, RotateCcw } from "lucide-react";
 import Modal from "@/components/Modal";
 import AddPlayerToGameModal from "./AddPlayerToGameModal";
+import PlayerDetailDrawer from "./PlayerDetailDrawer";
 
 const GAME_BADGES: Record<string, { short: string; bg: string; color: string }> = {
   TELE:    { short: "AK", bg: "rgba(212,175,55,0.15)", color: "#D4AF37" },
@@ -25,6 +26,7 @@ interface Props {
   gamesByPlayer: Record<number, string[]>;
   dealsByPlayer: Record<number, Deal[]>;
   agencyByPlayer: Record<number, number>;
+  pnlByPlayerGame: Record<string, { player_net: number; agency_pnl: number }>;
   activeGames: Game[];
 }
 
@@ -158,12 +160,13 @@ function useEditModal(players: Player[], dealsByPlayer: Record<number, Deal[]>, 
   return { openEdit, modal };
 }
 
-export default function CRMKanbanView({ players, gamesByPlayer, dealsByPlayer, agencyByPlayer, activeGames }: Props) {
+export default function CRMKanbanView({ players, gamesByPlayer, dealsByPlayer, agencyByPlayer, pnlByPlayerGame, activeGames }: Props) {
   const router = useRouter();
   const [search, setSearch] = useState("");
   const [showInactive, setShowInactive] = useState(false);
   const [addGameModal, setAddGameModal] = useState<Game | null>(null);
   const [removing, setRemoving] = useState<number | null>(null);
+  const [drawerPlayer, setDrawerPlayer] = useState<Player | null>(null);
 
   const { openEdit, modal: editModal } = useEditModal(players, dealsByPlayer, activeGames);
 
@@ -222,7 +225,7 @@ export default function CRMKanbanView({ players, gamesByPlayer, dealsByPlayer, a
             .filter((x): x is { player: Player; deal: Deal } => !!x.player)
             .sort((a, b) => (agencyByPlayer[b.player.id] ?? 0) - (agencyByPlayer[a.player.id] ?? 0));
 
-          const totalCut = gamePlayers.reduce((s, { player }) => s + (agencyByPlayer[player.id] ?? 0), 0);
+          const totalCut = gamePlayers.reduce((s, { player }) => s + (pnlByPlayerGame[`${player.id}_${game.id}`]?.agency_pnl ?? 0), 0);
           const existingIds = new Set(gamePlayers.map(x => x.player.id));
 
           return (
@@ -244,11 +247,14 @@ export default function CRMKanbanView({ players, gamesByPlayer, dealsByPlayer, a
               {/* Cards */}
               <div style={{ flex: 1, padding: 8, display: "flex", flexDirection: "column", gap: 6, overflowY: "auto", maxHeight: 500 }}>
                 {gamePlayers.map(({ player, deal }) => {
-                  const agency = agencyByPlayer[player.id] ?? 0;
+                  const pnlKey = `${player.id}_${game.id}`;
+                  const pnl = pnlByPlayerGame[pnlKey];
+                  const playerNet = pnl?.player_net ?? 0;
+                  const agencyPnl = pnl?.agency_pnl ?? 0;
                   const otherGames = (gamesByPlayer[player.id] ?? []).filter(gn => gn !== game.name);
                   const isInactive = player.status !== "active" && player.status !== "signed";
                   return (
-                    <div key={player.id} onClick={() => openEdit(player)} style={{
+                    <div key={player.id} onClick={() => setDrawerPlayer(player)} style={{
                       padding: "10px 12px", borderRadius: 8, border: "1px solid var(--border)", background: "var(--bg-raised)",
                       cursor: "pointer", position: "relative", opacity: isInactive ? 0.5 : 1,
                       transition: "border-color 0.15s",
@@ -259,10 +265,13 @@ export default function CRMKanbanView({ players, gamesByPlayer, dealsByPlayer, a
                         <X size={12} />
                       </button>
                       <div style={{ fontWeight: 600, fontSize: 13, color: "var(--text)", marginBottom: 2, paddingRight: 20 }}>{player.name}</div>
-                      {player.telegram_handle && <div style={{ fontSize: 10, color: "var(--text-dim)", marginBottom: 6 }}>@{player.telegram_handle}</div>}
+                      {player.telegram_handle && <div style={{ fontSize: 10, color: "var(--text-dim)", marginBottom: 4 }}>@{player.telegram_handle}</div>}
+                      <div style={{ fontSize: 11, color: playerNet > 0 ? "#22C55E" : playerNet < 0 ? "#EF4444" : "var(--text-dim)", marginBottom: 2 }}>
+                        Player: {playerNet !== 0 ? `${fmtAmt(playerNet)} USDT` : "—"}
+                      </div>
                       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-                        <span style={{ fontSize: 12, fontWeight: 700, color: agency > 0 ? "#D4AF37" : agency < 0 ? "#EF4444" : "var(--text-dim)" }}>
-                          {agency !== 0 ? `${fmtAmt(agency)} USDT` : "—"}
+                        <span style={{ fontSize: 12, fontWeight: 700, color: agencyPnl > 0 ? "#D4AF37" : agencyPnl < 0 ? "#EF4444" : "var(--text-dim)" }}>
+                          Agency: {agencyPnl !== 0 ? `${fmtAmt(agencyPnl)} USDT` : "—"}
                         </span>
                         <span style={{ fontSize: 10, color: "var(--text-dim)", fontWeight: 600 }}>
                           {deal.action_pct}%{deal.rakeback_pct > 0 ? ` · rb ${deal.rakeback_pct}%` : ""}
@@ -304,7 +313,7 @@ export default function CRMKanbanView({ players, gamesByPlayer, dealsByPlayer, a
           </div>
           <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
             {poolPlayers.map(p => (
-              <div key={p.id} onClick={() => openEdit(p)} style={{
+              <div key={p.id} onClick={() => setDrawerPlayer(p)} style={{
                 padding: "6px 12px", borderRadius: 7, background: "var(--bg-raised)", border: "1px solid var(--border)",
                 fontSize: 12, color: "var(--text-muted)", cursor: "pointer",
                 opacity: p.status !== "active" && p.status !== "signed" ? 0.5 : 1,
@@ -324,9 +333,21 @@ export default function CRMKanbanView({ players, gamesByPlayer, dealsByPlayer, a
           onClose={() => setAddGameModal(null)}
           game={addGameModal}
           existingPlayerIds={new Set(
-            Object.values(dealsByPlayer).flat().filter(d => d.game_id === addGameModal.id).map(d => d.player_id)
+            Object.values(dealsByPlayer).flat().filter(d => d.game_id === addGameModal.id && !d.end_date).map(d => d.player_id)
           )}
           allPlayers={players}
+        />
+      )}
+
+      {drawerPlayer && (
+        <PlayerDetailDrawer
+          player={drawerPlayer}
+          deals={dealsByPlayer[drawerPlayer.id] ?? []}
+          pnlByPlayerGame={pnlByPlayerGame}
+          activeGames={activeGames}
+          agencyTotal={agencyByPlayer[drawerPlayer.id] ?? 0}
+          onClose={() => setDrawerPlayer(null)}
+          onEdit={() => { setDrawerPlayer(null); openEdit(drawerPlayer); }}
         />
       )}
     </div>

@@ -13,6 +13,7 @@ interface Props {
   gamesByPlayer: Record<number, string[]>;
   dealsByPlayer: Record<number, Deal[]>;
   agencyByPlayer: Record<number, number>;
+  pnlByPlayerGame: Record<string, { player_net: number; agency_pnl: number }>;
   activeGames: Game[];
 }
 
