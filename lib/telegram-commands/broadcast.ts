@@ -44,15 +44,23 @@ type Recipient = {
   topic_id: number;
 };
 
-function getRecipients(channel: Channel): Recipient[] {
+function getRecipients(channel: Channel, gameId?: number): Recipient[] {
   const col = TOPIC_COLUMN[channel];
+  const gameFilter = gameId
+    ? `AND id IN (SELECT player_id FROM player_game_deals WHERE game_id = ${gameId})`
+    : "";
   return getDb().prepare(`
     SELECT id, name, telegram_handle, telegram_id, telegram_group_id, ${col} AS topic_id
     FROM players
     WHERE status = 'active'
       AND telegram_group_id IS NOT NULL
       AND ${col} IS NOT NULL
+      ${gameFilter}
   `).all() as Recipient[];
+}
+
+function getActiveGames(): { id: number; name: string }[] {
+  return getDb().prepare(`SELECT id, name FROM games WHERE status = 'active' ORDER BY id`).all() as any[];
 }
 
 export async function handleBroadcast(msg: any, chatId: number) {
@@ -99,7 +107,7 @@ export async function handleBroadcastCallback(callbackId: string, data: string, 
     return;
   }
 
-  // Step 1 callback: channel selection → show preview
+  // Step 1: channel selected → show game filter buttons
   const chMatch = data.match(/^bc_ch:(alertes|liveplay):(\d+)$/);
   if (chMatch) {
     const channel = chMatch[1] as Channel;
@@ -110,35 +118,71 @@ export async function handleBroadcastCallback(callbackId: string, data: string, 
       return;
     }
 
-    const recipients = getRecipients(channel);
+    const games = getActiveGames();
+    const buttons: any[][] = [
+      [{ text: "📢 TOUS", callback_data: `bc_game:all:${channel}:${originalMsgId}` }],
+    ];
+    for (const g of games) {
+      buttons.push([{ text: `🃏 ${g.name}`, callback_data: `bc_game:${g.id}:${channel}:${originalMsgId}` }]);
+    }
+    buttons.push([{ text: "❌ Annuler", callback_data: "bc_no" }]);
+
+    await editMessageKeyboard(chatId, msgId,
+      `📢 <b>Quels joueurs cibler ?</b>\n\nChannel : <b>${CHANNEL_LABELS[channel]}</b>`,
+      buttons
+    );
+    return;
+  }
+
+  // Step 2: game filter selected → show preview
+  const gameMatch = data.match(/^bc_game:(all|\d+):(alertes|liveplay):(\d+)$/);
+  if (gameMatch) {
+    const gameFilter = gameMatch[1];
+    const channel = gameMatch[2] as Channel;
+    const originalMsgId = parseInt(gameMatch[3]);
+    const original = pendingBroadcasts.get(originalMsgId);
+    if (!original) {
+      await editMessage(chatId, msgId, "❌ Message source expiré. Relance /broadcast.");
+      return;
+    }
+
+    const gameId = gameFilter === "all" ? undefined : parseInt(gameFilter);
+    const recipients = getRecipients(channel, gameId);
+
     if (recipients.length === 0) {
+      const label = gameFilter === "all" ? "TOUS" : getActiveGames().find(g => g.id === gameId)?.name ?? gameFilter;
       await editMessage(chatId, msgId,
-        `❌ Aucun joueur avec un topic ${CHANNEL_LABELS[channel]} configuré.\n` +
-        `Lance le backfill : <code>POST /api/admin/backfill-${channel === "alertes" ? "alertes" : "liveplay"}-topic</code>`
+        `❌ Aucun joueur trouvé pour <b>${label}</b> avec un topic ${CHANNEL_LABELS[channel]} configuré.`
       );
       return;
     }
 
+    const gameLabel = gameFilter === "all" ? "TOUS" : getActiveGames().find(g => g.id === gameId)?.name ?? gameFilter;
     const msgType = detectMessageType(original);
+    const names = recipients.slice(0, 5).map(r => r.name).join(", ") + (recipients.length > 5 ? ` +${recipients.length - 5}` : "");
+
     await editMessageKeyboard(chatId, msgId,
       `📢 <b>Broadcast preview</b>\n\n` +
       `Type : <b>${msgType}</b>\n` +
       `Channel : <b>${CHANNEL_LABELS[channel]}</b>\n` +
-      `Destinataires : <b>${recipients.length} joueurs actifs</b>`,
+      `Cible : <b>${gameLabel}</b>\n` +
+      `Destinataires : <b>${recipients.length} joueurs</b>\n` +
+      `<i>${names}</i>`,
       [[
-        { text: "✅ Confirmer", callback_data: `bc_go:${channel}:${originalMsgId}` },
+        { text: "✅ Confirmer", callback_data: `bc_go:${gameFilter}:${channel}:${originalMsgId}` },
         { text: "❌ Annuler", callback_data: "bc_no" },
       ]]
     );
     return;
   }
 
-  // Step 2 callback: confirm → fan out
-  const goMatch = data.match(/^bc_go:(alertes|liveplay):(\d+)$/);
+  // Step 3: confirm → fan out
+  const goMatch = data.match(/^bc_go:(all|\d+):(alertes|liveplay):(\d+)$/);
   if (!goMatch) return;
 
-  const channel = goMatch[1] as Channel;
-  const originalMsgId = parseInt(goMatch[2]);
+  const gameFilter = goMatch[1];
+  const channel = goMatch[2] as Channel;
+  const originalMsgId = parseInt(goMatch[3]);
 
   const original = pendingBroadcasts.get(originalMsgId);
   if (!original) {
@@ -154,9 +198,11 @@ export async function handleBroadcastCallback(callbackId: string, data: string, 
   isBroadcasting = true;
 
   try {
-    await editMessage(chatId, msgId, `📤 Diffusion en cours vers ${CHANNEL_LABELS[channel]}...`);
+    const gameId = gameFilter === "all" ? undefined : parseInt(gameFilter);
+    const gameLabel = gameFilter === "all" ? "TOUS" : getActiveGames().find(g => g.id === gameId)?.name ?? gameFilter;
+    await editMessage(chatId, msgId, `📤 Diffusion en cours vers ${CHANNEL_LABELS[channel]} (${gameLabel})...`);
 
-    const recipients = getRecipients(channel);
+    const recipients = getRecipients(channel, gameId);
     const msgType = detectMessageType(original);
     const token = process.env.TELEGRAM_BOT_TOKEN;
 
@@ -205,7 +251,7 @@ export async function handleBroadcastCallback(callbackId: string, data: string, 
       await sleep(200);
     }
 
-    let report = `✅ Diffusé à ${sent}/${recipients.length} joueurs (${CHANNEL_LABELS[channel]})`;
+    let report = `✅ Diffusé à ${sent}/${recipients.length} joueurs (${CHANNEL_LABELS[channel]} · ${gameLabel})`;
     if (errors.length > 0) {
       report += `\n\n❌ Échec (${errors.length}) :\n` + errors.map(e => `• ${e}`).join("\n");
     }
