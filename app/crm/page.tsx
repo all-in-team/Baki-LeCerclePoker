@@ -2,7 +2,7 @@ export const dynamic = "force-dynamic";
 import { getTopContributors } from "@/lib/queries";
 import { getDb } from "@/lib/db";
 import PageHeader from "@/components/PageHeader";
-import CRMListClient from "./CRMListClient";
+import CRMViewToggle from "./CRMViewToggle";
 
 function daysAgo(n: number): string {
   const d = new Date(); d.setDate(d.getDate() - n);
@@ -46,7 +46,7 @@ export default function CRMPage() {
   return (
     <>
       <PageHeader title="CRM Joueurs" subtitle="Vue d'ensemble des joueurs et leur contribution" />
-      <CRMListClient
+      <CRMViewToggle
         players={sorted}
         gamesByPlayer={gamesByPlayer}
         dealsByPlayer={dealsByPlayer}
