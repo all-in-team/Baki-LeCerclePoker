@@ -2,7 +2,7 @@
 
 import { Fragment, useState } from "react";
 import { useRouter } from "next/navigation";
-import { ArrowDownLeft, ArrowUpRight, Plus, Trash2, Wallet, TrendingUp, RefreshCw, Settings2, ExternalLink, Save, X, Pencil, ChevronDown, ChevronRight, Calendar } from "lucide-react";
+import { ArrowDownLeft, ArrowUpRight, Plus, Trash2, Wallet, TrendingUp, RefreshCw, Settings2, ExternalLink, Save, X, Pencil, ChevronDown, ChevronRight, Calendar, Clock } from "lucide-react";
 import StatCard from "@/components/StatCard";
 import Btn from "@/components/Btn";
 import Modal from "@/components/Modal";
@@ -96,6 +96,11 @@ export default function TELEClient({
   const [expandedTx, setExpandedTx] = useState<number | null>(null);
   const [manualTx, setManualTx] = useState({ type: "deposit" as "deposit" | "withdrawal", amount: "" });
   const [weekOpen, setWeekOpen] = useState(false);
+  const [customOpen, setCustomOpen] = useState(false);
+  const [customStart, setCustomStart] = useState("");
+  const [customStartTime, setCustomStartTime] = useState("00:00");
+  const [customEnd, setCustomEnd] = useState("");
+  const [customEndTime, setCustomEndTime] = useState("23:59");
 
   function navigate(filter: string) {
     setWeekOpen(false);
@@ -104,6 +109,13 @@ export default function TELEClient({
 
   const isWeekPick = /^\d{4}-W\d{2}$/.test(activeFilter);
   const activeWeekLabel = isWeekPick ? weeks.find(w => w.isoWeek === activeFilter)?.label : null;
+  const isCustom = activeFilter.startsWith("custom:");
+
+  function applyCustomRange() {
+    if (!customStart || !customEnd) return;
+    navigate(`custom:${customStart}T${customStartTime}~${customEnd}T${customEndTime}`);
+    setCustomOpen(false);
+  }
 
   async function openWalletConfig(focusPlayerId?: number) {
     const [playersRes, settingsRes] = await Promise.all([
@@ -350,7 +362,32 @@ export default function TELEClient({
               {f.label}
             </button>
           ))}
+          <div style={{ width: 1, height: 20, background: "var(--border)", margin: "0 4px" }} />
+          <button onClick={() => setCustomOpen(!customOpen)} style={{
+            padding: "6px 14px", borderRadius: 7, fontSize: 12, fontWeight: 600, cursor: "pointer",
+            border: isCustom ? "1px solid var(--green)" : "1px solid var(--border)",
+            background: isCustom ? "rgba(34,197,94,0.12)" : "var(--bg-surface)",
+            color: isCustom ? "var(--green)" : "var(--text-muted)",
+            display: "flex", alignItems: "center", gap: 6,
+          }}>
+            <Clock size={12} />
+            {isCustom ? "Custom" : "Custom…"}
+          </button>
         </div>
+        {customOpen && (
+          <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 10, flexWrap: "wrap" }}>
+            <label style={{ fontSize: 11, color: "var(--text-muted)", fontWeight: 600 }}>Du</label>
+            <input type="date" value={customStart} onChange={e => setCustomStart(e.target.value)} style={{ padding: "5px 8px", borderRadius: 6, fontSize: 12, background: "var(--bg-surface)", color: "var(--text)", border: "1px solid var(--border)", outline: "none" }} />
+            <input type="time" value={customStartTime} onChange={e => setCustomStartTime(e.target.value)} style={{ padding: "5px 8px", borderRadius: 6, fontSize: 12, background: "var(--bg-surface)", color: "var(--text)", border: "1px solid var(--border)", outline: "none", width: 90 }} />
+            <label style={{ fontSize: 11, color: "var(--text-muted)", fontWeight: 600 }}>Au</label>
+            <input type="date" value={customEnd} onChange={e => setCustomEnd(e.target.value)} style={{ padding: "5px 8px", borderRadius: 6, fontSize: 12, background: "var(--bg-surface)", color: "var(--text)", border: "1px solid var(--border)", outline: "none" }} />
+            <input type="time" value={customEndTime} onChange={e => setCustomEndTime(e.target.value)} style={{ padding: "5px 8px", borderRadius: 6, fontSize: 12, background: "var(--bg-surface)", color: "var(--text)", border: "1px solid var(--border)", outline: "none", width: 90 }} />
+            <button onClick={applyCustomRange} disabled={!customStart || !customEnd} style={{ padding: "5px 14px", borderRadius: 7, fontSize: 12, fontWeight: 600, cursor: customStart && customEnd ? "pointer" : "not-allowed", border: "1px solid var(--green)", background: "rgba(34,197,94,0.12)", color: "var(--green)", opacity: customStart && customEnd ? 1 : 0.4 }}>
+              Appliquer
+            </button>
+            <span style={{ fontSize: 10, color: "var(--text-dim)" }}>Heure France (Europe/Paris)</span>
+          </div>
+        )}
         <div style={{ marginTop: 10, fontSize: 12, color: "var(--text-dim)", display: "flex", alignItems: "center", gap: 6 }}>
           <Calendar size={12} />
           {rangeLabel}

@@ -44,7 +44,7 @@ function getParisOffsetMinutes(d: Date): number {
   return sign * (parseInt(match[2]) * 60 + parseInt(match[3]));
 }
 
-function parisLocalToUTC(year: number, month: number, day: number, h: number, m: number, s: number, ms: number): Date {
+export function parisLocalToUTC(year: number, month: number, day: number, h: number, m: number, s: number, ms: number): Date {
   const guess = new Date(Date.UTC(year, month - 1, day, h, m, s, ms));
   const offset = getParisOffsetMinutes(guess);
   const utc = new Date(guess.getTime() - offset * 60_000);

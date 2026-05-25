@@ -1,7 +1,7 @@
 export const dynamic = "force-dynamic";
 import { getDb } from "@/lib/db";
 import { getLockAwareSummaryByPlayer, getLockAwareKPIs, getWalletTransactions, getPlayers, getGames, getPlayerCashouts, getPlayerGameWallets, getWalletMeresForGame } from "@/lib/queries";
-import { getWeekBounds, getLast12Weeks, toUTCISO, toParisDate, formatRangeLabel, isoWeekToOffset } from "@/lib/date-utils";
+import { getWeekBounds, getLast12Weeks, toUTCISO, toParisDate, formatRangeLabel, isoWeekToOffset, parisLocalToUTC } from "@/lib/date-utils";
 import PageHeader from "@/components/PageHeader";
 import TELEClient from "@/app/akpoker/pnl/TELEClient";
 import AgencyExtras from "@/components/AgencyExtras";
@@ -23,6 +23,21 @@ function computeFilter(filter: string | undefined) {
     if (offset !== null && offset < 0) {
       const { start, end } = getWeekBounds(offset);
       return { key: f, startDate: toUTCISO(start), endDate: toUTCISO(end), rangeLabel: formatRangeLabel(start, end) };
+    }
+  }
+  if (f.startsWith("custom:")) {
+    const parts = f.slice(7).split("~");
+    if (parts.length === 2) {
+      const [sd, ed] = parts;
+      const sm = sd.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})$/);
+      const em = ed.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})$/);
+      if (sm && em) {
+        const start = parisLocalToUTC(+sm[1], +sm[2], +sm[3], +sm[4], +sm[5], 0, 0);
+        const end = parisLocalToUTC(+em[1], +em[2], +em[3], +em[4], +em[5], 59, 0);
+        if (end >= start) {
+          return { key: f, startDate: toUTCISO(start), endDate: toUTCISO(end), rangeLabel: `${sd.replace("T", " ")} → ${ed.replace("T", " ")} (Paris)` };
+        }
+      }
     }
   }
   if (/^\d{4}-\d{2}-\d{2}$/.test(f)) {
