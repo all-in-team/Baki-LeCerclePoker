@@ -11,6 +11,10 @@ export async function handleNewMembers(members: any[], chatTitle: string, chatId
     if (member.is_bot) continue;
     const name = [member.first_name, member.last_name].filter(Boolean).join(" ") || `TG#${member.id}`;
     const existing = db.prepare(`SELECT id FROM players WHERE telegram_id = ?`).get(member.id) as { id: number } | undefined;
+    // Consume group data early so gameName is available for joined_via
+    const groupData = consumePendingGroupData(member.id);
+    const gameName = groupData?.gameName;
+
     let playerId: number;
     let isNew: boolean;
     if (existing) { playerId = existing.id; isNew = false; }
@@ -22,14 +26,10 @@ export async function handleNewMembers(members: any[], chatTitle: string, chatId
       isNew = true;
     }
 
-    // Save group data from onboarding flow (if group was just created for this player)
-    const groupData = consumePendingGroupData(member.id);
     if (groupData) {
       db.prepare(`UPDATE players SET telegram_group_id = ?, alertes_topic_id = ?, liveplay_topic_id = ? WHERE id = ?`)
         .run(String(groupData.groupId), groupData.alertesTopicId, groupData.liveplayTopicId, playerId);
     }
-
-    const gameName = groupData?.gameName;
 
     if (!existing) {
       db.prepare(`INSERT INTO crm_notes (player_id, content, type) VALUES (?, ?, 'note')`)
