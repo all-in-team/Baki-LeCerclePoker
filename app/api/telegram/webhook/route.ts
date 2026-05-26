@@ -13,6 +13,8 @@ import {
   handleStartKkpoker,
   handleA5pokerCallback,
   handleStartA5poker,
+  handleStartAffiliation,
+  handleAffiliationCallback,
   sendMsg, answerCbQuery, getSession, handleRawMessage, registerCommandHandlers,
   OWNER_IDS, AGENT_CHAT_ID,
 } from "@/lib/telegram-commands";
@@ -56,6 +58,8 @@ export async function POST(req: NextRequest) {
       await handleCashoutDoneCallback(cb.id, cbData, cbChatId, cb.message?.message_id, cbThreadId);
     } else if (cbData.startsWith("cashout_skipped:")) {
       await handleCashoutSkippedCallback(cb.id, cbData, cbChatId, cb.message?.message_id, cbThreadId);
+    } else if (cbData.startsWith("affiliation:")) {
+      await handleAffiliationCallback(cb.id, cbData, cbChatId, cbThreadId, cb.from, cb.message?.message_id);
     } else if (cbData.startsWith("bc_")) {
       await handleBroadcastCallback(cb.id, cbData, cb.message);
     } else {
@@ -134,6 +138,7 @@ export async function POST(req: NextRequest) {
       else if (cmd === "/broadcast")   await handleBroadcast(msg, chatId);
       else if (cmd === "/startkkpoker" || cmd === "/start_kkpoker") await handleStartKkpoker(chatId);
       else if (cmd === "/starta5poker" || cmd === "/start_a5poker") await handleStartA5poker(chatId);
+      else if (cmd === "/startaffiliation" || cmd === "/start_affiliation") await handleStartAffiliation(chatId, msg.from.id);
     } catch (e: any) {
       console.error("[TG CMD]", e);
       await sendMsg(chatId, `❌ Erreur : ${e.message}`);
