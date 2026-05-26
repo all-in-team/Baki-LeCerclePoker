@@ -84,7 +84,6 @@ export async function handleAffiliationRawMessage(
       `❌ <i>@${handle}</i> est déjà player chez nous. Vérifie le handle.`,
       messageThreadId
     );
-    clearSession(chatId);
     return true;
   }
 
@@ -96,7 +95,6 @@ export async function handleAffiliationRawMessage(
       `❌ Quelqu'un est déjà en train d'onboarder <i>@${handle}</i>.`,
       messageThreadId
     );
-    clearSession(chatId);
     return true;
   }
 
