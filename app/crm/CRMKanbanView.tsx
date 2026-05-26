@@ -41,6 +41,7 @@ function useEditModal(players: Player[], dealsByPlayer: Record<number, Deal[]>, 
   const [form, setForm] = useState({ name: "", tier: "B", status: "active" });
   const [dealForm, setDealForm] = useState<Record<number, { checked: boolean; action_pct: string; rakeback_pct: string; had_deal: boolean; deal_id: number | null; end_date: string | null }>>({});
   const [saving, setSaving] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState(false);
 
   function openEdit(p: Player) {
     setEditPlayer(p);
@@ -93,7 +94,7 @@ function useEditModal(players: Player[], dealsByPlayer: Record<number, Deal[]>, 
   }
 
   const modal = (
-    <Modal open={!!editPlayer} onClose={() => setEditPlayer(null)} title={`Edit — ${editPlayer?.name ?? ""}`} width={520}>
+    <Modal open={!!editPlayer} onClose={() => { setEditPlayer(null); setConfirmDelete(false); }} title={`Edit — ${editPlayer?.name ?? ""}${editPlayer?.telegram_handle ? ` @${editPlayer.telegram_handle}` : ""}`} width={520}>
       <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
         <div>
           <label style={{ fontSize: 11, fontWeight: 700, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.07em", display: "block", marginBottom: 6 }}>Nom</label>
@@ -147,12 +148,44 @@ function useEditModal(players: Player[], dealsByPlayer: Record<number, Deal[]>, 
             })}
           </div>
         </div>
-        <div style={{ display: "flex", justifyContent: "flex-end", gap: 10, marginTop: 8 }}>
-          <button onClick={() => setEditPlayer(null)} style={{ padding: "8px 18px", borderRadius: 7, fontSize: 13, cursor: "pointer", background: "none", border: "1px solid var(--border)", color: "var(--text-muted)" }}>Annuler</button>
-          <button onClick={handleSave} disabled={saving || !form.name.trim()} style={{ padding: "8px 18px", borderRadius: 7, fontSize: 13, fontWeight: 600, cursor: saving ? "wait" : "pointer", background: "rgba(34,197,94,0.15)", border: "1px solid rgba(34,197,94,0.3)", color: "#22C55E", opacity: saving || !form.name.trim() ? 0.5 : 1 }}>
-            {saving ? "Saving..." : "Sauvegarder"}
-          </button>
-        </div>
+        {confirmDelete && editPlayer ? (
+          <div style={{ padding: 14, background: "rgba(239,68,68,0.06)", border: "1px solid rgba(239,68,68,0.2)", borderRadius: 8, marginTop: 8 }}>
+            <div style={{ fontSize: 13, fontWeight: 700, color: "#EF4444", marginBottom: 8 }}>Supprimer {editPlayer.name} ?</div>
+            <div style={{ fontSize: 12, color: "var(--text-muted)", lineHeight: 1.6, marginBottom: 12 }}>
+              Action IRRÉVERSIBLE. Tous les deals, wallets, transactions et sessions seront supprimés.
+            </div>
+            <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
+              <button onClick={() => setConfirmDelete(false)} style={{ padding: "6px 14px", borderRadius: 7, fontSize: 12, cursor: "pointer", background: "none", border: "1px solid var(--border)", color: "var(--text-muted)" }}>Annuler</button>
+              <button disabled={saving} onClick={async () => {
+                setSaving(true);
+                try { await fetch(`/api/players/${editPlayer.id}`, { method: "DELETE" }); setEditPlayer(null); setConfirmDelete(false); router.refresh(); }
+                catch (e: any) { alert("Erreur: " + (e.message ?? e)); }
+                finally { setSaving(false); }
+              }} style={{ padding: "6px 14px", borderRadius: 7, fontSize: 12, fontWeight: 600, cursor: "pointer", background: "rgba(239,68,68,0.15)", border: "1px solid rgba(239,68,68,0.3)", color: "#EF4444" }}>
+                {saving ? "..." : "Confirmer suppression"}
+              </button>
+            </div>
+          </div>
+        ) : (
+          <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 8 }}>
+            <button onClick={() => setConfirmDelete(true)} style={{ padding: "8px 12px", borderRadius: 7, fontSize: 12, cursor: "pointer", background: "rgba(239,68,68,0.08)", border: "1px solid rgba(239,68,68,0.2)", color: "#EF4444" }}>Supprimer</button>
+            <button disabled={saving} onClick={async () => {
+              if (!editPlayer) return;
+              setSaving(true);
+              const newStatus = editPlayer.status === "churned" ? "active" : "churned";
+              try { await fetch(`/api/players/${editPlayer.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ status: newStatus }) }); setEditPlayer(null); router.refresh(); }
+              catch (e: any) { alert("Erreur: " + (e.message ?? e)); }
+              finally { setSaving(false); }
+            }} style={{ padding: "8px 12px", borderRadius: 7, fontSize: 12, cursor: "pointer", background: "none", border: "1px solid var(--border)", color: "var(--text-muted)" }}>
+              {editPlayer?.status === "churned" ? "Réactiver" : "Archiver"}
+            </button>
+            <div style={{ flex: 1 }} />
+            <button onClick={() => { setEditPlayer(null); setConfirmDelete(false); }} style={{ padding: "8px 18px", borderRadius: 7, fontSize: 13, cursor: "pointer", background: "none", border: "1px solid var(--border)", color: "var(--text-muted)" }}>Annuler</button>
+            <button onClick={handleSave} disabled={saving || !form.name.trim()} style={{ padding: "8px 18px", borderRadius: 7, fontSize: 13, fontWeight: 600, cursor: saving ? "wait" : "pointer", background: "rgba(34,197,94,0.15)", border: "1px solid rgba(34,197,94,0.3)", color: "#22C55E", opacity: saving || !form.name.trim() ? 0.5 : 1 }}>
+              {saving ? "Saving..." : "Sauvegarder"}
+            </button>
+          </div>
+        )}
       </div>
     </Modal>
   );
