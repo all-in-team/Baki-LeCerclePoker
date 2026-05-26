@@ -380,7 +380,7 @@ export default function CRMKanbanView({ players, gamesByPlayer, dealsByPlayer, a
           </div>
           <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
             {poolPlayers.map(p => (
-              <div key={p.id} onClick={() => setDrawerPlayer(p)} style={{
+              <div key={p.id} onClick={() => openEdit(p)} style={{
                 padding: "6px 12px", borderRadius: 7, background: "var(--bg-raised)", border: "1px solid var(--border)",
                 fontSize: 12, color: "var(--text-muted)", cursor: "pointer",
                 opacity: p.status !== "active" && p.status !== "signed" ? 0.5 : 1,
