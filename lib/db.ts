@@ -1069,4 +1069,15 @@ function initSchema(db: Database.Database) {
     console.error(`[MIGRATION:add_deal_end_date_v1] FAILED:`, err.message);
     console.error(err.stack);
   }
+
+  try {
+    const fixJoinTracking = db.prepare(`INSERT OR IGNORE INTO _applied_fixes (name) VALUES (?)`).run("add_player_joined_via_v1");
+    if (fixJoinTracking.changes > 0) {
+      db.exec(`ALTER TABLE players ADD COLUMN joined_via TEXT`);
+      console.log("[MIGRATION] add_player_joined_via_v1 applied");
+    }
+  } catch (err: any) {
+    console.error(`[MIGRATION:add_player_joined_via_v1] FAILED:`, err.message);
+    console.error(err.stack);
+  }
 }

@@ -16,7 +16,7 @@ const GAME_BADGES: Record<string, { short: string; bg: string; color: string }> 
 };
 const BADGE_FALLBACK = { short: "??", bg: "rgba(156,163,175,0.15)", color: "#9CA3AF" };
 
-interface Player { id: number; name: string; telegram_handle: string | null; status: string; tier: string | null; last_note_at: string | null; }
+interface Player { id: number; name: string; telegram_handle: string | null; status: string; tier: string | null; last_note_at: string | null; telegram_id: number | null; created_at: string | null; joined_via: string | null; }
 interface Deal { deal_id: number; player_id: number; game_id: number; action_pct: number; rakeback_pct: number; start_date: string | null; end_date: string | null; }
 interface Game { id: number; name: string; default_action_pct: number | null; status: string; }
 
@@ -212,10 +212,22 @@ export default function CRMListClient({ players, gamesByPlayer, dealsByPlayer, a
             </div>
           </div>
 
+          {editPlayer && (editPlayer.telegram_id || editPlayer.joined_via || editPlayer.created_at) && (
+            <div style={{ padding: "10px 12px", background: "var(--bg-surface)", borderRadius: 8, border: "1px solid var(--border)" }}>
+              <label style={{ fontSize: 11, fontWeight: 700, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.07em", display: "block", marginBottom: 6 }}>Origine</label>
+              <div style={{ display: "grid", gridTemplateColumns: "auto 1fr", gap: "4px 12px", fontSize: 12 }}>
+                {editPlayer.telegram_id && <><span style={{ color: "var(--text-dim)" }}>Telegram ID</span><span style={{ color: "var(--text)", fontFamily: "monospace" }}>{editPlayer.telegram_id}</span></>}
+                {editPlayer.telegram_handle && <><span style={{ color: "var(--text-dim)" }}>Handle</span><span style={{ color: "var(--text)" }}>@{editPlayer.telegram_handle}</span></>}
+                <span style={{ color: "var(--text-dim)" }}>Source</span><span style={{ color: "var(--text)" }}>{editPlayer.joined_via ?? "— (avant tracking)"}</span>
+                <span style={{ color: "var(--text-dim)" }}>Créé le</span><span style={{ color: "var(--text)" }}>{editPlayer.created_at ? editPlayer.created_at.slice(0, 10) : "—"}</span>
+              </div>
+            </div>
+          )}
+
           <div>
             <label style={{ fontSize: 11, fontWeight: 700, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.07em", display: "block", marginBottom: 8 }}>Games & Deals</label>
             <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-              {activeGames.map(g => {
+              {activeGames.filter(g => g.status === "active").map(g => {
                 const df = dealForm[g.id];
                 if (!df) return null;
                 const badge = GAME_BADGES[g.name] ?? BADGE_FALLBACK;

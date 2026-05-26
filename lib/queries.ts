@@ -58,14 +58,15 @@ export function upsertPlayerFromTelegram(data: {
   telegram_id: number;
   name: string;
   telegram_handle?: string | null;
+  joined_via?: string | null;
 }): { id: number; isNew: boolean } {
   const db = getDb();
   const existing = db.prepare(`SELECT id FROM players WHERE telegram_id = ?`).get(data.telegram_id) as { id: number } | undefined;
   if (existing) return { id: existing.id, isNew: false };
   const r = db.prepare(`
-    INSERT INTO players (name, telegram_handle, telegram_id, status, tier)
-    VALUES (@name, @telegram_handle, @telegram_id, 'active', 'B')
-  `).run({ name: data.name, telegram_handle: data.telegram_handle ?? null, telegram_id: data.telegram_id });
+    INSERT INTO players (name, telegram_handle, telegram_id, status, tier, joined_via)
+    VALUES (@name, @telegram_handle, @telegram_id, 'active', 'B', @joined_via)
+  `).run({ name: data.name, telegram_handle: data.telegram_handle ?? null, telegram_id: data.telegram_id, joined_via: data.joined_via ?? null });
   return { id: Number(r.lastInsertRowid), isNew: true };
 }
 

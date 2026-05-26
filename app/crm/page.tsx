@@ -15,7 +15,7 @@ export default function CRMPage() {
   const d30 = daysAgo(30);
 
   const allPlayers = db.prepare(`
-    SELECT p.id, p.name, p.telegram_handle, p.status, p.tier,
+    SELECT p.id, p.name, p.telegram_handle, p.status, p.tier, p.telegram_id, p.created_at, p.joined_via,
       (SELECT MAX(created_at) FROM crm_notes WHERE player_id = p.id) AS last_note_at
     FROM players p WHERE p.status IN ('active', 'signed', 'inactive', 'churned')
     ORDER BY p.name

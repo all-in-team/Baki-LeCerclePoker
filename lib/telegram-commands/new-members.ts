@@ -15,8 +15,9 @@ export async function handleNewMembers(members: any[], chatTitle: string, chatId
     let isNew: boolean;
     if (existing) { playerId = existing.id; isNew = false; }
     else {
-      const r = db.prepare(`INSERT INTO players (name, telegram_handle, telegram_id, telegram_chat_id, status, tier) VALUES (@name, @handle, @telegram_id, @chat_id, 'active', 'B')`)
-        .run({ name, handle: member.username ?? null, telegram_id: member.id, chat_id: String(chatId) });
+      const joinedVia = gameName ? `new_member_${gameName}` : "new_member_AKPOKER";
+      const r = db.prepare(`INSERT INTO players (name, telegram_handle, telegram_id, telegram_chat_id, status, tier, joined_via) VALUES (@name, @handle, @telegram_id, @chat_id, 'active', 'B', @joined_via)`)
+        .run({ name, handle: member.username ?? null, telegram_id: member.id, chat_id: String(chatId), joined_via: joinedVia });
       playerId = Number(r.lastInsertRowid);
       isNew = true;
     }
