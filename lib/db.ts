@@ -1080,4 +1080,51 @@ function initSchema(db: Database.Database) {
     console.error(`[MIGRATION:add_player_joined_via_v1] FAILED:`, err.message);
     console.error(err.stack);
   }
+
+  try {
+    const fixAff = db.prepare(`INSERT OR IGNORE INTO _applied_fixes (name) VALUES (?)`).run("add_affiliate_tables_v1");
+    if (fixAff.changes > 0) {
+      db.exec(`
+        CREATE TABLE affiliate_relationships (
+          id                      INTEGER PRIMARY KEY AUTOINCREMENT,
+          affiliate_player_id     INTEGER NOT NULL REFERENCES players(id) ON DELETE CASCADE,
+          referred_player_id      INTEGER NOT NULL REFERENCES players(id) ON DELETE CASCADE,
+          origin_game_id          INTEGER NOT NULL REFERENCES games(id),
+          start_date              TEXT NOT NULL DEFAULT (date('now')),
+          status                  TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active', 'paused', 'terminated')),
+          disclosed_action_pct    REAL,
+          disclosed_rakeback_pct  REAL,
+          disclosed_insurance_pct REAL,
+          exclude_agency_extras   INTEGER NOT NULL DEFAULT 1,
+          notes                   TEXT,
+          created_at              TEXT NOT NULL DEFAULT (datetime('now')),
+          UNIQUE(referred_player_id)
+        );
+        CREATE INDEX idx_aff_rel_affiliate ON affiliate_relationships(affiliate_player_id);
+        CREATE INDEX idx_aff_rel_referred ON affiliate_relationships(referred_player_id);
+        CREATE TABLE affiliate_payments (
+          id                          INTEGER PRIMARY KEY AUTOINCREMENT,
+          relationship_id             INTEGER NOT NULL REFERENCES affiliate_relationships(id) ON DELETE CASCADE,
+          game_id                     INTEGER NOT NULL REFERENCES games(id),
+          week_start_date             TEXT NOT NULL,
+          week_end_date               TEXT NOT NULL,
+          amount_usdt                 REAL NOT NULL,
+          tx_hash                     TEXT,
+          paid_at                     TEXT NOT NULL DEFAULT (datetime('now')),
+          paid_by                     TEXT,
+          snapshot_agency_pnl_lifetime REAL,
+          snapshot_commission_rate    REAL,
+          snapshot_total_earned       REAL,
+          snapshot_total_paid_before  REAL,
+          notes                       TEXT
+        );
+        CREATE INDEX idx_aff_pay_rel ON affiliate_payments(relationship_id);
+        CREATE INDEX idx_aff_pay_week ON affiliate_payments(week_start_date);
+      `);
+      console.log("[MIGRATION] add_affiliate_tables_v1 applied");
+    }
+  } catch (err: any) {
+    console.error(`[MIGRATION:add_affiliate_tables_v1] FAILED:`, err.message);
+    console.error(err.stack);
+  }
 }
