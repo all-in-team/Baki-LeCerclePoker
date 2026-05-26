@@ -19,7 +19,7 @@ const BADGE_FALLBACK = { short: "??", bg: "rgba(156,163,175,0.15)", color: "#9CA
 
 interface Player { id: number; name: string; telegram_handle: string | null; status: string; tier: string | null; last_note_at: string | null; }
 interface Deal { deal_id: number; player_id: number; game_id: number; action_pct: number; rakeback_pct: number; start_date: string | null; end_date: string | null; }
-interface Game { id: number; name: string; default_action_pct: number | null; }
+interface Game { id: number; name: string; default_action_pct: number | null; status: string; }
 
 interface Props {
   players: Player[];
@@ -168,7 +168,9 @@ export default function CRMKanbanView({ players, gamesByPlayer, dealsByPlayer, a
   const [removing, setRemoving] = useState<number | null>(null);
   const [drawerPlayer, setDrawerPlayer] = useState<Player | null>(null);
   const [archiveGame, setArchiveGame] = useState<Game | null>(null);
+  const [unarchiveGame, setUnarchiveGame] = useState<Game | null>(null);
   const [archiving, setArchiving] = useState(false);
+  const [showArchivedGames, setShowArchivedGames] = useState(false);
 
   const { openEdit, modal: editModal } = useEditModal(players, dealsByPlayer, activeGames);
 
@@ -215,12 +217,21 @@ export default function CRMKanbanView({ players, gamesByPlayer, dealsByPlayer, a
         }}>
           {showInactive ? "Inactifs visibles" : "Show inactive"}
         </button>
+        <button onClick={() => setShowArchivedGames(!showArchivedGames)} style={{
+          padding: "6px 14px", borderRadius: 7, fontSize: 12, fontWeight: 600, cursor: "pointer",
+          border: showArchivedGames ? "1px solid var(--green)" : "1px solid var(--border)",
+          background: showArchivedGames ? "rgba(34,197,94,0.12)" : "var(--bg-surface)",
+          color: showArchivedGames ? "var(--green)" : "var(--text-muted)",
+        }}>
+          {showArchivedGames ? "Archived visibles" : "Show archived games"}
+        </button>
       </div>
 
       {/* Kanban columns */}
       <div style={{ display: "flex", gap: 16, overflowX: "auto", paddingBottom: 20, minHeight: 300 }}>
-        {activeGames.map(game => {
+        {activeGames.filter(g => g.status === "active" || showArchivedGames).map(game => {
           const badge = GAME_BADGES[game.name] ?? BADGE_FALLBACK;
+          const isArchivedGame = game.status === "archived";
           const gameDeals = Object.values(dealsByPlayer).flat().filter(d => d.game_id === game.id && !d.end_date);
           const gamePlayers = gameDeals
             .map(d => ({ player: playerMap.get(d.player_id), deal: d }))
@@ -231,16 +242,23 @@ export default function CRMKanbanView({ players, gamesByPlayer, dealsByPlayer, a
           const existingIds = new Set(gamePlayers.map(x => x.player.id));
 
           return (
-            <div key={game.id} style={{ minWidth: 260, maxWidth: 300, flex: "0 0 280px", background: "var(--bg-surface)", borderRadius: 12, border: "1px solid var(--border)", display: "flex", flexDirection: "column" }}>
+            <div key={game.id} style={{ minWidth: 260, maxWidth: 300, flex: "0 0 280px", background: "var(--bg-surface)", borderRadius: 12, border: "1px solid var(--border)", display: "flex", flexDirection: "column", opacity: isArchivedGame ? 0.5 : 1 }}>
               {/* Column header */}
               <div style={{ padding: "14px 16px 10px", borderBottom: "1px solid var(--border)" }}>
                 <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
                   <span style={{ background: badge.bg, color: badge.color, padding: "3px 10px", borderRadius: 5, fontSize: 12, fontWeight: 700 }}>{badge.short}</span>
                   <span style={{ fontSize: 14, fontWeight: 700, color: "var(--text)" }}>{game.name}</span>
+                  {isArchivedGame && <span style={{ fontSize: 9, padding: "1px 6px", borderRadius: 3, background: "rgba(255,255,255,0.08)", color: "var(--text-dim)", fontWeight: 600 }}>ARCHIVED</span>}
                   <span style={{ fontSize: 11, color: "var(--text-dim)", marginLeft: "auto" }}>{gamePlayers.length}</span>
-                  <button onClick={() => setArchiveGame(game)} title="Archiver ce game" style={{ background: "none", border: "none", cursor: "pointer", color: "var(--text-dim)", padding: 2, opacity: 0.5 }}>
-                    <Archive size={13} />
-                  </button>
+                  {isArchivedGame ? (
+                    <button onClick={() => setUnarchiveGame(game)} title="Réactiver ce game" style={{ background: "none", border: "none", cursor: "pointer", color: "var(--text-dim)", padding: 2, opacity: 0.7 }}>
+                      <RotateCcw size={13} />
+                    </button>
+                  ) : (
+                    <button onClick={() => setArchiveGame(game)} title="Archiver ce game" style={{ background: "none", border: "none", cursor: "pointer", color: "var(--text-dim)", padding: 2, opacity: 0.5 }}>
+                      <Archive size={13} />
+                    </button>
+                  )}
                 </div>
                 {totalCut !== 0 && (
                   <div style={{ fontSize: 11, color: totalCut > 0 ? "#D4AF37" : "#EF4444", fontWeight: 600 }}>
@@ -400,6 +418,46 @@ export default function CRMKanbanView({ players, gamesByPlayer, dealsByPlayer, a
             </div>
           );
         })()}
+      </Modal>
+
+      <Modal open={!!unarchiveGame} onClose={() => setUnarchiveGame(null)} title={`Réactiver ${unarchiveGame?.name ?? ""} ?`} width={440}>
+        {unarchiveGame && (
+          <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+            <div style={{ fontSize: 13, color: "var(--text-muted)", lineHeight: 1.6 }}>
+              <p style={{ margin: "0 0 8px" }}>Le game redeviendra actif et apparaîtra dans la Kanban et les dropdowns.</p>
+              <p style={{ margin: "0 0 8px" }}>Les deals des joueurs (archivés au moment de l&apos;archive) ne seront <b>PAS</b> réactivés automatiquement.</p>
+              <p style={{ margin: 0 }}>Les wallet mères (retired) resteront retired. Réactive-les manuellement dans Settings si besoin.</p>
+            </div>
+            <div style={{ display: "flex", justifyContent: "flex-end", gap: 10 }}>
+              <button onClick={() => setUnarchiveGame(null)} style={{ padding: "8px 18px", borderRadius: 7, fontSize: 13, cursor: "pointer", background: "none", border: "1px solid var(--border)", color: "var(--text-muted)" }}>
+                Annuler
+              </button>
+              <button
+                disabled={archiving}
+                onClick={async () => {
+                  setArchiving(true);
+                  try {
+                    const res = await fetch("/api/games", {
+                      method: "PATCH",
+                      headers: { "Content-Type": "application/json" },
+                      body: JSON.stringify({ id: unarchiveGame.id, status: "active" }),
+                    });
+                    if (!res.ok) throw new Error((await res.json()).error ?? "Failed");
+                    setUnarchiveGame(null);
+                    router.refresh();
+                  } catch (e: any) {
+                    alert("Erreur: " + (e.message ?? e));
+                  } finally {
+                    setArchiving(false);
+                  }
+                }}
+                style={{ padding: "8px 18px", borderRadius: 7, fontSize: 13, fontWeight: 600, cursor: archiving ? "wait" : "pointer", background: "rgba(34,197,94,0.12)", border: "1px solid rgba(34,197,94,0.3)", color: "#22C55E", opacity: archiving ? 0.5 : 1 }}
+              >
+                {archiving ? "..." : "Confirmer réactivation"}
+              </button>
+            </div>
+          </div>
+        )}
       </Modal>
     </div>
   );

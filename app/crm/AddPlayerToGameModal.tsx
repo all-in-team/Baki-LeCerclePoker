@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import Modal from "@/components/Modal";
 
 interface Player { id: number; name: string; telegram_handle: string | null; status: string; }
-interface Game { id: number; name: string; default_action_pct: number | null; }
+interface Game { id: number; name: string; default_action_pct: number | null; status: string; }
 
 interface Props {
   open: boolean;

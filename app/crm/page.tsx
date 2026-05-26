@@ -37,7 +37,7 @@ export default function CRMPage() {
   const dealsByPlayer: Record<number, any[]> = {};
   dealRows.forEach((d: any) => { (dealsByPlayer[d.player_id] ??= []).push(d); });
 
-  const activeGames = db.prepare(`SELECT id, name, default_action_pct FROM games WHERE status = 'active' ORDER BY id`).all() as any[];
+  const activeGames = db.prepare(`SELECT id, name, default_action_pct, status FROM games WHERE status IN ('active', 'archived') ORDER BY CASE status WHEN 'active' THEN 0 ELSE 1 END, id`).all() as any[];
 
   const contributors = getTopContributors({ from: d30, to: today }, 100);
   const agencyByPlayer: Record<number, number> = {};

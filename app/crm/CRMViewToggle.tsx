@@ -6,7 +6,7 @@ import CRMKanbanView from "./CRMKanbanView";
 
 interface Player { id: number; name: string; telegram_handle: string | null; status: string; tier: string | null; last_note_at: string | null; }
 interface Deal { deal_id: number; player_id: number; game_id: number; action_pct: number; rakeback_pct: number; start_date: string | null; end_date: string | null; }
-interface Game { id: number; name: string; default_action_pct: number | null; }
+interface Game { id: number; name: string; default_action_pct: number | null; status: string; }
 
 interface Props {
   players: Player[];
