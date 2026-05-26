@@ -24,7 +24,7 @@ export { handleKkpokerCallback } from "@/lib/games/kkpoker/onboarding";
 export { handleStartKkpoker } from "./startkkpoker";
 export { handleA5pokerCallback } from "@/lib/games/a5poker/onboarding";
 export { handleStartA5poker } from "./starta5poker";
-export { handleStartAffiliation, handleAffiliationCallback } from "./start-affiliation";
+export { handleAffiliation, handleAffiliationRawMessage } from "./affiliation";
 
 // Re-export helpers needed by route.ts
 export {

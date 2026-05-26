@@ -1127,4 +1127,31 @@ function initSchema(db: Database.Database) {
     console.error(`[MIGRATION:add_affiliate_tables_v1] FAILED:`, err.message);
     console.error(err.stack);
   }
+
+  try {
+    const fixLeads = db.prepare(`INSERT OR IGNORE INTO _applied_fixes (name) VALUES (?)`).run("add_affiliate_leads_v1");
+    if (fixLeads.changes > 0) {
+      db.exec(`
+        CREATE TABLE affiliate_leads (
+          id                    INTEGER PRIMARY KEY AUTOINCREMENT,
+          affiliate_player_id   INTEGER NOT NULL REFERENCES players(id) ON DELETE CASCADE,
+          referred_handle       TEXT NOT NULL,
+          kickoff_group_id      TEXT,
+          kickoff_invite_link   TEXT,
+          status                TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending', 'converted', 'expired', 'cancelled')),
+          created_at            TEXT NOT NULL DEFAULT (datetime('now')),
+          converted_at          TEXT,
+          converted_player_id   INTEGER REFERENCES players(id),
+          origin_game_id        INTEGER REFERENCES games(id),
+          UNIQUE(referred_handle, status)
+        );
+        CREATE INDEX idx_aff_leads_handle ON affiliate_leads(referred_handle);
+        CREATE INDEX idx_aff_leads_affiliate ON affiliate_leads(affiliate_player_id);
+      `);
+      console.log("[MIGRATION] add_affiliate_leads_v1 applied");
+    }
+  } catch (err: any) {
+    console.error(`[MIGRATION:add_affiliate_leads_v1] FAILED:`, err.message);
+    console.error(err.stack);
+  }
 }

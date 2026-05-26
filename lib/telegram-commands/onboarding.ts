@@ -16,7 +16,7 @@ export function consumePendingGroupData(telegramId: number) {
   return data ?? null;
 }
 
-const TOPIC_MESSAGES: Record<string, string> = {
+export const TOPIC_MESSAGES: Record<string, string> = {
   accounting:
     `📊 <b>Accounting</b>\n\n` +
     `Ce canal sert au suivi de ta bankroll.\n\n` +
@@ -147,6 +147,24 @@ export async function handleOnboardingDirect(
   if (existingPlayer && !gameName) {
     await sendMsg(chatId, `✅ Tu es déjà inscrit ! Ton groupe est prêt.\n\nQuestions ? → @baki77777`);
     return;
+  }
+
+  if (username) {
+    const leadHandle = username.toLowerCase();
+    const existingLead = db.prepare(
+      `SELECT kickoff_invite_link FROM affiliate_leads WHERE LOWER(referred_handle) = ? AND status IN ('pending', 'converted')`
+    ).get(leadHandle) as { kickoff_invite_link: string | null } | undefined;
+    if (existingLead) {
+      console.log(`[ONBOARDING] User @${leadHandle} has affiliate lead, skipping new group creation`);
+      if (existingLead.kickoff_invite_link) {
+        await sendMsg(chatId,
+          `👉 Tu as déjà un groupe créé pour toi.\nClique ici pour rejoindre : ${existingLead.kickoff_invite_link}`
+        );
+      } else {
+        await sendMsg(chatId, `👋 Un groupe existe déjà pour toi. Contacte @baki77777 pour le lien.`);
+      }
+      return;
+    }
   }
 
   await sendMsg(chatId,

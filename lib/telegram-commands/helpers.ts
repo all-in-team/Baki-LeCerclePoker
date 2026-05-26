@@ -107,7 +107,7 @@ export async function askWalletGame(chatId: number | string, mention: string, me
 }
 
 // ── Session helpers ───────────────────────────────────────
-export type Step = "pitch_sent" | "solo_declined" | "contract_shown" | "signed_active" | "contract_questions" | "awaiting_wallet_address" | "onboarding_complete" | "awaiting_deposit_wallet" | "awaiting_cashout_wallet" | "wallets_complete" | "waiting_action_pct" | "waiting_wallet_game" | "waiting_wallet_cashout" | "waiting_game" | "waiting_player" | "awaiting_human_response" | "kkpoker_pitch_sent" | "kkpoker_contract_shown" | "awaiting_kkpoker_cashout_wallet" | "awaiting_kkpoker_game_wallet" | "a5poker_pitch_sent" | "a5poker_contract_shown" | "a5poker_wallet_check" | "awaiting_a5poker_cashout_wallet" | "awaiting_a5poker_game_wallet" | "affiliation_awaiting_handle" | "affiliation_awaiting_game" | "affiliation_awaiting_confirm";
+export type Step = "pitch_sent" | "solo_declined" | "contract_shown" | "signed_active" | "contract_questions" | "awaiting_wallet_address" | "onboarding_complete" | "awaiting_deposit_wallet" | "awaiting_cashout_wallet" | "wallets_complete" | "waiting_action_pct" | "waiting_wallet_game" | "waiting_wallet_cashout" | "waiting_game" | "waiting_player" | "awaiting_human_response" | "kkpoker_pitch_sent" | "kkpoker_contract_shown" | "awaiting_kkpoker_cashout_wallet" | "awaiting_kkpoker_game_wallet" | "a5poker_pitch_sent" | "a5poker_contract_shown" | "a5poker_wallet_check" | "awaiting_a5poker_cashout_wallet" | "awaiting_a5poker_game_wallet" | "affiliation_awaiting_handle";
 
 export function getSession(chatId: string | number): { step: Step; player_id: number; expected_tg_id: number | null; pending_cmd: string | null } | null {
   return getDb().prepare(
@@ -438,7 +438,7 @@ export async function handleRawMessage(text: string, chatId: number, messageThre
 
   // Affiliation flow — handle text input
   if (session.step === "affiliation_awaiting_handle") {
-    const { handleAffiliationRawMessage } = await import("./start-affiliation");
+    const { handleAffiliationRawMessage } = await import("./affiliation");
     const handled = await handleAffiliationRawMessage(text, chatId, session, messageThreadId);
     if (handled) return;
   }

@@ -1,5 +1,5 @@
 import { getDb } from "@/lib/db";
-import { sendMsg, sendMsgKeyboard, setSession, mentionOf, trackOnboardingStep, type Step } from "./helpers";
+import { sendMsg, sendMsgKeyboard, setSession, mentionOf, trackOnboardingStep, AGENT_CHAT_ID, type Step } from "./helpers";
 import { PITCH_MSG_1, PITCH_MSG_2, PITCH_MSG_3, PITCH_MSG_4 } from "./onboarding-script";
 import { consumePendingGroupData } from "./onboarding";
 
@@ -29,6 +29,32 @@ export async function handleNewMembers(members: any[], chatTitle: string, chatId
     if (groupData) {
       db.prepare(`UPDATE players SET telegram_group_id = ?, alertes_topic_id = ?, liveplay_topic_id = ? WHERE id = ?`)
         .run(String(groupData.groupId), groupData.alertesTopicId, groupData.liveplayTopicId, playerId);
+    }
+
+    if (isNew && member.username) {
+      const handle = member.username.toLowerCase();
+      const lead = db.prepare(
+        `SELECT id, affiliate_player_id FROM affiliate_leads WHERE LOWER(referred_handle) = ? AND status = 'pending'`
+      ).get(handle) as { id: number; affiliate_player_id: number } | undefined;
+      if (lead) {
+        db.prepare(
+          `UPDATE affiliate_leads SET status = 'converted', converted_at = datetime('now'), converted_player_id = ? WHERE id = ?`
+        ).run(playerId, lead.id);
+        console.log(`[AFFILIATE] Lead ${lead.id} converted: @${handle} → player ${playerId}`);
+        const affiliate = db.prepare(
+          `SELECT name, telegram_group_id FROM players WHERE id = ?`
+        ).get(lead.affiliate_player_id) as { name: string; telegram_group_id: string | null } | undefined;
+        if (affiliate?.telegram_group_id) {
+          await sendMsg(parseInt(affiliate.telegram_group_id),
+            `🎉 Ton filleul <i>@${handle}</i> vient de rejoindre !\n\nOn prend le relais pour l'onboarder. Tu seras notifié quand il sera connecté.`
+          );
+        }
+        await sendMsg(AGENT_CHAT_ID,
+          `🤝 <b>Lead affiliate converti</b>\n` +
+          `Filleul : <i>@${handle}</i> → player #${playerId}\n` +
+          `Affiliate : <b>${affiliate?.name ?? "?"}</b>`
+        );
+      }
     }
 
     if (!existing) {
