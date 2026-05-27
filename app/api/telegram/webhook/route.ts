@@ -111,9 +111,9 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ ok: true });
   }
 
-  // /myaffi — DM only, opens affiliate Mini App
+  // /myaffi — opens affiliate Mini App (works in DM + groups)
   if (msg?.text?.match(/^\/myaffi(\s|$|@)/)) {
-    await handleMyAffi(chatId, msg.chat?.type ?? "", msg.from?.id);
+    await handleMyAffi(chatId, msg.from?.id);
     return NextResponse.json({ ok: true });
   }
 
