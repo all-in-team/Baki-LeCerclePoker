@@ -107,6 +107,8 @@ export async function handleAffiliationRawMessage(
     return true;
   }
 
+  db.prepare(`INSERT OR IGNORE INTO affiliate_profiles (affiliate_player_id) VALUES (?)`).run(session.player_id);
+
   const affiliate = db.prepare(`SELECT name FROM players WHERE id = ?`).get(session.player_id) as { name: string } | undefined;
   const affiliateName = affiliate?.name ?? "Affiliate";
 

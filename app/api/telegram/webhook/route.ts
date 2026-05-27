@@ -15,6 +15,7 @@ import {
   handleStartA5poker,
   handleAffiliation,
   handleMyAffi,
+  handleStartAffi,
   sendMsg, answerCbQuery, getSession, handleRawMessage, registerCommandHandlers,
   OWNER_IDS, AGENT_CHAT_ID,
 } from "@/lib/telegram-commands";
@@ -114,6 +115,12 @@ export async function POST(req: NextRequest) {
   // /myaffi — affiliate Mini App (DM=web_app button, group=deep link to DM)
   if (msg?.text?.match(/^\/myaffi(\s|$|@)/)) {
     await handleMyAffi(chatId, msg.from?.id, msg.chat?.type ?? "private");
+    return NextResponse.json({ ok: true });
+  }
+
+  // /startaffi — activate player as affiliate (group only)
+  if (msg?.text?.match(/^\/startaffi(\s|$|@)/)) {
+    await handleStartAffi(chatId, msg.from?.id, msg.chat?.type ?? "private");
     return NextResponse.json({ ok: true });
   }
 

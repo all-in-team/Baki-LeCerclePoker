@@ -11,7 +11,25 @@ export async function handleStart(chatId: number, fromId: number, fromName: stri
     return;
   }
 
-  // Deep-link routing: ?start=kkpoker → KKPOKER onboarding (shared group flow)
+  // ref_<affiliate_id> deep link: prospect referred by an affiliate
+  if (payload?.startsWith("ref_")) {
+    const affiliateId = parseInt(payload.slice(4));
+    const profile = db.prepare(`SELECT 1 FROM affiliate_profiles WHERE affiliate_player_id = ?`).get(affiliateId);
+    if (profile && from?.username) {
+      const handle = from.username.toLowerCase();
+      const existingLead = db.prepare(
+        `SELECT 1 FROM affiliate_leads WHERE LOWER(referred_handle) = ? AND status IN ('pending', 'converted')`
+      ).get(handle);
+      if (!existingLead) {
+        db.prepare(
+          `INSERT INTO affiliate_leads (affiliate_player_id, referred_handle, status) VALUES (?, ?, 'pending')`
+        ).run(affiliateId, handle);
+        console.log(`[AFFILIATE] Lead created via ref_ deep link: affiliate=${affiliateId} handle=@${handle}`);
+      }
+    }
+    // Continue with normal onboarding (handleOnboardingDirect will detect the lead)
+  }
+
   if (payload === "kkpoker") {
     await handleOnboardingDirect(chatId, {
       id: fromId,
@@ -51,7 +69,6 @@ export async function handleStart(chatId: number, fromId: number, fromName: stri
       `👋 <b>${fromName}</b> — mode admin actif.`
     );
   } else {
-    // Default = AKPOKER onboarding (unchanged)
     await handleOnboardingDirect(chatId, {
       id: fromId,
       first_name: from?.first_name ?? fromName,

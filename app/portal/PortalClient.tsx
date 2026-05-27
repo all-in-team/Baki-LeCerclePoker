@@ -10,6 +10,7 @@ declare global {
         expand: () => void;
         initData: string;
         themeParams: Record<string, string>;
+        openTelegramLink?: (url: string) => void;
       };
     };
   }
@@ -18,6 +19,7 @@ declare global {
 interface DashboardData {
   affiliate: { name: string; handle: string | null; joined_at: string | null };
   summary: { lifetime_usdt: number; paid_usdt: number; pending_usdt: number };
+  share_link: string;
   filleuls: {
     name: string; handle: string | null;
     games: { game_name: string; rate_label: string; rate_pct: number; earned: number; due_now: number }[];
@@ -102,13 +104,23 @@ export default function PortalClient() {
     </div>
   );
 
-  const { affiliate, summary, filleuls, payments } = data;
+  const { affiliate, summary, filleuls, payments, share_link } = data;
+  const [copied, setCopied] = useState(false);
+
+  async function copyLink() {
+    try { await navigator.clipboard.writeText(share_link); setCopied(true); setTimeout(() => setCopied(false), 2000); } catch {}
+  }
+  function shareLink() {
+    const text = "Rejoins LeCerclePoker, on partage les profits";
+    const url = `https://t.me/share/url?url=${encodeURIComponent(share_link)}&text=${encodeURIComponent(text)}`;
+    try { window.Telegram?.WebApp?.openTelegramLink?.(url); } catch { window.open(url, "_blank"); }
+  }
 
   return (
     <div style={s}>
       {/* Header */}
       <div style={{ marginBottom: 24 }}>
-        <div style={{ fontSize: 20, fontWeight: 700 }}>Bonjour {affiliate.name} 👋</div>
+        <div style={{ fontSize: 20, fontWeight: 700 }}>Bienvenue {affiliate.name} 🎰</div>
         <div style={hint}>Affilié depuis {affiliate.joined_at ?? "—"}</div>
       </div>
 
@@ -118,21 +130,50 @@ export default function PortalClient() {
           { label: "Lifetime", icon: "💰", value: summary.lifetime_usdt },
           { label: "Payé", icon: "✅", value: summary.paid_usdt },
           { label: "En attente", icon: "⏳", value: summary.pending_usdt },
-        ].map(s => (
-          <div key={s.label} style={card}>
-            <div style={{ ...hint, marginBottom: 4 }}>{s.icon} {s.label}</div>
-            <div style={{ fontSize: 18, fontWeight: 700, color: s.value > 0 ? accent : "var(--tg-theme-text-color, #fff)" }}>{fmt(s.value)} USDT</div>
+        ].map(st => (
+          <div key={st.label} style={card}>
+            <div style={{ ...hint, marginBottom: 4 }}>{st.icon} {st.label}</div>
+            <div style={{ fontSize: 18, fontWeight: 700, color: st.value > 0 ? accent : "var(--tg-theme-text-color, #fff)" }}>{fmt(st.value)} USDT</div>
           </div>
         ))}
       </div>
+
+      {/* Share link + CTA (always visible if no filleuls) */}
+      {filleuls.length === 0 && (
+        <div style={{ ...card, marginBottom: 24, textAlign: "center" }}>
+          <div style={{ fontSize: 15, fontWeight: 700, marginBottom: 12 }}>🎯 Ramène ton premier filleul</div>
+          <div style={{ padding: "10px 12px", background: "rgba(255,255,255,0.05)", borderRadius: 8, fontFamily: "monospace", fontSize: 12, wordBreak: "break-all", marginBottom: 12, color: "var(--tg-theme-link-color, #2ea043)" }}>
+            {share_link}
+          </div>
+          <div style={{ display: "flex", gap: 8, justifyContent: "center", marginBottom: 16 }}>
+            <button onClick={copyLink} style={{ padding: "8px 16px", borderRadius: 8, fontSize: 13, fontWeight: 600, cursor: "pointer", background: "var(--tg-theme-button-color, #2ea043)", color: "var(--tg-theme-button-text-color, #fff)", border: "none" }}>
+              {copied ? "✅ Copié !" : "📋 Copier mon lien"}
+            </button>
+            <button onClick={shareLink} style={{ padding: "8px 16px", borderRadius: 8, fontSize: 13, fontWeight: 600, cursor: "pointer", background: "transparent", color: "var(--tg-theme-button-color, #2ea043)", border: "1px solid var(--tg-theme-button-color, #2ea043)" }}>
+              📤 Partager
+            </button>
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 8 }}>
+            {[
+              { step: "1️⃣", text: "Partage ton lien" },
+              { step: "2️⃣", text: "Ton contact s'inscrit" },
+              { step: "3️⃣", text: "Tu gagnes 50% lifetime" },
+            ].map(x => (
+              <div key={x.step} style={{ background: "rgba(255,255,255,0.03)", borderRadius: 8, padding: "10px 8px", textAlign: "center" }}>
+                <div style={{ fontSize: 18, marginBottom: 4 }}>{x.step}</div>
+                <div style={{ fontSize: 11, color: "var(--tg-theme-hint-color, #707579)" }}>{x.text}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* Filleuls */}
       <div style={{ marginBottom: 24 }}>
         <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 10 }}>Mes filleuls ({filleuls.length})</div>
         {filleuls.length === 0 ? (
-          <div style={{ ...card, textAlign: "center" }}>
-            <div style={hint}>Aucun filleul pour le moment.</div>
-            <div style={{ ...hint, marginTop: 4 }}>Tape <b>/affiliation</b> dans ton groupe pour ramener des joueurs.</div>
+          <div style={{ textAlign: "center" }}>
+            <div style={hint}>Aucun filleul pour l'instant — partage ton lien pour démarrer !</div>
           </div>
         ) : filleuls.map((f, i) => (
           <div key={i} style={{ ...card, marginBottom: 8 }}>
@@ -193,9 +234,20 @@ export default function PortalClient() {
         )}
       </div>
 
+      {/* Comment ça marche */}
+      <div style={{ ...card, marginBottom: 24 }}>
+        <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 8 }}>Comment ça marche</div>
+        <div style={{ fontSize: 12, display: "flex", flexDirection: "column", gap: 6 }}>
+          <div><span style={{ color: "var(--tg-theme-button-color, #2ea043)", fontWeight: 600 }}>Game origin</span> <span style={hint}>— 50% des profits agency lifetime</span></div>
+          <div><span style={{ color: "#22C55E", fontWeight: 600 }}>Nouveaux games (30j)</span> <span style={hint}>— 50% (grâce)</span></div>
+          <div><span style={{ color: "var(--tg-theme-hint-color, #707579)", fontWeight: 600 }}>Après 30j</span> <span style={hint}>— 10% (passif)</span></div>
+        </div>
+        <div style={{ ...hint, marginTop: 8, fontSize: 10 }}>On partage les profits, pas les pertes — makeup quand cumulé positif.</div>
+      </div>
+
       {/* Footer */}
       <div style={{ textAlign: "center", padding: "16px 0", ...hint }}>
-        <div>Questions ? Contacte @baki77777</div>
+        <div>Questions ? @baki77777</div>
         <div style={{ marginTop: 4, fontSize: 10, opacity: 0.5 }}>LeCerclePoker</div>
       </div>
     </div>

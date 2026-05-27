@@ -45,11 +45,14 @@ export async function POST(req: NextRequest) {
 
   if (!player) return NextResponse.json({ error: "Player not found" }, { status: 403 });
 
+  const profile = db.prepare(
+    `SELECT 1 FROM affiliate_profiles WHERE affiliate_player_id = ?`
+  ).get(player.id);
   const rels = db.prepare(
     `SELECT id FROM affiliate_relationships WHERE affiliate_player_id = ? AND status = 'active'`
   ).all(player.id) as { id: number }[];
 
-  if (rels.length === 0) return NextResponse.json({ error: "Not an affiliate" }, { status: 403 });
+  if (!profile && rels.length === 0) return NextResponse.json({ error: "Not an affiliate" }, { status: 403 });
 
   let totalEarned = 0;
   let totalPaid = 0;
@@ -83,6 +86,8 @@ export async function POST(req: NextRequest) {
     ORDER BY ap.paid_at DESC LIMIT 20
   `).all(player.id) as any[];
 
+  const botUsername = process.env.TELEGRAM_BOT_USERNAME || "LeCercle_Lebot";
+
   return NextResponse.json({
     affiliate: {
       name: player.name,
@@ -94,6 +99,7 @@ export async function POST(req: NextRequest) {
       paid_usdt: totalPaid,
       pending_usdt: Math.max(0, totalEarned - totalPaid),
     },
+    share_link: `https://t.me/${botUsername}?start=ref_${player.id}`,
     filleuls,
     payments,
   });

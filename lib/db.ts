@@ -1183,4 +1183,25 @@ function initSchema(db: Database.Database) {
   } catch (err: any) {
     console.error(`[MIGRATION:aff_rel_nullable_origin_v1] FAILED:`, err.message);
   }
+
+  try {
+    const fix = db.prepare(`INSERT OR IGNORE INTO _applied_fixes (name) VALUES (?)`).run("add_affiliate_profiles_v1");
+    if (fix.changes > 0) {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS affiliate_profiles (
+          affiliate_player_id INTEGER PRIMARY KEY REFERENCES players(id) ON DELETE CASCADE,
+          joined_at TEXT NOT NULL DEFAULT (datetime('now')),
+          status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active', 'paused'))
+        );
+        INSERT OR IGNORE INTO affiliate_profiles (affiliate_player_id, joined_at, status)
+        SELECT DISTINCT ar.affiliate_player_id, MIN(ar.start_date), 'active'
+        FROM affiliate_relationships ar
+        WHERE ar.status = 'active'
+        GROUP BY ar.affiliate_player_id;
+      `);
+      console.log("[MIGRATION] add_affiliate_profiles_v1 applied");
+    }
+  } catch (err: any) {
+    console.error(`[MIGRATION:add_affiliate_profiles_v1] FAILED:`, err.message);
+  }
 }
