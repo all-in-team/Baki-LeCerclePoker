@@ -58,9 +58,8 @@ export default function AffiliateDetailDrawer({ rel, onClose, onPay, onEdit }: P
   }, [rel.id]);
 
   const RATE_LABEL_STYLE: Record<string, { bg: string; color: string }> = {
-    origin: { bg: "rgba(212,175,55,0.15)", color: "#D4AF37" },
-    "grâce": { bg: "rgba(34,197,94,0.12)", color: "#22C55E" },
-    passif: { bg: "rgba(156,163,175,0.15)", color: "#9CA3AF" },
+    "éligible": { bg: "rgba(34,197,94,0.12)", color: "#22C55E" },
+    hors_fenetre: { bg: "rgba(156,163,175,0.15)", color: "#9CA3AF" },
   };
 
   return (
@@ -106,7 +105,7 @@ export default function AffiliateDetailDrawer({ rel, onClose, onPay, onEdit }: P
               {breakdown.length === 0 && <tr><td colSpan={7} style={{ padding: 16, textAlign: "center", color: "var(--text-dim)", fontSize: 12 }}>Pas encore de deals. Assigne un game à @{rel.referred.telegram_handle ?? rel.referred.name} dans /crm pour démarrer le tracking.</td></tr>}
               {breakdown.map(b => {
                 const gb = GAME_BADGES[b.game_name] ?? { short: b.game_name.slice(0, 2), bg: "rgba(156,163,175,0.15)", color: "#9CA3AF" };
-                const rl = RATE_LABEL_STYLE[b.rate_label] ?? RATE_LABEL_STYLE.passif;
+                const rl = RATE_LABEL_STYLE[b.rate_label] ?? RATE_LABEL_STYLE.hors_fenetre;
                 return (
                   <tr key={b.game_id} style={{ borderBottom: "1px solid var(--border)" }}>
                     <td style={{ padding: "8px 4px" }}>

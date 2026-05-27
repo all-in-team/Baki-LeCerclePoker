@@ -36,10 +36,8 @@ export async function handleAffiliation(chatId: number, fromId: number, threadId
     `→ Tu reçois <b>500 USDT</b> direct sur ton wallet.\n\n` +
     `━━━━━━━━━━━━━━━━━━━━\n\n` +
     `🎮 <b>LES TAUX EN DÉTAIL</b>\n\n` +
-    `▪️ <b>Le game où tu l'as ramené</b> (game d'origine) → <b>50% à vie</b>\n` +
-    `▪️ <b>Les autres games où il commence à jouer</b> :\n` +
-    `   ├─ Dans les <b>30 premiers jours</b> → 50% aussi 🔥\n` +
-    `   └─ Au-delà → 10% passif\n\n` +
+    `▪️ <b>50% des profits agency lifetime</b> sur tous les games onboardés dans les <b>30 premiers jours</b> après l'arrivée de ton filleul\n` +
+    `▪️ Après 30 jours, les nouveaux games ne comptent plus\n\n` +
     `━━━━━━━━━━━━━━━━━━━━\n\n` +
     `📅 <b>PAIEMENT</b>\n\n` +
     `Versé chaque <b>lundi</b> directement sur ton wallet USDT.\n\n` +

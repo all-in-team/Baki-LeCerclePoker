@@ -331,9 +331,8 @@ export default function AffiliatesClient({ relationships, players, activeGames, 
   const fmt = (n: number) => n.toFixed(2);
 
   const RATE_LABEL_STYLE: Record<string, { bg: string; color: string }> = {
-    origin: { bg: "rgba(212,175,55,0.15)", color: "#D4AF37" },
-    "grâce": { bg: "rgba(34,197,94,0.12)", color: "#22C55E" },
-    passif: { bg: "rgba(156,163,175,0.15)", color: "#9CA3AF" },
+    "éligible": { bg: "rgba(34,197,94,0.12)", color: "#22C55E" },
+    hors_fenetre: { bg: "rgba(156,163,175,0.15)", color: "#9CA3AF" },
   };
 
   function renderHealthBanner() {

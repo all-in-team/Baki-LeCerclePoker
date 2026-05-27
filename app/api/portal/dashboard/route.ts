@@ -52,6 +52,7 @@ function buildAgentDashboard(agentPlayerId: number, db: any) {
     filleuls.push({
       name: commission.referred.name,
       handle: commission.referred.telegram_handle,
+      window_status: commission.window_status,
       games: commission.breakdown.map(b => ({
         game_name: b.game_name, rate_label: b.rate_label,
         rate_pct: Math.round(b.rate * 100), earned: b.earned_lifetime, due_now: b.due_now,

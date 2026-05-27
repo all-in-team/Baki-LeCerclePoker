@@ -36,6 +36,7 @@ interface DashboardData {
   share_link: string;
   filleuls: {
     name: string; handle: string | null;
+    window_status: { is_open: boolean; days_remaining?: number; days_elapsed?: number };
     games: { game_name: string; rate_label: string; rate_pct: number; earned: number; due_now: number }[];
     total_earned: number;
   }[];
@@ -250,19 +251,28 @@ export default function PortalClient() {
           </div>
         ) : filleuls.map((f, i) => (
           <div key={i} style={{ ...card, marginBottom: 8 }}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
               <div>
                 <span style={{ fontWeight: 600, fontSize: 14 }}>{f.name}</span>
                 {f.handle && <span style={{ ...hint, marginLeft: 6 }}>@{f.handle}</span>}
               </div>
               <span style={{ fontSize: 13, fontWeight: 600, color: accent }}>{fmt(f.total_earned)} USDT</span>
             </div>
+            <div style={{ marginBottom: 8 }}>
+              {f.window_status?.is_open
+                ? <span style={{ fontSize: 10, padding: "2px 6px", borderRadius: 4, background: "rgba(34,197,94,0.12)", color: "#22C55E", fontWeight: 600 }}>🟢 Fenêtre ouverte — J+{30 - (f.window_status.days_remaining ?? 0)}/30</span>
+                : <span style={{ fontSize: 10, padding: "2px 6px", borderRadius: 4, background: "rgba(156,163,175,0.12)", color: "#9CA3AF", fontWeight: 600 }}>🔒 Fenêtre fermée depuis {f.window_status?.days_elapsed ?? "?"}j</span>
+              }
+            </div>
             {f.games.map(g => (
               <div key={g.game_name} style={{ display: "flex", alignItems: "center", gap: 8, padding: "4px 0", fontSize: 12 }}>
                 <span style={{ background: `${GAME_COLORS[g.game_name] ?? "#666"}22`, color: GAME_COLORS[g.game_name] ?? "#999", padding: "1px 6px", borderRadius: 4, fontSize: 10, fontWeight: 700 }}>
                   {g.game_name.slice(0, 2).toUpperCase()}
                 </span>
-                <span style={hint}>{g.rate_label} {g.rate_pct}%</span>
+                {g.rate_label === "éligible"
+                  ? <span style={{ fontSize: 10, color: "#22C55E", fontWeight: 600 }}>✅ Éligible (50%)</span>
+                  : <span style={{ fontSize: 10, color: "#9CA3AF" }}>⏰ Hors fenêtre</span>
+                }
                 <span style={{ marginLeft: "auto", fontWeight: 500 }}>{fmt(g.earned)} USDT</span>
               </div>
             ))}
@@ -309,13 +319,13 @@ export default function PortalClient() {
 
       {/* Comment ça marche */}
       <div style={{ ...card, marginBottom: 24 }}>
-        <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 8 }}>Comment ça marche</div>
+        <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 8 }}>🎯 Comment ça marche</div>
         <div style={{ fontSize: 12, display: "flex", flexDirection: "column", gap: 6 }}>
-          <div><span style={{ color: "var(--tg-theme-button-color, #2ea043)", fontWeight: 600 }}>Game origin</span> <span style={hint}>— 50% des profits agency lifetime</span></div>
-          <div><span style={{ color: "#22C55E", fontWeight: 600 }}>Nouveaux games (30j)</span> <span style={hint}>— 50% (grâce)</span></div>
-          <div><span style={{ color: "var(--tg-theme-hint-color, #707579)", fontWeight: 600 }}>Après 30j</span> <span style={hint}>— 10% (passif)</span></div>
+          <div><span style={{ color: "#22C55E", fontWeight: 600 }}>50% lifetime</span> <span style={hint}>— sur les games onboardés dans les 30 premiers jours</span></div>
+          <div><span style={{ color: "#9CA3AF", fontWeight: 600 }}>Après 30j</span> <span style={hint}>— les nouveaux games ne comptent plus</span></div>
+          <div><span style={{ color: "var(--tg-theme-hint-color, #707579)", fontWeight: 600 }}>Makeup</span> <span style={hint}>— on partage les profits, pas les pertes</span></div>
         </div>
-        <div style={{ ...hint, marginTop: 8, fontSize: 10 }}>On partage les profits, pas les pertes — makeup quand cumulé positif.</div>
+        <div style={{ ...hint, marginTop: 8, fontSize: 10 }}>Plus tu mets ton filleul dans des écosystèmes qui lui plaisent pendant le 1er mois, plus ton revenu long-terme est solide.</div>
       </div>
 
       {/* Footer */}

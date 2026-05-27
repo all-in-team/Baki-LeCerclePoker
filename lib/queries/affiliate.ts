@@ -29,11 +29,17 @@ export interface GameBreakdown {
   game_id: number;
   game_name: string;
   rate: number;
-  rate_label: "origin" | "grâce" | "passif";
+  rate_label: "éligible" | "hors_fenetre";
   agency_pnl_lifetime: number;
   earned_lifetime: number;
   paid_lifetime: number;
   due_now: number;
+}
+
+export interface WindowStatus {
+  is_open: boolean;
+  days_remaining?: number;
+  days_elapsed?: number;
 }
 
 export interface CommissionResult {
@@ -45,6 +51,7 @@ export interface CommissionResult {
   total_earned_lifetime: number;
   total_paid_lifetime: number;
   last_paid_at: string | null;
+  window_status: WindowStatus;
 }
 
 export interface AffiliateGroup {
@@ -58,24 +65,29 @@ export interface AffiliateGroup {
 function getCommissionRate(
   rel: AffRel,
   gameId: number,
-): { rate: number; label: "origin" | "grâce" | "passif" } {
-  if (gameId === rel.origin_game_id) return { rate: 0.50, label: "origin" };
-
+): { rate: number; label: "éligible" | "hors_fenetre" } {
   const db = getDb();
   const pgd = db.prepare(
-    `SELECT start_date FROM player_game_deals WHERE player_id = ? AND game_id = ?`
-  ).get(rel.referred_player_id, gameId) as { start_date: string | null } | undefined;
+    `SELECT created_at FROM player_game_deals WHERE player_id = ? AND game_id = ?`
+  ).get(rel.referred_player_id, gameId) as { created_at: string | null } | undefined;
 
-  if (!pgd?.start_date) return { rate: 0.10, label: "passif" };
+  if (!pgd?.created_at) return { rate: 0, label: "hors_fenetre" };
 
   const relStart = new Date(rel.start_date + "T00:00:00Z");
-  const pgdStart = new Date(pgd.start_date + "T00:00:00Z");
-  const diffMs = pgdStart.getTime() - relStart.getTime();
-  const diffDays = diffMs / (1000 * 86400);
+  const dealCreated = new Date(pgd.created_at);
+  const diffDays = (dealCreated.getTime() - relStart.getTime()) / (1000 * 86400);
 
   return diffDays <= 30
-    ? { rate: 0.50, label: "grâce" }
-    : { rate: 0.10, label: "passif" };
+    ? { rate: 0.50, label: "éligible" }
+    : { rate: 0, label: "hors_fenetre" };
+}
+
+export function getEligibilityWindowStatus(rel: AffRel): WindowStatus {
+  const now = new Date();
+  const relStart = new Date(rel.start_date + "T00:00:00Z");
+  const daysSince = Math.floor((now.getTime() - relStart.getTime()) / (1000 * 86400));
+  if (daysSince <= 30) return { is_open: true, days_remaining: 30 - daysSince };
+  return { is_open: false, days_elapsed: daysSince - 30 };
 }
 
 // ── 2. Disclosed agency P&L ─────────────────────────────
@@ -213,6 +225,7 @@ export function computeAffiliateCommission(relationshipId: number): CommissionRe
     affiliate: { id: rel.affiliate_player_id, name: rel.aff_name, telegram_handle: rel.aff_handle },
     referred: { id: rel.referred_player_id, name: rel.ref_name, telegram_handle: rel.ref_handle },
     breakdown,
+    window_status: getEligibilityWindowStatus(rel),
     total_due_now: breakdown.reduce((s, b) => s + b.due_now, 0),
     total_earned_lifetime: breakdown.reduce((s, b) => s + b.earned_lifetime, 0),
     total_paid_lifetime: breakdown.reduce((s, b) => s + b.paid_lifetime, 0),
