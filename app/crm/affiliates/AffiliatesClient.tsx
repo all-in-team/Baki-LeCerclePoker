@@ -76,7 +76,7 @@ function lastSunday(): string {
 }
 
 interface EnrichedRel extends Rel {
-  games?: { game_id: number; game_name: string; rate_label: string; agency_pnl_disclosed: number; due_now: number }[];
+  games?: GameBreakdown[];
   total_due_now?: number; total_paid_lifetime?: number; last_paid_at?: string | null;
   breakdown?: GameBreakdown[];
 }
@@ -449,7 +449,6 @@ export default function AffiliatesClient({ relationships, players, activeGames, 
               referred: (drawerRel as any).referred ?? { id: drawerRel.referred_player_id, name: drawerRel.referred_name, telegram_handle: drawerRel.referred_handle },
               origin_game: (drawerRel as any).origin_game ?? { id: drawerRel.origin_game_id, name: drawerRel.origin_game_name },
             }}
-            breakdown={drawerRel.breakdown ?? []}
             onClose={() => setDrawerRel(null)}
             onPay={(gameId, gameName, due) => {
               const aff = (drawerRel as any).affiliate?.name ?? drawerRel.affiliate_name;

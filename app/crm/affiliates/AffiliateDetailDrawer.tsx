@@ -22,9 +22,8 @@ interface RelData {
   origin_game: { id: number | null; name: string | null };
   status: string; start_date: string;
   disclosed_action_pct: number | null; disclosed_rakeback_pct: number | null; disclosed_insurance_pct: number | null;
-  games: { game_id: number; game_name: string; rate_label: string; agency_pnl_disclosed: number; due_now: number }[];
+  games: GameBreakdown[];
   total_due_now: number; total_paid_lifetime: number; last_paid_at: string | null;
-  breakdown?: GameBreakdown[];
 }
 
 interface Payment {
@@ -34,7 +33,6 @@ interface Payment {
 
 interface Props {
   rel: RelData;
-  breakdown: GameBreakdown[];
   onClose: () => void;
   onPay: (gameId: number, gameName: string, due: number) => void;
   onEdit: () => void;
@@ -42,7 +40,8 @@ interface Props {
 
 const fmt = (n: number) => n.toFixed(2);
 
-export default function AffiliateDetailDrawer({ rel, breakdown, onClose, onPay, onEdit }: Props) {
+export default function AffiliateDetailDrawer({ rel, onClose, onPay, onEdit }: Props) {
+  const breakdown = rel.games as GameBreakdown[];
   const [payments, setPayments] = useState<Payment[]>([]);
   const [loadingPayments, setLoadingPayments] = useState(true);
 

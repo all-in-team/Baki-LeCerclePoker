@@ -37,10 +37,7 @@ export async function GET(req: NextRequest) {
       exclude_agency_extras: r.exclude_agency_extras,
       notes: r.notes,
       created_at: r.created_at,
-      games: commission?.breakdown.map(b => ({
-        game_id: b.game_id, game_name: b.game_name, rate_label: b.rate_label,
-        agency_pnl_disclosed: b.agency_pnl_lifetime, due_now: b.due_now,
-      })) ?? [],
+      games: commission?.breakdown ?? [],
       total_due_now: commission?.total_due_now ?? 0,
       total_paid_lifetime: commission?.total_paid_lifetime ?? 0,
       last_paid_at: commission?.last_paid_at ?? null,
