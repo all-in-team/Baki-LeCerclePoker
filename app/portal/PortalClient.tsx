@@ -91,8 +91,8 @@ export default function PortalClient() {
   if (state === "forbidden") return (
     <div style={{ ...s, display: "flex", flexDirection: "column", justifyContent: "center", alignItems: "center", gap: 16, textAlign: "center", paddingTop: 80 }}>
       <div style={{ fontSize: 40 }}>🚫</div>
-      <div style={{ fontSize: 16, fontWeight: 600 }}>Tu n'es pas affilié</div>
-      <div style={hint}>Contacte @baki77777 pour rejoindre le programme affiliate.</div>
+      <div style={{ fontSize: 16, fontWeight: 600 }}>Tu n'es pas agent</div>
+      <div style={hint}>Contacte @baki77777 pour rejoindre le programme.</div>
     </div>
   );
 
@@ -121,7 +121,7 @@ export default function PortalClient() {
       {/* Header */}
       <div style={{ marginBottom: 24 }}>
         <div style={{ fontSize: 20, fontWeight: 700 }}>Bienvenue {affiliate.name} 🎰</div>
-        <div style={hint}>Affilié depuis {affiliate.joined_at ?? "—"}</div>
+        <div style={hint}>Agent depuis {affiliate.joined_at ?? "—"}</div>
       </div>
 
       {/* Stats */}

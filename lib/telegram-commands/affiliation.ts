@@ -26,7 +26,7 @@ export async function handleAffiliation(chatId: number, fromId: number, threadId
   setSession(chatId, "affiliation_awaiting_handle" as Step, player.id, player.telegram_id);
 
   await sendMsg(chatId,
-    `🎯 <b>PROGRAMME AFFILIATE — LECERCLEPOKER</b>\n\n` +
+    `🎯 <b>PROGRAMME AGENT — LECERCLEPOKER</b>\n\n` +
     `Tu peux désormais gagner sur les joueurs que tu nous ramènes.\n\n` +
     `━━━━━━━━━━━━━━━━━━━━\n\n` +
     `💰 <b>LE DEAL</b>\n\n` +

@@ -1,7 +1,7 @@
 import { getDb } from "@/lib/db";
 import { sendMsg } from "./helpers";
 
-const BOT_USERNAME = process.env.TELEGRAM_BOT_USERNAME || "LeCercle_Lebot";
+const DIRECT_LINK = "https://t.me/LeCercle_Lebot/portal";
 
 export async function handleStartAffi(chatId: number, fromId: number, chatType: string) {
   if (chatType !== "group" && chatType !== "supergroup") {
@@ -24,7 +24,20 @@ export async function handleStartAffi(chatId: number, fromId: number, chatType: 
   ).get(player.id);
 
   if (existing) {
-    await sendMsg(chatId, `✅ <b>${player.name}</b> est déjà affilié. Tape /myaffi en DM pour ton dashboard.`);
+    const botToken = process.env.TELEGRAM_BOT_TOKEN;
+    if (!botToken) return;
+    await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        chat_id: chatId,
+        text: `✅ <b>${player.name}</b> est déjà agent. Voici ton dashboard 👇`,
+        parse_mode: "HTML",
+        reply_markup: {
+          inline_keyboard: [[{ text: "🎰 Ouvrir mon dashboard", url: DIRECT_LINK }]],
+        },
+      }),
+    });
     return;
   }
 
@@ -40,7 +53,7 @@ export async function handleStartAffi(chatId: number, fromId: number, chatType: 
       chat_id: chatId,
       text:
         `🎰 <b>${player.name}</b>, félicitations !\n\n` +
-        `Tu es désormais affilié LeCerclePoker.\n\n` +
+        `Tu es désormais agent LeCerclePoker.\n\n` +
         `Tu peux ramener des filleuls et gagner :\n` +
         `• <b>50%</b> des profits agency lifetime sur leur game origin\n` +
         `• <b>50%</b> pendant 30j sur les nouveaux games\n` +
@@ -48,7 +61,7 @@ export async function handleStartAffi(chatId: number, fromId: number, chatType: 
         `Ouvre ton dashboard pour récupérer ton lien perso 👇`,
       parse_mode: "HTML",
       reply_markup: {
-        inline_keyboard: [[{ text: "🎰 Ouvrir mon dashboard", url: `https://t.me/${BOT_USERNAME}?start=myaffi` }]],
+        inline_keyboard: [[{ text: "🎰 Ouvrir mon dashboard", url: DIRECT_LINK }]],
       },
     }),
   });

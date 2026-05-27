@@ -1,7 +1,7 @@
 import { getDb } from "@/lib/db";
 
 const PORTAL_URL = "https://lecerclepoker-production.up.railway.app/portal";
-const BOT_USERNAME = "LeCercle_Lebot";
+const DIRECT_LINK = "https://t.me/LeCercle_Lebot/portal";
 
 export async function handleMyAffi(chatId: number, fromId: number, chatType: string) {
   const botToken = process.env.TELEGRAM_BOT_TOKEN;
@@ -20,10 +20,10 @@ export async function handleMyAffi(chatId: number, fromId: number, chatType: str
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         chat_id: chatId,
-        text: `🎰 <b>${name}</b>, ton dashboard affiliate est prêt !`,
+        text: `🎰 <b>${name}</b>, ton dashboard agent est prêt !`,
         parse_mode: "HTML",
         reply_markup: {
-          inline_keyboard: [[{ text: "🎰 Voir mon dashboard", url: `https://t.me/${BOT_USERNAME}?start=myaffi` }]],
+          inline_keyboard: [[{ text: "🎰 Voir mon dashboard", url: DIRECT_LINK }]],
         },
       }),
     });
@@ -35,7 +35,7 @@ export async function handleMyAffi(chatId: number, fromId: number, chatType: str
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       chat_id: chatId,
-      text: `🎰 <b>${name}</b>, ton dashboard affiliate 👇`,
+      text: `🎰 <b>${name}</b>, ton dashboard agent 👇`,
       parse_mode: "HTML",
       reply_markup: {
         inline_keyboard: [[{ text: "🎰 Ouvrir mon dashboard", web_app: { url: PORTAL_URL } }]],
