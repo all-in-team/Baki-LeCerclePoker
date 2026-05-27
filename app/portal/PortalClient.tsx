@@ -16,7 +16,21 @@ declare global {
   }
 }
 
+interface AgentSummary {
+  player_id: number; name: string; handle: string | null; joined_at: string | null;
+  filleuls_count: number;
+  summary: { lifetime: number; paid: number; pending: number };
+}
+
+interface OwnerData {
+  mode: "owner";
+  total_due_all_agents: number;
+  total_paid_all_agents: number;
+  agents: AgentSummary[];
+}
+
 interface DashboardData {
+  mode?: "agent";
   affiliate: { name: string; handle: string | null; joined_at: string | null };
   summary: { lifetime_usdt: number; paid_usdt: number; pending_usdt: number };
   share_link: string;
@@ -28,6 +42,8 @@ interface DashboardData {
   payments: { paid_at: string; game_name: string; amount_usdt: number; tx_hash: string | null; notes: string | null }[];
 }
 
+type ApiResponse = OwnerData | DashboardData;
+
 const fmt = (n: number) => n.toFixed(2);
 
 const GAME_COLORS: Record<string, string> = {
@@ -36,29 +52,44 @@ const GAME_COLORS: Record<string, string> = {
 
 export default function PortalClient() {
   const [state, setState] = useState<"loading" | "no-auth" | "forbidden" | "error" | "ok">("loading");
-  const [data, setData] = useState<DashboardData | null>(null);
+  const [response, setResponse] = useState<ApiResponse | null>(null);
+  const [selectedAgentId, setSelectedAgentId] = useState<number | null>(null);
+  const [initDataStr, setInitDataStr] = useState("");
 
-  useEffect(() => {
-    const tg = window.Telegram?.WebApp;
-    if (tg) { tg.ready(); tg.expand(); }
-
-    const initData = tg?.initData || "";
-    if (!initData) { setState("no-auth"); return; }
-
+  function fetchDashboard(initData: string, agentId?: number | null) {
+    setState("loading");
     fetch("/api/portal/dashboard", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ initData }),
+      body: JSON.stringify({ initData, ...(agentId ? { agent_id: agentId } : {}) }),
     })
       .then(async res => {
         if (res.status === 401) { setState("no-auth"); return; }
         if (res.status === 403) { setState("forbidden"); return; }
         if (!res.ok) { setState("error"); return; }
-        setData(await res.json());
+        setResponse(await res.json());
         setState("ok");
       })
       .catch(() => setState("error"));
+  }
+
+  useEffect(() => {
+    const tg = window.Telegram?.WebApp;
+    if (tg) { tg.ready(); tg.expand(); }
+    const initData = tg?.initData || "";
+    setInitDataStr(initData);
+    if (!initData) { setState("no-auth"); return; }
+    fetchDashboard(initData);
   }, []);
+
+  function selectAgent(agentId: number) {
+    setSelectedAgentId(agentId);
+    fetchDashboard(initDataStr, agentId);
+  }
+  function backToOverview() {
+    setSelectedAgentId(null);
+    fetchDashboard(initDataStr);
+  }
 
   const s: React.CSSProperties = {
     fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif",
@@ -96,7 +127,7 @@ export default function PortalClient() {
     </div>
   );
 
-  if (state === "error" || !data) return (
+  if (state === "error" || !response) return (
     <div style={{ ...s, display: "flex", flexDirection: "column", justifyContent: "center", alignItems: "center", gap: 16, textAlign: "center", paddingTop: 80 }}>
       <div style={{ fontSize: 40 }}>⚠️</div>
       <div style={{ fontSize: 16, fontWeight: 600 }}>Erreur de chargement</div>
@@ -104,6 +135,42 @@ export default function PortalClient() {
     </div>
   );
 
+  // Owner overview mode
+  if (response.mode === "owner") {
+    const ow = response as OwnerData;
+    return (
+      <div style={s}>
+        <div style={{ marginBottom: 24 }}>
+          <div style={{ fontSize: 20, fontWeight: 700 }}>👑 Vue Owner</div>
+          <div style={hint}>{ow.agents.length} agents · {fmt(ow.total_due_all_agents)} USDT en attente · {fmt(ow.total_paid_all_agents)} USDT payé</div>
+        </div>
+        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+          {ow.agents.length === 0 && <div style={{ ...card, textAlign: "center" }}><div style={hint}>Aucun agent activé.</div></div>}
+          {ow.agents.map(a => (
+            <div key={a.player_id} onClick={() => selectAgent(a.player_id)} style={{ ...card, cursor: "pointer", display: "flex", alignItems: "center", gap: 14 }}>
+              <div style={{ width: 40, height: 40, borderRadius: "50%", background: "var(--tg-theme-button-color, #2ea043)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 16, fontWeight: 700, color: "var(--tg-theme-button-text-color, #fff)", flexShrink: 0 }}>
+                {a.name.slice(0, 2).toUpperCase()}
+              </div>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontWeight: 600, fontSize: 14 }}>{a.name} {a.handle && <span style={hint}>@{a.handle}</span>}</div>
+                <div style={{ ...hint, fontSize: 11 }}>Filleuls: {a.filleuls_count} · Depuis {a.joined_at ?? "—"}</div>
+              </div>
+              <div style={{ textAlign: "right", flexShrink: 0 }}>
+                <div style={{ fontWeight: 700, fontSize: 14, color: a.summary.pending > 0 ? accent : "var(--tg-theme-text-color, #fff)" }}>{fmt(a.summary.pending)}</div>
+                <div style={{ ...hint, fontSize: 10 }}>USDT dû</div>
+              </div>
+            </div>
+          ))}
+        </div>
+        <div style={{ textAlign: "center", padding: "24px 0", ...hint }}>
+          <div>LeCerclePoker</div>
+        </div>
+      </div>
+    );
+  }
+
+  // Agent dashboard mode
+  const data = response as DashboardData;
   const { affiliate, summary, filleuls, payments, share_link } = data;
   const [copied, setCopied] = useState(false);
 
@@ -118,9 +185,15 @@ export default function PortalClient() {
 
   return (
     <div style={s}>
+      {/* Back button (owner drill-down) */}
+      {selectedAgentId && (
+        <button onClick={backToOverview} style={{ display: "flex", alignItems: "center", gap: 6, padding: "6px 12px", borderRadius: 8, fontSize: 13, cursor: "pointer", background: "transparent", border: "1px solid var(--tg-theme-hint-color, #707579)", color: "var(--tg-theme-hint-color, #707579)", marginBottom: 16 }}>
+          ← Retour overview
+        </button>
+      )}
       {/* Header */}
       <div style={{ marginBottom: 24 }}>
-        <div style={{ fontSize: 20, fontWeight: 700 }}>Bienvenue {affiliate.name} 🎰</div>
+        <div style={{ fontSize: 20, fontWeight: 700 }}>{selectedAgentId ? affiliate.name : `Bienvenue ${affiliate.name}`} 🎰</div>
         <div style={hint}>Agent depuis {affiliate.joined_at ?? "—"}</div>
       </div>
 

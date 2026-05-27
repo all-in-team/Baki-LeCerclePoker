@@ -3,6 +3,11 @@ import { createHmac, timingSafeEqual } from "crypto";
 import { getDb } from "@/lib/db";
 import { computeAffiliateCommission } from "@/lib/queries/affiliate";
 
+const OWNER_TG_IDS = new Set(
+  (process.env.TELEGRAM_OWNER_IDS ?? "1298290355,1486389037")
+    .split(",").map(id => parseInt(id.trim(), 10)).filter(n => !isNaN(n))
+);
+
 function verifyTelegramWebAppData(initData: string, botToken: string): { valid: boolean; user?: any } {
   const params = new URLSearchParams(initData);
   const hash = params.get("hash");
@@ -25,34 +30,15 @@ function verifyTelegramWebAppData(initData: string, botToken: string): { valid: 
   return { valid: true, user };
 }
 
-export async function POST(req: NextRequest) {
-  const body = await req.json();
-  const initData = body.initData as string;
-  if (!initData) return NextResponse.json({ error: "initData required" }, { status: 400 });
-
-  const botToken = process.env.TELEGRAM_BOT_TOKEN;
-  if (!botToken) return NextResponse.json({ error: "Server config error" }, { status: 500 });
-
-  const { valid, user } = verifyTelegramWebAppData(initData, botToken);
-  if (!valid || !user?.id) return NextResponse.json({ error: "Invalid initData" }, { status: 401 });
-
-  const db = getDb();
-  const telegramId = user.id;
-
+function buildAgentDashboard(agentPlayerId: number, db: any) {
   const player = db.prepare(
-    `SELECT id, name, telegram_handle, created_at FROM players WHERE telegram_id = ?`
-  ).get(telegramId) as { id: number; name: string; telegram_handle: string | null; created_at: string | null } | undefined;
+    `SELECT id, name, telegram_handle, created_at FROM players WHERE id = ?`
+  ).get(agentPlayerId) as { id: number; name: string; telegram_handle: string | null; created_at: string | null } | undefined;
+  if (!player) return null;
 
-  if (!player) return NextResponse.json({ error: "Player not found" }, { status: 403 });
-
-  const profile = db.prepare(
-    `SELECT 1 FROM affiliate_profiles WHERE affiliate_player_id = ?`
-  ).get(player.id);
   const rels = db.prepare(
     `SELECT id FROM affiliate_relationships WHERE affiliate_player_id = ? AND status = 'active'`
   ).all(player.id) as { id: number }[];
-
-  if (!profile && rels.length === 0) return NextResponse.json({ error: "Not an affiliate" }, { status: 403 });
 
   let totalEarned = 0;
   let totalPaid = 0;
@@ -67,11 +53,8 @@ export async function POST(req: NextRequest) {
       name: commission.referred.name,
       handle: commission.referred.telegram_handle,
       games: commission.breakdown.map(b => ({
-        game_name: b.game_name,
-        rate_label: b.rate_label,
-        rate_pct: Math.round(b.rate * 100),
-        earned: b.earned_lifetime,
-        due_now: b.due_now,
+        game_name: b.game_name, rate_label: b.rate_label,
+        rate_pct: Math.round(b.rate * 100), earned: b.earned_lifetime, due_now: b.due_now,
       })),
       total_earned: commission.total_earned_lifetime,
     });
@@ -88,19 +71,97 @@ export async function POST(req: NextRequest) {
 
   const botUsername = process.env.TELEGRAM_BOT_USERNAME || "LeCercle_Lebot";
 
-  return NextResponse.json({
-    affiliate: {
-      name: player.name,
-      handle: player.telegram_handle,
-      joined_at: player.created_at?.slice(0, 10) ?? null,
-    },
-    summary: {
-      lifetime_usdt: totalEarned,
-      paid_usdt: totalPaid,
-      pending_usdt: Math.max(0, totalEarned - totalPaid),
-    },
+  return {
+    mode: "agent" as const,
+    affiliate: { name: player.name, handle: player.telegram_handle, joined_at: player.created_at?.slice(0, 10) ?? null },
+    summary: { lifetime_usdt: totalEarned, paid_usdt: totalPaid, pending_usdt: Math.max(0, totalEarned - totalPaid) },
     share_link: `https://t.me/${botUsername}?start=ref_${player.id}`,
     filleuls,
     payments,
-  });
+  };
+}
+
+export async function POST(req: NextRequest) {
+  const body = await req.json();
+  const initData = body.initData as string;
+  const agentId = body.agent_id as number | undefined;
+  if (!initData) return NextResponse.json({ error: "initData required" }, { status: 400 });
+
+  const botToken = process.env.TELEGRAM_BOT_TOKEN;
+  if (!botToken) return NextResponse.json({ error: "Server config error" }, { status: 500 });
+
+  const { valid, user } = verifyTelegramWebAppData(initData, botToken);
+  if (!valid || !user?.id) return NextResponse.json({ error: "Invalid initData" }, { status: 401 });
+
+  const db = getDb();
+  const telegramId = user.id;
+  const isOwner = OWNER_TG_IDS.has(telegramId);
+
+  // Owner mode: drill into specific agent
+  if (isOwner && agentId) {
+    const dashboard = buildAgentDashboard(agentId, db);
+    if (!dashboard) return NextResponse.json({ error: "Agent not found" }, { status: 404 });
+    return NextResponse.json(dashboard);
+  }
+
+  // Owner mode: overview of all agents
+  if (isOwner && !agentId) {
+    const agents = db.prepare(`
+      SELECT ap.affiliate_player_id, p.name, p.telegram_handle, ap.joined_at
+      FROM affiliate_profiles ap
+      JOIN players p ON p.id = ap.affiliate_player_id
+      WHERE ap.status = 'active'
+      ORDER BY p.name
+    `).all() as { affiliate_player_id: number; name: string; telegram_handle: string | null; joined_at: string }[];
+
+    let totalDueAll = 0;
+    let totalPaidAll = 0;
+    const agentSummaries = agents.map(a => {
+      const rels = db.prepare(
+        `SELECT id FROM affiliate_relationships WHERE affiliate_player_id = ? AND status = 'active'`
+      ).all(a.affiliate_player_id) as { id: number }[];
+
+      let lifetime = 0, paid = 0, filleulsCount = 0;
+      for (const r of rels) {
+        const c = computeAffiliateCommission(r.id);
+        if (!c) continue;
+        lifetime += c.total_earned_lifetime;
+        paid += c.total_paid_lifetime;
+        filleulsCount++;
+      }
+      const pending = Math.max(0, lifetime - paid);
+      totalDueAll += pending;
+      totalPaidAll += paid;
+
+      return {
+        player_id: a.affiliate_player_id,
+        name: a.name,
+        handle: a.telegram_handle,
+        joined_at: a.joined_at?.slice(0, 10) ?? null,
+        filleuls_count: filleulsCount,
+        summary: { lifetime, paid, pending },
+      };
+    });
+
+    return NextResponse.json({
+      mode: "owner",
+      total_due_all_agents: totalDueAll,
+      total_paid_all_agents: totalPaidAll,
+      agents: agentSummaries,
+    });
+  }
+
+  // Agent mode: own dashboard
+  const player = db.prepare(
+    `SELECT id FROM players WHERE telegram_id = ?`
+  ).get(telegramId) as { id: number } | undefined;
+  if (!player) return NextResponse.json({ error: "Player not found" }, { status: 403 });
+
+  const profile = db.prepare(`SELECT 1 FROM affiliate_profiles WHERE affiliate_player_id = ?`).get(player.id);
+  const hasRels = db.prepare(`SELECT 1 FROM affiliate_relationships WHERE affiliate_player_id = ? AND status = 'active'`).get(player.id);
+  if (!profile && !hasRels) return NextResponse.json({ error: "Not an agent" }, { status: 403 });
+
+  const dashboard = buildAgentDashboard(player.id, db);
+  if (!dashboard) return NextResponse.json({ error: "Error building dashboard" }, { status: 500 });
+  return NextResponse.json(dashboard);
 }
