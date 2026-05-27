@@ -55,6 +55,7 @@ export default function PortalClient() {
   const [response, setResponse] = useState<ApiResponse | null>(null);
   const [selectedAgentId, setSelectedAgentId] = useState<number | null>(null);
   const [initDataStr, setInitDataStr] = useState("");
+  const [copied, setCopied] = useState(false);
 
   function fetchDashboard(initData: string, agentId?: number | null) {
     setState("loading");
@@ -172,7 +173,6 @@ export default function PortalClient() {
   // Agent dashboard mode
   const data = response as DashboardData;
   const { affiliate, summary, filleuls, payments, share_link } = data;
-  const [copied, setCopied] = useState(false);
 
   async function copyLink() {
     try { await navigator.clipboard.writeText(share_link); setCopied(true); setTimeout(() => setCopied(false), 2000); } catch {}
