@@ -1,6 +1,6 @@
 import { getDb } from "@/lib/db";
 import { sendMsg, sendMsgKeyboard, setSession, mentionOf, trackOnboardingStep, AGENT_CHAT_ID, type Step } from "./helpers";
-import { PITCH_MSG_1, PITCH_MSG_2, PITCH_MSG_3, PITCH_MSG_4 } from "./onboarding-script";
+// PITCH_MSG imports removed — neutral default, game-specific pitches are inline in sendKkpokerPitch/sendA5pokerPitch
 import { consumePendingGroupData } from "./onboarding";
 
 const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
@@ -69,7 +69,7 @@ export async function handleNewMembers(members: any[], chatTitle: string, chatId
     let isNew: boolean;
     if (existing) { playerId = existing.id; isNew = false; }
     else {
-      const joinedVia = gameName ? `new_member_${gameName}` : "new_member_AKPOKER";
+      const joinedVia = gameName ? `new_member_${gameName}` : "new_member_neutral";
       const r = db.prepare(`INSERT INTO players (name, telegram_handle, telegram_id, telegram_chat_id, status, tier, joined_via) VALUES (@name, @handle, @telegram_id, @chat_id, 'active', 'B', @joined_via)`)
         .run({ name, handle: member.username ?? null, telegram_id: member.id, chat_id: String(chatId), joined_via: joinedVia });
       playerId = Number(r.lastInsertRowid);
@@ -130,22 +130,19 @@ export async function handleNewMembers(members: any[], chatTitle: string, chatId
       continue;
     }
 
-    // AKPOKER (default): existing pitch flow — unchanged
-    if (isNew) {
-      setSession(chatId, "pitch_sent", playerId, member.id);
-      trackOnboardingStep(member.id, "pitch_sent");
-
-      const tag = mentionOf({ name: member.first_name ?? name, telegram_handle: member.username ?? null, telegram_id: member.id });
-      await sendMsg(chatId, `${tag}\n\n${PITCH_MSG_1(member.first_name ?? name)}`);
-      await sleep(2000);
-      await sendMsg(chatId, PITCH_MSG_2);
-      await sleep(2000);
-      await sendMsg(chatId, PITCH_MSG_3);
-      await sleep(3000);
-      await sendMsgKeyboard(chatId, PITCH_MSG_4, [
-        [{ text: "🤝 J'accepte le deal", callback_data: "onboard_choice_with_us" }],
-        [{ text: "❓ J'ai une question", callback_data: "onboard_choice_question" }],
-      ]);
+    // Neutral (no gameName): welcome message, Baki handles onboarding manually
+    if (isNew && !gameName) {
+      await sendMsg(chatId,
+        `👋 Bienvenue <b>${member.first_name ?? name}</b> !\n\n` +
+        `L'équipe va te contacter pour te setup sur le bon game. En attendant, fais comme chez toi 🃏`
+      );
+      await sendMsg(AGENT_CHAT_ID,
+        `🆕 <b>Nouveau joueur (neutral)</b>\n` +
+        `👤 ${name}` + (member.username ? ` @${member.username}` : "") + `\n` +
+        `🆔 <code>${member.id}</code>\n` +
+        `📦 Chat: <code>${chatId}</code>\n` +
+        `→ Assigner un game via /crm`
+      );
     }
   }
 }
