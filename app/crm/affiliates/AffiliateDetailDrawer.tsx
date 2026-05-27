@@ -66,8 +66,8 @@ export default function AffiliateDetailDrawer({ rel, breakdown, onClose, onPay, 
 
   return (
     <>
-      <div onClick={onClose} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.4)", zIndex: 90 }} />
-      <div style={{ position: "fixed", top: 0, right: 0, bottom: 0, width: 540, background: "var(--bg)", borderLeft: "1px solid var(--border)", zIndex: 100, overflowY: "auto", padding: "20px 24px", display: "flex", flexDirection: "column", gap: 20 }}>
+      <div onClick={onClose} style={{ position: "fixed", inset: 0, zIndex: 200, background: "rgba(0,0,0,0.5)" }} />
+      <div style={{ position: "fixed", top: 0, right: 0, bottom: 0, zIndex: 201, width: "min(480px, 100vw)", background: "var(--bg-raised)", borderLeft: "1px solid var(--border)", overflowY: "auto", padding: "24px", display: "flex", flexDirection: "column", gap: 20 }}>
         {/* Header */}
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
           <div>
@@ -104,7 +104,7 @@ export default function AffiliateDetailDrawer({ rel, breakdown, onClose, onPay, 
               </tr>
             </thead>
             <tbody>
-              {breakdown.length === 0 && <tr><td colSpan={7} style={{ padding: 12, textAlign: "center", color: "var(--text-dim)" }}>Aucun deal actif</td></tr>}
+              {breakdown.length === 0 && <tr><td colSpan={7} style={{ padding: 16, textAlign: "center", color: "var(--text-dim)", fontSize: 12 }}>Pas encore de deals. Assigne un game à @{rel.referred.telegram_handle ?? rel.referred.name} dans /crm pour démarrer le tracking.</td></tr>}
               {breakdown.map(b => {
                 const gb = GAME_BADGES[b.game_name] ?? { short: b.game_name.slice(0, 2), bg: "rgba(156,163,175,0.15)", color: "#9CA3AF" };
                 const rl = RATE_LABEL_STYLE[b.rate_label] ?? RATE_LABEL_STYLE.passif;
@@ -150,11 +150,12 @@ export default function AffiliateDetailDrawer({ rel, breakdown, onClose, onPay, 
               <div key={d.label} style={{ padding: "8px 10px", background: "var(--bg-surface)", borderRadius: 6, border: "1px solid var(--border)" }}>
                 <div style={{ fontSize: 10, color: "var(--text-dim)", marginBottom: 2 }}>{d.label}</div>
                 <div style={{ fontWeight: 600, color: d.val != null ? "var(--text)" : "var(--text-dim)" }}>
-                  {d.val != null ? `${d.val}%` : "réel"}
+                  {d.val != null ? `${d.val}%` : "—"}
                 </div>
               </div>
             ))}
           </div>
+          <div style={{ fontSize: 10, color: "var(--text-dim)", marginTop: 4 }}>Les taux à « — » utilisent les rates réels des deals.</div>
         </div>
 
         {/* Payment history */}
