@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getDb } from "@/lib/db";
+import { computeAffiliateCommission } from "@/lib/queries/affiliate";
 
 export async function GET(req: NextRequest) {
   const db = getDb();
@@ -21,20 +22,30 @@ export async function GET(req: NextRequest) {
     ORDER BY ar.created_at DESC
   `).all(...params) as any[];
 
-  return NextResponse.json(rows.map(r => ({
-    id: r.id,
-    affiliate: { id: r.affiliate_player_id, name: r.affiliate_name, telegram_handle: r.affiliate_handle },
-    referred: { id: r.referred_player_id, name: r.referred_name, telegram_handle: r.referred_handle },
-    origin_game: { id: r.origin_game_id, name: r.origin_game_name },
-    start_date: r.start_date,
-    status: r.status,
-    disclosed_action_pct: r.disclosed_action_pct,
-    disclosed_rakeback_pct: r.disclosed_rakeback_pct,
-    disclosed_insurance_pct: r.disclosed_insurance_pct,
-    exclude_agency_extras: r.exclude_agency_extras,
-    notes: r.notes,
-    created_at: r.created_at,
-  })));
+  return NextResponse.json(rows.map(r => {
+    const commission = computeAffiliateCommission(r.id);
+    return {
+      id: r.id,
+      affiliate: { id: r.affiliate_player_id, name: r.affiliate_name, telegram_handle: r.affiliate_handle },
+      referred: { id: r.referred_player_id, name: r.referred_name, telegram_handle: r.referred_handle },
+      origin_game: { id: r.origin_game_id, name: r.origin_game_name },
+      start_date: r.start_date,
+      status: r.status,
+      disclosed_action_pct: r.disclosed_action_pct,
+      disclosed_rakeback_pct: r.disclosed_rakeback_pct,
+      disclosed_insurance_pct: r.disclosed_insurance_pct,
+      exclude_agency_extras: r.exclude_agency_extras,
+      notes: r.notes,
+      created_at: r.created_at,
+      games: commission?.breakdown.map(b => ({
+        game_id: b.game_id, game_name: b.game_name, rate_label: b.rate_label,
+        agency_pnl_disclosed: b.agency_pnl_lifetime, due_now: b.due_now,
+      })) ?? [],
+      total_due_now: commission?.total_due_now ?? 0,
+      total_paid_lifetime: commission?.total_paid_lifetime ?? 0,
+      last_paid_at: commission?.last_paid_at ?? null,
+    };
+  }));
 }
 
 export async function POST(req: NextRequest) {

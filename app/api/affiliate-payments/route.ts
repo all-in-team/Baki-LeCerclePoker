@@ -2,6 +2,20 @@ import { NextRequest, NextResponse } from "next/server";
 import { getDb } from "@/lib/db";
 import { computeAffiliateCommission } from "@/lib/queries/affiliate";
 
+export async function GET(req: NextRequest) {
+  const relId = req.nextUrl.searchParams.get("relationship_id");
+  if (!relId) return NextResponse.json({ error: "relationship_id required" }, { status: 400 });
+  const db = getDb();
+  const rows = db.prepare(`
+    SELECT ap.*, g.name AS game_name
+    FROM affiliate_payments ap
+    LEFT JOIN games g ON g.id = ap.game_id
+    WHERE ap.relationship_id = ?
+    ORDER BY ap.paid_at DESC LIMIT 20
+  `).all(Number(relId)) as any[];
+  return NextResponse.json(rows);
+}
+
 export async function POST(req: NextRequest) {
   const body = await req.json();
   const { relationship_id, game_id, amount_usdt, week_start_date, week_end_date, tx_hash, notes } = body;

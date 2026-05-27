@@ -2,8 +2,9 @@
 
 import { useState, useEffect, useCallback } from "react";
 import { useRouter } from "next/navigation";
-import { Plus, Pencil, XCircle, DollarSign, Loader2 } from "lucide-react";
+import { Plus, Pencil, XCircle, DollarSign, Loader2, AlertTriangle } from "lucide-react";
 import Modal from "@/components/Modal";
+import AffiliateDetailDrawer from "./AffiliateDetailDrawer";
 
 const GAME_BADGES: Record<string, { short: string; bg: string; color: string }> = {
   TELE:    { short: "AK", bg: "rgba(212,175,55,0.15)", color: "#D4AF37" },
@@ -74,6 +75,19 @@ function lastSunday(): string {
   return d.toISOString().slice(0, 10);
 }
 
+interface EnrichedRel extends Rel {
+  games?: { game_id: number; game_name: string; rate_label: string; agency_pnl_disclosed: number; due_now: number }[];
+  total_due_now?: number; total_paid_lifetime?: number; last_paid_at?: string | null;
+  breakdown?: GameBreakdown[];
+}
+
+interface HealthData {
+  pending_leads_no_relationship: number;
+  relationships_no_origin: number;
+  relationships_no_referred_player: number;
+  orphan_payments: number;
+}
+
 export default function AffiliatesClient({ relationships, players, activeGames, existingReferredIds }: Props) {
   const router = useRouter();
   const [tab, setTab] = useState<Tab>("relations");
@@ -83,6 +97,30 @@ export default function AffiliatesClient({ relationships, players, activeGames, 
   const [saving, setSaving] = useState(false);
   const [searchAff, setSearchAff] = useState("");
   const [searchRef, setSearchRef] = useState("");
+
+  // Enriched relations from API
+  const [enrichedRels, setEnrichedRels] = useState<EnrichedRel[]>([]);
+  const [enrichedLoading, setEnrichedLoading] = useState(false);
+
+  // Health
+  const [health, setHealth] = useState<HealthData | null>(null);
+
+  // Drawer
+  const [drawerRel, setDrawerRel] = useState<EnrichedRel | null>(null);
+
+  const loadEnriched = useCallback(async () => {
+    setEnrichedLoading(true);
+    try {
+      const [relsRes, healthRes] = await Promise.all([
+        fetch("/api/affiliate-relationships"),
+        fetch("/api/affiliate-health"),
+      ]);
+      if (relsRes.ok) setEnrichedRels(await relsRes.json());
+      if (healthRes.ok) setHealth(await healthRes.json());
+    } finally { setEnrichedLoading(false); }
+  }, []);
+
+  useEffect(() => { if (tab === "relations") loadEnriched(); }, [tab, loadEnriched]);
 
   // Payouts state
   const [payouts, setPayouts] = useState<AffiliateGroup[]>([]);
@@ -121,6 +159,7 @@ export default function AffiliatesClient({ relationships, players, activeGames, 
       if (!res.ok) { const d = await res.json(); alert(d.error ?? "Erreur"); return; }
       setPayTarget(null);
       loadPayouts();
+      loadEnriched();
     } catch (e: any) { alert(e.message); } finally { setSaving(false); }
   }
 
@@ -291,50 +330,99 @@ export default function AffiliatesClient({ relationships, players, activeGames, 
 
   const fmt = (n: number) => n.toFixed(2);
 
+  const RATE_LABEL_STYLE: Record<string, { bg: string; color: string }> = {
+    origin: { bg: "rgba(212,175,55,0.15)", color: "#D4AF37" },
+    "grâce": { bg: "rgba(34,197,94,0.12)", color: "#22C55E" },
+    passif: { bg: "rgba(156,163,175,0.15)", color: "#9CA3AF" },
+  };
+
+  function renderHealthBanner() {
+    if (!health) return null;
+    const { pending_leads_no_relationship: plnr, relationships_no_origin: rno, relationships_no_referred_player: rnrp, orphan_payments: op } = health;
+    if (plnr === 0 && rno === 0 && rnrp === 0 && op === 0) return null;
+    const isRed = plnr > 0 || rnrp > 0 || op > 0;
+    const msgs: string[] = [];
+    if (rno > 0) msgs.push(`${rno} relation(s) en attente de leur premier deal`);
+    if (plnr > 0) msgs.push(`${plnr} lead(s) converti(s) sans relationship`);
+    if (rnrp > 0) msgs.push(`${rnrp} relationship(s) sans player`);
+    if (op > 0) msgs.push(`${op} paiement(s) orphelin(s)`);
+    return (
+      <div style={{ padding: "10px 14px", borderRadius: 8, marginBottom: 14, display: "flex", alignItems: "center", gap: 8, fontSize: 12, background: isRed ? "rgba(239,68,68,0.08)" : "rgba(234,179,8,0.08)", border: `1px solid ${isRed ? "rgba(239,68,68,0.3)" : "rgba(234,179,8,0.3)"}`, color: isRed ? "#EF4444" : "#EAB308" }}>
+        <AlertTriangle size={14} /> {msgs.join(" · ")}
+      </div>
+    );
+  }
+
   function renderRelationsTab() {
+    const rels = enrichedRels.length > 0 ? enrichedRels : relationships.map(r => ({ ...r, games: [], total_due_now: 0, total_paid_lifetime: 0, last_paid_at: null } as EnrichedRel));
+
     return (
       <>
+        {renderHealthBanner()}
         <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 16 }}>
           <button onClick={openCreate} style={{ display: "flex", alignItems: "center", gap: 6, padding: "8px 16px", borderRadius: 8, fontSize: 13, fontWeight: 600, cursor: "pointer", background: "rgba(34,197,94,0.12)", border: "1px solid rgba(34,197,94,0.3)", color: "#22C55E" }}>
             <Plus size={14} /> Créer relation
           </button>
         </div>
+        {enrichedLoading && <div style={{ textAlign: "center", padding: 12, color: "var(--text-dim)", fontSize: 12 }}>Chargement...</div>}
         <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
           <thead>
             <tr style={{ borderBottom: "1px solid var(--border)", color: "var(--text-muted)", fontSize: 11, textTransform: "uppercase", letterSpacing: "0.05em" }}>
               <th style={{ textAlign: "left", padding: "8px" }}>Affiliate</th>
               <th style={{ textAlign: "left", padding: "8px" }}>Referred</th>
-              <th style={{ textAlign: "center", padding: "8px" }}>Game</th>
-              <th style={{ textAlign: "center", padding: "8px" }}>Start</th>
+              <th style={{ textAlign: "center", padding: "8px" }}>Games</th>
+              <th style={{ textAlign: "right", padding: "8px" }}>Commission due</th>
+              <th style={{ textAlign: "center", padding: "8px" }}>Last paid</th>
               <th style={{ textAlign: "center", padding: "8px" }}>Status</th>
               <th style={{ textAlign: "center", padding: "8px" }}>Actions</th>
             </tr>
           </thead>
           <tbody>
-            {relationships.length === 0 && (
-              <tr><td colSpan={6} style={{ padding: 24, textAlign: "center", color: "var(--text-dim)" }}>Aucune relation affiliate</td></tr>
+            {rels.length === 0 && (
+              <tr><td colSpan={7} style={{ padding: 24, textAlign: "center", color: "var(--text-dim)" }}>Aucune relation affiliate</td></tr>
             )}
-            {relationships.map(r => {
-              const gb = GAME_BADGES[r.origin_game_name] ?? { short: r.origin_game_name.slice(0, 2), bg: "rgba(156,163,175,0.15)", color: "#9CA3AF" };
+            {rels.map(r => {
               const st = STATUS_STYLE[r.status] ?? STATUS_STYLE.terminated;
+              const affName = (r as any).affiliate?.name ?? r.affiliate_name;
+              const affHandle = (r as any).affiliate?.telegram_handle ?? r.affiliate_handle;
+              const refName = (r as any).referred?.name ?? r.referred_name;
+              const refHandle = (r as any).referred?.telegram_handle ?? r.referred_handle;
+              const games = r.games ?? [];
               return (
-                <tr key={r.id} style={{ borderBottom: "1px solid var(--border)", opacity: r.status === "terminated" ? 0.5 : 1 }}>
+                <tr key={r.id} onClick={() => setDrawerRel(r)} style={{ borderBottom: "1px solid var(--border)", cursor: "pointer", opacity: r.status === "terminated" ? 0.5 : 1 }}>
                   <td style={{ padding: "10px 8px" }}>
-                    <span style={{ fontWeight: 600, color: "var(--text)" }}>{r.affiliate_name}</span>
-                    {r.affiliate_handle && <span style={{ fontSize: 11, color: "var(--text-dim)", marginLeft: 6 }}>@{r.affiliate_handle}</span>}
+                    <span style={{ fontWeight: 600, color: "var(--text)" }}>{affName}</span>
+                    {affHandle && <span style={{ fontSize: 11, color: "var(--text-dim)", marginLeft: 6 }}>@{affHandle}</span>}
                   </td>
                   <td style={{ padding: "10px 8px" }}>
-                    <span style={{ fontWeight: 600, color: "var(--text)" }}>{r.referred_name}</span>
-                    {r.referred_handle && <span style={{ fontSize: 11, color: "var(--text-dim)", marginLeft: 6 }}>@{r.referred_handle}</span>}
+                    <span style={{ fontWeight: 600, color: "var(--text)" }}>{refName}</span>
+                    {refHandle && <span style={{ fontSize: 11, color: "var(--text-dim)", marginLeft: 6 }}>@{refHandle}</span>}
                   </td>
                   <td style={{ textAlign: "center", padding: "10px 8px" }}>
-                    <span style={{ background: gb.bg, color: gb.color, padding: "2px 8px", borderRadius: 4, fontSize: 10, fontWeight: 700 }}>{gb.short}</span>
+                    <div style={{ display: "flex", gap: 4, justifyContent: "center", flexWrap: "wrap" }}>
+                      {games.map(g => {
+                        const gb = GAME_BADGES[g.game_name] ?? { short: g.game_name.slice(0, 2), bg: "rgba(156,163,175,0.15)", color: "#9CA3AF" };
+                        const rl = RATE_LABEL_STYLE[g.rate_label] ?? RATE_LABEL_STYLE.passif;
+                        return (
+                          <div key={g.game_id} style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 1 }}>
+                            <span style={{ background: gb.bg, color: gb.color, padding: "1px 6px", borderRadius: 4, fontSize: 10, fontWeight: 700 }}>{gb.short}</span>
+                            <span style={{ fontSize: 8, color: rl.color }}>{g.rate_label}</span>
+                          </div>
+                        );
+                      })}
+                      {games.length === 0 && <span style={{ color: "var(--text-dim)", fontSize: 11 }}>—</span>}
+                    </div>
                   </td>
-                  <td style={{ textAlign: "center", padding: "10px 8px", fontSize: 12, color: "var(--text-muted)" }}>{r.start_date}</td>
+                  <td style={{ textAlign: "right", padding: "10px 8px", fontWeight: 600, color: (r.total_due_now ?? 0) > 0 ? "#22C55E" : "var(--text-dim)" }}>
+                    {(r.total_due_now ?? 0) > 0 ? `${fmt(r.total_due_now!)} USDT` : "—"}
+                  </td>
+                  <td style={{ textAlign: "center", padding: "10px 8px", fontSize: 12, color: "var(--text-muted)" }}>
+                    {r.last_paid_at ? r.last_paid_at.slice(0, 10) : "—"}
+                  </td>
                   <td style={{ textAlign: "center", padding: "10px 8px" }}>
                     <span style={{ padding: "2px 8px", borderRadius: 4, fontSize: 10, fontWeight: 600, background: st.bg, color: st.color }}>{r.status}</span>
                   </td>
-                  <td style={{ textAlign: "center", padding: "10px 8px" }}>
+                  <td style={{ textAlign: "center", padding: "10px 8px" }} onClick={e => e.stopPropagation()}>
                     <div style={{ display: "flex", justifyContent: "center", gap: 6 }}>
                       <button onClick={() => openEdit(r)} title="Edit" style={{ background: "none", border: "1px solid var(--border)", borderRadius: 6, cursor: "pointer", padding: "4px 6px", color: "var(--text-muted)", display: "flex", alignItems: "center" }}><Pencil size={13} /></button>
                       {r.status !== "terminated" && (
@@ -347,6 +435,30 @@ export default function AffiliatesClient({ relationships, players, activeGames, 
             })}
           </tbody>
         </table>
+
+        {/* Drawer */}
+        {drawerRel && (
+          <AffiliateDetailDrawer
+            rel={{
+              ...drawerRel,
+              games: drawerRel.games ?? [],
+              total_due_now: drawerRel.total_due_now ?? 0,
+              total_paid_lifetime: drawerRel.total_paid_lifetime ?? 0,
+              last_paid_at: drawerRel.last_paid_at ?? null,
+              affiliate: (drawerRel as any).affiliate ?? { id: drawerRel.affiliate_player_id, name: drawerRel.affiliate_name, telegram_handle: drawerRel.affiliate_handle },
+              referred: (drawerRel as any).referred ?? { id: drawerRel.referred_player_id, name: drawerRel.referred_name, telegram_handle: drawerRel.referred_handle },
+              origin_game: (drawerRel as any).origin_game ?? { id: drawerRel.origin_game_id, name: drawerRel.origin_game_name },
+            }}
+            breakdown={drawerRel.breakdown ?? []}
+            onClose={() => setDrawerRel(null)}
+            onPay={(gameId, gameName, due) => {
+              const aff = (drawerRel as any).affiliate?.name ?? drawerRel.affiliate_name;
+              const ref = (drawerRel as any).referred?.name ?? drawerRel.referred_name;
+              openPay(drawerRel.id, gameId, gameName, due, aff, ref);
+            }}
+            onEdit={() => { openEdit(drawerRel); setDrawerRel(null); }}
+          />
+        )}
       </>
     );
   }

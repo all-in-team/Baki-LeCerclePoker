@@ -44,6 +44,7 @@ export interface CommissionResult {
   total_due_now: number;
   total_earned_lifetime: number;
   total_paid_lifetime: number;
+  last_paid_at: string | null;
 }
 
 export interface AffiliateGroup {
@@ -203,6 +204,10 @@ export function computeAffiliateCommission(relationshipId: number): CommissionRe
     });
   }
 
+  const lastPaidRow = db.prepare(
+    `SELECT MAX(paid_at) AS last_paid_at FROM affiliate_payments WHERE relationship_id = ?`
+  ).get(relationshipId) as { last_paid_at: string | null };
+
   return {
     relationship_id: relationshipId,
     affiliate: { id: rel.affiliate_player_id, name: rel.aff_name, telegram_handle: rel.aff_handle },
@@ -211,6 +216,7 @@ export function computeAffiliateCommission(relationshipId: number): CommissionRe
     total_due_now: breakdown.reduce((s, b) => s + b.due_now, 0),
     total_earned_lifetime: breakdown.reduce((s, b) => s + b.earned_lifetime, 0),
     total_paid_lifetime: breakdown.reduce((s, b) => s + b.paid_lifetime, 0),
+    last_paid_at: lastPaidRow.last_paid_at,
   };
 }
 

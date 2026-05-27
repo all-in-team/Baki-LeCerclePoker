@@ -36,7 +36,7 @@ function fmtAmt(n: number): string {
 }
 
 // Edit modal — same as CRMListClient but extracted inline here for independence
-function useEditModal(players: Player[], dealsByPlayer: Record<number, Deal[]>, activeGames: Game[]) {
+function useEditModal(players: Player[], dealsByPlayer: Record<number, Deal[]>, activeGames: Game[], affiliatedByPlayer: Record<number, { name: string; handle: string | null }>) {
   const router = useRouter();
   const [editPlayer, setEditPlayer] = useState<Player | null>(null);
   const [form, setForm] = useState({ name: "", tier: "B", status: "active" });
@@ -221,7 +221,7 @@ export default function CRMKanbanView({ players, gamesByPlayer, dealsByPlayer, a
   const [archiving, setArchiving] = useState(false);
   const [showArchivedGames, setShowArchivedGames] = useState(false);
 
-  const { openEdit, modal: editModal } = useEditModal(players, dealsByPlayer, activeGames);
+  const { openEdit, modal: editModal } = useEditModal(players, dealsByPlayer, activeGames, affiliatedByPlayer);
 
   const filtered = players.filter(p => {
     if (!showInactive && p.status !== "active" && p.status !== "signed") return false;
