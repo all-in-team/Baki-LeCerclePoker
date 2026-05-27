@@ -3,7 +3,7 @@ import {
   sendMsg, setSession, clearSession, AGENT_CHAT_ID,
   type Step,
 } from "./helpers";
-import { isUserbotConfigured, createPlayerGroup } from "@/lib/telegram-userbot";
+import { isUserbotConfigured, createPlayerGroup, inviteUserToGroup } from "@/lib/telegram-userbot";
 import { TOPIC_MESSAGES } from "./onboarding";
 
 const HANDLE_RE = /^[a-z0-9_]{5,32}$/;
@@ -107,7 +107,10 @@ export async function handleAffiliationRawMessage(
     return true;
   }
 
-  const result = await createPlayerGroup(0, `@${handle}`, process.env.TELEGRAM_BOT_TOKEN, handle);
+  const affiliate = db.prepare(`SELECT name FROM players WHERE id = ?`).get(session.player_id) as { name: string } | undefined;
+  const affiliateName = affiliate?.name ?? "Affiliate";
+
+  const result = await createPlayerGroup(0, `@${handle}`, process.env.TELEGRAM_BOT_TOKEN, handle, affiliateName);
   if (!result || result.status === "failed") {
     await sendMsg(chatId,
       `❌ Erreur création groupe. Réessaie dans quelques minutes.\n` +
@@ -117,6 +120,9 @@ export async function handleAffiliationRawMessage(
     clearSession(chatId);
     return true;
   }
+
+  const inviteResult = await inviteUserToGroup(result.chatId, handle);
+  const autoInvited = inviteResult.ok;
 
   try {
     db.prepare(`
@@ -140,23 +146,32 @@ export async function handleAffiliationRawMessage(
     }
   }
 
-  const affiliate = db.prepare(`SELECT name FROM players WHERE id = ?`).get(session.player_id) as { name: string } | undefined;
-
-  await sendMsg(chatId,
-    `✅ <b>C'est fait !</b>\n\n` +
-    `Groupe créé pour <i>@${handle}</i> 🎉\n\n` +
-    `👉 <b>Partage ce lien avec ton filleul</b> :\n${result.inviteLink}\n\n` +
-    `Dès qu'il rejoint, on prend le relais pour l'onboarder.\n` +
-    `Tu seras notifié quand il sera connecté.\n\n` +
-    `💰 <i>Rappel : tu touches 50% des profits agency sur ce joueur.</i>`,
-    messageThreadId
-  );
+  if (autoInvited) {
+    await sendMsg(chatId,
+      `✅ <b>C'est fait !</b>\n\n` +
+      `J'ai créé le groupe <i>@${handle} x LeCercle x ${affiliateName}</i> et ajouté ton filleul dedans 🎉\n\n` +
+      `👉 <b>Rejoins le groupe ici</b> (ton filleul est déjà dedans) :\n${result.inviteLink}\n\n` +
+      `On prend le relais pour l'onboarder dès que tu es dans le groupe.\n\n` +
+      `💰 <i>Rappel : tu touches 50% des profits agency sur ce joueur.</i>`,
+      messageThreadId
+    );
+  } else {
+    await sendMsg(chatId,
+      `✅ <b>Groupe créé pour</b> <i>@${handle}</i> 🎉\n\n` +
+      `Je n'ai pas pu l'ajouter automatiquement (paramètres de confidentialité Telegram probablement).\n\n` +
+      `👉 <b>Partage ce lien avec ton filleul</b> :\n${result.inviteLink}\n\n` +
+      `Dès qu'il rejoint, on prend le relais pour l'onboarder.\n\n` +
+      `💰 <i>Rappel : tu touches 50% des profits agency sur ce joueur.</i>`,
+      messageThreadId
+    );
+  }
 
   await sendMsg(AGENT_CHAT_ID,
     `🤝 <b>Nouveau lead affiliate</b>\n` +
-    `Affiliate : <b>${affiliate?.name ?? "?"}</b> (ID ${session.player_id})\n` +
+    `Affiliate : <b>${affiliateName}</b> (ID ${session.player_id})\n` +
     `Filleul : <i>@${handle}</i>\n` +
     `Groupe : <code>${result.chatId}</code>\n` +
+    `Auto-invite : ${autoInvited ? "✅" : `❌ ${inviteResult.error ?? ""}`}\n` +
     `Status : ${result.status} — ${Object.keys(result.topicIds).length} topics`
   );
 

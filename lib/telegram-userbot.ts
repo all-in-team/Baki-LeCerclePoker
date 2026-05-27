@@ -261,7 +261,8 @@ export async function createPlayerGroup(
   _playerTgId: number,
   playerName: string,
   _botToken?: string,
-  _playerUsername?: string
+  _playerUsername?: string,
+  titleSuffix?: string,
 ): Promise<GroupResult | null> {
   const client = await getClient();
   if (!client) return null;
@@ -285,7 +286,7 @@ export async function createPlayerGroup(
     const result = await client.invoke(
       new Api.messages.CreateChat({
         users: usersToAdd,
-        title: `${playerName} x LeCercle`,
+        title: titleSuffix ? `${playerName} x LeCercle x ${titleSuffix}` : `${playerName} x LeCercle`,
       })
     );
 
@@ -465,6 +466,40 @@ export async function createPlayerGroup(
   } catch (e: any) {
     console.error("[USERBOT] createPlayerGroup failed:", errMsg(e));
     return null;
+  }
+}
+
+// ── inviteUserToGroup ───────────────────────────────────
+
+export async function inviteUserToGroup(
+  groupChatId: number,
+  username: string,
+): Promise<{ ok: boolean; error?: string }> {
+  try {
+    const client = await getClient();
+    if (!client) return { ok: false, error: "userbot_not_configured" };
+
+    const handle = username.replace(/^@/, "");
+    const userEntity = await client.getInputEntity(handle);
+
+    const channelId = -(groupChatId + 1000000000000);
+    const channelPeer = await client.getInputEntity(
+      new Api.PeerChannel({ channelId: BigInt(channelId) as any })
+    ) as unknown as Api.InputChannel;
+
+    await client.invoke(
+      new Api.channels.InviteToChannel({
+        channel: channelPeer,
+        users: [userEntity as unknown as Api.TypeInputUser],
+      })
+    );
+
+    console.log(`[USERBOT] invited @${handle} to group ${groupChatId}`);
+    return { ok: true };
+  } catch (e: any) {
+    const msg = errMsg(e);
+    console.warn(`[USERBOT] inviteUserToGroup failed for @${username}: ${msg}`);
+    return { ok: false, error: msg };
   }
 }
 
