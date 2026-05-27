@@ -51,6 +51,15 @@ export default function CRMPage() {
     pnlByPlayerGame[`${r.player_id}_${r.game_id}`] = { player_net: r.net ?? 0, agency_pnl: r.my_pnl ?? 0 };
   });
 
+  const affiliateInfo = db.prepare(`
+    SELECT ar.referred_player_id, ap.name AS affiliated_by_name, ap.telegram_handle AS affiliated_by_handle
+    FROM affiliate_relationships ar
+    JOIN players ap ON ap.id = ar.affiliate_player_id
+    WHERE ar.status = 'active'
+  `).all() as { referred_player_id: number; affiliated_by_name: string; affiliated_by_handle: string | null }[];
+  const affiliatedByPlayer: Record<number, { name: string; handle: string | null }> = {};
+  affiliateInfo.forEach(a => { affiliatedByPlayer[a.referred_player_id] = { name: a.affiliated_by_name, handle: a.affiliated_by_handle }; });
+
   const sorted = [...allPlayers].sort((a, b) => (agencyByPlayer[b.id] ?? 0) - (agencyByPlayer[a.id] ?? 0));
 
   return (
@@ -63,6 +72,7 @@ export default function CRMPage() {
         agencyByPlayer={agencyByPlayer}
         pnlByPlayerGame={pnlByPlayerGame}
         activeGames={activeGames}
+        affiliatedByPlayer={affiliatedByPlayer}
       />
     </>
   );

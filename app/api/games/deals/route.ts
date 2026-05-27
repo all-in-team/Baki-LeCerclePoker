@@ -25,23 +25,15 @@ export async function POST(req: NextRequest) {
     end_date: body.end_date !== undefined ? (body.end_date || null) : undefined,
   });
 
-  // Auto-create affiliate_relationship on first deal for converted leads
+  // Set origin_game_id on affiliate relationship if still NULL (first deal)
   const db = getDb();
-  const lead = db.prepare(
-    `SELECT affiliate_player_id FROM affiliate_leads WHERE converted_player_id = ? AND status = 'converted'`
-  ).get(playerId) as { affiliate_player_id: number } | undefined;
+  const pendingRel = db.prepare(
+    `SELECT id FROM affiliate_relationships WHERE referred_player_id = ? AND origin_game_id IS NULL`
+  ).get(playerId) as { id: number } | undefined;
 
-  if (lead) {
-    const existingRel = db.prepare(
-      `SELECT 1 FROM affiliate_relationships WHERE referred_player_id = ?`
-    ).get(playerId);
-
-    if (!existingRel) {
-      db.prepare(
-        `INSERT INTO affiliate_relationships (affiliate_player_id, referred_player_id, origin_game_id, start_date) VALUES (?, ?, ?, date('now'))`
-      ).run(lead.affiliate_player_id, playerId, gameId);
-      console.log(`[AFFILIATE] Relationship auto-created: affiliate=${lead.affiliate_player_id} referred=${playerId} origin_game=${gameId}`);
-    }
+  if (pendingRel) {
+    db.prepare(`UPDATE affiliate_relationships SET origin_game_id = ? WHERE id = ?`).run(gameId, pendingRel.id);
+    console.log(`[AFFILIATE] origin_game_id set to ${gameId} for relationship ${pendingRel.id}`);
   }
 
   return NextResponse.json({ id }, { status: 201 });

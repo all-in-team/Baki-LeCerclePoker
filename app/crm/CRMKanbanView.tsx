@@ -28,6 +28,7 @@ interface Props {
   agencyByPlayer: Record<number, number>;
   pnlByPlayerGame: Record<string, { player_net: number; agency_pnl: number }>;
   activeGames: Game[];
+  affiliatedByPlayer: Record<number, { name: string; handle: string | null }>;
 }
 
 function fmtAmt(n: number): string {
@@ -122,6 +123,10 @@ function useEditModal(players: Player[], dealsByPlayer: Record<number, Deal[]>, 
               {editPlayer.telegram_handle && <><span style={{ color: "var(--text-dim)" }}>Handle</span><span style={{ color: "var(--text)" }}>@{editPlayer.telegram_handle}</span></>}
               <span style={{ color: "var(--text-dim)" }}>Source</span><span style={{ color: "var(--text)" }}>{editPlayer.joined_via ?? "— (avant tracking)"}</span>
               <span style={{ color: "var(--text-dim)" }}>Créé le</span><span style={{ color: "var(--text)" }}>{editPlayer.created_at ? editPlayer.created_at.slice(0, 10) : "—"}</span>
+              {affiliatedByPlayer[editPlayer.id] && <>
+                <span style={{ color: "var(--text-dim)" }}>Affilié par</span>
+                <span style={{ color: "#A78BFA", fontWeight: 600 }}>{affiliatedByPlayer[editPlayer.id].handle ? `@${affiliatedByPlayer[editPlayer.id].handle}` : affiliatedByPlayer[editPlayer.id].name}</span>
+              </>}
             </div>
           </div>
         )}
@@ -204,7 +209,7 @@ function useEditModal(players: Player[], dealsByPlayer: Record<number, Deal[]>, 
   return { openEdit, modal };
 }
 
-export default function CRMKanbanView({ players, gamesByPlayer, dealsByPlayer, agencyByPlayer, pnlByPlayerGame, activeGames }: Props) {
+export default function CRMKanbanView({ players, gamesByPlayer, dealsByPlayer, agencyByPlayer, pnlByPlayerGame, activeGames, affiliatedByPlayer }: Props) {
   const router = useRouter();
   const [search, setSearch] = useState("");
   const [showInactive, setShowInactive] = useState(false);

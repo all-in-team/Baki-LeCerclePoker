@@ -26,13 +26,14 @@ interface Props {
   dealsByPlayer: Record<number, Deal[]>;
   agencyByPlayer: Record<number, number>;
   activeGames: Game[];
+  affiliatedByPlayer: Record<number, { name: string; handle: string | null }>;
 }
 
 function fmtAmt(n: number): string {
   return `${n >= 0 ? "+" : ""}${n.toLocaleString("fr-FR", { maximumFractionDigits: 0 })}`;
 }
 
-export default function CRMListClient({ players, gamesByPlayer, dealsByPlayer, agencyByPlayer, activeGames }: Props) {
+export default function CRMListClient({ players, gamesByPlayer, dealsByPlayer, agencyByPlayer, activeGames, affiliatedByPlayer }: Props) {
   const router = useRouter();
   const [editPlayer, setEditPlayer] = useState<Player | null>(null);
   const [form, setForm] = useState({ name: "", tier: "B", status: "active" });
@@ -222,6 +223,10 @@ export default function CRMListClient({ players, gamesByPlayer, dealsByPlayer, a
                 {editPlayer.telegram_handle && <><span style={{ color: "var(--text-dim)" }}>Handle</span><span style={{ color: "var(--text)" }}>@{editPlayer.telegram_handle}</span></>}
                 <span style={{ color: "var(--text-dim)" }}>Source</span><span style={{ color: "var(--text)" }}>{editPlayer.joined_via ?? "— (avant tracking)"}</span>
                 <span style={{ color: "var(--text-dim)" }}>Créé le</span><span style={{ color: "var(--text)" }}>{editPlayer.created_at ? editPlayer.created_at.slice(0, 10) : "—"}</span>
+                {affiliatedByPlayer[editPlayer.id] && <>
+                  <span style={{ color: "var(--text-dim)" }}>Affilié par</span>
+                  <span style={{ color: "#A78BFA", fontWeight: 600 }}>{affiliatedByPlayer[editPlayer.id].handle ? `@${affiliatedByPlayer[editPlayer.id].handle}` : affiliatedByPlayer[editPlayer.id].name}</span>
+                </>}
               </div>
             </div>
           )}

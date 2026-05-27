@@ -35,6 +35,14 @@ export async function handleNewMembers(members: any[], chatTitle: string, chatId
       ).run(newPlayerId, affiliateLead.id);
       console.log(`[AFFILIATE] Lead ${affiliateLead.id} converted (group match): @${affiliateLead.referred_handle} → player ${newPlayerId}`);
 
+      const existingRel = db.prepare(`SELECT 1 FROM affiliate_relationships WHERE referred_player_id = ?`).get(newPlayerId);
+      if (!existingRel) {
+        db.prepare(
+          `INSERT INTO affiliate_relationships (affiliate_player_id, referred_player_id, origin_game_id, start_date) VALUES (?, ?, NULL, date('now'))`
+        ).run(affiliateLead.affiliate_player_id, newPlayerId);
+        console.log(`[AFFILIATE] Relationship created: affiliate=${affiliateLead.affiliate_player_id} referred=${newPlayerId} origin=NULL`);
+      }
+
       db.prepare(`INSERT INTO crm_notes (player_id, content, type) VALUES (?, ?, 'note')`)
         .run(newPlayerId, `Créé via affiliation — a rejoint "${chatTitle}"`);
 

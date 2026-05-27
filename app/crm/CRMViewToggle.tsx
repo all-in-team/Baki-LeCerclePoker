@@ -15,6 +15,7 @@ interface Props {
   agencyByPlayer: Record<number, number>;
   pnlByPlayerGame: Record<string, { player_net: number; agency_pnl: number }>;
   activeGames: Game[];
+  affiliatedByPlayer: Record<number, { name: string; handle: string | null }>;
 }
 
 export default function CRMViewToggle(props: Props) {
