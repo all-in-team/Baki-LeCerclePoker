@@ -1,7 +1,27 @@
 import { getDb } from "@/lib/db";
 import { sendMsg, OWNER_IDS } from "./helpers";
 
-export async function handleLinkGroup(chatId: number, fromId: number, chatType: string, args: string) {
+interface PlayerRow { id: number; name: string; telegram_handle: string | null; telegram_group_id: string | null }
+
+function extractBaseName(title: string): string {
+  return title
+    .replace(/\s*x\s*LeCercle.*$/i, "")
+    .replace(/\s*\(OLD ARCHIVE\)\s*/i, "")
+    .replace(/\s*\(Agent\s*:.*?\)\s*/i, "")
+    .trim();
+}
+
+function linkPlayer(chatId: number, player: PlayerRow): string {
+  const db = getDb();
+  const old = player.telegram_group_id;
+  db.prepare(`UPDATE players SET telegram_group_id = ? WHERE id = ?`).run(String(chatId), player.id);
+  let msg = `✅ Groupe lié à <b>${player.name}</b> (id=${player.id}).`;
+  if (old && old !== String(chatId)) msg += `\n<i>(remplace l'ancien groupe ${old})</i>`;
+  msg += `\nTu peux maintenant taper /startaffi.`;
+  return msg;
+}
+
+export async function handleLinkGroup(chatId: number, fromId: number, chatType: string, args: string, chatTitle: string) {
   if (!OWNER_IDS.has(fromId)) {
     await sendMsg(chatId, `❌ Réservé aux admins.`);
     return;
@@ -12,55 +32,67 @@ export async function handleLinkGroup(chatId: number, fromId: number, chatType: 
     return;
   }
 
+  const db = getDb();
   const trimmed = args.trim();
+
+  // CAS 1 — No args: auto-detect from group title
   if (!trimmed) {
-    await sendMsg(chatId, `Usage : <code>/linkgroup @handle</code> ou <code>/linkgroup id:&lt;numero&gt;</code>`);
+    const baseName = extractBaseName(chatTitle);
+    if (!baseName) {
+      await sendMsg(chatId, `❌ Impossible d'extraire le nom du player depuis le titre "${chatTitle}".\nUtilise <code>/linkgroup @handle</code> ou <code>/linkgroup id:&lt;numéro&gt;</code>.`);
+      return;
+    }
+
+    const players = db.prepare(
+      `SELECT id, name, telegram_handle, telegram_group_id FROM players WHERE LOWER(name) LIKE LOWER('%' || ? || '%')`
+    ).all(baseName) as PlayerRow[];
+
+    if (players.length === 0) {
+      await sendMsg(chatId, `❌ Aucun player trouvé pour "<i>${baseName}</i>".\nUtilise <code>/linkgroup @handle</code> ou <code>/linkgroup id:&lt;numéro&gt;</code>.`);
+      return;
+    }
+    if (players.length === 1) {
+      await sendMsg(chatId, linkPlayer(chatId, players[0]));
+      return;
+    }
+    const list = players.map(p => `• id=${p.id} — ${p.name}${p.telegram_handle ? ` (@${p.telegram_handle})` : ""}`).join("\n");
+    await sendMsg(chatId, `⚠️ Plusieurs players pour "<i>${baseName}</i>" :\n${list}\n\nChoisis avec <code>/linkgroup id:&lt;numéro&gt;</code>`);
     return;
   }
 
-  const db = getDb();
-  const force = trimmed.endsWith(" force");
-  const arg = force ? trimmed.slice(0, -6).trim() : trimmed;
-
-  let players: { id: number; name: string; telegram_handle: string | null; telegram_group_id: string | null }[] = [];
-
-  if (arg.startsWith("id:")) {
-    const pid = parseInt(arg.slice(3));
-    if (isNaN(pid)) { await sendMsg(chatId, `❌ ID invalide.`); return; }
-    const p = db.prepare(`SELECT id, name, telegram_handle, telegram_group_id FROM players WHERE id = ?`).get(pid);
-    if (p) players = [p as any];
-  } else {
-    const handle = arg.replace(/^@/, "").toLowerCase();
-    players = db.prepare(
-      `SELECT id, name, telegram_handle, telegram_group_id FROM players WHERE LOWER(telegram_handle) = ? OR LOWER(REPLACE(telegram_handle, '@', '')) = ?`
-    ).all(handle, handle) as any[];
+  // CAS 2 — id:<number>
+  if (trimmed.startsWith("id:")) {
+    const force = trimmed.endsWith(" force");
+    const idStr = force ? trimmed.slice(3, -6).trim() : trimmed.slice(3).trim();
+    const pid = parseInt(idStr);
+    if (isNaN(pid)) {
+      await sendMsg(chatId, `❌ Format : <code>/linkgroup id:&lt;numéro&gt;</code> (un nombre).\nOu tape juste <code>/linkgroup</code> pour auto-détecter.`);
+      return;
+    }
+    const player = db.prepare(`SELECT id, name, telegram_handle, telegram_group_id FROM players WHERE id = ?`).get(pid) as PlayerRow | undefined;
+    if (!player) { await sendMsg(chatId, `❌ Player id=${pid} introuvable.`); return; }
+    if (player.telegram_group_id && player.telegram_group_id !== String(chatId) && !force) {
+      await sendMsg(chatId, `⚠️ <b>${player.name}</b> a déjà un groupe (<code>${player.telegram_group_id}</code>).\nPour écraser : <code>/linkgroup id:${pid} force</code>`);
+      return;
+    }
+    await sendMsg(chatId, linkPlayer(chatId, player));
+    return;
   }
+
+  // CAS 3 — @handle or handle
+  const handle = trimmed.replace(/^@/, "").toLowerCase();
+  const players = db.prepare(
+    `SELECT id, name, telegram_handle, telegram_group_id FROM players WHERE LOWER(telegram_handle) = ? OR LOWER(REPLACE(telegram_handle, '@', '')) = ?`
+  ).all(handle, handle) as PlayerRow[];
 
   if (players.length === 0) {
-    await sendMsg(chatId, `❌ Aucun player trouvé pour "<i>${arg}</i>".\nUtilise <code>/linkgroup id:&lt;numero&gt;</code> pour cibler par ID.`);
+    await sendMsg(chatId, `❌ Aucun player pour "@${handle}".\nTape juste <code>/linkgroup</code> pour auto-détecter depuis le titre du groupe.`);
     return;
   }
-
   if (players.length > 1) {
     const list = players.map(p => `• id=${p.id} — ${p.name} (@${p.telegram_handle ?? "?"})`).join("\n");
-    await sendMsg(chatId, `⚠️ Plusieurs players matchent :\n${list}\n\nUtilise <code>/linkgroup id:&lt;numero&gt;</code> pour choisir.`);
+    await sendMsg(chatId, `⚠️ Plusieurs players :\n${list}\n\nChoisis avec <code>/linkgroup id:&lt;numéro&gt;</code>`);
     return;
   }
-
-  const player = players[0];
-
-  if (player.telegram_group_id && player.telegram_group_id !== String(chatId) && !force) {
-    await sendMsg(chatId,
-      `⚠️ <b>${player.name}</b> a déjà un groupe lié (<code>${player.telegram_group_id}</code>).\n` +
-      `Pour écraser, retape : <code>/linkgroup id:${player.id} force</code>`
-    );
-    return;
-  }
-
-  db.prepare(`UPDATE players SET telegram_group_id = ? WHERE id = ?`).run(String(chatId), player.id);
-
-  await sendMsg(chatId,
-    `✅ Groupe lié à <b>${player.name}</b> (id=${player.id}).\n` +
-    `Tu peux maintenant taper /startaffi.`
-  );
+  await sendMsg(chatId, linkPlayer(chatId, players[0]));
 }

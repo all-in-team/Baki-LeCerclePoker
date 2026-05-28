@@ -128,7 +128,7 @@ export async function POST(req: NextRequest) {
   // /linkgroup — associate orphan group with a player (owner only)
   if (msg?.text?.match(/^\/linkgroup(\s|@)/)) {
     const linkArgs = msg.text.replace(/^\/linkgroup(@\S+)?\s*/, "");
-    await handleLinkGroup(chatId, msg.from?.id, msg.chat?.type ?? "private", linkArgs);
+    await handleLinkGroup(chatId, msg.from?.id, msg.chat?.type ?? "private", linkArgs, msg.chat?.title ?? "");
     return NextResponse.json({ ok: true });
   }
 
