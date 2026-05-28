@@ -15,7 +15,6 @@ const SECTIONS: NavSection[] = [
       { href: "/crm", label: "CRM Joueurs", icon: ContactRound },
       { href: "/players", label: "Joueurs", icon: Users },
       { href: "/crm/affiliates", label: "Affiliates", icon: Network },
-      { href: "/grindhouse", label: "Grindhouse", icon: Gamepad2 },
       { href: "/settings", label: "Settings", icon: Settings },
     ],
   },
@@ -46,6 +45,12 @@ const SECTIONS: NavSection[] = [
     items: [
       { href: "/akpoker/pnl", label: "P&L", icon: Wallet },
       { href: "/akpoker/settlements", label: "Settlements", icon: Scale },
+    ],
+  },
+  {
+    label: "GRINDHOUSE",
+    items: [
+      { href: "/grindhouse", label: "Sessions", icon: Gamepad2 },
     ],
   },
 ];
