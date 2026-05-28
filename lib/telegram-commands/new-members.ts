@@ -47,17 +47,56 @@ export async function handleNewMembers(members: any[], chatTitle: string, chatId
         .run(newPlayerId, `Créé via affiliation — a rejoint "${chatTitle}"`);
 
       const affiliate = db.prepare(
-        `SELECT name, telegram_group_id FROM players WHERE id = ?`
-      ).get(affiliateLead.affiliate_player_id) as { name: string; telegram_group_id: string | null } | undefined;
+        `SELECT name, telegram_group_id, telegram_id, telegram_handle FROM players WHERE id = ?`
+      ).get(affiliateLead.affiliate_player_id) as { name: string; telegram_group_id: string | null; telegram_id: number | null; telegram_handle: string | null } | undefined;
+
+      const lead = db.prepare(
+        `SELECT kickoff_invite_link FROM affiliate_leads WHERE id = ?`
+      ).get(affiliateLead.id) as { kickoff_invite_link: string | null } | undefined;
+      const inviteLink = lead?.kickoff_invite_link;
+
+      // Notify agent's own group
       if (affiliate?.telegram_group_id) {
         await sendMsg(parseInt(affiliate.telegram_group_id),
-          `🎉 Ton filleul <i>@${affiliateLead.referred_handle}</i> vient de rejoindre !\n\nOn prend le relais pour l'onboarder. Tu seras notifié quand il sera connecté.`
+          `🎉 Ton filleul <i>@${affiliateLead.referred_handle}</i> vient de rejoindre !`
         );
       }
+
+      // DM agent with invite link to filleul's group
+      if (affiliate?.telegram_id && inviteLink) {
+        const botToken = process.env.TELEGRAM_BOT_TOKEN;
+        if (botToken) {
+          await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              chat_id: affiliate.telegram_id,
+              text: `🎉 Ton filleul <b>@${affiliateLead.referred_handle}</b> vient de rejoindre LeCerclePoker !\n\nViens suivre son onboarding et l'accompagner 👇`,
+              parse_mode: "HTML",
+              reply_markup: {
+                inline_keyboard: [[{ text: "👀 Rejoindre le groupe", url: inviteLink }]],
+              },
+            }),
+          }).catch(() => {});
+        }
+      }
+
+      // Best-effort auto-add agent to filleul's group via MTProto
+      if (affiliate?.telegram_handle) {
+        try {
+          const { inviteUserToGroup } = await import("@/lib/telegram-userbot");
+          const addResult = await inviteUserToGroup(chatId, affiliate.telegram_handle);
+          console.log(`[AFFILIATE] Auto-add agent @${affiliate.telegram_handle} to group ${chatId}: ${addResult.ok ? "OK" : addResult.error}`);
+        } catch (e: any) {
+          console.warn(`[AFFILIATE] Auto-add agent failed (non-blocking): ${e.message}`);
+        }
+      }
+
       await sendMsg(AGENT_CHAT_ID,
         `🤝 <b>Lead affiliate converti</b>\n` +
         `Filleul : <i>@${affiliateLead.referred_handle}</i> → player #${newPlayerId}\n` +
-        `Affiliate : <b>${affiliate?.name ?? "?"}</b>`
+        `Affiliate : <b>${affiliate?.name ?? "?"}</b>\n` +
+        `Auto-add agent : ${affiliate?.telegram_handle ? "tenté" : "skip (pas de handle)"}`
       );
 
       await sendMsg(chatId, `👋 Bienvenue <b>${name}</b> !\n\nBaki va te contacter bientôt pour te setup sur un game. En attendant, fais comme chez toi.`);
