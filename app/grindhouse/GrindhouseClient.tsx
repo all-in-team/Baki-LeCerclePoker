@@ -1,7 +1,8 @@
 "use client";
 
 import { useState } from "react";
-import { Plus, Trash2, ChevronLeft, ChevronRight } from "lucide-react";
+import { useRouter } from "next/navigation";
+import { Plus, Trash2, ChevronLeft, ChevronRight, X, Search } from "lucide-react";
 
 const GAME_BADGES: Record<string, { short: string; bg: string; color: string }> = {
   TELE:    { short: "AK", bg: "rgba(212,175,55,0.15)", color: "#D4AF37" },
@@ -16,13 +17,15 @@ interface Session {
   duration_hours: number; net_result_usdt: number; notes: string | null;
   player_name: string; game_name: string;
 }
-interface Player { id: number; name: string; }
-interface Game { id: number; name: string; }
+interface Grinder { player_id: number; name: string; telegram_handle: string | null; status: string; deal_percentage: number }
+interface Player { id: number; name: string; telegram_handle: string | null }
+interface Game { id: number; name: string }
 
 interface Props {
   initialSessions: Session[];
   initialDate: string;
-  players: Player[];
+  grinders: Grinder[];
+  allPlayers: Player[];
   games: Game[];
 }
 
@@ -34,12 +37,22 @@ function shiftDate(date: string, days: number): string {
 
 const fmt = (n: number) => n.toLocaleString("fr-FR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
-export default function GrindhouseClient({ initialSessions, initialDate, players, games }: Props) {
+export default function GrindhouseClient({ initialSessions, initialDate, grinders: initialGrinders, allPlayers, games }: Props) {
+  const router = useRouter();
   const [sessions, setSessions] = useState<Session[]>(initialSessions);
+  const [grinderList, setGrinderList] = useState<Grinder[]>(initialGrinders);
   const [date, setDate] = useState(initialDate);
   const [loading, setLoading] = useState(false);
   const [form, setForm] = useState({ player_id: 0, game_id: 0, duration_hours: "", net_result_usdt: "", notes: "" });
   const [saving, setSaving] = useState(false);
+  const [addGrinderOpen, setAddGrinderOpen] = useState(false);
+  const [grinderSearch, setGrinderSearch] = useState("");
+
+  const grinderIds = new Set(grinderList.map(g => g.player_id));
+  const availablePlayers = allPlayers.filter(p => !grinderIds.has(p.id));
+  const filteredAvail = availablePlayers.filter(p =>
+    !grinderSearch || p.name.toLowerCase().includes(grinderSearch.toLowerCase()) || (p.telegram_handle ?? "").toLowerCase().includes(grinderSearch.toLowerCase())
+  );
 
   async function fetchDay(d: string) {
     setDate(d);
@@ -48,6 +61,25 @@ export default function GrindhouseClient({ initialSessions, initialDate, players
       const res = await fetch(`/api/grindhouse-sessions?date=${d}`);
       if (res.ok) setSessions(await res.json());
     } finally { setLoading(false); }
+  }
+
+  async function addGrinder(playerId: number) {
+    const res = await fetch("/api/grindhouse-grinders", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ player_id: playerId }),
+    });
+    if (res.ok) {
+      const g = await res.json();
+      setGrinderList(prev => [...prev, g].sort((a, b) => a.name.localeCompare(b.name)));
+      setAddGrinderOpen(false);
+      setGrinderSearch("");
+    }
+  }
+
+  async function removeGrinder(playerId: number, name: string) {
+    if (!confirm(`Retirer ${name} des grinders ?`)) return;
+    await fetch(`/api/grindhouse-grinders/${playerId}`, { method: "DELETE" });
+    setGrinderList(prev => prev.filter(g => g.player_id !== playerId));
   }
 
   async function addSession() {
@@ -90,6 +122,41 @@ export default function GrindhouseClient({ initialSessions, initialDate, players
 
   return (
     <div style={{ padding: "0 28px" }}>
+      {/* Grinders section */}
+      <div style={{ marginBottom: 24, padding: "14px 18px", background: "var(--bg-raised)", border: "1px solid var(--border)", borderRadius: 10 }}>
+        <div style={{ fontSize: 11, fontWeight: 700, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 10 }}>Grinders ({grinderList.length})</div>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+          {grinderList.length === 0 && <span style={{ fontSize: 12, color: "var(--text-dim)" }}>Aucun grinder. Clique "+ Ajouter" pour commencer.</span>}
+          {grinderList.map(g => (
+            <div key={g.player_id} style={{ display: "flex", alignItems: "center", gap: 6, padding: "5px 10px", borderRadius: 20, background: "rgba(34,197,94,0.10)", border: "1px solid rgba(34,197,94,0.25)", fontSize: 12, fontWeight: 600, color: "#22C55E" }}>
+              {g.name}
+              <button onClick={() => removeGrinder(g.player_id, g.name)} style={{ background: "none", border: "none", cursor: "pointer", color: "rgba(34,197,94,0.5)", padding: 0, display: "flex" }} onMouseEnter={e => (e.currentTarget.style.color = "#f87171")} onMouseLeave={e => (e.currentTarget.style.color = "rgba(34,197,94,0.5)")}><X size={12} /></button>
+            </div>
+          ))}
+          <div style={{ position: "relative" }}>
+            <button onClick={() => setAddGrinderOpen(!addGrinderOpen)} style={{ display: "flex", alignItems: "center", gap: 4, padding: "5px 12px", borderRadius: 20, fontSize: 11, fontWeight: 600, cursor: "pointer", background: "var(--bg-surface)", border: "1px solid var(--border)", color: "var(--text-muted)" }}>
+              <Plus size={12} /> Ajouter
+            </button>
+            {addGrinderOpen && (
+              <div style={{ position: "absolute", top: "100%", left: 0, marginTop: 4, width: 220, background: "var(--bg-raised)", border: "1px solid var(--border)", borderRadius: 8, zIndex: 20, boxShadow: "0 4px 12px rgba(0,0,0,0.3)" }}>
+                <div style={{ padding: "6px 8px", borderBottom: "1px solid var(--border)", display: "flex", alignItems: "center", gap: 6 }}>
+                  <Search size={12} style={{ color: "var(--text-dim)" }} />
+                  <input autoFocus placeholder="Chercher player..." value={grinderSearch} onChange={e => setGrinderSearch(e.target.value)} style={{ ...inputStyle, border: "none", background: "transparent", padding: "4px 0", flex: 1, fontSize: 12 }} />
+                </div>
+                <div style={{ maxHeight: 160, overflowY: "auto" }}>
+                  {filteredAvail.slice(0, 12).map(p => (
+                    <button key={p.id} onClick={() => addGrinder(p.id)} style={{ display: "block", width: "100%", textAlign: "left", padding: "7px 10px", fontSize: 12, cursor: "pointer", border: "none", borderBottom: "1px solid var(--border)", background: "transparent", color: "var(--text)" }}>
+                      {p.name}{p.telegram_handle && <span style={{ color: "var(--text-dim)", marginLeft: 6, fontSize: 11 }}>@{p.telegram_handle}</span>}
+                    </button>
+                  ))}
+                  {filteredAvail.length === 0 && <div style={{ padding: 10, fontSize: 11, color: "var(--text-dim)", textAlign: "center" }}>Aucun player disponible</div>}
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+
       {/* Date nav */}
       <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 20 }}>
         <button onClick={() => fetchDay(shiftDate(date, -1))} style={{ background: "none", border: "1px solid var(--border)", borderRadius: 6, cursor: "pointer", padding: "6px 8px", color: "var(--text-muted)", display: "flex" }}><ChevronLeft size={16} /></button>
@@ -100,9 +167,9 @@ export default function GrindhouseClient({ initialSessions, initialDate, players
 
       {/* Quick add */}
       <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 20, flexWrap: "wrap" }}>
-        <select value={form.player_id} onChange={e => setForm({ ...form, player_id: Number(e.target.value) })} style={{ ...inputStyle, width: 160 }}>
-          <option value={0}>Player...</option>
-          {players.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+        <select value={form.player_id} onChange={e => setForm({ ...form, player_id: Number(e.target.value) })} style={{ ...inputStyle, width: 160 }} disabled={grinderList.length === 0}>
+          <option value={0}>{grinderList.length === 0 ? "Ajoute un grinder" : "Grinder..."}</option>
+          {grinderList.map(g => <option key={g.player_id} value={g.player_id}>{g.name}</option>)}
         </select>
         <select value={form.game_id} onChange={e => setForm({ ...form, game_id: Number(e.target.value) })} style={{ ...inputStyle, width: 130 }}>
           <option value={0}>Game...</option>
@@ -111,7 +178,7 @@ export default function GrindhouseClient({ initialSessions, initialDate, players
         <input type="number" step="0.5" min="0" placeholder="Heures" value={form.duration_hours} onChange={e => setForm({ ...form, duration_hours: e.target.value })} style={{ ...inputStyle, width: 80 }} />
         <input type="number" step="0.01" placeholder="P&L USDT" value={form.net_result_usdt} onChange={e => setForm({ ...form, net_result_usdt: e.target.value })} style={{ ...inputStyle, width: 110 }} />
         <input type="text" placeholder="Notes..." value={form.notes} onChange={e => setForm({ ...form, notes: e.target.value })} style={{ ...inputStyle, width: 150 }} />
-        <button onClick={addSession} disabled={saving || !form.player_id || !form.game_id || !form.duration_hours || form.net_result_usdt === ""} style={{ display: "flex", alignItems: "center", gap: 4, padding: "7px 14px", borderRadius: 7, fontSize: 12, fontWeight: 600, cursor: saving ? "wait" : "pointer", background: "rgba(34,197,94,0.12)", border: "1px solid rgba(34,197,94,0.3)", color: "#22C55E", opacity: saving || !form.player_id || !form.game_id || !form.duration_hours || form.net_result_usdt === "" ? 0.4 : 1 }}>
+        <button onClick={addSession} disabled={saving || !form.player_id || !form.game_id || !form.duration_hours || form.net_result_usdt === "" || grinderList.length === 0} style={{ display: "flex", alignItems: "center", gap: 4, padding: "7px 14px", borderRadius: 7, fontSize: 12, fontWeight: 600, cursor: saving ? "wait" : "pointer", background: "rgba(34,197,94,0.12)", border: "1px solid rgba(34,197,94,0.3)", color: "#22C55E", opacity: saving || !form.player_id || !form.game_id || !form.duration_hours || form.net_result_usdt === "" || grinderList.length === 0 ? 0.4 : 1 }}>
           <Plus size={14} /> Ajouter
         </button>
       </div>
@@ -126,7 +193,7 @@ export default function GrindhouseClient({ initialSessions, initialDate, players
           <table style={{ width: "100%", borderCollapse: "collapse" }}>
             <thead>
               <tr style={{ borderBottom: "1px solid var(--border)" }}>
-                {["Player", "Game", "Heures", "P&L USDT", "Notes", ""].map((h, i) => (
+                {["Grinder", "Game", "Heures", "P&L USDT", "Notes", ""].map((h, i) => (
                   <th key={i} style={{ padding: "10px 16px", textAlign: i >= 2 && i <= 3 ? "right" : "left", fontSize: 11, fontWeight: 600, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.08em" }}>{h}</th>
                 ))}
               </tr>

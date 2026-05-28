@@ -16,13 +16,21 @@ export default function GrindhousePage() {
     ORDER BY gs.created_at DESC
   `).all(today) as any[];
 
-  const players = db.prepare(`SELECT id, name FROM players WHERE status IN ('active', 'signed') ORDER BY name`).all() as any[];
+  const grinders = db.prepare(`
+    SELECT gg.player_id, gg.status, gg.deal_percentage, p.name, p.telegram_handle
+    FROM grindhouse_grinders gg
+    JOIN players p ON p.id = gg.player_id
+    WHERE gg.status = 'active'
+    ORDER BY p.name
+  `).all() as any[];
+
+  const allPlayers = db.prepare(`SELECT id, name, telegram_handle FROM players WHERE status IN ('active', 'signed') ORDER BY name`).all() as any[];
   const games = db.prepare(`SELECT id, name FROM games WHERE status = 'active' ORDER BY id`).all() as any[];
 
   return (
     <>
       <PageHeader title="Grindhouse" subtitle="Sessions de grind quotidiennes" />
-      <GrindhouseClient initialSessions={sessions} initialDate={today} players={players} games={games} />
+      <GrindhouseClient initialSessions={sessions} initialDate={today} grinders={grinders} allPlayers={allPlayers} games={games} />
     </>
   );
 }

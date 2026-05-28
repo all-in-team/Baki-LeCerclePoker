@@ -1227,4 +1227,22 @@ function initSchema(db: Database.Database) {
   } catch (err: any) {
     console.error(`[MIGRATION:add_grindhouse_sessions_v1] FAILED:`, err.message);
   }
+
+  try {
+    const fix = db.prepare(`INSERT OR IGNORE INTO _applied_fixes (name) VALUES (?)`).run("add_grindhouse_grinders_v1");
+    if (fix.changes > 0) {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS grindhouse_grinders (
+          player_id INTEGER PRIMARY KEY REFERENCES players(id),
+          joined_at TEXT NOT NULL DEFAULT (date('now')),
+          status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active', 'inactive')),
+          deal_percentage REAL DEFAULT 50,
+          notes TEXT
+        );
+      `);
+      console.log("[MIGRATION] add_grindhouse_grinders_v1 applied");
+    }
+  } catch (err: any) {
+    console.error(`[MIGRATION:add_grindhouse_grinders_v1] FAILED:`, err.message);
+  }
 }
