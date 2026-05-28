@@ -1204,4 +1204,27 @@ function initSchema(db: Database.Database) {
   } catch (err: any) {
     console.error(`[MIGRATION:add_affiliate_profiles_v1] FAILED:`, err.message);
   }
+
+  try {
+    const fix = db.prepare(`INSERT OR IGNORE INTO _applied_fixes (name) VALUES (?)`).run("add_grindhouse_sessions_v1");
+    if (fix.changes > 0) {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS grindhouse_sessions (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          player_id INTEGER NOT NULL REFERENCES players(id),
+          game_id INTEGER NOT NULL REFERENCES games(id),
+          session_date TEXT NOT NULL DEFAULT (date('now')),
+          duration_hours REAL NOT NULL,
+          net_result_usdt REAL NOT NULL,
+          notes TEXT,
+          created_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+        CREATE INDEX IF NOT EXISTS idx_grindhouse_date ON grindhouse_sessions(session_date);
+        CREATE INDEX IF NOT EXISTS idx_grindhouse_player ON grindhouse_sessions(player_id);
+      `);
+      console.log("[MIGRATION] add_grindhouse_sessions_v1 applied");
+    }
+  } catch (err: any) {
+    console.error(`[MIGRATION:add_grindhouse_sessions_v1] FAILED:`, err.message);
+  }
 }
