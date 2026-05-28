@@ -37,6 +37,16 @@ export async function GET(req: NextRequest) {
   const agencyBrute = totalSessionsPnl - totalGrindFeesAttributed - totalGrinderShare;
   const agencyNet = agencyBrute - generalGrindFees - restoFees - autreFees;
 
+  const perGame = db.prepare(`
+    SELECT g.id AS game_id, g.name AS game_name,
+      COALESCE(SUM(gs.duration_hours), 0) AS hours,
+      COALESCE(SUM(gs.net_result_usdt), 0) AS pnl
+    FROM grindhouse_sessions gs
+    JOIN games g ON g.id = gs.game_id
+    WHERE gs.session_date >= ? AND gs.session_date <= ?
+    GROUP BY g.id ORDER BY pnl DESC
+  `).all(from, to) as { game_id: number; game_name: string; hours: number; pnl: number }[];
+
   return NextResponse.json({
     period: { from, to },
     total_sessions_pnl: totalSessionsPnl,
@@ -50,5 +60,6 @@ export async function GET(req: NextRequest) {
     agency_net: agencyNet,
     total_hours: totalHours,
     breakdown,
+    per_game: perGame,
   });
 }

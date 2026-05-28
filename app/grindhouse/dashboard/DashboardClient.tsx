@@ -1,6 +1,6 @@
 "use client";
-import { useState } from "react";
-import { TrendingUp, Clock, DollarSign } from "lucide-react";
+import { useState, useEffect, useCallback } from "react";
+import { Clock, TrendingUp, Zap } from "lucide-react";
 
 const GAME_BADGES: Record<string, { short: string; bg: string; color: string }> = {
   TELE: { short: "AK", bg: "rgba(212,175,55,0.15)", color: "#D4AF37" },
@@ -15,89 +15,159 @@ interface ProfitData {
   total_grinder_share: number; agency_brute: number; general_grind_fees: number;
   resto_fees: number; autre_fees: number; agency_net: number; total_hours: number;
   breakdown: { player_id: number; name: string; hours: number; sessions_pnl: number; grind_fees: number; pool_net: number; grinder_share: number; agency_share: number }[];
+  per_game?: { game_id: number; game_name: string; hours: number; pnl: number }[];
 }
 
-interface GameStats { game_id: number; game_name: string; hours: number; pnl: number }
+type Preset = "today" | "7d" | "30d" | "custom";
 
-function monday() { const d = new Date(); d.setDate(d.getDate() - ((d.getDay() + 6) % 7)); return d.toISOString().slice(0, 10); }
-function sunday() { const d = new Date(monday() + "T12:00:00Z"); d.setUTCDate(d.getUTCDate() + 6); return d.toISOString().slice(0, 10); }
-function firstOfMonth() { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-01`; }
+function daysAgo(n: number) { const d = new Date(); d.setDate(d.getDate() - n); return d.toISOString().slice(0, 10); }
+const today = () => new Date().toISOString().slice(0, 10);
 const fmt = (n: number) => n.toLocaleString("fr-FR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-const pnlColor = (n: number) => n >= 0 ? "var(--green)" : "#f87171";
+const fmtShort = (n: number) => Math.abs(n) >= 1000 ? (n / 1000).toFixed(1) + "k" : fmt(n);
+const pnlColor = (n: number) => n > 0 ? "#22C55E" : n < 0 ? "#f87171" : "var(--text-dim)";
 const pnlSign = (n: number) => (n >= 0 ? "+" : "") + fmt(n);
-const hourlyRate = (pnl: number, hours: number) => hours > 0 ? pnlSign(pnl / hours) : "—";
+const hrRate = (pnl: number, h: number) => h > 0 ? `${pnl >= 0 ? "+" : ""}$${(pnl / h).toFixed(2)}/h` : "—";
+const hrRateColor = (pnl: number, h: number) => h > 0 ? pnlColor(pnl / h) : "var(--text-dim)";
+
+function formatRange(from: string, to: string) {
+  const f = new Date(from + "T12:00:00Z");
+  const t = new Date(to + "T12:00:00Z");
+  const months = ["jan", "fév", "mar", "avr", "mai", "jun", "jul", "aoû", "sep", "oct", "nov", "déc"];
+  if (f.getUTCMonth() === t.getUTCMonth()) return `${f.getUTCDate()} → ${t.getUTCDate()} ${months[t.getUTCMonth()]} ${t.getUTCFullYear()}`;
+  return `${f.getUTCDate()} ${months[f.getUTCMonth()]} → ${t.getUTCDate()} ${months[t.getUTCMonth()]} ${t.getUTCFullYear()}`;
+}
 
 export default function DashboardClient() {
-  const [from, setFrom] = useState(monday());
-  const [to, setTo] = useState(sunday());
+  const [preset, setPreset] = useState<Preset>("7d");
+  const [from, setFrom] = useState(daysAgo(6));
+  const [to, setTo] = useState(today());
+  const [customOpen, setCustomOpen] = useState(false);
   const [data, setData] = useState<ProfitData | null>(null);
-  const [gameStats, setGameStats] = useState<GameStats[]>([]);
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(true);
 
-  async function compute() {
+  const load = useCallback(async (f: string, t: string) => {
     setLoading(true);
-    try {
-      const [profRes, sessRes] = await Promise.all([
-        fetch(`/api/grindhouse-profitability?from=${from}&to=${to}`),
-        fetch(`/api/grindhouse-sessions?date=__range&from=${from}&to=${to}`),
-      ]);
-      if (profRes.ok) setData(await profRes.json());
-      // Compute per-game stats from sessions endpoint doesn't support range — use profitability data instead
-    } finally { setLoading(false); }
+    try { const r = await fetch(`/api/grindhouse-profitability?from=${f}&to=${t}`); if (r.ok) setData(await r.json()); }
+    finally { setLoading(false); }
+  }, []);
+
+  useEffect(() => { load(from, to); }, [from, to, load]);
+
+  function pick(p: Preset) {
+    setPreset(p);
+    setCustomOpen(false);
+    if (p === "today") { setFrom(today()); setTo(today()); }
+    else if (p === "7d") { setFrom(daysAgo(6)); setTo(today()); }
+    else if (p === "30d") { setFrom(daysAgo(29)); setTo(today()); }
+    else setCustomOpen(true);
   }
 
-  const inputStyle: React.CSSProperties = { padding: "7px 10px", borderRadius: 7, fontSize: 12, background: "var(--bg-surface)", color: "var(--text)", border: "1px solid var(--border)", outline: "none", boxSizing: "border-box" };
+  const presetBtn = (p: Preset, label: string) => (
+    <button onClick={() => pick(p)} style={{ padding: "6px 14px", borderRadius: 7, fontSize: 12, fontWeight: 600, cursor: "pointer", background: preset === p ? "rgba(34,197,94,0.15)" : "var(--bg-surface)", border: preset === p ? "1px solid rgba(34,197,94,0.3)" : "1px solid var(--border)", color: preset === p ? "#22C55E" : "var(--text-muted)" }}>{label}</button>
+  );
+
+  const inputStyle: React.CSSProperties = { padding: "6px 10px", borderRadius: 7, fontSize: 12, background: "var(--bg-surface)", color: "var(--text)", border: "1px solid var(--border)", outline: "none", boxSizing: "border-box" };
+
+  const hasData = data && data.total_hours > 0;
 
   return (
     <div style={{ padding: "0 28px" }}>
-      <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 20, flexWrap: "wrap" }}>
-        <input type="date" value={from} onChange={e => setFrom(e.target.value)} style={inputStyle} />
-        <span style={{ color: "var(--text-dim)" }}>→</span>
-        <input type="date" value={to} onChange={e => setTo(e.target.value)} style={inputStyle} />
-        <button onClick={() => { setFrom(monday()); setTo(sunday()); }} style={{ padding: "6px 12px", borderRadius: 6, fontSize: 11, cursor: "pointer", background: "var(--bg-surface)", border: "1px solid var(--border)", color: "var(--text-muted)" }}>Cette semaine</button>
-        <button onClick={() => { setFrom(firstOfMonth()); setTo(new Date().toISOString().slice(0, 10)); }} style={{ padding: "6px 12px", borderRadius: 6, fontSize: 11, cursor: "pointer", background: "var(--bg-surface)", border: "1px solid var(--border)", color: "var(--text-muted)" }}>Ce mois</button>
-        <button onClick={compute} style={{ padding: "7px 16px", borderRadius: 7, fontSize: 12, fontWeight: 600, cursor: "pointer", background: "rgba(34,197,94,0.12)", border: "1px solid rgba(34,197,94,0.3)", color: "#22C55E" }}>Calculer</button>
+      {/* Period picker */}
+      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 24, flexWrap: "wrap" }}>
+        {presetBtn("today", "Aujourd'hui")}
+        {presetBtn("7d", "7 jours")}
+        {presetBtn("30d", "30 jours")}
+        {presetBtn("custom", "Custom 📅")}
+        {customOpen && (<>
+          <input type="date" value={from} onChange={e => { setFrom(e.target.value); setPreset("custom"); }} style={inputStyle} />
+          <span style={{ color: "var(--text-dim)", fontSize: 12 }}>→</span>
+          <input type="date" value={to} onChange={e => { setTo(e.target.value); setPreset("custom"); }} style={inputStyle} />
+        </>)}
+        <span style={{ marginLeft: "auto", fontSize: 12, color: "var(--text-dim)" }}>{formatRange(from, to)}</span>
       </div>
 
-      {loading ? <div style={{ padding: 32, textAlign: "center", color: "var(--text-dim)" }}>Calcul...</div> : data && (<>
+      {loading ? <div style={{ padding: 48, textAlign: "center", color: "var(--text-dim)" }}>Chargement...</div> : !hasData ? (
+        <div style={{ padding: "48px 24px", textAlign: "center", background: "var(--bg-raised)", border: "1px solid var(--border)", borderRadius: 10 }}>
+          <div style={{ fontSize: 32, marginBottom: 12 }}>📊</div>
+          <div style={{ fontSize: 14, fontWeight: 600, color: "var(--text)", marginBottom: 6 }}>Aucune session sur cette période</div>
+          <div style={{ fontSize: 12, color: "var(--text-dim)" }}>Logge des sessions dans l'onglet Sessions.</div>
+        </div>
+      ) : (<>
         {/* Hero stats */}
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 12, marginBottom: 24 }}>
-          <div style={{ padding: "16px 20px", background: "var(--bg-raised)", border: "1px solid var(--border)", borderRadius: 10 }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11, fontWeight: 700, color: "var(--text-muted)", textTransform: "uppercase", marginBottom: 6 }}><Clock size={14} /> Total heures</div>
-            <div style={{ fontSize: 24, fontWeight: 700, color: "var(--text)" }}>{data.total_hours.toFixed(1)}h</div>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 12, marginBottom: 28 }}>
+          <div style={{ padding: "18px 20px", background: "var(--bg-raised)", border: "1px solid var(--border)", borderRadius: 10 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 10, fontWeight: 700, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 8 }}><Clock size={13} /> Total heures</div>
+            <div><span style={{ fontSize: 32, fontWeight: 600, color: "var(--text)" }}>{Math.round(data!.total_hours)}</span><span style={{ fontSize: 16, fontWeight: 400, color: "var(--text-dim)", marginLeft: 2 }}>h</span></div>
           </div>
-          <div style={{ padding: "16px 20px", background: "var(--bg-raised)", border: "1px solid var(--border)", borderRadius: 10 }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11, fontWeight: 700, color: "var(--text-muted)", textTransform: "uppercase", marginBottom: 6 }}><TrendingUp size={14} /> Total P&L</div>
-            <div style={{ fontSize: 24, fontWeight: 700, color: pnlColor(data.total_sessions_pnl) }}>{pnlSign(data.total_sessions_pnl)}</div>
+          <div style={{ padding: "18px 20px", background: "var(--bg-raised)", border: "1px solid var(--border)", borderRadius: 10 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 10, fontWeight: 700, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 8 }}><TrendingUp size={13} /> P&L net</div>
+            <div style={{ fontSize: 32, fontWeight: 600, color: pnlColor(data!.total_sessions_pnl) }}>{pnlSign(data!.total_sessions_pnl)}<span style={{ fontSize: 14, fontWeight: 400, marginLeft: 4 }}>USDT</span></div>
           </div>
-          <div style={{ padding: "16px 20px", background: "var(--bg-raised)", border: "1px solid var(--border)", borderRadius: 10 }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11, fontWeight: 700, color: "var(--text-muted)", textTransform: "uppercase", marginBottom: 6 }}><DollarSign size={14} /> Avg $/h</div>
-            <div style={{ fontSize: 24, fontWeight: 700, color: data.total_hours > 0 ? pnlColor(data.total_sessions_pnl / data.total_hours) : "var(--text-dim)" }}>{hourlyRate(data.total_sessions_pnl, data.total_hours)}</div>
+          <div style={{ padding: "18px 20px", background: "var(--bg-raised)", border: "1px solid var(--border)", borderRadius: 10 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 10, fontWeight: 700, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 8 }}><Zap size={13} /> Taux moyen</div>
+            <div style={{ fontSize: 32, fontWeight: 600, color: hrRateColor(data!.total_sessions_pnl, data!.total_hours) }}>{hrRate(data!.total_sessions_pnl, data!.total_hours)}</div>
           </div>
         </div>
 
         {/* Per-grinder */}
-        {data.breakdown.length > 0 && (
-          <div style={{ background: "var(--bg-raised)", border: "1px solid var(--border)", borderRadius: 10, marginBottom: 24 }}>
-            <div style={{ padding: "10px 16px", borderBottom: "1px solid var(--border)", fontSize: 11, fontWeight: 700, color: "var(--text-muted)", textTransform: "uppercase" }}>Par grinder</div>
-            <table style={{ width: "100%", borderCollapse: "collapse" }}><thead><tr style={{ borderBottom: "1px solid var(--border)" }}>{["Grinder", "Heures", "P&L", "$/h", "Part grinder", "Part agence"].map((h, i) => (<th key={i} style={{ padding: "8px 12px", textAlign: i >= 1 ? "right" : "left", fontSize: 10, fontWeight: 600, color: "var(--text-muted)", textTransform: "uppercase" }}>{h}</th>))}</tr></thead>
-            <tbody>{data.breakdown.map(b => (<tr key={b.player_id} style={{ borderBottom: "1px solid var(--border)" }}><td style={{ padding: "10px 12px", fontSize: 13, fontWeight: 600 }}>{b.name}</td><td style={{ padding: "10px 12px", textAlign: "right", fontSize: 12, color: "var(--text-muted)" }}>{b.hours.toFixed(1)}h</td><td style={{ padding: "10px 12px", textAlign: "right", fontSize: 12, fontWeight: 600, color: pnlColor(b.sessions_pnl) }}>{pnlSign(b.sessions_pnl)}</td><td style={{ padding: "10px 12px", textAlign: "right", fontSize: 12, fontWeight: 600, color: b.hours > 0 ? pnlColor(b.sessions_pnl / b.hours) : "var(--text-dim)" }}>{hourlyRate(b.sessions_pnl, b.hours)}</td><td style={{ padding: "10px 12px", textAlign: "right", fontSize: 12, fontWeight: 600, color: pnlColor(b.grinder_share) }}>{pnlSign(b.grinder_share)}</td><td style={{ padding: "10px 12px", textAlign: "right", fontSize: 12, fontWeight: 600, color: pnlColor(b.agency_share) }}>{pnlSign(b.agency_share)}</td></tr>))}</tbody></table>
+        {data!.breakdown.length > 0 && (<>
+          <div style={{ fontSize: 11, fontWeight: 700, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 10 }}>Par grinder</div>
+          <div style={{ display: "grid", gridTemplateColumns: `repeat(auto-fit, minmax(200px, 1fr))`, gap: 12, marginBottom: 28 }}>
+            {data!.breakdown.map(b => {
+              const hasHours = b.hours > 0;
+              const avatarBg = !hasHours ? "rgba(156,163,175,0.2)" : b.sessions_pnl >= 0 ? "rgba(34,197,94,0.15)" : "rgba(248,113,113,0.15)";
+              const avatarColor = !hasHours ? "#9CA3AF" : b.sessions_pnl >= 0 ? "#22C55E" : "#f87171";
+              return (
+                <div key={b.player_id} style={{ padding: "14px 16px", background: "var(--bg-raised)", border: "1px solid var(--border)", borderRadius: 10, opacity: hasHours ? 1 : 0.5 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8 }}>
+                    <div style={{ width: 30, height: 30, borderRadius: "50%", background: avatarBg, color: avatarColor, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 12, fontWeight: 700, flexShrink: 0 }}>{b.name.slice(0, 2).toUpperCase()}</div>
+                    <span style={{ fontWeight: 500, fontSize: 13, color: "var(--text)" }}>{b.name}</span>
+                  </div>
+                  <div style={{ fontSize: 12, color: "var(--text-dim)", marginBottom: 6 }}>
+                    {hasHours ? <>{b.hours.toFixed(1)}h · <span style={{ color: pnlColor(b.sessions_pnl), fontWeight: 500 }}>{pnlSign(b.sessions_pnl)} USDT</span></> : "—"}
+                  </div>
+                  <div style={{ fontSize: 20, fontWeight: 500, color: hrRateColor(b.sessions_pnl, b.hours) }}>{hrRate(b.sessions_pnl, b.hours)}</div>
+                </div>
+              );
+            })}
           </div>
-        )}
+        </>)}
+
+        {/* Per-game table */}
+        {data!.per_game && data!.per_game.length > 0 && (<>
+          <div style={{ fontSize: 11, fontWeight: 700, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 10 }}>Par game</div>
+          <div style={{ background: "var(--bg-raised)", border: "1px solid var(--border)", borderRadius: 10, marginBottom: 28 }}>
+            <table style={{ width: "100%", borderCollapse: "collapse" }}><thead><tr style={{ borderBottom: "1px solid var(--border)", background: "var(--bg-surface)" }}>{["Game", "Heures", "P&L", "$/h"].map((h, i) => (<th key={i} style={{ padding: "8px 14px", textAlign: i >= 1 ? "right" : "left", fontSize: 10, fontWeight: 600, color: "var(--text-muted)", textTransform: "uppercase" }}>{h}</th>))}</tr></thead>
+            <tbody>{data!.per_game.map(g => { const gb = GAME_BADGES[g.game_name] ?? { short: g.game_name.slice(0, 2), bg: "rgba(156,163,175,0.15)", color: "#9CA3AF" }; return (
+              <tr key={g.game_id} style={{ borderBottom: "1px solid var(--border)" }}>
+                <td style={{ padding: "10px 14px" }}><span style={{ background: gb.bg, color: gb.color, padding: "2px 8px", borderRadius: 4, fontSize: 10, fontWeight: 700 }}>{gb.short}</span><span style={{ marginLeft: 8, fontSize: 12, color: "var(--text)" }}>{g.game_name}</span></td>
+                <td style={{ padding: "10px 14px", textAlign: "right", fontSize: 12, color: "var(--text-muted)" }}>{g.hours.toFixed(1)}h</td>
+                <td style={{ padding: "10px 14px", textAlign: "right", fontSize: 12, fontWeight: 600, color: pnlColor(g.pnl) }}>{pnlSign(g.pnl)}</td>
+                <td style={{ padding: "10px 14px", textAlign: "right", fontSize: 12, fontWeight: 600, color: hrRateColor(g.pnl, g.hours) }}>{hrRate(g.pnl, g.hours)}</td>
+              </tr>
+            ); })}</tbody></table>
+          </div>
+        </>)}
 
         {/* Profitability waterfall */}
+        <div style={{ fontSize: 11, fontWeight: 700, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 10 }}>Rentabilité agence</div>
         <div style={{ padding: "20px 24px", background: "var(--bg-raised)", border: "1px solid var(--border)", borderRadius: 10, marginBottom: 24 }}>
-          <div style={{ fontSize: 11, fontWeight: 700, color: "var(--text-muted)", textTransform: "uppercase", marginBottom: 12 }}>Rentabilité agence</div>
           <div style={{ display: "flex", flexDirection: "column", gap: 8, fontSize: 13 }}>
-            <div style={{ display: "flex", justifyContent: "space-between" }}><span>Production brute (sessions)</span><span style={{ fontWeight: 600, color: pnlColor(data.total_sessions_pnl) }}>{pnlSign(data.total_sessions_pnl)}</span></div>
-            <div style={{ display: "flex", justifyContent: "space-between" }}><span style={{ color: "var(--text-dim)" }}>- Frais grind attribués</span><span style={{ color: "#f87171" }}>-{fmt(data.total_grind_fees_attributed)}</span></div>
-            <div style={{ display: "flex", justifyContent: "space-between", borderTop: "1px solid var(--border)", paddingTop: 8, fontWeight: 600 }}><span>= Pool net</span><span style={{ color: pnlColor(data.total_pool_net) }}>{pnlSign(data.total_pool_net)}</span></div>
-            <div style={{ display: "flex", justifyContent: "space-between" }}><span style={{ color: "var(--text-dim)" }}>- Part grinders (50%)</span><span style={{ color: "#f87171" }}>-{fmt(Math.abs(data.total_grinder_share))}</span></div>
-            <div style={{ display: "flex", justifyContent: "space-between", fontWeight: 600 }}><span>= Part agence brute</span><span style={{ color: pnlColor(data.agency_brute) }}>{pnlSign(data.agency_brute)}</span></div>
-            <div style={{ display: "flex", justifyContent: "space-between" }}><span style={{ color: "var(--text-dim)" }}>- Frais grind généraux</span><span style={{ color: "#f87171" }}>-{fmt(data.general_grind_fees)}</span></div>
-            <div style={{ display: "flex", justifyContent: "space-between" }}><span style={{ color: "var(--text-dim)" }}>- Frais resto</span><span style={{ color: "#f87171" }}>-{fmt(data.resto_fees)}</span></div>
-            <div style={{ display: "flex", justifyContent: "space-between" }}><span style={{ color: "var(--text-dim)" }}>- Frais autres</span><span style={{ color: "#f87171" }}>-{fmt(data.autre_fees)}</span></div>
-            <div style={{ display: "flex", justifyContent: "space-between", borderTop: "2px solid var(--border)", paddingTop: 10, marginTop: 4 }}><span style={{ fontSize: 15, fontWeight: 700 }}>Rentabilité nette agence</span><span style={{ fontSize: 20, fontWeight: 700, color: pnlColor(data.agency_net) }}>{pnlSign(data.agency_net)} USDT</span></div>
+            <div style={{ display: "flex", justifyContent: "space-between" }}><span>Production brute</span><span style={{ fontWeight: 600, color: pnlColor(data!.total_sessions_pnl) }}>{pnlSign(data!.total_sessions_pnl)}</span></div>
+            <div style={{ display: "flex", justifyContent: "space-between" }}><span style={{ color: "var(--text-dim)" }}>− Frais grind attribués</span><span style={{ color: "#f87171" }}>−{fmt(data!.total_grind_fees_attributed)}</span></div>
+            <div style={{ height: 1, background: "var(--border)", margin: "4px 0" }} />
+            <div style={{ display: "flex", justifyContent: "space-between", fontWeight: 500 }}><span>Pool net</span><span style={{ color: pnlColor(data!.total_pool_net) }}>{pnlSign(data!.total_pool_net)}</span></div>
+            <div style={{ height: 1, background: "var(--border)", margin: "4px 0" }} />
+            <div style={{ display: "flex", justifyContent: "space-between" }}><span style={{ color: "var(--text-dim)" }}>− Part grinders (50%)</span><span style={{ color: "#f87171" }}>−{fmt(Math.abs(data!.total_grinder_share))}</span></div>
+            <div style={{ display: "flex", justifyContent: "space-between", fontWeight: 500 }}><span>Part agence brute</span><span style={{ color: pnlColor(data!.agency_brute) }}>{pnlSign(data!.agency_brute)}</span></div>
+            {data!.general_grind_fees > 0 && <div style={{ display: "flex", justifyContent: "space-between" }}><span style={{ color: "var(--text-dim)" }}>− Frais grind généraux</span><span style={{ color: "#f87171" }}>−{fmt(data!.general_grind_fees)}</span></div>}
+            {data!.resto_fees > 0 && <div style={{ display: "flex", justifyContent: "space-between" }}><span style={{ color: "var(--text-dim)" }}>− Frais resto</span><span style={{ color: "#f87171" }}>−{fmt(data!.resto_fees)}</span></div>}
+            {data!.autre_fees > 0 && <div style={{ display: "flex", justifyContent: "space-between" }}><span style={{ color: "var(--text-dim)" }}>− Frais autres</span><span style={{ color: "#f87171" }}>−{fmt(data!.autre_fees)}</span></div>}
+            <div style={{ height: 2, background: "var(--border)", margin: "6px 0" }} />
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
+              <span style={{ fontSize: 15, fontWeight: 600 }}>Rentabilité nette</span>
+              <span style={{ fontSize: 20, fontWeight: 600, color: pnlColor(data!.agency_net) }}>{pnlSign(data!.agency_net)} USDT</span>
+            </div>
           </div>
         </div>
       </>)}
