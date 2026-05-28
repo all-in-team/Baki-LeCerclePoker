@@ -149,7 +149,7 @@ export async function handleAffiliationRawMessage(
   if (autoInvited) {
     await sendMsg(chatId,
       `✅ <b>C'est fait !</b>\n\n` +
-      `J'ai créé le groupe <i>@${handle} x LeCercle x ${affiliateName}</i> et ajouté ton filleul dedans 🎉\n\n` +
+      `J'ai créé le groupe <i>@${handle} x LeCercle (Agent : ${affiliateName})</i> et ajouté ton filleul dedans 🎉\n\n` +
       `👉 <b>Rejoins le groupe ici</b> (ton filleul est déjà dedans) :\n${result.inviteLink}\n\n` +
       `On prend le relais pour l'onboarder dès que tu es dans le groupe.\n\n` +
       `💰 <i>Rappel : tu touches 50% des profits agency sur ce joueur.</i>`,

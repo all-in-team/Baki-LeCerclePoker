@@ -286,7 +286,7 @@ export async function createPlayerGroup(
     const result = await client.invoke(
       new Api.messages.CreateChat({
         users: usersToAdd,
-        title: titleSuffix ? `${playerName} x LeCercle x ${titleSuffix}` : `${playerName} x LeCercle`,
+        title: titleSuffix ? `${playerName} x LeCercle (Agent : ${titleSuffix})` : `${playerName} x LeCercle`,
       })
     );
 
