@@ -27,6 +27,7 @@ export { handleStartA5poker } from "./starta5poker";
 export { handleAffiliation, handleAffiliationRawMessage } from "./affiliation";
 export { handleMyAffi } from "./myaffi";
 export { handleStartAffi } from "./startaffi";
+export { handleLinkGroup } from "./linkgroup";
 
 // Re-export helpers needed by route.ts
 export {

@@ -16,6 +16,7 @@ import {
   handleAffiliation,
   handleMyAffi,
   handleStartAffi,
+  handleLinkGroup,
   sendMsg, answerCbQuery, getSession, handleRawMessage, registerCommandHandlers,
   OWNER_IDS, AGENT_CHAT_ID,
 } from "@/lib/telegram-commands";
@@ -121,6 +122,13 @@ export async function POST(req: NextRequest) {
   // /startaffi — activate player as affiliate (group only)
   if (msg?.text?.match(/^\/startaffi(\s|$|@)/)) {
     await handleStartAffi(chatId, msg.from?.id, msg.chat?.type ?? "private");
+    return NextResponse.json({ ok: true });
+  }
+
+  // /linkgroup — associate orphan group with a player (owner only)
+  if (msg?.text?.match(/^\/linkgroup(\s|@)/)) {
+    const linkArgs = msg.text.replace(/^\/linkgroup(@\S+)?\s*/, "");
+    await handleLinkGroup(chatId, msg.from?.id, msg.chat?.type ?? "private", linkArgs);
     return NextResponse.json({ ok: true });
   }
 
