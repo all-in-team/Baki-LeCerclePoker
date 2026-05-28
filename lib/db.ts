@@ -1245,4 +1245,44 @@ function initSchema(db: Database.Database) {
   } catch (err: any) {
     console.error(`[MIGRATION:add_grindhouse_grinders_v1] FAILED:`, err.message);
   }
+
+  try {
+    const fix = db.prepare(`INSERT OR IGNORE INTO _applied_fixes (name) VALUES (?)`).run("add_grindhouse_expenses_settlements_v1");
+    if (fix.changes > 0) {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS grindhouse_expenses (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          date TEXT NOT NULL DEFAULT (date('now')),
+          amount_usdt REAL NOT NULL,
+          type TEXT NOT NULL CHECK(type IN ('grind', 'resto', 'autre')),
+          player_id INTEGER REFERENCES players(id),
+          description TEXT,
+          created_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+        CREATE INDEX IF NOT EXISTS idx_grindhouse_expenses_date ON grindhouse_expenses(date);
+        CREATE INDEX IF NOT EXISTS idx_grindhouse_expenses_type ON grindhouse_expenses(type);
+        CREATE INDEX IF NOT EXISTS idx_grindhouse_expenses_player ON grindhouse_expenses(player_id);
+
+        CREATE TABLE IF NOT EXISTS grindhouse_settlements (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          player_id INTEGER NOT NULL REFERENCES players(id),
+          period_start TEXT NOT NULL,
+          period_end TEXT NOT NULL,
+          sessions_pnl REAL NOT NULL,
+          attributed_grind_fees REAL NOT NULL,
+          pool_net REAL NOT NULL,
+          grinder_share REAL NOT NULL,
+          status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending', 'paid')),
+          paid_at TEXT,
+          notes TEXT,
+          created_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+        CREATE INDEX IF NOT EXISTS idx_grindhouse_settlements_player ON grindhouse_settlements(player_id);
+        CREATE INDEX IF NOT EXISTS idx_grindhouse_settlements_period ON grindhouse_settlements(period_start, period_end);
+      `);
+      console.log("[MIGRATION] add_grindhouse_expenses_settlements_v1 applied");
+    }
+  } catch (err: any) {
+    console.error(`[MIGRATION:add_grindhouse_expenses_settlements_v1] FAILED:`, err.message);
+  }
 }
