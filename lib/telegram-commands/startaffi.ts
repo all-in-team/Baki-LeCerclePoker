@@ -56,9 +56,9 @@ export async function handleStartAffi(chatId: number, fromId: number, chatType: 
         `Tu es désormais agent LeCerclePoker.\n\n` +
         `Tu peux ramener des filleuls et gagner :\n` +
         `• <b>50% des profits agency lifetime</b> sur les games onboardés dans les 30 premiers jours\n` +
-        `• Après 30 jours, les nouveaux games ne comptent plus\n` +
-        `• On partage les profits, pas les pertes\n\n` +
-        `Notre but ensemble le 1er mois : mettre ton filleul dans le max d'écosystèmes qu'il kiffe pour qu'il soit bien setup et que ton revenu print sur le long terme.\n\n` +
+        `• Après 30 jours, les nouveaux games ne comptent plus\n\n` +
+        `💡 Makeup : tu touches quand on est en profit cumulé sur ton filleul.\n` +
+        `⚠️ Tu réponds de tes filleuls (scam = déduit de tes profits).\n\n` +
         `Ouvre ton dashboard pour récupérer ton lien perso 👇`,
       parse_mode: "HTML",
       reply_markup: {

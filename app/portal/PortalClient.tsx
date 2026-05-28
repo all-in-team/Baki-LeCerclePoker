@@ -179,7 +179,7 @@ export default function PortalClient() {
     try { await navigator.clipboard.writeText(share_link); setCopied(true); setTimeout(() => setCopied(false), 2000); } catch {}
   }
   function shareLink() {
-    const text = "Rejoins LeCerclePoker, on partage les profits";
+    const text = "Rejoins-moi sur LeCerclePoker 🎰";
     const url = `https://t.me/share/url?url=${encodeURIComponent(share_link)}&text=${encodeURIComponent(text)}`;
     try { window.Telegram?.WebApp?.openTelegramLink?.(url); } catch { window.open(url, "_blank"); }
   }
@@ -216,7 +216,7 @@ export default function PortalClient() {
       {filleuls.length === 0 && (
         <div style={{ ...card, marginBottom: 24, textAlign: "center" }}>
           <div style={{ fontSize: 15, fontWeight: 700, marginBottom: 12 }}>🎯 Ramène ton premier filleul</div>
-          <div style={{ padding: "10px 12px", background: "rgba(255,255,255,0.05)", borderRadius: 8, fontFamily: "monospace", fontSize: 12, wordBreak: "break-all", marginBottom: 12, color: "var(--tg-theme-link-color, #2ea043)" }}>
+          <div onClick={() => { try { window.Telegram?.WebApp?.openTelegramLink?.(share_link); } catch { window.open(share_link, "_blank"); } }} style={{ padding: "10px 12px", background: "rgba(255,255,255,0.05)", borderRadius: 8, fontFamily: "monospace", fontSize: 12, wordBreak: "break-all", marginBottom: 12, color: "var(--tg-theme-link-color, #2ea043)", cursor: "pointer", textDecoration: "underline", textUnderlineOffset: 3 }}>
             {share_link}
           </div>
           <div style={{ display: "flex", gap: 8, justifyContent: "center", marginBottom: 16 }}>
@@ -319,13 +319,19 @@ export default function PortalClient() {
 
       {/* Comment ça marche */}
       <div style={{ ...card, marginBottom: 24 }}>
-        <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 8 }}>🎯 Comment ça marche</div>
-        <div style={{ fontSize: 12, display: "flex", flexDirection: "column", gap: 6 }}>
-          <div><span style={{ color: "#22C55E", fontWeight: 600 }}>50% lifetime</span> <span style={hint}>— sur les games onboardés dans les 30 premiers jours</span></div>
+        <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 10 }}>🎯 Comment ça marche</div>
+        <div style={{ fontSize: 12, display: "flex", flexDirection: "column", gap: 6, marginBottom: 12 }}>
+          <div><span style={{ color: "#22C55E", fontWeight: 600 }}>50% lifetime</span> <span style={hint}>— sur les games où ton filleul est onboardé dans les 30 premiers jours</span></div>
           <div><span style={{ color: "#9CA3AF", fontWeight: 600 }}>Après 30j</span> <span style={hint}>— les nouveaux games ne comptent plus</span></div>
-          <div><span style={{ color: "var(--tg-theme-hint-color, #707579)", fontWeight: 600 }}>Makeup</span> <span style={hint}>— on partage les profits, pas les pertes</span></div>
         </div>
-        <div style={{ ...hint, marginTop: 8, fontSize: 10 }}>Plus tu mets ton filleul dans des écosystèmes qui lui plaisent pendant le 1er mois, plus ton revenu long-terme est solide.</div>
+        <div style={{ fontSize: 12, marginBottom: 8 }}>
+          <div style={{ fontWeight: 600, color: "var(--tg-theme-text-color, #fff)", marginBottom: 4 }}>💡 Système de makeup</div>
+          <div style={hint}>Si ton filleul est en perte (il nous coûte de l'argent), tu ne touches rien tant qu'on n'est pas repassé en profit cumulé sur lui. Dès qu'il redevient profitable, tu touches tes 50%.</div>
+        </div>
+        <div style={{ fontSize: 12 }}>
+          <div style={{ fontWeight: 600, color: "var(--tg-theme-text-color, #fff)", marginBottom: 4 }}>⚠️ Responsabilité</div>
+          <div style={hint}>Tu réponds de tes filleuls. Si l'un part avec ses gains sans régler son action (scam), le montant est déduit de tes profits. Choisis bien qui tu ramènes.</div>
+        </div>
       </div>
 
       {/* Footer */}
