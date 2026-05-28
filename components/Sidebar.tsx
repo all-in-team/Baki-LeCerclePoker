@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { LayoutDashboard, FileText, ContactRound, Settings, BarChart3, Scale, Wallet, Users, Network, Gamepad2 } from "lucide-react";
+import { LayoutDashboard, FileText, ContactRound, Settings, BarChart3, Scale, Wallet, Users, Network, Gamepad2, Receipt, TrendingUp } from "lucide-react";
 
 type NavItem = { href: string; label: string; icon: any };
 type NavSection = { label: string; items: NavItem[]; archived?: boolean };
@@ -50,7 +50,10 @@ const SECTIONS: NavSection[] = [
   {
     label: "GRINDHOUSE",
     items: [
-      { href: "/grindhouse", label: "Sessions", icon: Gamepad2 },
+      { href: "/grindhouse/sessions", label: "Sessions", icon: Gamepad2 },
+      { href: "/grindhouse/expenses", label: "Frais", icon: Receipt },
+      { href: "/grindhouse/settlements", label: "Settlements", icon: Scale },
+      { href: "/grindhouse/dashboard", label: "Dashboard", icon: TrendingUp },
     ],
   },
 ];
