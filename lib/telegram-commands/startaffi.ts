@@ -11,12 +11,18 @@ export async function handleStartAffi(chatId: number, fromId: number, chatType: 
 
   const db = getDb();
   const player = db.prepare(
-    `SELECT id, name FROM players WHERE telegram_group_id = ?`
-  ).get(String(chatId)) as { id: number; name: string } | undefined;
+    `SELECT id, name, telegram_id FROM players WHERE telegram_group_id = ?`
+  ).get(String(chatId)) as { id: number; name: string; telegram_id: string | null } | undefined;
 
   if (!player) {
     await sendMsg(chatId, `❌ Ce groupe n'est pas associé à un player.`);
     return;
+  }
+
+  if (player.telegram_id === null && fromId) {
+    db.prepare(`UPDATE players SET telegram_id = ? WHERE id = ? AND telegram_id IS NULL`)
+      .run(String(fromId), player.id);
+    console.log(`[startaffi] Backfilled telegram_id=${fromId} for player ${player.id} (${player.name})`);
   }
 
   const existing = db.prepare(

@@ -153,9 +153,26 @@ export async function POST(req: NextRequest) {
   }
 
   // Agent mode: own dashboard
-  const player = db.prepare(
+  let player = db.prepare(
     `SELECT id FROM players WHERE telegram_id = ?`
   ).get(telegramId) as { id: number } | undefined;
+
+  if (!player && user.username) {
+    const username = user.username as string;
+    const candidates = db.prepare(
+      `SELECT id FROM players WHERE telegram_id IS NULL AND (
+        LOWER(telegram_handle) = LOWER(?) OR LOWER(telegram_handle) = LOWER(?)
+      )`
+    ).all(username, `@${username}`) as { id: number }[];
+
+    if (candidates.length === 1) {
+      db.prepare(`UPDATE players SET telegram_id = ? WHERE id = ? AND telegram_id IS NULL`)
+        .run(String(telegramId), candidates[0].id);
+      player = candidates[0];
+      console.log(`[portal] Backfilled telegram_id=${telegramId} for player ${candidates[0].id} via username @${username}`);
+    }
+  }
+
   if (!player) return NextResponse.json({ error: "Player not found" }, { status: 403 });
 
   const profile = db.prepare(`SELECT 1 FROM affiliate_profiles WHERE affiliate_player_id = ?`).get(player.id);
