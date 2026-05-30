@@ -469,6 +469,79 @@ export async function createPlayerGroup(
   }
 }
 
+// ── resolveUsername ─────────────────────────────────────
+
+export async function resolveUsername(username: string): Promise<number | null> {
+  const client = await getClient();
+  if (!client) return null;
+
+  const handle = username.replace(/^@/, "");
+  try {
+    const result = await client.invoke(
+      new Api.contacts.ResolveUsername({ username: handle })
+    );
+    const users = (result as any).users ?? [];
+    if (users.length === 0) return null;
+    return toNum(users[0].id);
+  } catch (e: any) {
+    console.warn(`[USERBOT] resolveUsername(@${handle}) failed: ${errMsg(e)}`);
+    return null;
+  }
+}
+
+// ── getChatMembers ─────────────────────────────────────
+
+export async function getChatMembers(chatId: string): Promise<Array<{
+  id: number;
+  first_name?: string;
+  last_name?: string;
+  username?: string;
+}>> {
+  const client = await getClient();
+  if (!client) return [];
+
+  try {
+    const numericId = parseInt(chatId.replace(/^-100/, ""), 10);
+    const channelPeer = await client.getInputEntity(
+      new Api.PeerChannel({ channelId: BigInt(numericId) as any })
+    ) as unknown as Api.InputChannel;
+
+    const result = await client.invoke(
+      new Api.channels.GetParticipants({
+        channel: channelPeer,
+        filter: new Api.ChannelParticipantsRecent({}),
+        offset: 0,
+        limit: 200,
+        hash: BigInt(0) as any,
+      })
+    );
+
+    const users = (result as any).users ?? [];
+    return users.map((u: any) => ({
+      id: toNum(u.id),
+      first_name: u.firstName ?? undefined,
+      last_name: u.lastName ?? undefined,
+      username: u.username ?? undefined,
+    }));
+  } catch (e: any) {
+    console.warn(`[USERBOT] getChatMembers(${chatId}) failed: ${errMsg(e)}`);
+    return [];
+  }
+}
+
+// ── getMe (expose bot user id) ─────────────────────────
+
+export async function getUserbotId(): Promise<number | null> {
+  const client = await getClient();
+  if (!client) return null;
+  try {
+    const me = await client.getMe() as any;
+    return toNum(me.id);
+  } catch {
+    return null;
+  }
+}
+
 // ── inviteUserToGroup ───────────────────────────────────
 
 export async function inviteUserToGroup(

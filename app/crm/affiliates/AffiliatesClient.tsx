@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback } from "react";
 import { useRouter } from "next/navigation";
-import { Plus, Pencil, XCircle, DollarSign, Loader2, AlertTriangle } from "lucide-react";
+import { Plus, Pencil, XCircle, DollarSign, Loader2, AlertTriangle, RefreshCw } from "lucide-react";
 import Modal from "@/components/Modal";
 import AffiliateDetailDrawer from "./AffiliateDetailDrawer";
 
@@ -64,6 +64,20 @@ interface AffiliateGroup {
   relationships: CommissionResult[];
 }
 
+interface BackfillResult {
+  player_id: number;
+  full_name: string;
+  method: "handle" | "group_exclusion" | null;
+  status: "backfilled" | "would_backfill" | "skipped";
+  new_telegram_id?: number;
+  reason?: string;
+}
+interface BackfillResponse {
+  dry_run: boolean;
+  summary: { total_broken: number; would_backfill: number; would_skip: number };
+  results: BackfillResult[];
+}
+
 type Tab = "relations" | "payouts";
 
 function lastMonday(): string {
@@ -108,6 +122,13 @@ export default function AffiliatesClient({ relationships, players, activeGames, 
   // Drawer
   const [drawerRel, setDrawerRel] = useState<EnrichedRel | null>(null);
 
+  // Backfill telegram_id
+  const [backfillCount, setBackfillCount] = useState<number | null>(null);
+  const [backfillData, setBackfillData] = useState<BackfillResponse | null>(null);
+  const [backfillOpen, setBackfillOpen] = useState(false);
+  const [backfillLoading, setBackfillLoading] = useState(false);
+  const [backfillApplied, setBackfillApplied] = useState(false);
+
   const loadEnriched = useCallback(async () => {
     setEnrichedLoading(true);
     try {
@@ -121,6 +142,48 @@ export default function AffiliatesClient({ relationships, players, activeGames, 
   }, []);
 
   useEffect(() => { if (tab === "relations") loadEnriched(); }, [tab, loadEnriched]);
+
+  // Backfill: fetch initial count
+  useEffect(() => {
+    fetch("/api/admin/backfill-telegram-ids", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ key: "db-diag-20260518" }),
+    }).then(r => r.ok ? r.json() : null).then((data: BackfillResponse | null) => {
+      if (data) setBackfillCount(data.summary.total_broken);
+    }).catch(() => {});
+  }, [backfillApplied]);
+
+  async function openBackfillModal() {
+    setBackfillOpen(true);
+    setBackfillLoading(true);
+    setBackfillData(null);
+    setBackfillApplied(false);
+    try {
+      const res = await fetch("/api/admin/backfill-telegram-ids", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ key: "db-diag-20260518" }),
+      });
+      if (res.ok) setBackfillData(await res.json());
+    } finally { setBackfillLoading(false); }
+  }
+
+  async function applyBackfill() {
+    setBackfillLoading(true);
+    try {
+      const res = await fetch("/api/admin/backfill-telegram-ids?apply=1", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ key: "db-diag-20260518" }),
+      });
+      if (res.ok) {
+        setBackfillData(await res.json());
+        setBackfillApplied(true);
+        setBackfillCount(0);
+      }
+    } finally { setBackfillLoading(false); }
+  }
 
   // Payouts state
   const [payouts, setPayouts] = useState<AffiliateGroup[]>([]);
@@ -358,7 +421,12 @@ export default function AffiliatesClient({ relationships, players, activeGames, 
     return (
       <>
         {renderHealthBanner()}
-        <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 16 }}>
+        <div style={{ display: "flex", justifyContent: "flex-end", gap: 10, marginBottom: 16 }}>
+          {backfillCount != null && backfillCount > 0 && (
+            <button onClick={openBackfillModal} style={{ display: "flex", alignItems: "center", gap: 6, padding: "8px 16px", borderRadius: 8, fontSize: 13, fontWeight: 600, cursor: "pointer", background: "rgba(245,158,11,0.12)", border: "1px solid rgba(245,158,11,0.3)", color: "#F59E0B" }}>
+              <RefreshCw size={14} /> Backfill telegram_id ({backfillCount} agent{backfillCount > 1 ? "s" : ""})
+            </button>
+          )}
           <button onClick={openCreate} style={{ display: "flex", alignItems: "center", gap: 6, padding: "8px 16px", borderRadius: 8, fontSize: 13, fontWeight: 600, cursor: "pointer", background: "rgba(34,197,94,0.12)", border: "1px solid rgba(34,197,94,0.3)", color: "#22C55E" }}>
             <Plus size={14} /> Créer relation
           </button>
@@ -579,6 +647,71 @@ export default function AffiliatesClient({ relationships, players, activeGames, 
             {saving ? "..." : "Confirmer paiement"}
           </button>
         </div>
+      </Modal>
+
+      {/* Backfill modal */}
+      <Modal open={backfillOpen} onClose={() => setBackfillOpen(false)} title="Backfill telegram_id" width={600}>
+        {backfillLoading && !backfillData && (
+          <div style={{ padding: 30, textAlign: "center", color: "var(--text-dim)", fontSize: 13 }}>
+            <Loader2 size={18} style={{ animation: "spin 1s linear infinite", marginBottom: 8 }} /><br />
+            Resolution via userbot en cours...
+          </div>
+        )}
+        {backfillData && (
+          <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+            <div style={{ display: "flex", gap: 16, fontSize: 13 }}>
+              <span style={{ color: "var(--text-muted)" }}>Total: <strong style={{ color: "var(--text)" }}>{backfillData.summary.total_broken}</strong></span>
+              <span style={{ color: "#22C55E" }}>Resolvable: <strong>{backfillData.summary.would_backfill}</strong></span>
+              <span style={{ color: "var(--text-dim)" }}>Skipped: <strong>{backfillData.summary.would_skip}</strong></span>
+            </div>
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+              <thead>
+                <tr style={{ borderBottom: "1px solid var(--border)", fontSize: 10, textTransform: "uppercase", color: "var(--text-muted)", letterSpacing: "0.05em" }}>
+                  <th style={{ textAlign: "left", padding: "6px 8px" }}>Player</th>
+                  <th style={{ textAlign: "center", padding: "6px 8px" }}>Method</th>
+                  <th style={{ textAlign: "center", padding: "6px 8px" }}>Status</th>
+                  <th style={{ textAlign: "left", padding: "6px 8px" }}>telegram_id / reason</th>
+                </tr>
+              </thead>
+              <tbody>
+                {backfillData.results.map(r => (
+                  <tr key={r.player_id} style={{ borderBottom: "1px solid var(--border)" }}>
+                    <td style={{ padding: "8px", fontWeight: 600 }}>{r.full_name}</td>
+                    <td style={{ padding: "8px", textAlign: "center" }}>
+                      {r.method && (
+                        <span style={{ padding: "1px 6px", borderRadius: 4, fontSize: 10, fontWeight: 600, background: r.method === "handle" ? "rgba(59,130,246,0.12)" : "rgba(139,92,246,0.12)", color: r.method === "handle" ? "#3B82F6" : "#8B5CF6" }}>
+                          {r.method === "handle" ? "@handle" : "group"}
+                        </span>
+                      )}
+                      {!r.method && <span style={{ color: "var(--text-dim)" }}>-</span>}
+                    </td>
+                    <td style={{ padding: "8px", textAlign: "center" }}>
+                      <span style={{ padding: "1px 6px", borderRadius: 4, fontSize: 10, fontWeight: 600, background: r.status === "backfilled" ? "rgba(34,197,94,0.12)" : r.status === "would_backfill" ? "rgba(245,158,11,0.12)" : "rgba(156,163,175,0.12)", color: r.status === "backfilled" ? "#22C55E" : r.status === "would_backfill" ? "#F59E0B" : "#9CA3AF" }}>
+                        {r.status === "backfilled" ? "done" : r.status === "would_backfill" ? "ready" : "skip"}
+                      </span>
+                    </td>
+                    <td style={{ padding: "8px", fontSize: 11, color: r.new_telegram_id ? "#22C55E" : "var(--text-dim)" }}>
+                      {r.new_telegram_id ? r.new_telegram_id : r.reason ?? "-"}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            <div style={{ display: "flex", justifyContent: "flex-end", gap: 10, marginTop: 6 }}>
+              <button onClick={() => setBackfillOpen(false)} style={{ padding: "8px 18px", borderRadius: 7, fontSize: 13, cursor: "pointer", background: "none", border: "1px solid var(--border)", color: "var(--text-muted)" }}>Fermer</button>
+              {backfillData.dry_run && backfillData.summary.would_backfill > 0 && (
+                <button onClick={applyBackfill} disabled={backfillLoading} style={{ padding: "8px 18px", borderRadius: 7, fontSize: 13, fontWeight: 600, cursor: backfillLoading ? "wait" : "pointer", background: "rgba(34,197,94,0.15)", border: "1px solid rgba(34,197,94,0.3)", color: "#22C55E", opacity: backfillLoading ? 0.5 : 1 }}>
+                  {backfillLoading ? "..." : `Appliquer (${backfillData.summary.would_backfill})`}
+                </button>
+              )}
+              {!backfillData.dry_run && (
+                <span style={{ fontSize: 12, color: "#22C55E", fontWeight: 600, alignSelf: "center" }}>
+                  {backfillData.summary.would_backfill} backfilled
+                </span>
+              )}
+            </div>
+          </div>
+        )}
       </Modal>
 
       <style>{`@keyframes spin { to { transform: rotate(360deg) } }`}</style>
