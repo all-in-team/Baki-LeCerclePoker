@@ -2,9 +2,9 @@
 
 import { useState, useEffect, useCallback } from "react";
 import { useRouter } from "next/navigation";
-import { Plus, Pencil, XCircle, DollarSign, Loader2, AlertTriangle, RefreshCw } from "lucide-react";
+import { Plus, Pencil, XCircle, DollarSign, Loader2, RefreshCw, ChevronRight, Users } from "lucide-react";
 import Modal from "@/components/Modal";
-import AffiliateDetailDrawer from "./AffiliateDetailDrawer";
+import AgentDetailDrawer from "./AgentDetailDrawer";
 
 const GAME_BADGES: Record<string, { short: string; bg: string; color: string }> = {
   TELE:    { short: "AK", bg: "rgba(212,175,55,0.15)", color: "#D4AF37" },
@@ -15,25 +15,49 @@ const GAME_BADGES: Record<string, { short: string; bg: string; color: string }> 
   ClubGG:  { short: "CG", bg: "rgba(234,179,8,0.15)",  color: "#EAB308" },
 };
 
-const STATUS_STYLE: Record<string, { bg: string; color: string }> = {
-  active: { bg: "rgba(16,185,129,0.15)", color: "#10B981" },
-  paused: { bg: "rgba(234,179,8,0.15)", color: "#EAB308" },
-  terminated: { bg: "rgba(156,163,175,0.15)", color: "#9CA3AF" },
-};
-
 interface Player { id: number; name: string; telegram_handle: string | null; }
 interface Game { id: number; name: string; }
-interface Rel {
-  id: number; affiliate_player_id: number; referred_player_id: number; origin_game_id: number;
-  affiliate_name: string; affiliate_handle: string | null;
-  referred_name: string; referred_handle: string | null;
-  origin_game_name: string; start_date: string; status: string;
+interface Agent {
+  affiliate_player_id: number; joined_at: string; profile_status: string;
+  name: string; telegram_handle: string | null; telegram_id: number | null;
+}
+
+interface GameBreakdown {
+  game_id: number; game_name: string; rate: number; rate_label: string;
+  agency_pnl_lifetime: number; earned_lifetime: number; paid_lifetime: number; due_now: number;
+}
+interface EnrichedRel {
+  id: number; status: string; start_date: string;
+  affiliate: { id: number; name: string; telegram_handle: string | null };
+  referred: { id: number; name: string; telegram_handle: string | null };
+  origin_game: { id: number | null; name: string | null };
   disclosed_action_pct: number | null; disclosed_rakeback_pct: number | null; disclosed_insurance_pct: number | null;
-  exclude_agency_extras: number; notes: string | null; created_at: string;
+  exclude_agency_extras: number; notes: string | null;
+  games: GameBreakdown[];
+  total_due_now: number; total_paid_lifetime: number; last_paid_at: string | null;
+}
+
+interface AgentSummary {
+  agent: Agent;
+  filleuls: EnrichedRel[];
+  totalCommissionEarned: number;
+  totalDueNow: number;
+}
+
+interface BackfillResult {
+  player_id: number; full_name: string;
+  method: "handle" | "group_exclusion" | null;
+  status: "backfilled" | "would_backfill" | "skipped";
+  new_telegram_id?: number; reason?: string;
+}
+interface BackfillResponse {
+  dry_run: boolean;
+  summary: { total_broken: number; would_backfill: number; would_skip: number };
+  results: BackfillResult[];
 }
 
 interface Props {
-  relationships: Rel[];
+  agents: Agent[];
   players: Player[];
   activeGames: Game[];
   existingReferredIds: number[];
@@ -46,40 +70,6 @@ const emptyForm = () => ({
   exclude_agency_extras: true, notes: "", status: "active",
 });
 
-// ── Payouts types ────────────────────────────────────────
-interface GameBreakdown {
-  game_id: number; game_name: string; rate: number; rate_label: string;
-  agency_pnl_lifetime: number; earned_lifetime: number; paid_lifetime: number; due_now: number;
-}
-interface CommissionResult {
-  relationship_id: number;
-  affiliate: { id: number; name: string; telegram_handle: string | null };
-  referred: { id: number; name: string; telegram_handle: string | null };
-  breakdown: GameBreakdown[];
-  total_due_now: number; total_earned_lifetime: number; total_paid_lifetime: number;
-}
-interface AffiliateGroup {
-  affiliate: { id: number; name: string; telegram_handle: string | null };
-  total_due: number;
-  relationships: CommissionResult[];
-}
-
-interface BackfillResult {
-  player_id: number;
-  full_name: string;
-  method: "handle" | "group_exclusion" | null;
-  status: "backfilled" | "would_backfill" | "skipped";
-  new_telegram_id?: number;
-  reason?: string;
-}
-interface BackfillResponse {
-  dry_run: boolean;
-  summary: { total_broken: number; would_backfill: number; would_skip: number };
-  results: BackfillResult[];
-}
-
-type Tab = "relations" | "payouts";
-
 function lastMonday(): string {
   const d = new Date(); d.setDate(d.getDate() - ((d.getDay() + 6) % 7));
   return d.toISOString().slice(0, 10);
@@ -89,70 +79,62 @@ function lastSunday(): string {
   return d.toISOString().slice(0, 10);
 }
 
-interface EnrichedRel extends Rel {
-  games?: GameBreakdown[];
-  total_due_now?: number; total_paid_lifetime?: number; last_paid_at?: string | null;
-  breakdown?: GameBreakdown[];
-}
+const fmt = (n: number) => n.toFixed(2);
 
-interface HealthData {
-  pending_leads_no_relationship: number;
-  relationships_no_origin: number;
-  relationships_no_referred_player: number;
-  orphan_payments: number;
-}
-
-export default function AffiliatesClient({ relationships, players, activeGames, existingReferredIds }: Props) {
+export default function AffiliatesClient({ agents, players, activeGames, existingReferredIds }: Props) {
   const router = useRouter();
-  const [tab, setTab] = useState<Tab>("relations");
   const [createOpen, setCreateOpen] = useState(false);
-  const [editRel, setEditRel] = useState<Rel | null>(null);
+  const [editRel, setEditRel] = useState<EnrichedRel | null>(null);
   const [form, setForm] = useState(emptyForm());
   const [saving, setSaving] = useState(false);
   const [searchAff, setSearchAff] = useState("");
   const [searchRef, setSearchRef] = useState("");
 
-  // Enriched relations from API
   const [enrichedRels, setEnrichedRels] = useState<EnrichedRel[]>([]);
-  const [enrichedLoading, setEnrichedLoading] = useState(false);
+  const [loading, setLoading] = useState(true);
 
-  // Health
-  const [health, setHealth] = useState<HealthData | null>(null);
+  const [drawerAgent, setDrawerAgent] = useState<AgentSummary | null>(null);
 
-  // Drawer
-  const [drawerRel, setDrawerRel] = useState<EnrichedRel | null>(null);
-
-  // Backfill telegram_id
+  // Backfill
   const [backfillCount, setBackfillCount] = useState<number | null>(null);
   const [backfillData, setBackfillData] = useState<BackfillResponse | null>(null);
   const [backfillOpen, setBackfillOpen] = useState(false);
   const [backfillLoading, setBackfillLoading] = useState(false);
   const [backfillApplied, setBackfillApplied] = useState(false);
 
+  // Pay
+  const [payTarget, setPayTarget] = useState<{ relId: number; gameId: number; gameName: string; due: number; affName: string; refName: string } | null>(null);
+  const [payForm, setPayForm] = useState({ amount: "", tx_hash: "", notes: "", week_start: lastMonday(), week_end: lastSunday() });
+
   const loadEnriched = useCallback(async () => {
-    setEnrichedLoading(true);
+    setLoading(true);
     try {
-      const [relsRes, healthRes] = await Promise.all([
-        fetch("/api/affiliate-relationships"),
-        fetch("/api/affiliate-health"),
-      ]);
-      if (relsRes.ok) setEnrichedRels(await relsRes.json());
-      if (healthRes.ok) setHealth(await healthRes.json());
-    } finally { setEnrichedLoading(false); }
+      const res = await fetch("/api/affiliate-relationships");
+      if (res.ok) setEnrichedRels(await res.json());
+    } finally { setLoading(false); }
   }, []);
 
-  useEffect(() => { if (tab === "relations") loadEnriched(); }, [tab, loadEnriched]);
+  useEffect(() => { loadEnriched(); }, [loadEnriched]);
+
+  // Build agent summaries
+  const agentSummaries: AgentSummary[] = agents.map(agent => {
+    const filleuls = enrichedRels.filter(r => r.affiliate.id === agent.affiliate_player_id);
+    const totalCommissionEarned = filleuls.reduce((s, r) => s + (r.games ?? []).reduce((gs, g) => gs + g.earned_lifetime, 0), 0);
+    const totalDueNow = filleuls.reduce((s, r) => s + (r.total_due_now ?? 0), 0);
+    return { agent, filleuls, totalCommissionEarned, totalDueNow };
+  });
+
+  const brokenTgCount = agents.filter(a => !a.telegram_id).length;
 
   // Backfill: fetch initial count
   useEffect(() => {
     fetch("/api/admin/backfill-telegram-ids", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
+      method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ key: "db-diag-20260518" }),
     }).then(r => r.ok ? r.json() : null).then((data: BackfillResponse | null) => {
       if (data) setBackfillCount(data.summary.total_broken);
-    }).catch(() => {});
-  }, [backfillApplied]);
+    }).catch(() => { setBackfillCount(brokenTgCount > 0 ? brokenTgCount : 0); });
+  }, [backfillApplied, brokenTgCount]);
 
   async function openBackfillModal() {
     setBackfillOpen(true);
@@ -161,8 +143,7 @@ export default function AffiliatesClient({ relationships, players, activeGames, 
     setBackfillApplied(false);
     try {
       const res = await fetch("/api/admin/backfill-telegram-ids", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
+        method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ key: "db-diag-20260518" }),
       });
       if (res.ok) setBackfillData(await res.json());
@@ -173,8 +154,7 @@ export default function AffiliatesClient({ relationships, players, activeGames, 
     setBackfillLoading(true);
     try {
       const res = await fetch("/api/admin/backfill-telegram-ids?apply=1", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
+        method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ key: "db-diag-20260518" }),
       });
       if (res.ok) {
@@ -185,21 +165,67 @@ export default function AffiliatesClient({ relationships, players, activeGames, 
     } finally { setBackfillLoading(false); }
   }
 
-  // Payouts state
-  const [payouts, setPayouts] = useState<AffiliateGroup[]>([]);
-  const [payoutsLoading, setPayoutsLoading] = useState(false);
-  const [payTarget, setPayTarget] = useState<{ relId: number; gameId: number; gameName: string; due: number; affName: string; refName: string } | null>(null);
-  const [payForm, setPayForm] = useState({ amount: "", tx_hash: "", notes: "", week_start: lastMonday(), week_end: lastSunday() });
+  // Create / Edit / Pay handlers
+  function openCreate() {
+    setForm(emptyForm()); setSearchAff(""); setSearchRef("");
+    setCreateOpen(true);
+  }
 
-  const loadPayouts = useCallback(async () => {
-    setPayoutsLoading(true);
+  function openEdit(r: EnrichedRel) {
+    setEditRel(r);
+    setForm({
+      affiliate_player_id: r.affiliate.id, referred_player_id: r.referred.id,
+      origin_game_id: r.origin_game?.id ?? 0, start_date: r.start_date, status: r.status,
+      disclosed_action_pct: r.disclosed_action_pct != null ? String(r.disclosed_action_pct) : "",
+      disclosed_rakeback_pct: r.disclosed_rakeback_pct != null ? String(r.disclosed_rakeback_pct) : "",
+      disclosed_insurance_pct: r.disclosed_insurance_pct != null ? String(r.disclosed_insurance_pct) : "",
+      exclude_agency_extras: !!r.exclude_agency_extras, notes: r.notes ?? "",
+    });
+  }
+
+  async function handleCreate() {
+    if (!form.affiliate_player_id || !form.referred_player_id || !form.origin_game_id) return;
+    setSaving(true);
     try {
-      const res = await fetch("/api/affiliate-payouts");
-      if (res.ok) setPayouts(await res.json());
-    } finally { setPayoutsLoading(false); }
-  }, []);
+      const res = await fetch("/api/affiliate-relationships", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          ...form,
+          disclosed_action_pct: form.disclosed_action_pct ? Number(form.disclosed_action_pct) : null,
+          disclosed_rakeback_pct: form.disclosed_rakeback_pct ? Number(form.disclosed_rakeback_pct) : null,
+          disclosed_insurance_pct: form.disclosed_insurance_pct ? Number(form.disclosed_insurance_pct) : null,
+          exclude_agency_extras: form.exclude_agency_extras ? 1 : 0,
+        }),
+      });
+      if (!res.ok) { const d = await res.json(); alert(d.error ?? "Erreur"); return; }
+      setCreateOpen(false); loadEnriched(); router.refresh();
+    } catch (e: any) { alert(e.message); } finally { setSaving(false); }
+  }
 
-  useEffect(() => { if (tab === "payouts") loadPayouts(); }, [tab, loadPayouts]);
+  async function handleEdit() {
+    if (!editRel) return;
+    setSaving(true);
+    try {
+      await fetch(`/api/affiliate-relationships/${editRel.id}`, {
+        method: "PATCH", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          origin_game_id: form.origin_game_id, start_date: form.start_date, status: form.status,
+          disclosed_action_pct: form.disclosed_action_pct ? Number(form.disclosed_action_pct) : null,
+          disclosed_rakeback_pct: form.disclosed_rakeback_pct ? Number(form.disclosed_rakeback_pct) : null,
+          disclosed_insurance_pct: form.disclosed_insurance_pct ? Number(form.disclosed_insurance_pct) : null,
+          exclude_agency_extras: form.exclude_agency_extras ? 1 : 0,
+          notes: form.notes || null,
+        }),
+      });
+      setEditRel(null); loadEnriched(); router.refresh();
+    } catch (e: any) { alert(e.message); } finally { setSaving(false); }
+  }
+
+  async function terminate(id: number) {
+    if (!confirm("Terminer cette relation affiliate ?")) return;
+    await fetch(`/api/affiliate-relationships/${id}`, { method: "DELETE" });
+    loadEnriched(); router.refresh();
+  }
 
   function openPay(relId: number, gameId: number, gameName: string, due: number, affName: string, refName: string) {
     setPayTarget({ relId, gameId, gameName, due, affName, refName });
@@ -220,73 +246,8 @@ export default function AffiliatesClient({ relationships, players, activeGames, 
         }),
       });
       if (!res.ok) { const d = await res.json(); alert(d.error ?? "Erreur"); return; }
-      setPayTarget(null);
-      loadPayouts();
-      loadEnriched();
+      setPayTarget(null); loadEnriched();
     } catch (e: any) { alert(e.message); } finally { setSaving(false); }
-  }
-
-  function openCreate() {
-    setForm(emptyForm());
-    setSearchAff(""); setSearchRef("");
-    setCreateOpen(true);
-  }
-
-  function openEdit(r: Rel) {
-    setEditRel(r);
-    setForm({
-      affiliate_player_id: r.affiliate_player_id, referred_player_id: r.referred_player_id, origin_game_id: r.origin_game_id,
-      start_date: r.start_date, status: r.status,
-      disclosed_action_pct: r.disclosed_action_pct != null ? String(r.disclosed_action_pct) : "",
-      disclosed_rakeback_pct: r.disclosed_rakeback_pct != null ? String(r.disclosed_rakeback_pct) : "",
-      disclosed_insurance_pct: r.disclosed_insurance_pct != null ? String(r.disclosed_insurance_pct) : "",
-      exclude_agency_extras: !!r.exclude_agency_extras,
-      notes: r.notes ?? "",
-    });
-  }
-
-  async function handleCreate() {
-    if (!form.affiliate_player_id || !form.referred_player_id || !form.origin_game_id) return;
-    setSaving(true);
-    try {
-      const res = await fetch("/api/affiliate-relationships", {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          ...form,
-          disclosed_action_pct: form.disclosed_action_pct ? Number(form.disclosed_action_pct) : null,
-          disclosed_rakeback_pct: form.disclosed_rakeback_pct ? Number(form.disclosed_rakeback_pct) : null,
-          disclosed_insurance_pct: form.disclosed_insurance_pct ? Number(form.disclosed_insurance_pct) : null,
-          exclude_agency_extras: form.exclude_agency_extras ? 1 : 0,
-        }),
-      });
-      if (!res.ok) { const d = await res.json(); alert(d.error ?? "Erreur"); return; }
-      setCreateOpen(false); router.refresh();
-    } catch (e: any) { alert(e.message); } finally { setSaving(false); }
-  }
-
-  async function handleEdit() {
-    if (!editRel) return;
-    setSaving(true);
-    try {
-      await fetch(`/api/affiliate-relationships/${editRel.id}`, {
-        method: "PATCH", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          origin_game_id: form.origin_game_id, start_date: form.start_date, status: form.status,
-          disclosed_action_pct: form.disclosed_action_pct ? Number(form.disclosed_action_pct) : null,
-          disclosed_rakeback_pct: form.disclosed_rakeback_pct ? Number(form.disclosed_rakeback_pct) : null,
-          disclosed_insurance_pct: form.disclosed_insurance_pct ? Number(form.disclosed_insurance_pct) : null,
-          exclude_agency_extras: form.exclude_agency_extras ? 1 : 0,
-          notes: form.notes || null,
-        }),
-      });
-      setEditRel(null); router.refresh();
-    } catch (e: any) { alert(e.message); } finally { setSaving(false); }
-  }
-
-  async function terminate(id: number) {
-    if (!confirm("Terminer cette relation affiliate ?")) return;
-    await fetch(`/api/affiliate-relationships/${id}`, { method: "DELETE" });
-    router.refresh();
   }
 
   const playerName = (id: number) => players.find(p => p.id === id)?.name ?? `#${id}`;
@@ -365,7 +326,7 @@ export default function AffiliatesClient({ relationships, players, activeGames, 
             {(["disclosed_action_pct", "disclosed_rakeback_pct", "disclosed_insurance_pct"] as const).map(k => (
               <div key={k} style={{ flex: 1 }}>
                 <label style={{ fontSize: 10, color: "var(--text-dim)", display: "block", marginBottom: 3 }}>{k.replace("disclosed_", "").replace("_pct", " %")}</label>
-                <input type="number" step="0.01" min={0} max={100} value={(form as any)[k]} onChange={e => setForm({ ...form, [k]: e.target.value })} placeholder="Réel"
+                <input type="number" step="0.01" min={0} max={100} value={(form as any)[k]} onChange={e => setForm({ ...form, [k]: e.target.value })} placeholder="Reel"
                   style={{ width: "100%", padding: "6px 8px", borderRadius: 6, fontSize: 12, background: "var(--bg-raised)", color: "var(--text)", border: "1px solid var(--border)", outline: "none", textAlign: "center", boxSizing: "border-box" }} />
               </div>
             ))}
@@ -384,223 +345,108 @@ export default function AffiliatesClient({ relationships, players, activeGames, 
     );
   }
 
-  const tabStyle = (t: Tab) => ({
-    padding: "7px 18px", borderRadius: 7, fontSize: 13, fontWeight: 600, cursor: "pointer" as const,
-    background: tab === t ? "rgba(255,255,255,0.08)" : "transparent",
-    border: tab === t ? "1px solid var(--border)" : "1px solid transparent",
-    color: tab === t ? "var(--text)" : "var(--text-dim)",
-  });
-
-  const fmt = (n: number) => n.toFixed(2);
-
-  const RATE_LABEL_STYLE: Record<string, { bg: string; color: string }> = {
-    "éligible": { bg: "rgba(34,197,94,0.12)", color: "#22C55E" },
-    hors_fenetre: { bg: "rgba(156,163,175,0.15)", color: "#9CA3AF" },
-  };
-
-  function renderHealthBanner() {
-    if (!health) return null;
-    const { pending_leads_no_relationship: plnr, relationships_no_origin: rno, relationships_no_referred_player: rnrp, orphan_payments: op } = health;
-    if (plnr === 0 && rno === 0 && rnrp === 0 && op === 0) return null;
-    const isRed = plnr > 0 || rnrp > 0 || op > 0;
-    const msgs: string[] = [];
-    if (rno > 0) msgs.push(`${rno} relation(s) en attente de leur premier deal`);
-    if (plnr > 0) msgs.push(`${plnr} lead(s) converti(s) sans relationship`);
-    if (rnrp > 0) msgs.push(`${rnrp} relationship(s) sans player`);
-    if (op > 0) msgs.push(`${op} paiement(s) orphelin(s)`);
-    return (
-      <div style={{ padding: "10px 14px", borderRadius: 8, marginBottom: 14, display: "flex", alignItems: "center", gap: 8, fontSize: 12, background: isRed ? "rgba(239,68,68,0.08)" : "rgba(234,179,8,0.08)", border: `1px solid ${isRed ? "rgba(239,68,68,0.3)" : "rgba(234,179,8,0.3)"}`, color: isRed ? "#EF4444" : "#EAB308" }}>
-        <AlertTriangle size={14} /> {msgs.join(" · ")}
-      </div>
-    );
-  }
-
-  function renderRelationsTab() {
-    const rels = enrichedRels.length > 0 ? enrichedRels : relationships.map(r => ({ ...r, games: [], total_due_now: 0, total_paid_lifetime: 0, last_paid_at: null } as EnrichedRel));
-
-    return (
-      <>
-        {renderHealthBanner()}
-        <div style={{ display: "flex", justifyContent: "flex-end", gap: 10, marginBottom: 16 }}>
-          {backfillCount != null && backfillCount > 0 && (
-            <button onClick={openBackfillModal} style={{ display: "flex", alignItems: "center", gap: 6, padding: "8px 16px", borderRadius: 8, fontSize: 13, fontWeight: 600, cursor: "pointer", background: "rgba(245,158,11,0.12)", border: "1px solid rgba(245,158,11,0.3)", color: "#F59E0B" }}>
-              <RefreshCw size={14} /> Backfill telegram_id ({backfillCount} agent{backfillCount > 1 ? "s" : ""})
-            </button>
-          )}
-          <button onClick={openCreate} style={{ display: "flex", alignItems: "center", gap: 6, padding: "8px 16px", borderRadius: 8, fontSize: 13, fontWeight: 600, cursor: "pointer", background: "rgba(34,197,94,0.12)", border: "1px solid rgba(34,197,94,0.3)", color: "#22C55E" }}>
-            <Plus size={14} /> Créer relation
-          </button>
-        </div>
-        {enrichedLoading && <div style={{ textAlign: "center", padding: 12, color: "var(--text-dim)", fontSize: 12 }}>Chargement...</div>}
-        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
-          <thead>
-            <tr style={{ borderBottom: "1px solid var(--border)", color: "var(--text-muted)", fontSize: 11, textTransform: "uppercase", letterSpacing: "0.05em" }}>
-              <th style={{ textAlign: "left", padding: "8px" }}>Affiliate</th>
-              <th style={{ textAlign: "left", padding: "8px" }}>Referred</th>
-              <th style={{ textAlign: "center", padding: "8px" }}>Games</th>
-              <th style={{ textAlign: "right", padding: "8px" }}>Commission due</th>
-              <th style={{ textAlign: "center", padding: "8px" }}>Last paid</th>
-              <th style={{ textAlign: "center", padding: "8px" }}>Status</th>
-              <th style={{ textAlign: "center", padding: "8px" }}>Actions</th>
-            </tr>
-          </thead>
-          <tbody>
-            {rels.length === 0 && (
-              <tr><td colSpan={7} style={{ padding: 24, textAlign: "center", color: "var(--text-dim)" }}>Aucune relation affiliate</td></tr>
-            )}
-            {rels.map(r => {
-              const st = STATUS_STYLE[r.status] ?? STATUS_STYLE.terminated;
-              const affName = (r as any).affiliate?.name ?? r.affiliate_name;
-              const affHandle = (r as any).affiliate?.telegram_handle ?? r.affiliate_handle;
-              const refName = (r as any).referred?.name ?? r.referred_name;
-              const refHandle = (r as any).referred?.telegram_handle ?? r.referred_handle;
-              const games = r.games ?? [];
-              return (
-                <tr key={r.id} onClick={() => setDrawerRel(r)} style={{ borderBottom: "1px solid var(--border)", cursor: "pointer", opacity: r.status === "terminated" ? 0.5 : 1 }}>
-                  <td style={{ padding: "10px 8px" }}>
-                    <span style={{ fontWeight: 600, color: "var(--text)" }}>{affName}</span>
-                    {affHandle && <span style={{ fontSize: 11, color: "var(--text-dim)", marginLeft: 6 }}>@{affHandle}</span>}
-                  </td>
-                  <td style={{ padding: "10px 8px" }}>
-                    <span style={{ fontWeight: 600, color: "var(--text)" }}>{refName}</span>
-                    {refHandle && <span style={{ fontSize: 11, color: "var(--text-dim)", marginLeft: 6 }}>@{refHandle}</span>}
-                  </td>
-                  <td style={{ textAlign: "center", padding: "10px 8px" }}>
-                    <div style={{ display: "flex", gap: 4, justifyContent: "center", flexWrap: "wrap" }}>
-                      {games.map(g => {
-                        const gb = GAME_BADGES[g.game_name] ?? { short: g.game_name.slice(0, 2), bg: "rgba(156,163,175,0.15)", color: "#9CA3AF" };
-                        const rl = RATE_LABEL_STYLE[g.rate_label] ?? RATE_LABEL_STYLE.passif;
-                        return (
-                          <div key={g.game_id} style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 1 }}>
-                            <span style={{ background: gb.bg, color: gb.color, padding: "1px 6px", borderRadius: 4, fontSize: 10, fontWeight: 700 }}>{gb.short}</span>
-                            <span style={{ fontSize: 8, color: rl.color }}>{g.rate_label}</span>
-                          </div>
-                        );
-                      })}
-                      {games.length === 0 && <span style={{ color: "var(--text-dim)", fontSize: 11 }}>—</span>}
-                    </div>
-                  </td>
-                  <td style={{ textAlign: "right", padding: "10px 8px", fontWeight: 600, color: (r.total_due_now ?? 0) > 0 ? "#22C55E" : "var(--text-dim)" }}>
-                    {(r.total_due_now ?? 0) > 0 ? `${fmt(r.total_due_now!)} USDT` : "—"}
-                  </td>
-                  <td style={{ textAlign: "center", padding: "10px 8px", fontSize: 12, color: "var(--text-muted)" }}>
-                    {r.last_paid_at ? r.last_paid_at.slice(0, 10) : "—"}
-                  </td>
-                  <td style={{ textAlign: "center", padding: "10px 8px" }}>
-                    <span style={{ padding: "2px 8px", borderRadius: 4, fontSize: 10, fontWeight: 600, background: st.bg, color: st.color }}>{r.status}</span>
-                  </td>
-                  <td style={{ textAlign: "center", padding: "10px 8px" }} onClick={e => e.stopPropagation()}>
-                    <div style={{ display: "flex", justifyContent: "center", gap: 6 }}>
-                      <button onClick={() => openEdit(r)} title="Edit" style={{ background: "none", border: "1px solid var(--border)", borderRadius: 6, cursor: "pointer", padding: "4px 6px", color: "var(--text-muted)", display: "flex", alignItems: "center" }}><Pencil size={13} /></button>
-                      {r.status !== "terminated" && (
-                        <button onClick={() => terminate(r.id)} title="Terminer" style={{ background: "none", border: "1px solid var(--border)", borderRadius: 6, cursor: "pointer", padding: "4px 6px", color: "var(--text-muted)", display: "flex", alignItems: "center" }}><XCircle size={13} /></button>
-                      )}
-                    </div>
-                  </td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
-
-        {/* Drawer */}
-        {drawerRel && (
-          <AffiliateDetailDrawer
-            rel={{
-              ...drawerRel,
-              games: drawerRel.games ?? [],
-              total_due_now: drawerRel.total_due_now ?? 0,
-              total_paid_lifetime: drawerRel.total_paid_lifetime ?? 0,
-              last_paid_at: drawerRel.last_paid_at ?? null,
-              affiliate: (drawerRel as any).affiliate ?? { id: drawerRel.affiliate_player_id, name: drawerRel.affiliate_name, telegram_handle: drawerRel.affiliate_handle },
-              referred: (drawerRel as any).referred ?? { id: drawerRel.referred_player_id, name: drawerRel.referred_name, telegram_handle: drawerRel.referred_handle },
-              origin_game: (drawerRel as any).origin_game ?? { id: drawerRel.origin_game_id, name: drawerRel.origin_game_name },
-            }}
-            onClose={() => setDrawerRel(null)}
-            onPay={(gameId, gameName, due) => {
-              const aff = (drawerRel as any).affiliate?.name ?? drawerRel.affiliate_name;
-              const ref = (drawerRel as any).referred?.name ?? drawerRel.referred_name;
-              openPay(drawerRel.id, gameId, gameName, due, aff, ref);
-            }}
-            onEdit={() => { openEdit(drawerRel); setDrawerRel(null); }}
-          />
-        )}
-      </>
-    );
-  }
-
-  function renderPayoutsTab() {
-    if (payoutsLoading) return <div style={{ padding: 40, textAlign: "center", color: "var(--text-dim)" }}><Loader2 size={20} style={{ animation: "spin 1s linear infinite" }} /> Calcul en cours...</div>;
-    if (payouts.length === 0) return <div style={{ padding: 40, textAlign: "center", color: "var(--text-dim)" }}>Aucun paiement en attente</div>;
-
-    return (
-      <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
-        {payouts.map(group => (
-          <div key={group.affiliate.id} style={{ border: "1px solid var(--border)", borderRadius: 10, overflow: "hidden" }}>
-            {/* Affiliate header */}
-            <div style={{ padding: "12px 16px", background: "var(--bg-surface)", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-              <div>
-                <span style={{ fontWeight: 700, fontSize: 14, color: "var(--text)" }}>{group.affiliate.name}</span>
-                {group.affiliate.telegram_handle && <span style={{ fontSize: 12, color: "var(--text-dim)", marginLeft: 8 }}>@{group.affiliate.telegram_handle}</span>}
-              </div>
-              <span style={{ fontWeight: 700, fontSize: 15, color: "#22C55E" }}>{fmt(group.total_due)} USDT</span>
-            </div>
-            {/* Relationship rows */}
-            {group.relationships.map(rel => (
-              <div key={rel.relationship_id}>
-                {rel.breakdown.filter(b => b.due_now > 0 || b.earned_lifetime > 0).map(b => {
-                  const gb = GAME_BADGES[b.game_name] ?? { short: b.game_name.slice(0, 2), bg: "rgba(156,163,175,0.15)", color: "#9CA3AF" };
-                  const rateLabel = b.rate_label === "origin" ? "origin" : b.rate_label === "grâce" ? "grâce 30j" : "passif";
-                  return (
-                    <div key={`${rel.relationship_id}-${b.game_id}`} style={{ padding: "10px 16px", borderTop: "1px solid var(--border)", display: "flex", alignItems: "center", gap: 12, fontSize: 12 }}>
-                      <span style={{ fontWeight: 600, color: "var(--text)", minWidth: 100 }}>{rel.referred.name}</span>
-                      <span style={{ background: gb.bg, color: gb.color, padding: "1px 6px", borderRadius: 4, fontSize: 10, fontWeight: 700 }}>{gb.short}</span>
-                      <span style={{ padding: "1px 6px", borderRadius: 4, fontSize: 10, fontWeight: 600, background: "rgba(139,92,246,0.12)", color: "#8B5CF6" }}>{rateLabel}</span>
-                      <span style={{ color: "var(--text-muted)" }}>agency={fmt(b.agency_pnl_lifetime)}</span>
-                      <span style={{ color: "var(--text-muted)" }}>rate={Math.round(b.rate * 100)}%</span>
-                      <span style={{ color: "var(--text-muted)" }}>earned={fmt(b.earned_lifetime)}</span>
-                      <span style={{ color: "var(--text-muted)" }}>paid={fmt(b.paid_lifetime)}</span>
-                      <span style={{ fontWeight: 700, color: b.due_now > 0 ? "#22C55E" : "var(--text-dim)" }}>due={fmt(b.due_now)}</span>
-                      {b.due_now > 0 && (
-                        <button onClick={() => openPay(rel.relationship_id, b.game_id, b.game_name, b.due_now, group.affiliate.name, rel.referred.name)}
-                          style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 4, padding: "4px 10px", borderRadius: 6, fontSize: 11, fontWeight: 600, cursor: "pointer", background: "rgba(34,197,94,0.12)", border: "1px solid rgba(34,197,94,0.3)", color: "#22C55E" }}>
-                          <DollarSign size={12} /> Pay
-                        </button>
-                      )}
-                    </div>
-                  );
-                })}
-              </div>
-            ))}
-          </div>
-        ))}
-      </div>
-    );
-  }
-
   return (
     <div style={{ padding: "0 28px" }}>
-      {/* Tab toggle */}
-      <div style={{ display: "flex", gap: 4, marginBottom: 18, background: "var(--bg-surface)", borderRadius: 8, padding: 3, width: "fit-content", border: "1px solid var(--border)" }}>
-        <button onClick={() => setTab("relations")} style={tabStyle("relations")}>Relations</button>
-        <button onClick={() => setTab("payouts")} style={tabStyle("payouts")}>Pending Payouts</button>
+      {/* Header actions */}
+      <div style={{ display: "flex", justifyContent: "flex-end", gap: 10, marginBottom: 16 }}>
+        {(backfillCount ?? brokenTgCount) > 0 && (
+          <button onClick={openBackfillModal} style={{ display: "flex", alignItems: "center", gap: 6, padding: "8px 16px", borderRadius: 8, fontSize: 13, fontWeight: 600, cursor: "pointer", background: "rgba(245,158,11,0.12)", border: "1px solid rgba(245,158,11,0.3)", color: "#F59E0B" }}>
+            <RefreshCw size={14} /> Backfill telegram_id ({backfillCount ?? brokenTgCount} agent{(backfillCount ?? brokenTgCount) > 1 ? "s" : ""})
+          </button>
+        )}
+        <button onClick={openCreate} style={{ display: "flex", alignItems: "center", gap: 6, padding: "8px 16px", borderRadius: 8, fontSize: 13, fontWeight: 600, cursor: "pointer", background: "rgba(34,197,94,0.12)", border: "1px solid rgba(34,197,94,0.3)", color: "#22C55E" }}>
+          <Plus size={14} /> Ajouter filleul
+        </button>
       </div>
 
-      {tab === "relations" ? renderRelationsTab() : renderPayoutsTab()}
+      {/* Agents table */}
+      {loading && <div style={{ textAlign: "center", padding: 12, color: "var(--text-dim)", fontSize: 12 }}>Chargement...</div>}
+      <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+        <thead>
+          <tr style={{ borderBottom: "1px solid var(--border)", color: "var(--text-muted)", fontSize: 11, textTransform: "uppercase", letterSpacing: "0.05em" }}>
+            <th style={{ textAlign: "left", padding: "8px" }}>Agent</th>
+            <th style={{ textAlign: "center", padding: "8px" }}>Telegram</th>
+            <th style={{ textAlign: "center", padding: "8px" }}>Filleuls</th>
+            <th style={{ textAlign: "right", padding: "8px" }}>Commission totale</th>
+            <th style={{ textAlign: "right", padding: "8px" }}>Due now</th>
+            <th style={{ textAlign: "center", padding: "8px" }}>Actif depuis</th>
+            <th style={{ textAlign: "center", padding: "8px", width: 40 }}></th>
+          </tr>
+        </thead>
+        <tbody>
+          {agentSummaries.length === 0 && (
+            <tr><td colSpan={7} style={{ padding: 24, textAlign: "center", color: "var(--text-dim)" }}>Aucun agent actif</td></tr>
+          )}
+          {agentSummaries.map(({ agent, filleuls, totalCommissionEarned, totalDueNow }) => {
+            const activeFilleuls = filleuls.filter(r => r.status === "active");
+            return (
+              <tr key={agent.affiliate_player_id} onClick={() => setDrawerAgent({ agent, filleuls, totalCommissionEarned, totalDueNow })}
+                style={{ borderBottom: "1px solid var(--border)", cursor: "pointer", transition: "background 0.1s" }}
+                onMouseEnter={e => (e.currentTarget.style.background = "rgba(255,255,255,0.02)")}
+                onMouseLeave={e => (e.currentTarget.style.background = "transparent")}>
+                <td style={{ padding: "12px 8px" }}>
+                  <span style={{ fontWeight: 600, color: "var(--text)" }}>{agent.name}</span>
+                  {agent.telegram_handle && <span style={{ fontSize: 11, color: "var(--text-dim)", marginLeft: 6 }}>@{agent.telegram_handle}</span>}
+                </td>
+                <td style={{ textAlign: "center", padding: "12px 8px" }}>
+                  {agent.telegram_id ? (
+                    <span style={{ color: "#22C55E", fontSize: 12, fontWeight: 600 }}>OK</span>
+                  ) : (
+                    <span style={{ color: "#EF4444", fontSize: 11, fontWeight: 600 }}>A fix</span>
+                  )}
+                </td>
+                <td style={{ textAlign: "center", padding: "12px 8px" }}>
+                  <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 6 }}>
+                    <Users size={13} style={{ color: "var(--text-dim)" }} />
+                    <span style={{ fontWeight: 600 }}>{activeFilleuls.length}</span>
+                    {filleuls.length > activeFilleuls.length && (
+                      <span style={{ fontSize: 10, color: "var(--text-dim)" }}>({filleuls.length})</span>
+                    )}
+                  </div>
+                </td>
+                <td style={{ textAlign: "right", padding: "12px 8px", fontWeight: 600, color: totalCommissionEarned > 0 ? "var(--text)" : "var(--text-dim)" }}>
+                  {totalCommissionEarned > 0 ? `${fmt(totalCommissionEarned)} USDT` : "—"}
+                </td>
+                <td style={{ textAlign: "right", padding: "12px 8px", fontWeight: 600, color: totalDueNow > 0 ? "#22C55E" : "var(--text-dim)" }}>
+                  {totalDueNow > 0 ? `${fmt(totalDueNow)}` : "—"}
+                </td>
+                <td style={{ textAlign: "center", padding: "12px 8px", fontSize: 12, color: "var(--text-muted)" }}>
+                  {agent.joined_at?.slice(0, 10) ?? "—"}
+                </td>
+                <td style={{ textAlign: "center", padding: "12px 8px" }}>
+                  <ChevronRight size={14} style={{ color: "var(--text-dim)" }} />
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+
+      {/* Agent detail drawer */}
+      {drawerAgent && (
+        <AgentDetailDrawer
+          agentSummary={drawerAgent}
+          onClose={() => setDrawerAgent(null)}
+          onEditRel={(r) => { openEdit(r); setDrawerAgent(null); }}
+          onTerminateRel={(id) => { terminate(id); }}
+          onPayRel={(relId, gameId, gameName, due, affName, refName) => openPay(relId, gameId, gameName, due, affName, refName)}
+          gameBadges={GAME_BADGES}
+        />
+      )}
 
       {/* Create modal */}
-      <Modal open={createOpen} onClose={() => setCreateOpen(false)} title="Créer relation affiliate" width={520}>
+      <Modal open={createOpen} onClose={() => setCreateOpen(false)} title="Ajouter un filleul" width={520}>
         {renderFormFields(false)}
         <div style={{ display: "flex", justifyContent: "flex-end", gap: 10, marginTop: 16 }}>
           <button onClick={() => setCreateOpen(false)} style={{ padding: "8px 18px", borderRadius: 7, fontSize: 13, cursor: "pointer", background: "none", border: "1px solid var(--border)", color: "var(--text-muted)" }}>Annuler</button>
           <button onClick={handleCreate} disabled={saving || !form.affiliate_player_id || !form.referred_player_id || !form.origin_game_id} style={{ padding: "8px 18px", borderRadius: 7, fontSize: 13, fontWeight: 600, cursor: saving ? "wait" : "pointer", background: "rgba(34,197,94,0.15)", border: "1px solid rgba(34,197,94,0.3)", color: "#22C55E", opacity: saving || !form.affiliate_player_id || !form.referred_player_id || !form.origin_game_id ? 0.5 : 1 }}>
-            {saving ? "..." : "Créer"}
+            {saving ? "..." : "Creer"}
           </button>
         </div>
       </Modal>
 
       {/* Edit modal */}
-      <Modal open={!!editRel} onClose={() => setEditRel(null)} title={`Edit — ${editRel?.affiliate_name ?? ""} → ${editRel?.referred_name ?? ""}`} width={520}>
+      <Modal open={!!editRel} onClose={() => setEditRel(null)} title={`Edit — ${editRel?.affiliate.name ?? ""} → ${editRel?.referred.name ?? ""}`} width={520}>
         {renderFormFields(true)}
         <div style={{ display: "flex", justifyContent: "flex-end", gap: 10, marginTop: 16 }}>
           <button onClick={() => setEditRel(null)} style={{ padding: "8px 18px", borderRadius: 7, fontSize: 13, cursor: "pointer", background: "none", border: "1px solid var(--border)", color: "var(--text-muted)" }}>Annuler</button>
