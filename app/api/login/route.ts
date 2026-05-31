@@ -8,7 +8,7 @@ export async function POST(req: NextRequest) {
   const authSecret = process.env.AUTH_SECRET;
 
   if (!appPassword || !authSecret) {
-    return NextResponse.json({ error: "Auth not configured" }, { status: 503 });
+    return NextResponse.json({ error: "AUTH_SECRET and APP_PASSWORD env vars must be set to enable auth" }, { status: 500 });
   }
 
   const a = Buffer.from(password);
