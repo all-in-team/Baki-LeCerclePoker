@@ -1,0 +1,10 @@
+node_modules/
+.next/
+data/
+.env.local
+.env
+tsconfig.tsbuildinfo
+package-lock.json
+.gstack/
+.agent-report-secret.txt
+.doer-ids.json
