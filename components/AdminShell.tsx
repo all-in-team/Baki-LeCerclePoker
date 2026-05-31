@@ -6,7 +6,7 @@ import Sidebar from "./Sidebar";
 export default function AdminShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
 
-  if (pathname?.startsWith("/portal")) {
+  if (pathname?.startsWith("/portal") || pathname?.startsWith("/login")) {
     return <>{children}</>;
   }
 

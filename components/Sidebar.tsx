@@ -2,7 +2,8 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { LayoutDashboard, FileText, ContactRound, Settings, BarChart3, Scale, Wallet, Users, Network, Gamepad2, Receipt, TrendingUp } from "lucide-react";
+import { useRouter } from "next/navigation";
+import { LayoutDashboard, FileText, ContactRound, Settings, BarChart3, Scale, Wallet, Users, Network, Gamepad2, Receipt, TrendingUp, LogOut } from "lucide-react";
 
 type NavItem = { href: string; label: string; icon: any };
 type NavSection = { label: string; items: NavItem[]; archived?: boolean };
@@ -60,6 +61,13 @@ const SECTIONS: NavSection[] = [
 
 export default function Sidebar() {
   const path = usePathname();
+  const router = useRouter();
+
+  async function handleLogout() {
+    await fetch("/api/logout", { method: "POST" });
+    router.push("/login");
+    router.refresh();
+  }
 
   return (
     <aside style={{
@@ -138,8 +146,11 @@ export default function Sidebar() {
       </nav>
 
       {/* Footer */}
-      <div style={{ padding: "12px 16px", borderTop: "1px solid var(--border)" }}>
-        <div style={{ fontSize: 11, color: "var(--text-dim)" }}>v1.0 · Local SQLite</div>
+      <div style={{ padding: "12px 16px", borderTop: "1px solid var(--border)", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+        <div style={{ fontSize: 11, color: "var(--text-dim)" }}>v1.0</div>
+        <button onClick={handleLogout} title="Logout" style={{ display: "flex", alignItems: "center", gap: 4, padding: "4px 8px", borderRadius: 5, fontSize: 10, fontWeight: 600, cursor: "pointer", background: "none", border: "1px solid var(--border)", color: "var(--text-dim)" }}>
+          <LogOut size={12} /> Logout
+        </button>
       </div>
     </aside>
   );
