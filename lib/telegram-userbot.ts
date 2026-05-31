@@ -509,7 +509,7 @@ export async function getChatMembers(chatId: string): Promise<Array<{
     const result = await client.invoke(
       new Api.channels.GetParticipants({
         channel: channelPeer,
-        filter: new Api.ChannelParticipantsRecent({}),
+        filter: new Api.ChannelParticipantsRecent(),
         offset: 0,
         limit: 200,
         hash: BigInt(0) as any,
