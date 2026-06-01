@@ -1321,4 +1321,14 @@ function initSchema(db: Database.Database) {
   } catch (err: any) {
     console.error(`[MIGRATION:add_games_deal_columns_v1] FAILED:`, err.message);
   }
+
+  try {
+    const fix = db.prepare(`INSERT OR IGNORE INTO _applied_fixes (name) VALUES (?)`).run("add_aff_rel_games_excluded_v1");
+    if (fix.changes > 0) {
+      try { db.exec(`ALTER TABLE affiliate_relationship_games ADD COLUMN excluded INTEGER NOT NULL DEFAULT 0`); } catch {}
+      console.log("[MIGRATION] add_aff_rel_games_excluded_v1 applied");
+    }
+  } catch (err: any) {
+    console.error(`[MIGRATION:add_aff_rel_games_excluded_v1] FAILED:`, err.message);
+  }
 }

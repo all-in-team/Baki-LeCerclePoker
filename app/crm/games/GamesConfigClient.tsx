@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { Pencil, Lock, Eye } from "lucide-react";
+import { Pencil, Lock, Eye, Archive, RotateCcw } from "lucide-react";
 import Modal from "@/components/Modal";
 
 const GAME_COLORS: Record<string, { bg: string; color: string }> = {
@@ -36,6 +36,10 @@ export default function GamesConfigClient({ games }: Props) {
   const [editGame, setEditGame] = useState<GameRow | null>(null);
   const [form, setForm] = useState<EditForm>({ exact_action_pct: "", exact_rakeback_pct: "", exact_insurance_pct: "", perceived_action_pct: "", perceived_rakeback_pct: "", perceived_insurance_pct: "" });
   const [saving, setSaving] = useState(false);
+  const [showArchived, setShowArchived] = useState(false);
+
+  const activeGames = games.filter(g => g.status === "active");
+  const archivedGames = games.filter(g => g.status === "archived");
 
   function openEdit(g: GameRow) {
     setEditGame(g);
@@ -70,6 +74,19 @@ export default function GamesConfigClient({ games }: Props) {
     } catch (e: any) { alert(e.message); } finally { setSaving(false); }
   }
 
+  async function toggleArchive(g: GameRow) {
+    const newStatus = g.status === "active" ? "archived" : "active";
+    if (newStatus === "archived" && !confirm(`Archiver ${g.name} ? Les agents ne verront plus ce game.`)) return;
+    try {
+      const res = await fetch(`/api/games/${g.id}`, {
+        method: "PATCH", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ status: newStatus }),
+      });
+      if (!res.ok) { const d = await res.json(); alert(d.error ?? "Erreur"); return; }
+      router.refresh();
+    } catch (e: any) { alert(e.message); }
+  }
+
   function renderRateBox(label: string, icon: React.ReactNode, action: number | null, rb: number | null, ins: number | null, accent: string) {
     return (
       <div style={{ flex: 1, padding: "10px 12px", background: "var(--bg-base)", borderRadius: 8, border: "1px solid var(--border)" }}>
@@ -88,34 +105,59 @@ export default function GamesConfigClient({ games }: Props) {
     );
   }
 
+  function renderGameCard(g: GameRow, dimmed?: boolean) {
+    const gc = GAME_COLORS[g.name] ?? { bg: "rgba(156,163,175,0.15)", color: "#9CA3AF" };
+    return (
+      <div key={g.id} style={{ border: "1px solid var(--border)", borderRadius: 10, overflow: "hidden", opacity: dimmed ? 0.5 : 1 }}>
+        <div style={{ padding: "12px 16px", background: "var(--bg-surface)", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            <span style={{ background: gc.bg, color: gc.color, padding: "3px 10px", borderRadius: 5, fontSize: 12, fontWeight: 700 }}>{g.name}</span>
+            {g.status === "archived" && <span style={{ fontSize: 9, padding: "1px 6px", borderRadius: 3, background: "rgba(156,163,175,0.15)", color: "#9CA3AF", fontWeight: 600 }}>ARCHIVED</span>}
+          </div>
+          <div style={{ display: "flex", gap: 6 }}>
+            {g.status === "active" && (
+              <button onClick={() => openEdit(g)} style={{ display: "flex", alignItems: "center", gap: 4, padding: "5px 12px", borderRadius: 6, fontSize: 11, fontWeight: 600, cursor: "pointer", background: "rgba(255,255,255,0.05)", border: "1px solid var(--border)", color: "var(--text-muted)" }}>
+                <Pencil size={12} /> Editer
+              </button>
+            )}
+            <button onClick={() => toggleArchive(g)} title={g.status === "active" ? "Archiver" : "Restaurer"}
+              style={{ display: "flex", alignItems: "center", gap: 4, padding: "5px 10px", borderRadius: 6, fontSize: 11, fontWeight: 600, cursor: "pointer", background: "none", border: "1px solid var(--border)", color: "var(--text-dim)" }}>
+              {g.status === "active" ? <Archive size={12} /> : <RotateCcw size={12} />}
+              {g.status === "active" ? "" : " Restore"}
+            </button>
+          </div>
+        </div>
+        <div style={{ padding: "12px 16px", display: "flex", gap: 12 }}>
+          {renderRateBox("Exact Deal", <Lock size={10} />, g.exact_action_pct, g.exact_rakeback_pct, g.exact_insurance_pct, "var(--text-muted)")}
+          {renderRateBox("Perceived Deal", <Eye size={10} />, g.perceived_action_pct, g.perceived_rakeback_pct, g.perceived_insurance_pct, "#22C55E")}
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div style={{ padding: "0 28px" }}>
       <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-        {games.map(g => {
-          const gc = GAME_COLORS[g.name] ?? { bg: "rgba(156,163,175,0.15)", color: "#9CA3AF" };
-          return (
-            <div key={g.id} style={{ border: "1px solid var(--border)", borderRadius: 10, overflow: "hidden" }}>
-              <div style={{ padding: "12px 16px", background: "var(--bg-surface)", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                  <span style={{ background: gc.bg, color: gc.color, padding: "3px 10px", borderRadius: 5, fontSize: 12, fontWeight: 700 }}>{g.name}</span>
-                </div>
-                <button onClick={() => openEdit(g)} style={{ display: "flex", alignItems: "center", gap: 4, padding: "5px 12px", borderRadius: 6, fontSize: 11, fontWeight: 600, cursor: "pointer", background: "rgba(255,255,255,0.05)", border: "1px solid var(--border)", color: "var(--text-muted)" }}>
-                  <Pencil size={12} /> Editer
-                </button>
-              </div>
-              <div style={{ padding: "12px 16px", display: "flex", gap: 12 }}>
-                {renderRateBox("Exact Deal", <Lock size={10} />, g.exact_action_pct, g.exact_rakeback_pct, g.exact_insurance_pct, "var(--text-muted)")}
-                {renderRateBox("Perceived Deal", <Eye size={10} />, g.perceived_action_pct, g.perceived_rakeback_pct, g.perceived_insurance_pct, "#22C55E")}
-              </div>
-            </div>
-          );
-        })}
-        {games.length === 0 && <div style={{ padding: 40, textAlign: "center", color: "var(--text-dim)" }}>Aucun game actif</div>}
+        {activeGames.map(g => renderGameCard(g))}
+        {activeGames.length === 0 && <div style={{ padding: 40, textAlign: "center", color: "var(--text-dim)" }}>Aucun game actif</div>}
       </div>
+
+      {archivedGames.length > 0 && (
+        <div style={{ marginTop: 24 }}>
+          <button onClick={() => setShowArchived(!showArchived)}
+            style={{ background: "none", border: "none", cursor: "pointer", fontSize: 12, color: "var(--text-dim)", padding: "8px 0", fontWeight: 600 }}>
+            {showArchived ? "▾" : "▸"} Archived ({archivedGames.length})
+          </button>
+          {showArchived && (
+            <div style={{ display: "flex", flexDirection: "column", gap: 14, marginTop: 8 }}>
+              {archivedGames.map(g => renderGameCard(g, true))}
+            </div>
+          )}
+        </div>
+      )}
 
       <Modal open={!!editGame} onClose={() => setEditGame(null)} title={`${editGame?.name ?? ""} — Deals`} width={520}>
         <div style={{ display: "flex", gap: 16 }}>
-          {/* Exact */}
           <div style={{ flex: 1, padding: "12px", background: "var(--bg-surface)", borderRadius: 8, border: "1px solid var(--border)" }}>
             <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 10, fontSize: 11, fontWeight: 700, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.07em" }}>
               <Lock size={11} /> Exact Deal
@@ -130,7 +172,6 @@ export default function GamesConfigClient({ games }: Props) {
               ))}
             </div>
           </div>
-          {/* Perceived */}
           <div style={{ flex: 1, padding: "12px", background: "rgba(34,197,94,0.04)", borderRadius: 8, border: "1px solid rgba(34,197,94,0.2)" }}>
             <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 10, fontSize: 11, fontWeight: 700, color: "#22C55E", textTransform: "uppercase", letterSpacing: "0.07em" }}>
               <Eye size={11} /> Perceived Deal

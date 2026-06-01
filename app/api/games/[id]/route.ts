@@ -11,6 +11,7 @@ export async function PATCH(req: NextRequest, { params }: Ctx) {
   const allowed = [
     "exact_action_pct", "exact_rakeback_pct", "exact_insurance_pct",
     "perceived_action_pct", "perceived_rakeback_pct", "perceived_insurance_pct",
+    "status",
   ];
   const sets: string[] = [];
   const vals: Record<string, unknown> = { id: Number(id) };

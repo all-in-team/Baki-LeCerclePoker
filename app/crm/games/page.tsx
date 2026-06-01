@@ -9,7 +9,7 @@ export default function GamesConfigPage() {
     SELECT id, name, status,
       exact_action_pct, exact_rakeback_pct, exact_insurance_pct,
       perceived_action_pct, perceived_rakeback_pct, perceived_insurance_pct
-    FROM games WHERE status = 'active' ORDER BY name
+    FROM games ORDER BY status ASC, name ASC
   `).all() as any[];
 
   return (

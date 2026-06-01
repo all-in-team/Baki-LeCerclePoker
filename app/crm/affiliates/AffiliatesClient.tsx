@@ -61,6 +61,7 @@ interface GameRateRow {
   disclosed_action_pct: string; disclosed_rakeback_pct: string; disclosed_insurance_pct: string;
   exclude_agency_extras: boolean;
   overridden: boolean;
+  excluded: boolean;
 }
 
 interface Props {
@@ -102,6 +103,7 @@ export default function AffiliatesClient({ agents, players, activeGames, existin
 
   const [drawerAgent, setDrawerAgent] = useState<AgentSummary | null>(null);
   const [gameRates, setGameRates] = useState<GameRateRow[]>([]);
+  const [showExcluded, setShowExcluded] = useState(false);
 
   // Backfill
   const [backfillCount, setBackfillCount] = useState<number | null>(null);
@@ -188,7 +190,7 @@ export default function AffiliatesClient({ agents, players, activeGames, existin
       exclude_agency_extras: true, notes: r.notes ?? "",
     });
     const inherited: GameRateRow[] = activeGames.map(g => ({
-      game_id: g.id, game_name: g.name, overridden: false,
+      game_id: g.id, game_name: g.name, overridden: false, excluded: false,
       disclosed_action_pct: g.perceived_action_pct != null ? String(g.perceived_action_pct) : "",
       disclosed_rakeback_pct: g.perceived_rakeback_pct != null ? String(g.perceived_rakeback_pct) : "",
       disclosed_insurance_pct: g.perceived_insurance_pct != null ? String(g.perceived_insurance_pct) : "",
@@ -203,6 +205,7 @@ export default function AffiliatesClient({ agents, players, activeGames, existin
         setGameRates(inherited.map(row => {
           const ov = overrides.get(row.game_id) as any;
           if (!ov) return row;
+          if (ov.excluded) return { ...row, excluded: true, overridden: false };
           return {
             ...row, overridden: true,
             disclosed_action_pct: ov.disclosed_action_pct != null ? String(ov.disclosed_action_pct) : "",
@@ -242,12 +245,13 @@ export default function AffiliatesClient({ agents, players, activeGames, existin
         body: JSON.stringify({
           origin_game_id: form.origin_game_id, start_date: form.start_date, status: form.status,
           notes: form.notes || null,
-          game_rates: gameRates.filter(gr => gr.overridden).map(gr => ({
+          game_rates: gameRates.filter(gr => gr.overridden || gr.excluded).map(gr => ({
             game_id: gr.game_id,
-            disclosed_action_pct: gr.disclosed_action_pct ? Number(gr.disclosed_action_pct) : null,
-            disclosed_rakeback_pct: gr.disclosed_rakeback_pct ? Number(gr.disclosed_rakeback_pct) : null,
-            disclosed_insurance_pct: gr.disclosed_insurance_pct ? Number(gr.disclosed_insurance_pct) : null,
+            disclosed_action_pct: gr.excluded ? null : (gr.disclosed_action_pct ? Number(gr.disclosed_action_pct) : null),
+            disclosed_rakeback_pct: gr.excluded ? null : (gr.disclosed_rakeback_pct ? Number(gr.disclosed_rakeback_pct) : null),
+            disclosed_insurance_pct: gr.excluded ? null : (gr.disclosed_insurance_pct ? Number(gr.disclosed_insurance_pct) : null),
             exclude_agency_extras: gr.exclude_agency_extras ? 1 : 0,
+            excluded: gr.excluded ? 1 : 0,
           })),
         }),
       });
@@ -354,7 +358,10 @@ export default function AffiliatesClient({ agents, players, activeGames, existin
             </select>
           </div>
         )}
-        {isEdit && (
+        {isEdit && (() => {
+          const activeRows = gameRates.filter(gr => !gr.excluded);
+          const excludedRows = gameRates.filter(gr => gr.excluded);
+          return (
           <div style={{ padding: "10px 12px", background: "var(--bg-surface)", borderRadius: 8, border: "1px solid var(--border)" }}>
             <label style={{ fontSize: 11, fontWeight: 700, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.07em", display: "block", marginBottom: 8 }}>Games & Rates</label>
             <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11 }}>
@@ -364,14 +371,14 @@ export default function AffiliatesClient({ agents, players, activeGames, existin
                   <th style={{ textAlign: "center", padding: "4px 2px" }}>Action %</th>
                   <th style={{ textAlign: "center", padding: "4px 2px" }}>RB %</th>
                   <th style={{ textAlign: "center", padding: "4px 2px" }}>Ins %</th>
-                  <th style={{ textAlign: "center", padding: "4px 2px", width: 70 }}></th>
+                  <th style={{ textAlign: "center", padding: "4px 2px", width: 90 }}></th>
                 </tr>
               </thead>
               <tbody>
-                {gameRates.map((gr, i) => {
+                {activeRows.map(gr => {
+                  const i = gameRates.findIndex(r => r.game_id === gr.game_id);
                   const inherited = !gr.overridden;
                   const rowBg = gr.overridden ? "rgba(245,158,11,0.04)" : "transparent";
-                  const inputSt = (v: string): React.CSSProperties => ({ width: 52, padding: "3px 4px", borderRadius: 4, fontSize: 11, background: inherited ? "transparent" : "var(--bg-raised)", color: inherited ? "var(--text-dim)" : "var(--text)", border: inherited ? "1px solid transparent" : "1px solid var(--border)", outline: "none", textAlign: "center", boxSizing: "border-box" });
                   return (
                     <tr key={gr.game_id} style={{ borderBottom: "1px solid var(--border)", background: rowBg }}>
                       <td style={{ padding: "6px 4px", fontWeight: 600, fontSize: 11 }}>{gr.game_name}</td>
@@ -382,11 +389,11 @@ export default function AffiliatesClient({ agents, players, activeGames, existin
                           ) : (
                             <input type="number" step="0.01" min={0} max={100} value={(gr as any)[k]}
                               onChange={e => { const u = [...gameRates]; u[i] = { ...gr, [k]: e.target.value }; setGameRates(u); }}
-                              placeholder="—" style={inputSt((gr as any)[k])} />
+                              placeholder="—" style={{ width: 52, padding: "3px 4px", borderRadius: 4, fontSize: 11, background: "var(--bg-raised)", color: "var(--text)", border: "1px solid var(--border)", outline: "none", textAlign: "center", boxSizing: "border-box" as const }} />
                           )}
                         </td>
                       ))}
-                      <td style={{ padding: "4px 2px", textAlign: "center" }}>
+                      <td style={{ padding: "4px 2px", textAlign: "center", display: "flex", gap: 3, justifyContent: "center" }}>
                         {inherited ? (
                           <button onClick={() => { const u = [...gameRates]; u[i] = { ...gr, overridden: true }; setGameRates(u); }}
                             style={{ padding: "2px 8px", borderRadius: 4, fontSize: 9, fontWeight: 600, cursor: "pointer", background: "rgba(245,158,11,0.10)", border: "1px solid rgba(245,158,11,0.3)", color: "#F59E0B" }}>
@@ -406,17 +413,47 @@ export default function AffiliatesClient({ agents, players, activeGames, existin
                             Reset
                           </button>
                         )}
+                        <button onClick={() => { if (!confirm(`Exclure ${gr.game_name} pour ce filleul ?`)) return; const u = [...gameRates]; u[i] = { ...gr, excluded: true, overridden: false }; setGameRates(u); }}
+                          title="Exclure" style={{ padding: "2px 5px", borderRadius: 4, fontSize: 9, cursor: "pointer", background: "none", border: "1px solid var(--border)", color: "var(--text-dim)", display: "flex", alignItems: "center" }}>
+                          ✕
+                        </button>
                       </td>
                     </tr>
                   );
                 })}
               </tbody>
             </table>
+            {excludedRows.length > 0 && (
+              <div style={{ marginTop: 6 }}>
+                <button onClick={() => setShowExcluded(!showExcluded)}
+                  style={{ background: "none", border: "none", cursor: "pointer", fontSize: 10, color: "var(--text-dim)", padding: "4px 0" }}>
+                  {showExcluded ? "▾" : "▸"} Games exclus ({excludedRows.length})
+                </button>
+                {showExcluded && excludedRows.map(gr => {
+                  const i = gameRates.findIndex(r => r.game_id === gr.game_id);
+                  return (
+                    <div key={gr.game_id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "4px 6px", fontSize: 11, color: "var(--text-dim)", opacity: 0.6 }}>
+                      <span>{gr.game_name}</span>
+                      <button onClick={() => { const u = [...gameRates]; const g = activeGames.find(ag => ag.id === gr.game_id); u[i] = {
+                        ...gr, excluded: false, overridden: false,
+                        disclosed_action_pct: g?.perceived_action_pct != null ? String(g.perceived_action_pct) : "",
+                        disclosed_rakeback_pct: g?.perceived_rakeback_pct != null ? String(g.perceived_rakeback_pct) : "",
+                        disclosed_insurance_pct: g?.perceived_insurance_pct != null ? String(g.perceived_insurance_pct) : "",
+                      }; setGameRates(u); }}
+                        style={{ padding: "2px 8px", borderRadius: 4, fontSize: 9, fontWeight: 600, cursor: "pointer", background: "rgba(34,197,94,0.10)", border: "1px solid rgba(34,197,94,0.3)", color: "#22C55E" }}>
+                        Restore
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
             <div style={{ fontSize: 10, color: "var(--text-dim)", marginTop: 6 }}>
-              Rates herites de Games & Deals config. Override pour personnaliser cet agent.
+              Rates herites de Games & Deals config. Override pour personnaliser, ✕ pour exclure.
             </div>
           </div>
-        )}
+          );
+        })()}
         <div>
           <label style={{ fontSize: 11, fontWeight: 700, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.07em", display: "block", marginBottom: 6 }}>Notes</label>
           <textarea value={form.notes} onChange={e => setForm({ ...form, notes: e.target.value })} rows={2}
