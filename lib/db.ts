@@ -1285,4 +1285,25 @@ function initSchema(db: Database.Database) {
   } catch (err: any) {
     console.error(`[MIGRATION:add_grindhouse_expenses_settlements_v1] FAILED:`, err.message);
   }
+
+  try {
+    const fix = db.prepare(`INSERT OR IGNORE INTO _applied_fixes (name) VALUES (?)`).run("add_affiliate_relationship_games_v1");
+    if (fix.changes > 0) {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS affiliate_relationship_games (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          relationship_id INTEGER NOT NULL REFERENCES affiliate_relationships(id) ON DELETE CASCADE,
+          game_id INTEGER NOT NULL REFERENCES games(id) ON DELETE CASCADE,
+          disclosed_action_pct REAL,
+          disclosed_rakeback_pct REAL,
+          disclosed_insurance_pct REAL,
+          exclude_agency_extras INTEGER NOT NULL DEFAULT 1,
+          UNIQUE(relationship_id, game_id)
+        );
+      `);
+      console.log("[MIGRATION] add_affiliate_relationship_games_v1 applied");
+    }
+  } catch (err: any) {
+    console.error(`[MIGRATION:add_affiliate_relationship_games_v1] FAILED:`, err.message);
+  }
 }

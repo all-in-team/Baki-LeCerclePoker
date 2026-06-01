@@ -108,9 +108,14 @@ function getAgencyPnLDisclosed(
 
   if (!deal) return 0;
 
-  const effAction = rel.disclosed_action_pct ?? deal.action_pct;
-  const effRb = rel.disclosed_rakeback_pct ?? deal.rakeback_pct;
-  const effIns = rel.disclosed_insurance_pct ?? deal.insurance_pct;
+  const perGame = db.prepare(
+    `SELECT disclosed_action_pct, disclosed_rakeback_pct, disclosed_insurance_pct
+     FROM affiliate_relationship_games WHERE relationship_id = ? AND game_id = ?`
+  ).get(rel.id, gameId) as { disclosed_action_pct: number | null; disclosed_rakeback_pct: number | null; disclosed_insurance_pct: number | null } | undefined;
+
+  const effAction = perGame?.disclosed_action_pct ?? rel.disclosed_action_pct ?? deal.action_pct;
+  const effRb = perGame?.disclosed_rakeback_pct ?? rel.disclosed_rakeback_pct ?? deal.rakeback_pct;
+  const effIns = perGame?.disclosed_insurance_pct ?? rel.disclosed_insurance_pct ?? deal.insurance_pct;
 
   const game = db.prepare(`SELECT name FROM games WHERE id = ?`).get(gameId) as { name: string } | undefined;
   if (!game) return 0;

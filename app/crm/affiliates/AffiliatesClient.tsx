@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback } from "react";
 import { useRouter } from "next/navigation";
-import { Plus, Pencil, XCircle, DollarSign, Loader2, RefreshCw, ChevronRight, Users } from "lucide-react";
+import { Plus, Pencil, XCircle, DollarSign, Loader2, RefreshCw, ChevronRight, Users, Trash2 } from "lucide-react";
 import Modal from "@/components/Modal";
 import AgentDetailDrawer from "./AgentDetailDrawer";
 
@@ -56,6 +56,12 @@ interface BackfillResponse {
   results: BackfillResult[];
 }
 
+interface GameRateRow {
+  game_id: number; game_name: string;
+  disclosed_action_pct: string; disclosed_rakeback_pct: string; disclosed_insurance_pct: string;
+  exclude_agency_extras: boolean;
+}
+
 interface Props {
   agents: Agent[];
   players: Player[];
@@ -94,6 +100,7 @@ export default function AffiliatesClient({ agents, players, activeGames, existin
   const [loading, setLoading] = useState(true);
 
   const [drawerAgent, setDrawerAgent] = useState<AgentSummary | null>(null);
+  const [gameRates, setGameRates] = useState<GameRateRow[]>([]);
 
   // Backfill
   const [backfillCount, setBackfillCount] = useState<number | null>(null);
@@ -181,6 +188,20 @@ export default function AffiliatesClient({ agents, players, activeGames, existin
       disclosed_insurance_pct: r.disclosed_insurance_pct != null ? String(r.disclosed_insurance_pct) : "",
       exclude_agency_extras: !!r.exclude_agency_extras, notes: r.notes ?? "",
     });
+    setGameRates([]);
+    fetch(`/api/affiliate-relationships/${r.id}`)
+      .then(res => res.ok ? res.json() : null)
+      .then(data => {
+        if (data?.game_rates?.length > 0) {
+          setGameRates(data.game_rates.map((gr: any) => ({
+            game_id: gr.game_id, game_name: gr.game_name,
+            disclosed_action_pct: gr.disclosed_action_pct != null ? String(gr.disclosed_action_pct) : "",
+            disclosed_rakeback_pct: gr.disclosed_rakeback_pct != null ? String(gr.disclosed_rakeback_pct) : "",
+            disclosed_insurance_pct: gr.disclosed_insurance_pct != null ? String(gr.disclosed_insurance_pct) : "",
+            exclude_agency_extras: !!gr.exclude_agency_extras,
+          })));
+        }
+      }).catch(() => {});
   }
 
   async function handleCreate() {
@@ -215,6 +236,13 @@ export default function AffiliatesClient({ agents, players, activeGames, existin
           disclosed_insurance_pct: form.disclosed_insurance_pct ? Number(form.disclosed_insurance_pct) : null,
           exclude_agency_extras: form.exclude_agency_extras ? 1 : 0,
           notes: form.notes || null,
+          game_rates: gameRates.filter(gr => gr.game_id).map(gr => ({
+            game_id: gr.game_id,
+            disclosed_action_pct: gr.disclosed_action_pct ? Number(gr.disclosed_action_pct) : null,
+            disclosed_rakeback_pct: gr.disclosed_rakeback_pct ? Number(gr.disclosed_rakeback_pct) : null,
+            disclosed_insurance_pct: gr.disclosed_insurance_pct ? Number(gr.disclosed_insurance_pct) : null,
+            exclude_agency_extras: gr.exclude_agency_extras ? 1 : 0,
+          })),
         }),
       });
       setEditRel(null); loadEnriched(); router.refresh();
@@ -320,22 +348,76 @@ export default function AffiliatesClient({ agents, players, activeGames, existin
             </select>
           </div>
         )}
-        <div style={{ padding: "10px 12px", background: "var(--bg-surface)", borderRadius: 8, border: "1px solid var(--border)" }}>
-          <label style={{ fontSize: 11, fontWeight: 700, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.07em", display: "block", marginBottom: 8 }}>Disclosed rates (optionnel)</label>
-          <div style={{ display: "flex", gap: 10 }}>
-            {(["disclosed_action_pct", "disclosed_rakeback_pct", "disclosed_insurance_pct"] as const).map(k => (
-              <div key={k} style={{ flex: 1 }}>
-                <label style={{ fontSize: 10, color: "var(--text-dim)", display: "block", marginBottom: 3 }}>{k.replace("disclosed_", "").replace("_pct", " %")}</label>
-                <input type="number" step="0.01" min={0} max={100} value={(form as any)[k]} onChange={e => setForm({ ...form, [k]: e.target.value })} placeholder="Reel"
-                  style={{ width: "100%", padding: "6px 8px", borderRadius: 6, fontSize: 12, background: "var(--bg-raised)", color: "var(--text)", border: "1px solid var(--border)", outline: "none", textAlign: "center", boxSizing: "border-box" }} />
-              </div>
-            ))}
+        {isEdit ? (
+          <div style={{ padding: "10px 12px", background: "var(--bg-surface)", borderRadius: 8, border: "1px solid var(--border)" }}>
+            <label style={{ fontSize: 11, fontWeight: 700, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.07em", display: "block", marginBottom: 8 }}>Games & Rates</label>
+            {gameRates.length > 0 && (
+              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11, marginBottom: 8 }}>
+                <thead>
+                  <tr style={{ borderBottom: "1px solid var(--border)", color: "var(--text-dim)", fontSize: 9, textTransform: "uppercase" }}>
+                    <th style={{ textAlign: "left", padding: "4px 4px" }}>Game</th>
+                    <th style={{ textAlign: "center", padding: "4px 2px" }}>Action %</th>
+                    <th style={{ textAlign: "center", padding: "4px 2px" }}>RB %</th>
+                    <th style={{ textAlign: "center", padding: "4px 2px" }}>Ins %</th>
+                    <th style={{ textAlign: "center", padding: "4px 2px" }}>Excl.</th>
+                    <th style={{ width: 24 }}></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {gameRates.map((gr, i) => (
+                    <tr key={i} style={{ borderBottom: "1px solid var(--border)" }}>
+                      <td style={{ padding: "4px 4px" }}>
+                        <select value={gr.game_id} onChange={e => { const updated = [...gameRates]; updated[i] = { ...gr, game_id: Number(e.target.value), game_name: activeGames.find(g => g.id === Number(e.target.value))?.name ?? "" }; setGameRates(updated); }}
+                          style={{ padding: "4px 6px", borderRadius: 5, fontSize: 11, background: "var(--bg-raised)", color: "var(--text)", border: "1px solid var(--border)", outline: "none" }}>
+                          <option value={0}>--</option>
+                          {activeGames.map(g => <option key={g.id} value={g.id}>{g.name}</option>)}
+                        </select>
+                      </td>
+                      {(["disclosed_action_pct", "disclosed_rakeback_pct", "disclosed_insurance_pct"] as const).map(k => (
+                        <td key={k} style={{ padding: "4px 2px" }}>
+                          <input type="number" step="0.01" min={0} max={100} value={(gr as any)[k]} onChange={e => { const updated = [...gameRates]; updated[i] = { ...gr, [k]: e.target.value }; setGameRates(updated); }} placeholder="—"
+                            style={{ width: 52, padding: "3px 4px", borderRadius: 4, fontSize: 11, background: "var(--bg-raised)", color: "var(--text)", border: "1px solid var(--border)", outline: "none", textAlign: "center", boxSizing: "border-box" }} />
+                        </td>
+                      ))}
+                      <td style={{ padding: "4px 2px", textAlign: "center" }}>
+                        <input type="checkbox" checked={gr.exclude_agency_extras} onChange={e => { const updated = [...gameRates]; updated[i] = { ...gr, exclude_agency_extras: e.target.checked }; setGameRates(updated); }} />
+                      </td>
+                      <td style={{ padding: "4px 2px" }}>
+                        <button onClick={() => setGameRates(gameRates.filter((_, j) => j !== i))} style={{ background: "none", border: "none", cursor: "pointer", color: "var(--text-dim)", padding: 2, display: "flex" }}>
+                          <Trash2 size={12} />
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+            {gameRates.length === 0 && (
+              <div style={{ padding: "8px 0", fontSize: 11, color: "var(--text-dim)", textAlign: "center" }}>Aucun rate per-game. Les rates du deal standard s'appliquent.</div>
+            )}
+            <button onClick={() => setGameRates([...gameRates, { game_id: 0, game_name: "", disclosed_action_pct: "", disclosed_rakeback_pct: "", disclosed_insurance_pct: "", exclude_agency_extras: true }])}
+              style={{ display: "flex", alignItems: "center", gap: 4, padding: "5px 10px", borderRadius: 5, fontSize: 11, fontWeight: 600, cursor: "pointer", background: "rgba(59,130,246,0.10)", border: "1px solid rgba(59,130,246,0.3)", color: "#3B82F6", marginTop: 4 }}>
+              <Plus size={12} /> Ajouter game
+            </button>
           </div>
-          <label style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 8, fontSize: 12, color: "var(--text-muted)", cursor: "pointer" }}>
-            <input type="checkbox" checked={form.exclude_agency_extras} onChange={e => setForm({ ...form, exclude_agency_extras: e.target.checked })} />
-            Exclude agency extras du calcul commission
-          </label>
-        </div>
+        ) : (
+          <div style={{ padding: "10px 12px", background: "var(--bg-surface)", borderRadius: 8, border: "1px solid var(--border)" }}>
+            <label style={{ fontSize: 11, fontWeight: 700, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.07em", display: "block", marginBottom: 8 }}>Disclosed rates (optionnel)</label>
+            <div style={{ display: "flex", gap: 10 }}>
+              {(["disclosed_action_pct", "disclosed_rakeback_pct", "disclosed_insurance_pct"] as const).map(k => (
+                <div key={k} style={{ flex: 1 }}>
+                  <label style={{ fontSize: 10, color: "var(--text-dim)", display: "block", marginBottom: 3 }}>{k.replace("disclosed_", "").replace("_pct", " %")}</label>
+                  <input type="number" step="0.01" min={0} max={100} value={(form as any)[k]} onChange={e => setForm({ ...form, [k]: e.target.value })} placeholder="Reel"
+                    style={{ width: "100%", padding: "6px 8px", borderRadius: 6, fontSize: 12, background: "var(--bg-raised)", color: "var(--text)", border: "1px solid var(--border)", outline: "none", textAlign: "center", boxSizing: "border-box" }} />
+                </div>
+              ))}
+            </div>
+            <label style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 8, fontSize: 12, color: "var(--text-muted)", cursor: "pointer" }}>
+              <input type="checkbox" checked={form.exclude_agency_extras} onChange={e => setForm({ ...form, exclude_agency_extras: e.target.checked })} />
+              Exclude agency extras du calcul commission
+            </label>
+          </div>
+        )}
         <div>
           <label style={{ fontSize: 11, fontWeight: 700, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.07em", display: "block", marginBottom: 6 }}>Notes</label>
           <textarea value={form.notes} onChange={e => setForm({ ...form, notes: e.target.value })} rows={2}
