@@ -16,7 +16,7 @@ export default function AffiliatesPage() {
   `).all() as any[];
 
   const players = db.prepare(`SELECT id, name, telegram_handle FROM players WHERE status IN ('active', 'signed') ORDER BY name`).all() as any[];
-  const activeGames = db.prepare(`SELECT id, name FROM games WHERE status = 'active' ORDER BY id`).all() as any[];
+  const activeGames = db.prepare(`SELECT id, name, perceived_action_pct, perceived_rakeback_pct, perceived_insurance_pct FROM games WHERE status = 'active' ORDER BY id`).all() as any[];
   const existingReferredIds = db.prepare(`SELECT referred_player_id FROM affiliate_relationships WHERE status != 'terminated'`).all().map((r: any) => r.referred_player_id) as number[];
 
   return (
