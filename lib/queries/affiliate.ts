@@ -113,12 +113,15 @@ function getAgencyPnLDisclosed(
      FROM affiliate_relationship_games WHERE relationship_id = ? AND game_id = ?`
   ).get(rel.id, gameId) as { disclosed_action_pct: number | null; disclosed_rakeback_pct: number | null; disclosed_insurance_pct: number | null } | undefined;
 
-  const effAction = perGame?.disclosed_action_pct ?? rel.disclosed_action_pct ?? deal.action_pct;
-  const effRb = perGame?.disclosed_rakeback_pct ?? rel.disclosed_rakeback_pct ?? deal.rakeback_pct;
-  const effIns = perGame?.disclosed_insurance_pct ?? rel.disclosed_insurance_pct ?? deal.insurance_pct;
-
-  const game = db.prepare(`SELECT name FROM games WHERE id = ?`).get(gameId) as { name: string } | undefined;
+  const game = db.prepare(
+    `SELECT name, perceived_action_pct, perceived_rakeback_pct, perceived_insurance_pct FROM games WHERE id = ?`
+  ).get(gameId) as { name: string; perceived_action_pct: number | null; perceived_rakeback_pct: number | null; perceived_insurance_pct: number | null } | undefined;
   if (!game) return 0;
+
+  // Cascade: per-relation-game → game perceived → relation-level → deal
+  const effAction = perGame?.disclosed_action_pct ?? game.perceived_action_pct ?? rel.disclosed_action_pct ?? deal.action_pct;
+  const effRb = perGame?.disclosed_rakeback_pct ?? game.perceived_rakeback_pct ?? rel.disclosed_rakeback_pct ?? deal.rakeback_pct;
+  const effIns = perGame?.disclosed_insurance_pct ?? game.perceived_insurance_pct ?? rel.disclosed_insurance_pct ?? deal.insurance_pct;
 
   if (game.name === "Wepoker") {
     // Rakeback-based P&L (CNY) — mirrors getWepokerPnL lines 1242-1267

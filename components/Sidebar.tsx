@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useRouter } from "next/navigation";
-import { LayoutDashboard, FileText, ContactRound, Settings, BarChart3, Scale, Wallet, Users, Network, Gamepad2, Receipt, TrendingUp, LogOut } from "lucide-react";
+import { LayoutDashboard, FileText, ContactRound, Settings, BarChart3, Scale, Wallet, Users, Network, Gamepad2, Receipt, TrendingUp, LogOut, Sliders } from "lucide-react";
 
 type NavItem = { href: string; label: string; icon: any };
 type NavSection = { label: string; items: NavItem[]; archived?: boolean };
@@ -16,6 +16,7 @@ const SECTIONS: NavSection[] = [
       { href: "/crm", label: "CRM Joueurs", icon: ContactRound },
       { href: "/players", label: "Joueurs", icon: Users },
       { href: "/crm/affiliates", label: "Affiliates", icon: Network },
+      { href: "/crm/games", label: "Games & Deals", icon: Sliders },
       { href: "/settings", label: "Settings", icon: Settings },
     ],
   },

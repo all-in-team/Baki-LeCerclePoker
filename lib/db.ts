@@ -1306,4 +1306,19 @@ function initSchema(db: Database.Database) {
   } catch (err: any) {
     console.error(`[MIGRATION:add_affiliate_relationship_games_v1] FAILED:`, err.message);
   }
+
+  try {
+    const fix = db.prepare(`INSERT OR IGNORE INTO _applied_fixes (name) VALUES (?)`).run("add_games_deal_columns_v1");
+    if (fix.changes > 0) {
+      for (const col of [
+        "exact_action_pct", "exact_rakeback_pct", "exact_insurance_pct",
+        "perceived_action_pct", "perceived_rakeback_pct", "perceived_insurance_pct",
+      ]) {
+        try { db.exec(`ALTER TABLE games ADD COLUMN ${col} REAL`); } catch {}
+      }
+      console.log("[MIGRATION] add_games_deal_columns_v1 applied");
+    }
+  } catch (err: any) {
+    console.error(`[MIGRATION:add_games_deal_columns_v1] FAILED:`, err.message);
+  }
 }
