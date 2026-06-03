@@ -128,7 +128,7 @@ export async function POST(req: NextRequest) {
 
   // /startaffi — activate player as affiliate (group only)
   if (msg?.text?.match(/^\/startaffi(\s|$|@)/)) {
-    await handleStartAffi(chatId, msg.from?.id, msg.chat?.type ?? "private");
+    await handleStartAffi(chatId, msg.from?.id, msg.chat?.type ?? "private", threadId);
     return NextResponse.json({ ok: true });
   }
 
