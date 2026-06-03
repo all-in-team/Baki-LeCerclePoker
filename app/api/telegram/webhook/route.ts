@@ -35,8 +35,15 @@ export async function POST(req: NextRequest) {
     if (incoming !== secret) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const update = await req.json();
+  let update: any;
+  try {
+    update = await req.json();
+  } catch (e: any) {
+    console.error("[WEBHOOK] Failed to parse JSON:", e.message);
+    return NextResponse.json({ ok: true });
+  }
 
+  try {
   const updateType = update.callback_query ? "callback" : update.message?.new_chat_members ? "new_members" : update.message ? "message" : update.chat_member ? "chat_member" : "other";
   console.log(`[WEBHOOK_RAW] type=${updateType} chat=${update.message?.chat?.id ?? update.chat_member?.chat?.id ?? update.callback_query?.message?.chat?.id ?? "?"} from=${update.message?.from?.id ?? update.chat_member?.from?.id ?? update.callback_query?.from?.id ?? "?"}`);
 
@@ -205,4 +212,8 @@ export async function POST(req: NextRequest) {
   }
 
   return NextResponse.json({ ok: true });
+  } catch (e: any) {
+    console.error(`[WEBHOOK_CRASH] Unhandled error processing update ${update?.update_id}:`, e?.message ?? e, e?.stack);
+    return NextResponse.json({ ok: true });
+  }
 }
