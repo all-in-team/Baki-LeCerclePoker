@@ -30,9 +30,28 @@ export async function POST(req: NextRequest) {
   return NextResponse.json({ webhook: data, description: descData });
 }
 
-export async function GET() {
+export async function GET(req: NextRequest) {
   const token = process.env.TELEGRAM_BOT_TOKEN;
   if (!token) return NextResponse.json({ error: "TELEGRAM_BOT_TOKEN not set" }, { status: 500 });
+
+  const chatId = req.nextUrl.searchParams.get("test_chat");
+  if (chatId) {
+    const [sendRes, chatRes] = await Promise.all([
+      fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ chat_id: chatId, text: "🔧 Test message from diagnostic endpoint", parse_mode: "HTML" }),
+      }),
+      fetch(`https://api.telegram.org/bot${token}/getChat`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ chat_id: chatId }),
+      }),
+    ]);
+    const [sendData, chatData] = await Promise.all([sendRes.json(), chatRes.json()]);
+    return NextResponse.json({ test_send: sendData, chat_info: chatData });
+  }
+
   const res = await fetch(`https://api.telegram.org/bot${token}/getWebhookInfo`);
   const data = await res.json();
   return NextResponse.json(data);

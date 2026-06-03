@@ -31,8 +31,8 @@ export async function handleStartAffi(chatId: number, fromId: number, chatType: 
 
   if (existing) {
     const botToken = process.env.TELEGRAM_BOT_TOKEN;
-    if (!botToken) return;
-    await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
+    if (!botToken) { console.error("[startaffi] No TELEGRAM_BOT_TOKEN"); return; }
+    const res = await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -44,15 +44,17 @@ export async function handleStartAffi(chatId: number, fromId: number, chatType: 
         },
       }),
     });
+    if (!res.ok) console.error("[startaffi] sendMessage failed (existing):", res.status, await res.text().catch(() => ""));
     return;
   }
 
   db.prepare(`INSERT INTO affiliate_profiles (affiliate_player_id) VALUES (?)`).run(player.id);
+  console.log(`[startaffi] Created affiliate profile for player ${player.id} (${player.name})`);
 
   const botToken = process.env.TELEGRAM_BOT_TOKEN;
   if (!botToken) { await sendMsg(chatId, `❌ Config erreur.`); return; }
 
-  await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
+  const res = await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -72,4 +74,5 @@ export async function handleStartAffi(chatId: number, fromId: number, chatType: 
       },
     }),
   });
+  if (!res.ok) console.error("[startaffi] sendMessage failed (new):", res.status, await res.text().catch(() => ""));
 }
