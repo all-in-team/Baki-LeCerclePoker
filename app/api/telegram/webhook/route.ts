@@ -45,8 +45,17 @@ export async function POST(req: NextRequest) {
 
   try {
   const updateType = update.callback_query ? "callback" : update.message?.new_chat_members ? "new_members" : update.message ? "message" : update.chat_member ? "chat_member" : "other";
-  console.log(`[WEBHOOK_RAW] type=${updateType} chat=${update.message?.chat?.id ?? update.chat_member?.chat?.id ?? update.callback_query?.message?.chat?.id ?? "?"} from=${update.message?.from?.id ?? update.chat_member?.from?.id ?? update.callback_query?.from?.id ?? "?"}`);
+  const logChat = update.message?.chat?.id ?? update.chat_member?.chat?.id ?? update.callback_query?.message?.chat?.id ?? "?";
+  const logFrom = update.message?.from?.id ?? update.chat_member?.from?.id ?? update.callback_query?.from?.id ?? "?";
+  const logText = update.message?.text?.slice(0, 60) ?? "";
+  console.log(`[WEBHOOK_RAW] type=${updateType} chat=${logChat} from=${logFrom} text="${logText}"`);
 
+  // DB-based webhook trace (queryable via db-diagnostic)
+  try {
+    const { getDb } = await import("@/lib/db");
+    getDb().prepare(`INSERT INTO settings (key, value) VALUES ('_webhook_last', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`)
+      .run(JSON.stringify({ ts: new Date().toISOString(), type: updateType, chat: logChat, from: logFrom, text: logText, thread: update.message?.message_thread_id }));
+  } catch {}
 
   // Handle inline keyboard button clicks
   if (update.callback_query) {
