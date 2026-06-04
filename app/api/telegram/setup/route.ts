@@ -36,6 +36,15 @@ export async function GET(req: NextRequest) {
 
   const chatId = req.nextUrl.searchParams.get("test_chat");
   if (chatId) {
+    const action = req.nextUrl.searchParams.get("action") ?? "send";
+    if (action === "members") {
+      const res = await fetch(`https://api.telegram.org/bot${token}/getChatAdministrators`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ chat_id: chatId }),
+      });
+      return NextResponse.json(await res.json());
+    }
     const [sendRes, chatRes] = await Promise.all([
       fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
         method: "POST",
