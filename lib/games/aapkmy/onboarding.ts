@@ -20,8 +20,8 @@ export async function handleAapkmyRawMessage(
 
   if (session.step === ("aapkmy_waiting_id" as Step)) {
     const aapkId = text.trim();
-    if (!aapkId || aapkId.length < 3 || aapkId.length > 30) {
-      await reply("❌ ID invalide. Envoie ton ID AAPK (entre 3 et 30 caractères).");
+    if (!/^\d{3,30}$/.test(aapkId)) {
+      await reply("❌ ID AAPK doit être uniquement numérique (ex: 11116820). Réessaie.");
       return true;
     }
 
