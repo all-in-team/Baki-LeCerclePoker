@@ -1368,4 +1368,35 @@ function initSchema(db: Database.Database) {
     console.error(`[MIGRATION:add_aapkmy_game_v1] FAILED:`, err.message);
     console.error(err.stack);
   }
+
+  // Fix player_game_ids FK pointing to defunct "games_old" instead of "games"
+  try {
+    const fixPgiFK = db.prepare(`INSERT OR IGNORE INTO _applied_fixes (name) VALUES (?)`).run("fix_player_game_ids_fk_v1");
+    if (fixPgiFK.changes > 0) {
+      db.pragma("foreign_keys = OFF");
+      try {
+        db.exec(`
+          BEGIN;
+          CREATE TABLE player_game_ids_new (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            player_id   INTEGER NOT NULL REFERENCES players(id) ON DELETE CASCADE,
+            game_id     INTEGER NOT NULL REFERENCES games(id) ON DELETE CASCADE,
+            external_id TEXT NOT NULL,
+            UNIQUE(game_id, external_id)
+          );
+          INSERT INTO player_game_ids_new (id, player_id, game_id, external_id)
+            SELECT id, player_id, game_id, external_id FROM player_game_ids;
+          DROP TABLE player_game_ids;
+          ALTER TABLE player_game_ids_new RENAME TO player_game_ids;
+          COMMIT;
+        `);
+      } finally {
+        db.pragma("foreign_keys = ON");
+      }
+      console.log("[MIGRATION] fix_player_game_ids_fk_v1 applied");
+    }
+  } catch (err: any) {
+    console.error(`[MIGRATION:fix_player_game_ids_fk_v1] FAILED:`, err.message);
+    console.error(err.stack);
+  }
 }
