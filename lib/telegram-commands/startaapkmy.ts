@@ -7,13 +7,15 @@ export async function handleStartAapkmy(chatId: number, threadId?: number) {
   const db = getDb();
 
   const player = db.prepare(
-    `SELECT id, name, telegram_id, telegram_handle FROM players WHERE telegram_group_id = ?`
-  ).get(String(chatId)) as { id: number; name: string; telegram_id: number | null; telegram_handle: string | null } | undefined;
+    `SELECT id, name, telegram_id, telegram_handle, onboarding_topic_id FROM players WHERE telegram_group_id = ?`
+  ).get(String(chatId)) as { id: number; name: string; telegram_id: number | null; telegram_handle: string | null; onboarding_topic_id: number | null } | undefined;
 
   if (!player) {
     await sendMsg(chatId, `Ce groupe n'est lié à aucun joueur.`, threadId);
     return;
   }
+
+  const tid = player.onboarding_topic_id ?? threadId;
 
   const gameId = (db.prepare(`SELECT id FROM games WHERE name = ?`).get(AAPKMY_GAME_NAME) as { id: number } | undefined)?.id;
   if (gameId) {
@@ -24,7 +26,7 @@ export async function handleStartAapkmy(chatId: number, threadId?: number) {
       await sendMsg(chatId,
         `✅ <b>${player.name}</b> a déjà AAPK actif (ID: <code>${existing.external_id}</code>).\n` +
         `Club ID: ${AAPKMY_CLUB_ID}`,
-        threadId
+        tid
       );
       return;
     }
@@ -43,6 +45,6 @@ export async function handleStartAapkmy(chatId: number, threadId?: number) {
     `📥 Download: ${AAPKMY_DOWNLOAD_LINK}\n` +
     `🏠 Club ID: <code>${AAPKMY_CLUB_ID}</code>\n\n` +
     `Une fois installé et le club rejoint, envoie-moi ton ID AAPK ici.`,
-    threadId
+    tid
   );
 }
