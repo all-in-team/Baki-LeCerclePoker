@@ -16,6 +16,7 @@ import {
   handleAffiliation,
   handleMyAffi,
   handleStartAffi,
+  handleStartAapkmy,
   handleLinkGroup,
   sendMsg, answerCbQuery, getSession, handleRawMessage, registerCommandHandlers,
   OWNER_IDS, AGENT_CHAT_ID,
@@ -179,6 +180,7 @@ export async function POST(req: NextRequest) {
       else if (cmd === "/broadcast")   await handleBroadcast(msg, chatId);
       else if (cmd === "/startkkpoker" || cmd === "/start_kkpoker") await handleStartKkpoker(chatId);
       else if (cmd === "/starta5poker" || cmd === "/start_a5poker") await handleStartA5poker(chatId);
+      else if (cmd === "/startaapkmy" || cmd === "/start_aapkmy") await handleStartAapkmy(chatId, threadId);
     } catch (e: any) {
       console.error("[TG CMD]", e);
       await sendMsg(chatId, `❌ Erreur : ${e.message}`);
@@ -197,6 +199,25 @@ export async function POST(req: NextRequest) {
       if (isOwner || isExpectedPlayer) {
         try { await handleRawMessage(text, chatId, threadId); } catch (e: any) {
           console.error("[TG FLOW]", e);
+        }
+        return NextResponse.json({ ok: true });
+      }
+    }
+  }
+
+  // Photo/document handling — AAPKMY deposit proof forwarding
+  if (msg?.photo || msg?.document) {
+    const senderId: number = msg.from?.id;
+    const session = getSession(chatId);
+    if (session && session.step === "aapkmy_waiting_proof") {
+      const isOwner = OWNER_IDS.has(senderId);
+      const isExpectedPlayer = session.expected_tg_id != null && senderId === session.expected_tg_id;
+      if (isOwner || isExpectedPlayer) {
+        try {
+          const { handleAapkmyPhoto } = await import("@/lib/games/aapkmy/onboarding");
+          await handleAapkmyPhoto(chatId, session as any, msg, threadId);
+        } catch (e: any) {
+          console.error("[TG AAPK PHOTO]", e);
         }
         return NextResponse.json({ ok: true });
       }
