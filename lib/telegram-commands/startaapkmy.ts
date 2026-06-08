@@ -38,6 +38,8 @@ export async function handleStartAapkmy(chatId: number, threadId?: number) {
 
   await sendMsg(chatId,
     `🎰 <b>Welcome AAPK</b>\n\n` +
+    `💼 Deal: 20% action pour LeCercle\n` +
+    `💱 Taux: 1$ = 6.6 chips\n\n` +
     `📥 Download: ${AAPKMY_DOWNLOAD_LINK}\n` +
     `🏠 Club ID: <code>${AAPKMY_CLUB_ID}</code>\n\n` +
     `Une fois installé et le club rejoint, envoie-moi ton ID AAPK ici.`,
