@@ -45,31 +45,34 @@ export default function DashboardActions() {
 
   return (
     <div style={{
-      display: "flex", gap: 12, marginBottom: 24, padding: "14px 18px",
-      background: "var(--bg-raised)", border: "1px solid var(--border)", borderRadius: 10,
+      display: "flex", gap: 12, marginBottom: 24, padding: "14px 20px",
+      background: "#1A1D23", border: "1px solid rgba(255,255,255,0.06)", borderRadius: 14,
       alignItems: "center", flexWrap: "wrap",
     }}>
-      <span style={{ fontSize: 11, fontWeight: 600, color: "var(--text-dim)", textTransform: "uppercase", letterSpacing: "0.08em", marginRight: 8 }}>
+      <span style={{
+        fontSize: 11, fontWeight: 600, color: "#555568",
+        textTransform: "uppercase", letterSpacing: "0.08em", marginRight: 8,
+      }}>
         Actions rapides
       </span>
 
       <Btn size="sm" onClick={sendWeekly} disabled={loading === "weekly"}>
-        {loading === "weekly" ? <Loader size={12} className="spin" /> : <Send size={12} />}
+        {loading === "weekly" ? <Loader size={12} className="animate-spin" /> : <Send size={12} />}
         Envoyer récap hebdo
       </Btn>
       {weeklyStatus && (
-        <span style={{ fontSize: 11, color: "var(--text-muted)", display: "flex", alignItems: "center", gap: 4 }}>
-          <CheckCircle size={11} color="var(--green)" /> {weeklyStatus}
+        <span style={{ fontSize: 11, color: "#8888A0", display: "flex", alignItems: "center", gap: 4 }}>
+          <CheckCircle size={11} color="#10B981" /> {weeklyStatus}
         </span>
       )}
 
       <Btn size="sm" onClick={checkAlerts} disabled={loading === "alerts"}>
-        {loading === "alerts" ? <Loader size={12} className="spin" /> : <AlertTriangle size={12} />}
+        {loading === "alerts" ? <Loader size={12} className="animate-spin" /> : <AlertTriangle size={12} />}
         Vérifier alertes P&L
       </Btn>
       {alertStatus && (
-        <span style={{ fontSize: 11, color: "var(--text-muted)", display: "flex", alignItems: "center", gap: 4 }}>
-          <CheckCircle size={11} color="var(--green)" /> {alertStatus}
+        <span style={{ fontSize: 11, color: "#8888A0", display: "flex", alignItems: "center", gap: 4 }}>
+          <CheckCircle size={11} color="#10B981" /> {alertStatus}
         </span>
       )}
     </div>

@@ -33,20 +33,20 @@ export default function Modal({ open, onClose, title, children, width = 480 }: M
       <div
         onClick={e => e.stopPropagation()}
         style={{
-          background: "var(--bg-raised)",
-          border: "1px solid var(--border)",
-          borderRadius: 12,
+          background: "#1A1D23",
+          border: "1px solid rgba(255,255,255,0.06)",
+          borderRadius: 16,
           width: "100%",
           maxWidth: width,
           maxHeight: "90vh",
           overflow: "auto",
-          boxShadow: "0 25px 80px rgba(0,0,0,0.6)",
+          boxShadow: "0 32px 64px rgba(0,0,0,0.5)",
         }}
       >
         <div style={{
           display: "flex", justifyContent: "space-between", alignItems: "center",
           padding: "16px 20px",
-          borderBottom: "1px solid var(--border)",
+          borderBottom: "1px solid rgba(255,255,255,0.06)",
         }}>
           <h2 style={{ margin: 0, fontSize: 15, fontWeight: 700, color: "var(--text)" }}>{title}</h2>
           <button onClick={onClose} style={{ background: "none", border: "none", cursor: "pointer", color: "var(--text-muted)", padding: 4, display: "flex" }}>

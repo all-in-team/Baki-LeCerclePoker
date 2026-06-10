@@ -1,11 +1,14 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname } from "next/navigation";
-import { useRouter } from "next/navigation";
-import { LayoutDashboard, FileText, ContactRound, Settings, BarChart3, Scale, Wallet, Users, Network, Gamepad2, Receipt, TrendingUp, LogOut, Sliders } from "lucide-react";
+import { usePathname, useRouter } from "next/navigation";
+import {
+  X, LogOut, LayoutDashboard, ContactRound, Users, Network,
+  Sliders, Settings, Wallet, Scale, BarChart3, FileText,
+  Gamepad2, Receipt, TrendingUp,
+} from "lucide-react";
 
-type NavItem = { href: string; label: string; icon: any };
+type NavItem = { href: string; label: string; icon: React.ComponentType<{ size?: number; strokeWidth?: number }> };
 type NavSection = { label: string; items: NavItem[]; archived?: boolean };
 
 const SECTIONS: NavSection[] = [
@@ -60,7 +63,12 @@ const SECTIONS: NavSection[] = [
   },
 ];
 
-export default function Sidebar() {
+interface SidebarProps {
+  isOpen: boolean;
+  onClose: () => void;
+}
+
+export default function Sidebar({ isOpen, onClose }: SidebarProps) {
   const path = usePathname();
   const router = useRouter();
 
@@ -71,51 +79,67 @@ export default function Sidebar() {
   }
 
   return (
-    <aside style={{
-      width: 220,
-      minHeight: "100vh",
-      background: "var(--bg-surface)",
-      borderRight: "1px solid var(--border)",
-      display: "flex",
-      flexDirection: "column",
-      position: "fixed",
-      top: 0,
-      left: 0,
-      zIndex: 50,
-    }}>
+    <aside
+      className={`${isOpen ? "translate-x-0" : "-translate-x-full"} lg:translate-x-0`}
+      style={{
+        position: "fixed", top: 0, left: 0, zIndex: 50,
+        display: "flex", flexDirection: "column",
+        width: 260, height: "100vh",
+        background: "#121418",
+        borderRight: "1px solid rgba(255,255,255,0.06)",
+        transition: "transform 300ms ease-in-out",
+      }}
+    >
       {/* Logo */}
-      <div style={{ padding: "20px 20px 16px", borderBottom: "1px solid var(--border)" }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+      <div style={{
+        display: "flex", alignItems: "center", justifyContent: "space-between",
+        padding: "20px 20px 18px", borderBottom: "1px solid rgba(255,255,255,0.06)",
+      }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
           <div style={{
-            width: 32, height: 32, borderRadius: 8,
-            background: "linear-gradient(135deg, var(--green), var(--gold))",
+            width: 36, height: 36, borderRadius: 12,
+            background: "linear-gradient(135deg, #10B981, #F5C518)",
             display: "flex", alignItems: "center", justifyContent: "center",
-            fontSize: 14, fontWeight: 800, color: "#000",
+            fontSize: 16, fontWeight: 800, color: "#000",
+            boxShadow: "0 4px 16px rgba(16,185,129,0.2)",
             flexShrink: 0,
-          }}>♠</div>
+          }}>&#9824;</div>
           <div>
-            <div style={{ fontSize: 13, fontWeight: 700, color: "var(--text)", lineHeight: 1.2 }}>Le Cercle</div>
-            <div style={{ fontSize: 10, color: "var(--gold)", fontWeight: 600, letterSpacing: "0.06em", textTransform: "uppercase" }}>Poker</div>
+            <div style={{ fontSize: 14, fontWeight: 700, color: "#E8E8EE", lineHeight: 1.2 }}>Le Cercle</div>
+            <div style={{ fontSize: 10, color: "#F5C518", fontWeight: 600, letterSpacing: "0.06em", textTransform: "uppercase" }}>Poker</div>
           </div>
         </div>
+        <button
+          onClick={onClose}
+          className="lg:hidden flex items-center"
+          style={{
+            padding: 6, borderRadius: 6, background: "none", border: "none",
+            color: "#555568", cursor: "pointer",
+          }}
+        >
+          <X size={18} />
+        </button>
       </div>
 
-      {/* Nav */}
-      <nav style={{ flex: 1, padding: "12px 10px" }}>
+      {/* Navigation */}
+      <nav style={{ flex: 1, overflowY: "auto", padding: "12px 12px" }}>
         {SECTIONS.map((section) => (
-          <div key={section.label || "_top"} style={{ marginBottom: section.label ? 4 : 0 }}>
+          <div key={section.label || "_top"}>
             {section.label && (
               <div style={{
-                fontSize: 10, fontWeight: 700, color: "var(--text-dim)",
-                letterSpacing: "0.08em", textTransform: "uppercase",
-                padding: "12px 10px 4px", marginTop: 4,
-                borderTop: "1px solid var(--border)",
-                opacity: section.archived ? 0.5 : 1,
                 display: "flex", alignItems: "center", gap: 6,
+                padding: "14px 12px 6px",
+                fontSize: 10, fontWeight: 700, letterSpacing: "0.08em", textTransform: "uppercase",
+                color: section.archived ? "rgba(85,85,104,0.5)" : "#555568",
+                borderTop: "1px solid rgba(255,255,255,0.04)", marginTop: 4,
               }}>
                 {section.label}
                 {section.archived && (
-                  <span style={{ fontSize: 8, padding: "1px 5px", borderRadius: 3, background: "rgba(255,255,255,0.08)", color: "var(--text-dim)", fontWeight: 600, letterSpacing: "0.04em" }}>
+                  <span style={{
+                    fontSize: 8, padding: "1px 5px", borderRadius: 3,
+                    background: "rgba(255,255,255,0.05)", color: "#555568",
+                    fontWeight: 600, letterSpacing: "0.04em",
+                  }}>
                     ARCHIVED
                   </span>
                 )}
@@ -126,16 +150,16 @@ export default function Sidebar() {
               return (
                 <Link key={href} href={href} style={{
                   display: "flex", alignItems: "center", gap: 10,
-                  padding: section.label ? "7px 10px 7px 18px" : "9px 10px",
-                  borderRadius: 7, marginBottom: 1,
+                  padding: section.label ? "8px 12px 8px 20px" : "9px 12px",
+                  borderRadius: 10, marginBottom: 2,
                   textDecoration: "none",
-                  background: active ? "rgba(34,197,94,0.12)" : "transparent",
-                  color: active ? "var(--green)" : "var(--text-muted)",
-                  fontWeight: active ? 600 : 400,
                   fontSize: section.label ? 12 : 13,
+                  fontWeight: active ? 600 : 400,
                   transition: "all 0.15s",
-                  borderLeft: active ? "2px solid var(--green)" : "2px solid transparent",
-                  opacity: section.archived ? 0.5 : 1,
+                  background: active ? "rgba(16,185,129,0.1)" : "transparent",
+                  color: active ? "#10B981" : "#8888A0",
+                  boxShadow: active ? "inset 3px 0 0 0 #10B981" : "none",
+                  opacity: section.archived && !active ? 0.5 : 1,
                 }}>
                   <Icon size={section.label ? 14 : 16} strokeWidth={active ? 2.2 : 1.8} />
                   {label}
@@ -147,9 +171,18 @@ export default function Sidebar() {
       </nav>
 
       {/* Footer */}
-      <div style={{ padding: "12px 16px", borderTop: "1px solid var(--border)", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-        <div style={{ fontSize: 11, color: "var(--text-dim)" }}>v1.0</div>
-        <button onClick={handleLogout} title="Logout" style={{ display: "flex", alignItems: "center", gap: 4, padding: "4px 8px", borderRadius: 5, fontSize: 10, fontWeight: 600, cursor: "pointer", background: "none", border: "1px solid var(--border)", color: "var(--text-dim)" }}>
+      <div style={{
+        padding: "12px 16px", borderTop: "1px solid rgba(255,255,255,0.06)",
+        display: "flex", justifyContent: "space-between", alignItems: "center",
+      }}>
+        <span style={{ fontSize: 11, color: "#555568" }}>v1.0</span>
+        <button onClick={handleLogout} title="Logout" style={{
+          display: "flex", alignItems: "center", gap: 4,
+          padding: "5px 10px", borderRadius: 6,
+          fontSize: 10, fontWeight: 600, cursor: "pointer",
+          background: "none", border: "1px solid rgba(255,255,255,0.06)", color: "#555568",
+          transition: "all 0.15s",
+        }}>
           <LogOut size={12} /> Logout
         </button>
       </div>
