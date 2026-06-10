@@ -92,15 +92,17 @@ export default function WarRoomHero({ totalUsdt, pnl30d, pnl30dPrev, spark30d, a
         zIndex: 2,
       }} />
 
-      {/* THE CORE — lives in the right half of the hero, behind the 30d block.
-          Radial mask fades it out well before the text zone — no hard canvas edge. */}
+      {/* THE CORE — ambient background object in the empty band between the
+          counter and the 30d column. Small, dim, radially masked: it touches
+          neither the status line (below it) nor the sparkline (right of it). */}
       <div
-        className="opacity-50 md:opacity-90"
+        className="opacity-40 md:opacity-70"
         style={{
-          position: "absolute", top: 0, bottom: 0, right: 0, width: "46%",
+          position: "absolute", top: "42%", right: "26%",
+          width: 140, height: 140, transform: "translateY(-50%)",
           pointerEvents: "none", zIndex: 0,
-          WebkitMaskImage: "radial-gradient(ellipse 58% 80% at 60% 50%, black 40%, transparent 72%)",
-          maskImage: "radial-gradient(ellipse 58% 80% at 60% 50%, black 40%, transparent 72%)",
+          WebkitMaskImage: "radial-gradient(circle at 50% 50%, black 40%, transparent 72%)",
+          maskImage: "radial-gradient(circle at 50% 50%, black 40%, transparent 72%)",
         }}
       >
         <div ref={sphereLayer} style={{ width: "100%", height: "100%", willChange: "transform" }}>

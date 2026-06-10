@@ -23,7 +23,7 @@ export default function CoreSphere({ style }: { style?: CSSProperties }) {
 
       const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
       const isMobile = window.innerWidth < 768;
-      const COUNT = isMobile ? 800 : 2400;
+      const COUNT = isMobile ? 700 : 1800;
       const GOLD_RATIO = 0.05;
       const CAM_Z = 2.4;
 
@@ -64,7 +64,8 @@ export default function CoreSphere({ style }: { style?: CSSProperties }) {
         const jitter = 0.995 + Math.random() * 0.01;
         pos.push(Math.cos(theta) * r * jitter, y * jitter, Math.sin(theta) * r * jitter);
         const isGold = Math.random() < GOLD_RATIO;
-        const c = isGold ? gold : emerald.clone().lerp(cyan, Math.random() * 0.6);
+        // darkened — ambient background object, not a spotlight
+        const c = (isGold ? gold.clone() : emerald.clone().lerp(cyan, Math.random() * 0.6)).multiplyScalar(0.8);
         col.push(c.r, c.g, c.b);
         goldFlag.push(isGold ? 1 : 0);
       }
@@ -74,19 +75,21 @@ export default function CoreSphere({ style }: { style?: CSSProperties }) {
       geo.setAttribute("aColor", new THREE.Float32BufferAttribute(col, 3));
       geo.setAttribute("aGold", new THREE.Float32BufferAttribute(goldFlag, 1));
 
+      // NormalBlending + low per-point alpha: accumulation can never saturate
+      // into a solid blob. Fine distinct dots, 1.5→2.5 device px by depth.
       const mat = new THREE.ShaderMaterial({
         transparent: true,
         depthWrite: false,
-        blending: THREE.AdditiveBlending,
+        blending: THREE.NormalBlending,
         uniforms: {
-          uSize: { value: (isMobile ? 30 : 38) * Math.min(window.devicePixelRatio, 2) },
+          uPr: { value: Math.min(window.devicePixelRatio, 2) },
           uCamZ: { value: CAM_Z },
           uTwinkle: { value: 1 },
         },
         vertexShader: /* glsl */ `
           attribute vec3 aColor;
           attribute float aGold;
-          uniform float uSize;
+          uniform float uPr;
           uniform float uCamZ;
           varying vec3 vColor;
           varying float vGold;
@@ -97,7 +100,7 @@ export default function CoreSphere({ style }: { style?: CSSProperties }) {
             vec4 mv = modelViewMatrix * vec4(position, 1.0);
             // sphere center is at view z = -uCamZ; points span ±1 around it
             vDepth = clamp((mv.z + uCamZ) * 0.5 + 0.5, 0.0, 1.0);
-            gl_PointSize = uSize * (0.35 + 0.75 * vDepth) / -mv.z;
+            gl_PointSize = (1.5 + 1.0 * vDepth) * uPr;
             gl_Position = projectionMatrix * mv;
           }
         `,
@@ -109,21 +112,14 @@ export default function CoreSphere({ style }: { style?: CSSProperties }) {
           void main() {
             float d = length(gl_PointCoord - 0.5);
             if (d > 0.5) discard;
-            float soft = smoothstep(0.5, 0.12, d);
-            float alpha = (0.12 + 0.88 * vDepth) * soft;
+            float soft = smoothstep(0.5, 0.2, d);
+            float alpha = (0.10 + 0.40 * vDepth) * soft;   // 0.5 max per point
             if (vGold > 0.5) alpha *= uTwinkle;
             gl_FragColor = vec4(vColor, alpha);
           }
         `,
       });
       group.add(new THREE.Points(geo, mat));
-
-      // Faint wireframe shell for the luminous-globe look
-      const wireGeo = new THREE.IcosahedronGeometry(0.99, 1);
-      const wireMat = new THREE.MeshBasicMaterial({
-        color: emerald, wireframe: true, transparent: true, opacity: 0.045, depthWrite: false,
-      });
-      group.add(new THREE.Mesh(wireGeo, wireMat));
 
       group.rotation.x = 0.28;
 
@@ -138,7 +134,7 @@ export default function CoreSphere({ style }: { style?: CSSProperties }) {
         group.rotation.y = t * ((Math.PI * 2) / 55);           // visible slow spin, ~55s/turn
         const s = 1 + 0.02 * Math.sin((t * Math.PI * 2) / 8);   // ±2% breath over 8s
         group.scale.setScalar(s);
-        mat.uniforms.uTwinkle.value = 0.55 + 0.45 * Math.sin(t * 2.1);
+        mat.uniforms.uTwinkle.value = 0.4 + 0.35 * Math.sin(t * 2.1);
         renderer.render(scene, camera);
       };
 
@@ -179,8 +175,8 @@ export default function CoreSphere({ style }: { style?: CSSProperties }) {
         document.removeEventListener("visibilitychange", onVis);
         window.removeEventListener("resize", onResize);
         io.disconnect();
-        geo.dispose(); wireGeo.dispose();
-        mat.dispose(); wireMat.dispose();
+        geo.dispose();
+        mat.dispose();
         renderer.dispose();
         if (renderer.domElement.parentNode === mount) mount.removeChild(renderer.domElement);
       };
