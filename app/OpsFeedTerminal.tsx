@@ -55,7 +55,7 @@ export default function OpsFeedTerminal({ events }: { events: OpsFeedEvent[] }) 
 
   return (
     <div className="glass-card" style={{
-      borderRadius: 16, display: "flex", flexDirection: "column",
+      display: "flex", flexDirection: "column",
       height: "100%", minHeight: 0, overflow: "hidden",
     }}>
       {/* Terminal header */}

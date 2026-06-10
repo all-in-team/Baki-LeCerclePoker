@@ -1,5 +1,4 @@
 import Sparkline from "@/components/Sparkline";
-import Tilt from "@/components/Tilt";
 import { Globe } from "lucide-react";
 
 export interface PlatformTicker {
@@ -25,9 +24,8 @@ export default function PlatformTickers({ tickers }: { tickers: PlatformTicker[]
           ? Math.round(((t.pnl30d - t.pnl30dPrev) / Math.abs(t.pnl30dPrev)) * 100)
           : null;
         return (
-          <Tilt key={t.name}>
-          <div className="glass-card ticker-card" style={{
-            borderRadius: 14, padding: "16px 18px",
+          <div key={t.name} className="glass-card ticker-card" style={{
+            padding: "16px 18px",
             display: "flex", flexDirection: "column", gap: 10,
             position: "relative", overflow: "hidden", height: "100%",
           }}>
@@ -46,6 +44,7 @@ export default function PlatformTickers({ tickers }: { tickers: PlatformTicker[]
                 <div className="tabular-nums" style={{
                   fontSize: 20, fontWeight: 700, lineHeight: 1.1,
                   color: up ? "#10B981" : "#EF4444",
+                  textShadow: up ? "0 0 16px rgba(16,185,129,0.25)" : "0 0 16px rgba(239,68,68,0.2)",
                 }}>
                   {fmtSigned(Math.round(t.pnl30d))}
                 </div>
@@ -59,7 +58,7 @@ export default function PlatformTickers({ tickers }: { tickers: PlatformTicker[]
                   )}
                 </div>
               </div>
-              <Sparkline data={t.spark} width={84} height={30} color={up ? "#10B981" : "#EF4444"} />
+              <Sparkline data={t.spark} width={84} height={30} color={up ? "#10B981" : "#EF4444"} variant={up ? "gradient" : "solid"} />
             </div>
             <div className="tabular-nums" style={{
               fontSize: 11, color: "#555568",
@@ -68,7 +67,6 @@ export default function PlatformTickers({ tickers }: { tickers: PlatformTicker[]
               All-time <span style={{ color: "#8888A0", fontWeight: 600 }}>{fmtSigned(Math.round(t.allTime))} USDT</span>
             </div>
           </div>
-          </Tilt>
         );
       })}
     </div>

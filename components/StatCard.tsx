@@ -46,6 +46,7 @@ export default function StatCard({ label, value, sub, accent = "neutral", icon }
       <div style={{
         fontSize: 28, fontWeight: 700, color: accentColor,
         lineHeight: 1, fontVariantNumeric: "tabular-nums",
+        textShadow: accent === "neutral" ? "none" : `0 0 18px ${accentColor}40`,
       }}>{value}</div>
       {sub && <div style={{ fontSize: 12, color: subColor, fontWeight: 500 }}>{sub}</div>}
     </div>

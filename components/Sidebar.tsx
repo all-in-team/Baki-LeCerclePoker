@@ -85,8 +85,7 @@ export default function Sidebar({ isOpen, onClose }: SidebarProps) {
         position: "fixed", top: 0, left: 0, zIndex: 50,
         display: "flex", flexDirection: "column",
         width: 260, height: "100vh",
-        background: "rgba(10,9,20,0.78)",
-        backdropFilter: "blur(22px)", WebkitBackdropFilter: "blur(22px)",
+        background: "#07070B",
         borderRight: "1px solid rgba(255,255,255,0.06)",
         transition: "transform 300ms ease-in-out",
       }}
@@ -157,9 +156,8 @@ export default function Sidebar({ isOpen, onClose }: SidebarProps) {
                   fontSize: section.label ? 12 : 13,
                   fontWeight: active ? 600 : 400,
                   transition: "all 0.15s",
-                  background: active ? "rgba(16,185,129,0.1)" : "transparent",
+                  background: active ? "rgba(16,185,129,0.08)" : "transparent",
                   color: active ? "#10B981" : "#8888A0",
-                  boxShadow: active ? "inset 3px 0 0 0 #10B981" : "none",
                   opacity: section.archived && !active ? 0.5 : 1,
                 }}>
                   <Icon size={section.label ? 14 : 16} strokeWidth={active ? 2.2 : 1.8} />

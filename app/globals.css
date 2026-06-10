@@ -3,10 +3,10 @@
 @theme {
   --font-family-sans: 'Inter', ui-sans-serif, system-ui, -apple-system, sans-serif;
 
-  --color-noir: #0A0B0E;
-  --color-surface: #121418;
-  --color-raised: #1A1D23;
-  --color-elevated: #22252B;
+  --color-noir: #07070B;
+  --color-surface: #0D0E14;
+  --color-raised: #0D0E14;
+  --color-elevated: #13141C;
 
   --color-accent: #10B981;
   --color-accent-deep: #047857;
@@ -23,10 +23,11 @@
 }
 
 :root {
-  --bg-base: #0A0B0E;
-  --bg-surface: #121418;
-  --bg-raised: #1A1D23;
-  --bg-elevated: #22252B;
+  --bg-base: #07070B;
+  --bg-surface: #0D0E14;
+  --bg-raised: #0D0E14;
+  --bg-elevated: #13141C;
+  --gold-data: #F0B90B;
   --border: rgba(255, 255, 255, 0.08);
   --green: #10B981;
   --green-dim: #047857;
@@ -40,67 +41,68 @@
 * { box-sizing: border-box; }
 
 body {
-  background-color: #06060D;
-  background-image: linear-gradient(175deg, #0B0A1C 0%, #06060D 55%, #06060D 100%);
+  background-color: #07070B;
+  /* subtle white spotlight at the top of the page — depth layer 0 */
+  background-image: radial-gradient(ellipse 70% 38% at 50% 0%, rgba(255,255,255,0.02), transparent);
   background-attachment: fixed;
+  background-repeat: no-repeat;
   color: #E8E8EE;
   margin: 0;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
 
-/* ===== THE CORE — deep space ambiance ===== */
+/* ===== OBSIDIAN — depth by layers, floating cards ===== */
 
-/* Living nebula behind every page (transform-only drift, blur is static) */
-.nebula {
-  position: fixed; inset: 0; z-index: -1;
-  overflow: hidden; pointer-events: none;
-}
-/* Blobs are soft radial gradients — no filter:blur needed (it cost ~75ms/frame in software rendering) */
-.nebula-blob {
-  position: absolute; border-radius: 50%;
-  will-change: transform;
-}
-.nebula-b1 {
-  width: 55vw; height: 55vw; top: -12%; left: -8%;
-  background: radial-gradient(circle, rgba(76,58,140,0.13) 0%, rgba(76,58,140,0.06) 35%, transparent 68%);
-  animation: nebulaDrift1 28s ease-in-out infinite alternate;
-}
-.nebula-b2 {
-  width: 60vw; height: 60vw; bottom: -18%; right: -12%;
-  background: radial-gradient(circle, rgba(42,31,94,0.12) 0%, rgba(42,31,94,0.05) 35%, transparent 68%);
-  animation: nebulaDrift2 34s ease-in-out infinite alternate;
-}
-.nebula-b3 {
-  width: 40vw; height: 40vw; top: 35%; left: 45%;
-  background: radial-gradient(circle, rgba(76,58,140,0.09) 0%, rgba(76,58,140,0.04) 35%, transparent 68%);
-  animation: nebulaDrift3 23s ease-in-out infinite alternate;
-}
-@keyframes nebulaDrift1 { to { transform: translate3d(9vw, 7vh, 0) scale(1.12); } }
-@keyframes nebulaDrift2 { to { transform: translate3d(-7vw, -9vh, 0) scale(1.18); } }
-@keyframes nebulaDrift3 { to { transform: translate3d(-11vw, 6vh, 0) scale(0.92); } }
-
-/* Thick luxury glass */
+/* Floating obsidian card: vertical gradient body, gradient border (lit on top),
+   inner top highlight, double shadow (tight near + diffuse far) */
 .glass-card {
-  background: linear-gradient(180deg, rgba(21,19,40,0.62), rgba(12,11,24,0.55));
-  -webkit-backdrop-filter: blur(14px);
-  backdrop-filter: blur(14px);
-  border: 1px solid rgba(255,255,255,0.06);
-  border-top-color: rgba(255,255,255,0.13);
+  border-radius: 18px;
+  border: 1px solid transparent;
+  background:
+    linear-gradient(180deg, #13141C 0%, #0D0E14 100%) padding-box,
+    linear-gradient(180deg, rgba(255,255,255,0.10), rgba(255,255,255,0.01)) border-box;
   box-shadow:
-    inset 0 1px 0 rgba(255,255,255,0.08),
-    0 24px 60px -24px rgba(28,16,80,0.55);
+    inset 0 1px 0 rgba(255,255,255,0.07),
+    0 2px 6px rgba(0,0,0,0.45),
+    0 24px 48px -16px rgba(0,0,0,0.6);
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+.glass-card:hover {
+  transform: translateY(-2px);
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,0.07),
+    0 4px 10px rgba(0,0,0,0.5),
+    0 32px 64px -16px rgba(0,0,0,0.7);
 }
 
-/* Sidebar active item — slow breathing glow */
-.nav-active { position: relative; }
-.nav-active::after {
-  content: ""; position: absolute; inset: 0; border-radius: 10px;
-  background: radial-gradient(70% 120% at 0% 50%, rgba(16,185,129,0.16), transparent 70%);
-  animation: navBreathe 4.5s ease-in-out infinite;
+/* Obsidian plate (hero counter) — diagonal sheen sweeps every 9s */
+.obsidian-plate { position: relative; overflow: hidden; }
+.obsidian-plate::after {
+  content: ""; position: absolute; top: -60%; bottom: -60%; left: 0; width: 36%;
+  background: linear-gradient(105deg, transparent, rgba(255,255,255,0.05) 50%, transparent);
+  transform: translateX(-180%) skewX(-8deg);
+  animation: plateSheen 9s ease-in-out infinite;
   pointer-events: none;
 }
-@keyframes navBreathe { 0%, 100% { opacity: 0.4; } 50% { opacity: 1; } }
+@keyframes plateSheen {
+  0% { transform: translateX(-180%) skewX(-8deg); }
+  13.5% { transform: translateX(460%) skewX(-8deg); }   /* ~1.2s sweep */
+  100% { transform: translateX(460%) skewX(-8deg); }
+}
+
+/* Data viz — precious neon on obsidian */
+.chart-glow .recharts-area-curve {
+  filter: drop-shadow(0 0 7px rgba(16,185,129,0.30)) drop-shadow(0 0 14px rgba(240,185,11,0.12));
+}
+
+/* Sidebar active item — emerald, soft static glow, no stray focus ring */
+.nav-active {
+  box-shadow: 0 0 18px -6px rgba(16,185,129,0.35) !important;
+}
+.nav-active:focus, .nav-active:focus-visible { outline: none; }
+nav a:focus { outline: none; }
+nav a:focus-visible { outline: 1px solid rgba(16,185,129,0.4); outline-offset: 2px; }
 
 /* Page transitions (app/template.tsx remounts per navigation) */
 @keyframes pageIn {
@@ -126,15 +128,7 @@ body {
 }
 @keyframes feedShimmer { to { transform: translateX(100%); } }
 
-/* Platform tickers — hover glow + sparkline redraw */
-.ticker-card { transition: box-shadow 0.3s ease, border-color 0.3s ease; }
-.ticker-card:hover {
-  border-color: rgba(16,185,129,0.28);
-  box-shadow:
-    inset 0 1px 0 rgba(255,255,255,0.1),
-    0 0 36px -8px rgba(16,185,129,0.3),
-    0 24px 60px -24px rgba(28,16,80,0.55);
-}
+/* Platform tickers — sparkline redraws on hover (elevation comes from .glass-card) */
 .ticker-card:hover .spark-line {
   stroke-dasharray: 100 100;
   animation: sparkDraw 0.9s ease-out forwards;
@@ -142,13 +136,6 @@ body {
 @keyframes sparkDraw {
   from { stroke-dashoffset: 100; }
   to { stroke-dashoffset: 0; }
-}
-
-/* 3D tilt (driven by components/Tilt.tsx via CSS vars) */
-.tilt {
-  transform: perspective(1000px) rotateX(var(--rx, 0deg)) rotateY(var(--ry, 0deg));
-  transition: transform 0.2s ease-out;
-  will-change: transform;
 }
 
 /* Gold volumetric glow behind the hero counter */
@@ -288,12 +275,11 @@ select option { background: #22252B; }
   .status-dot, .chart-pulse { animation: none !important; }
   .feed-line, .feed-line-new { animation: none !important; opacity: 1 !important; }
   .odo-track { transition: none !important; }
-  .nebula-blob { animation: none !important; }
-  .nav-active::after { animation: none !important; opacity: 0.6; }
+  .obsidian-plate::after { animation: none !important; opacity: 0; }
+  .glass-card, .glass-card:hover { transform: none !important; transition: none !important; }
   .chart-reveal { animation: none !important; clip-path: none; }
   .feed-shimmer::after { animation: none !important; }
   .ticker-card:hover .spark-line { animation: none !important; stroke-dasharray: none; }
-  .tilt { transform: none !important; }
   .counter-glow { animation: none !important; }
   .burst-dot { animation: none !important; opacity: 0 !important; }
 }

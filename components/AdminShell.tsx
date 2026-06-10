@@ -23,7 +23,7 @@ export default function AdminShell({ children }: { children: React.ReactNode }) 
         style={{
           position: "fixed", top: 0, left: 0, right: 0, zIndex: 40,
           height: 56, padding: "0 16px",
-          background: "rgba(10,9,20,0.72)", backdropFilter: "blur(18px)", WebkitBackdropFilter: "blur(18px)",
+          background: "#07070B",
           borderBottom: "1px solid rgba(255,255,255,0.06)",
         }}
         className="flex items-center lg:hidden"
