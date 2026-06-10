@@ -1,11 +1,17 @@
 export const dynamic = "force-dynamic";
-import { getAgencyTotalPnL, getActivePlayersCount, getTopContributors, getPnLOverTime } from "@/lib/queries";
+import {
+  getAgencyTotalPnL, getActivePlayersCount, getTopContributors, getPnLOverTime,
+  getOpsFeed, getDashboardStatus,
+} from "@/lib/queries";
 import { getDb } from "@/lib/db";
-import { getCnyRate } from "@/lib/currency";
 import Link from "next/link";
-import { TrendingUp, Users, Wallet, AlertTriangle, CheckCircle, BarChart3 } from "lucide-react";
+import { TrendingUp, Users, Wallet, AlertTriangle, CheckCircle, BarChart3, Activity, Crosshair } from "lucide-react";
 import StatCard from "@/components/StatCard";
-import { PnLAreaChart, AppBreakdownDonut } from "./DashboardCharts";
+import Odometer from "@/components/Odometer";
+import WarRoomHero from "./WarRoomHero";
+import OpsFeedTerminal from "./OpsFeedTerminal";
+import PlatformTickers, { type PlatformTicker } from "./PlatformTickers";
+import { WarRoomPnLChart } from "./WarRoomCharts";
 import DashboardActions from "./DashboardActions";
 
 function daysAgo(n: number): string {
@@ -38,11 +44,29 @@ export default function DashboardPage() {
   const pnlAllTime = getAgencyTotalPnL();
 
   const activePlayers7d = getActivePlayersCount({ from: d7, to: today });
-  const totalPlayers = (db.prepare(`SELECT COUNT(*) AS n FROM players WHERE status = 'active'`).get() as { n: number }).n;
-
+  const status = getDashboardStatus();
+  const events = getOpsFeed(20);
   const top5 = getTopContributors({ from: d7, to: today }, 5);
   const timeline = getPnLOverTime({});
-  const cnyRate = getCnyRate();
+
+  // Hero sparkline: cumulative total over the last 30 days
+  let cum = 0;
+  const cumAll = timeline.map(p => { cum += p.total_usdt; return { date: p.date, v: cum }; });
+  const spark30d = cumAll.filter(p => p.date >= d30).map(p => p.v);
+
+  // Per-platform 30d cumulative sparklines
+  const sparkFor = (key: "akpoker_usdt" | "kkpoker_usdt" | "a5poker_usdt" | "wepoker_usdt") => {
+    let c = 0;
+    return timeline.map(p => { c += p[key]; return { date: p.date, v: c }; })
+      .filter(p => p.date >= d30).map(p => p.v);
+  };
+
+  const tickers: PlatformTicker[] = [
+    { name: "AKPOKER", color: "#F5C518", pnl30d: pnl30d.akpoker_usdt, pnl30dPrev: pnl30dPrev.akpoker_usdt, allTime: pnlAllTime.akpoker_usdt, spark: sparkFor("akpoker_usdt") },
+    { name: "KKPOKER", color: "#3B82F6", pnl30d: pnl30d.kkpoker_usdt, pnl30dPrev: pnl30dPrev.kkpoker_usdt, allTime: pnlAllTime.kkpoker_usdt, spark: sparkFor("kkpoker_usdt") },
+    { name: "A5POKER", color: "#F59E0B", pnl30d: pnl30d.a5poker_usdt, pnl30dPrev: pnl30dPrev.a5poker_usdt, allTime: pnlAllTime.a5poker_usdt, spark: sparkFor("a5poker_usdt") },
+    { name: "WEPOKER", color: "#10B981", pnl30d: pnl30d.wepoker_usdt, pnl30dPrev: pnl30dPrev.wepoker_usdt, allTime: pnlAllTime.wepoker_usdt, spark: sparkFor("wepoker_usdt") },
+  ];
 
   const pendingSettlements = (db.prepare(`
     SELECT COUNT(*) AS n FROM weekly_settlements
@@ -58,97 +82,91 @@ export default function DashboardPage() {
   return (
     <div className="animate-fade-in">
       {/* Header */}
-      <div style={{ marginBottom: 32 }}>
-        <h1 style={{ fontSize: 24, fontWeight: 700, color: "#E8E8EE", margin: 0 }}>Agency Dashboard</h1>
-        <p style={{ fontSize: 13, color: "#8888A0", marginTop: 6 }}>Le Cercle Poker &middot; {today}</p>
+      <div style={{ marginBottom: 20, display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 8 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          <Crosshair size={18} color="#F5C518" />
+          <h1 style={{ fontSize: 22, fontWeight: 700, color: "#E8E8EE", margin: 0, letterSpacing: "0.02em" }}>War Room</h1>
+        </div>
+        <span className="font-term" style={{ fontSize: 11, color: "#555568", letterSpacing: "0.08em" }}>
+          LE CERCLE · {today}
+        </span>
       </div>
 
-      {/* KPI Row */}
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 16, marginBottom: 32 }}>
+      {/* Hero + main chart (left 2/3) · Ops feed (right 1/3, full height) */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 mb-4">
+        <div className="lg:col-span-2 flex flex-col gap-4 min-w-0">
+          <WarRoomHero
+            totalUsdt={pnlAllTime.total_usdt}
+            pnl30d={pnl30d.total_usdt}
+            pnl30dPrev={pnl30dPrev.total_usdt}
+            spark30d={spark30d}
+            activeAgents={status.active_players}
+            activePlatforms={status.active_games}
+          />
+          <div style={{
+            background: "#1A1D23", border: "1px solid rgba(255,255,255,0.06)",
+            borderRadius: 16, padding: 24,
+          }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 16 }}>
+              <Activity size={15} color="#10B981" />
+              <span style={{ fontSize: 14, fontWeight: 600, color: "#E8E8EE" }}>
+                Profit cumulé · All-time
+              </span>
+            </div>
+            <WarRoomPnLChart data={timeline} />
+          </div>
+        </div>
+        <div className="min-w-0" style={{ maxHeight: 560 }}>
+          <OpsFeedTerminal events={events} />
+        </div>
+      </div>
+
+      {/* Platform tickers */}
+      <div className="mb-4">
+        <PlatformTickers tickers={tickers} />
+      </div>
+
+      {/* KPI StatCards */}
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 16, marginBottom: 16 }}>
         <StatCard
           label="All-time P&L"
-          value={fmt(pnlAllTime.total_usdt)}
+          value={<Odometer value={Math.round(pnlAllTime.total_usdt)} signed suffix=" USDT" durationMs={800} />}
           accent={pnlAllTime.total_usdt >= 0 ? "gold" : "red"}
           icon={<TrendingUp size={18} />}
         />
         <StatCard
           label="Last 30 days"
-          value={fmt(pnl30d.total_usdt)}
+          value={<Odometer value={Math.round(pnl30d.total_usdt)} signed suffix=" USDT" durationMs={800} />}
           accent={pnl30d.total_usdt >= 0 ? "gold" : "red"}
           sub={`${pctChange(pnl30d.total_usdt, pnl30dPrev.total_usdt)} vs 30j préc.`}
           icon={<BarChart3 size={18} />}
         />
         <StatCard
           label="Last 7 days"
-          value={fmt(pnl7d.total_usdt)}
+          value={<Odometer value={Math.round(pnl7d.total_usdt)} signed suffix=" USDT" durationMs={800} />}
           accent={pnl7d.total_usdt >= 0 ? "gold" : "red"}
           sub={`${pctChange(pnl7d.total_usdt, pnl7dPrev.total_usdt)} vs sem. préc.`}
           icon={<Wallet size={18} />}
         />
         <StatCard
           label="Active Players (7d)"
-          value={String(activePlayers7d)}
+          value={<Odometer value={activePlayers7d} durationMs={800} />}
           accent="green"
-          sub={`/ ${totalPlayers} total actifs`}
+          sub={`/ ${status.active_players} total actifs`}
           icon={<Users size={18} />}
         />
       </div>
 
       <DashboardActions />
 
-      {/* Chart: cumulative P&L */}
-      <div style={{
-        background: "#1A1D23", border: "1px solid rgba(255,255,255,0.06)",
-        borderRadius: 16, padding: 24, marginBottom: 20,
-      }}>
-        <div style={{ fontSize: 15, fontWeight: 600, color: "#E8E8EE", marginBottom: 16 }}>
-          Agency P&L &middot; All-time (cumulatif)
-        </div>
-        <PnLAreaChart data={timeline} />
-      </div>
-
-      {/* Two-column: Breakdown + Top Contributors */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-5">
-        {/* Breakdown by App */}
-        <div style={{
-          background: "#1A1D23", border: "1px solid rgba(255,255,255,0.06)",
-          borderRadius: 16, padding: 24,
-        }}>
-          <div style={{ fontSize: 15, fontWeight: 600, color: "#E8E8EE", marginBottom: 16 }}>Breakdown by App (all-time)</div>
-          <AppBreakdownDonut data={{ akpoker_usdt: pnlAllTime.akpoker_usdt, kkpoker_usdt: pnlAllTime.kkpoker_usdt, a5poker_usdt: pnlAllTime.a5poker_usdt, wepoker_usdt: pnlAllTime.wepoker_usdt }} />
-          <div style={{ marginTop: 16, fontSize: 13 }}>
-            {[
-              { label: "AKPOKER", color: "#F5C518", val: fmt(pnlAllTime.akpoker_usdt) },
-              { label: "KKPOKER", color: "#3B82F6", val: fmt(pnlAllTime.kkpoker_usdt) },
-              { label: "A5POKER", color: "#F59E0B", val: fmt(pnlAllTime.a5poker_usdt) },
-            ].map(a => (
-              <div key={a.label} style={{
-                display: "flex", justifyContent: "space-between",
-                padding: "8px 0", borderBottom: "1px solid rgba(255,255,255,0.04)",
-              }}>
-                <span style={{ color: a.color, fontWeight: 600 }}>{a.label}</span>
-                <span style={{ color: "#E8E8EE", fontVariantNumeric: "tabular-nums" }}>{a.val}</span>
-              </div>
-            ))}
-            <div style={{ display: "flex", justifyContent: "space-between", padding: "8px 0" }}>
-              <span style={{ color: "#10B981", fontWeight: 600 }}>WEPOKER</span>
-              <span style={{ color: "#E8E8EE", fontVariantNumeric: "tabular-nums" }}>
-                {pnlAllTime.wepoker_cny.toFixed(0)} CNY = {fmt(pnlAllTime.wepoker_usdt)}
-              </span>
-            </div>
-            <div style={{ fontSize: 10, color: "#555568", marginTop: 6 }}>
-              * WEPOKER converti à 1 CNY = {cnyRate} USDT
-            </div>
-          </div>
-        </div>
-
-        {/* Top Contributors */}
+      {/* Bottom row: Top contributors + Actions en attente */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         <div style={{
           background: "#1A1D23", border: "1px solid rgba(255,255,255,0.06)",
           borderRadius: 16, padding: 24,
         }}>
           <div style={{ fontSize: 15, fontWeight: 600, color: "#E8E8EE", marginBottom: 16 }}>
-            Top Contributors &middot; 7 derniers jours
+            Top Contributors · 7 derniers jours
           </div>
           {top5.length === 0 && (
             <div style={{ padding: 20, color: "#555568", textAlign: "center" }}>Aucune activité cette semaine</div>
@@ -186,36 +204,35 @@ export default function DashboardPage() {
             Voir tous les joueurs &rarr;
           </Link>
         </div>
+
+        <div style={{
+          background: "#1A1D23", border: "1px solid rgba(255,255,255,0.06)",
+          borderRadius: 16, padding: 24,
+        }}>
+          <div style={{ fontSize: 15, fontWeight: 600, color: "#E8E8EE", marginBottom: 12 }}>Actions en attente</div>
+          {pendingSettlements === 0 && unpaidAmount === 0 ? (
+            <div style={{ display: "flex", alignItems: "center", gap: 8, padding: 12, color: "#10B981" }}>
+              <CheckCircle size={16} /> All caught up &mdash; pas d&apos;actions urgentes.
+            </div>
+          ) : (
+            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+              {unpaidAmount > 0 && (
+                <Link href="/akpoker/settlements" style={{
+                  display: "flex", alignItems: "center", gap: 10, padding: "12px 16px",
+                  background: "rgba(245,197,24,0.06)", border: "1px solid rgba(245,197,24,0.15)", borderRadius: 12,
+                  textDecoration: "none", color: "#E8E8EE", fontSize: 13,
+                }}>
+                  <AlertTriangle size={16} color="#F5C518" />
+                  <span><b>{pendingSettlements}</b> settlements &middot; <b>{unpaidAmount.toFixed(0)} USDT</b> à payer</span>
+                </Link>
+              )}
+            </div>
+          )}
+        </div>
       </div>
 
-      {/* Tasks / Alerts */}
-      <div style={{
-        background: "#1A1D23", border: "1px solid rgba(255,255,255,0.06)",
-        borderRadius: 16, padding: 24,
-      }}>
-        <div style={{ fontSize: 15, fontWeight: 600, color: "#E8E8EE", marginBottom: 12 }}>Actions en attente</div>
-        {pendingSettlements === 0 && unpaidAmount === 0 ? (
-          <div style={{ display: "flex", alignItems: "center", gap: 8, padding: 12, color: "#10B981" }}>
-            <CheckCircle size={16} /> All caught up &mdash; pas d&apos;actions urgentes.
-          </div>
-        ) : (
-          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-            {unpaidAmount > 0 && (
-              <Link href="/akpoker/settlements" style={{
-                display: "flex", alignItems: "center", gap: 10, padding: "12px 16px",
-                background: "rgba(245,197,24,0.06)", border: "1px solid rgba(245,197,24,0.15)", borderRadius: 12,
-                textDecoration: "none", color: "#E8E8EE", fontSize: 13,
-              }}>
-                <AlertTriangle size={16} color="#F5C518" />
-                <span><b>{pendingSettlements}</b> settlements &middot; <b>{unpaidAmount.toFixed(0)} USDT</b> à payer</span>
-              </Link>
-            )}
-          </div>
-        )}
-      </div>
-
-      <div style={{ marginTop: 24, fontSize: 11, color: "#555568", textAlign: "center" }}>
-        Data as of {new Date().toISOString().replace("T", " ").slice(0, 16)} UTC &middot; Refresh page to update
+      <div className="font-term" style={{ marginTop: 24, fontSize: 10, color: "#555568", textAlign: "center", letterSpacing: "0.06em" }}>
+        DATA AS OF {new Date().toISOString().replace("T", " ").slice(0, 16)} UTC — REFRESH TO UPDATE
       </div>
     </div>
   );

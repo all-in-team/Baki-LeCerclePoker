@@ -1506,3 +1506,66 @@ export function getPnLOverTime(period: Period): PnLTimePoint[] {
 
   return [...dayMap.values()].sort((a, b) => a.date.localeCompare(b.date));
 }
+
+// H) War Room ops feed — READ-ONLY aggregation of recent agency events
+export interface OpsFeedEvent {
+  ts: string;                                              // "YYYY-MM-DD HH:MM:SS" UTC
+  type: "session" | "settlement" | "expense" | "onboard";
+  label: string;
+  detail: string | null;
+  amount: number | null;                                   // USDT, signed
+}
+export function getOpsFeed(limit = 20): OpsFeedEvent[] {
+  const db = getDb();
+  return db.prepare(`
+    SELECT * FROM (
+      SELECT s.created_at AS ts, 'session' AS type, p.name AS label,
+             g.name AS detail, s.net_result_usdt AS amount
+      FROM grindhouse_sessions s
+      JOIN players p ON p.id = s.player_id
+      JOIN games g ON g.id = s.game_id
+
+      UNION ALL
+      SELECT gs.paid_at, 'settlement', p.name,
+             gs.period_start || ' → ' || gs.period_end, gs.grinder_share
+      FROM grindhouse_settlements gs
+      JOIN players p ON p.id = gs.player_id
+      WHERE gs.status = 'paid' AND gs.paid_at IS NOT NULL
+
+      UNION ALL
+      SELECT ws.received_at, 'settlement', p.name,
+             'semaine ' || ws.week_start, ws.pnl_player
+      FROM weekly_settlements ws
+      JOIN players p ON p.id = ws.player_id
+      WHERE ws.payment_received = 1 AND ws.received_at IS NOT NULL
+
+      UNION ALL
+      SELECT e.created_at, 'expense', UPPER(e.type),
+             e.description, -ABS(e.amount_usdt)
+      FROM grindhouse_expenses e
+
+      UNION ALL
+      SELECT p.created_at, 'onboard', p.name, NULL, NULL
+      FROM players p
+    )
+    ORDER BY ts DESC
+    LIMIT ?
+  `).all(limit) as OpsFeedEvent[];
+}
+
+// I) War Room status line counts
+export interface DashboardStatus {
+  active_players: number;
+  active_games: number;
+  active_grinders: number;
+}
+export function getDashboardStatus(): DashboardStatus {
+  const db = getDb();
+  const active_players = (db.prepare(`SELECT COUNT(*) AS n FROM players WHERE status = 'active'`).get() as { n: number }).n;
+  const active_games = (db.prepare(`SELECT COUNT(*) AS n FROM games WHERE status = 'active'`).get() as { n: number }).n;
+  let active_grinders = 0;
+  try {
+    active_grinders = (db.prepare(`SELECT COUNT(*) AS n FROM grindhouse_grinders WHERE status = 'active'`).get() as { n: number }).n;
+  } catch { /* table absent on fresh DB before migration */ }
+  return { active_players, active_games, active_grinders };
+}

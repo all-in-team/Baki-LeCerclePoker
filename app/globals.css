@@ -99,3 +99,47 @@ select option { background: #22252B; }
   to { opacity: 1; transform: translateY(0); }
 }
 .animate-fade-in { animation: fadeIn 0.4s ease-out; }
+
+/* ===== War Room ===== */
+.font-term { font-family: var(--font-jbmono), ui-monospace, "SF Mono", Menlo, monospace; }
+
+/* Odometer — digits roll vertically (transform only, GPU) */
+.odo { display: inline-flex; overflow: hidden; height: 1em; line-height: 1; vertical-align: baseline; }
+.odo-col { display: inline-block; height: 1em; }
+.odo-track {
+  display: flex; flex-direction: column;
+  transition-property: transform;
+  transition-timing-function: cubic-bezier(0.22, 0.9, 0.32, 1.08); /* slight bounce */
+  will-change: transform;
+}
+.odo-digit { display: block; height: 1em; }
+
+/* Status line pulsing dot */
+@keyframes statusPulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
+.status-dot { animation: statusPulse 2.4s ease-in-out infinite; }
+
+/* Ops feed — terminal fill cascade (opacity/transform only) */
+@keyframes feedLineIn {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.feed-line { opacity: 0; animation: feedLineIn 0.32s ease-out forwards; }
+@keyframes feedFlash {
+  0% { background: rgba(16, 185, 129, 0.16); }
+  100% { background: transparent; }
+}
+.feed-line-new { animation: feedLineIn 0.32s ease-out forwards, feedFlash 1.4s ease-out 1.1s backwards; }
+
+/* Pulsing last point on main chart */
+@keyframes chartPulse {
+  0% { transform: scale(1); opacity: 0.5; }
+  100% { transform: scale(3.2); opacity: 0; }
+}
+.chart-pulse { transform-box: fill-box; transform-origin: center; animation: chartPulse 1.8s ease-out infinite; }
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-fade-in { animation: none; }
+  .status-dot, .chart-pulse { animation: none !important; }
+  .feed-line, .feed-line-new { animation: none !important; opacity: 1 !important; }
+  .odo-track { transition: none !important; }
+}
