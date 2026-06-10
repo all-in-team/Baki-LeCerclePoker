@@ -5,7 +5,9 @@ import type { CSSProperties } from "react";
 
 // THE CORE — particle sphere. three.js is imported lazily inside the effect so
 // it only ever loads on the dashboard, client-side.
-// Pauses when the tab is hidden or the canvas leaves the viewport.
+// Points sit on the sphere SURFACE; a custom shader scales size/alpha with view
+// depth so the front of the globe reads bright and the back fades — a sphere,
+// not a flat cloud. Pauses when the tab is hidden or off-viewport.
 // prefers-reduced-motion: renders a single static frame.
 export default function CoreSphere({ style }: { style?: CSSProperties }) {
   const mountRef = useRef<HTMLDivElement>(null);
@@ -21,20 +23,21 @@ export default function CoreSphere({ style }: { style?: CSSProperties }) {
 
       const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
       const isMobile = window.innerWidth < 768;
-      const COUNT = isMobile ? 800 : 2600;
+      const COUNT = isMobile ? 800 : 2400;
       const GOLD_RATIO = 0.05;
+      const CAM_Z = 2.4;
 
-      const w = mount.clientWidth || 320;
-      const h = mount.clientHeight || 320;
+      const w = mount.clientWidth || 280;
+      const h = mount.clientHeight || 280;
 
       const scene = new THREE.Scene();
-      const camera = new THREE.PerspectiveCamera(45, w / h, 0.1, 50);
-      camera.position.z = 3.1;
+      const camera = new THREE.PerspectiveCamera(48, w / h, 0.1, 50);
+      camera.position.z = CAM_Z;
 
       // No WebGL (old GPU, remote desktop, headless) → no sphere, page stays intact
       let renderer: import("three").WebGLRenderer;
       try {
-        renderer = new THREE.WebGLRenderer({ alpha: true, antialias: true, powerPreference: "low-power" });
+        renderer = new THREE.WebGLRenderer({ alpha: true, antialias: false, powerPreference: "low-power" });
       } catch {
         return;
       }
@@ -46,54 +49,83 @@ export default function CoreSphere({ style }: { style?: CSSProperties }) {
       const group = new THREE.Group();
       scene.add(group);
 
-      // Fibonacci-distributed points with slight radius jitter → organic shell
+      // Fibonacci distribution strictly ON the surface (±1% jitter max)
       const emerald = new THREE.Color("#10B981");
       const cyan = new THREE.Color("#22D3EE");
-      const mainPos: number[] = [];
-      const mainCol: number[] = [];
-      const goldPos: number[] = [];
+      const gold = new THREE.Color("#F5C518");
+      const pos: number[] = [];
+      const col: number[] = [];
+      const goldFlag: number[] = [];
       const phi = Math.PI * (3 - Math.sqrt(5));
       for (let i = 0; i < COUNT; i++) {
         const y = 1 - (i / (COUNT - 1)) * 2;
         const r = Math.sqrt(1 - y * y);
         const theta = phi * i;
-        const jitter = 0.97 + Math.random() * 0.07;
-        const x = Math.cos(theta) * r * jitter;
-        const z = Math.sin(theta) * r * jitter;
-        if (Math.random() < GOLD_RATIO) {
-          goldPos.push(x, y * jitter, z);
-        } else {
-          const c = emerald.clone().lerp(cyan, Math.random() * 0.65);
-          mainPos.push(x, y * jitter, z);
-          mainCol.push(c.r, c.g, c.b);
-        }
+        const jitter = 0.995 + Math.random() * 0.01;
+        pos.push(Math.cos(theta) * r * jitter, y * jitter, Math.sin(theta) * r * jitter);
+        const isGold = Math.random() < GOLD_RATIO;
+        const c = isGold ? gold : emerald.clone().lerp(cyan, Math.random() * 0.6);
+        col.push(c.r, c.g, c.b);
+        goldFlag.push(isGold ? 1 : 0);
       }
 
-      const mainGeo = new THREE.BufferGeometry();
-      mainGeo.setAttribute("position", new THREE.Float32BufferAttribute(mainPos, 3));
-      mainGeo.setAttribute("color", new THREE.Float32BufferAttribute(mainCol, 3));
-      const mainMat = new THREE.PointsMaterial({
-        size: 0.022, vertexColors: true, transparent: true, opacity: 0.8,
-        depthWrite: false, blending: THREE.AdditiveBlending, sizeAttenuation: true,
-      });
-      group.add(new THREE.Points(mainGeo, mainMat));
+      const geo = new THREE.BufferGeometry();
+      geo.setAttribute("position", new THREE.Float32BufferAttribute(pos, 3));
+      geo.setAttribute("aColor", new THREE.Float32BufferAttribute(col, 3));
+      geo.setAttribute("aGold", new THREE.Float32BufferAttribute(goldFlag, 1));
 
-      const goldGeo = new THREE.BufferGeometry();
-      goldGeo.setAttribute("position", new THREE.Float32BufferAttribute(goldPos, 3));
-      const goldMat = new THREE.PointsMaterial({
-        size: 0.034, color: new THREE.Color("#F5C518"), transparent: true, opacity: 0.9,
-        depthWrite: false, blending: THREE.AdditiveBlending, sizeAttenuation: true,
+      const mat = new THREE.ShaderMaterial({
+        transparent: true,
+        depthWrite: false,
+        blending: THREE.AdditiveBlending,
+        uniforms: {
+          uSize: { value: (isMobile ? 30 : 38) * Math.min(window.devicePixelRatio, 2) },
+          uCamZ: { value: CAM_Z },
+          uTwinkle: { value: 1 },
+        },
+        vertexShader: /* glsl */ `
+          attribute vec3 aColor;
+          attribute float aGold;
+          uniform float uSize;
+          uniform float uCamZ;
+          varying vec3 vColor;
+          varying float vGold;
+          varying float vDepth;
+          void main() {
+            vColor = aColor;
+            vGold = aGold;
+            vec4 mv = modelViewMatrix * vec4(position, 1.0);
+            // sphere center is at view z = -uCamZ; points span ±1 around it
+            vDepth = clamp((mv.z + uCamZ) * 0.5 + 0.5, 0.0, 1.0);
+            gl_PointSize = uSize * (0.35 + 0.75 * vDepth) / -mv.z;
+            gl_Position = projectionMatrix * mv;
+          }
+        `,
+        fragmentShader: /* glsl */ `
+          uniform float uTwinkle;
+          varying vec3 vColor;
+          varying float vGold;
+          varying float vDepth;
+          void main() {
+            float d = length(gl_PointCoord - 0.5);
+            if (d > 0.5) discard;
+            float soft = smoothstep(0.5, 0.12, d);
+            float alpha = (0.12 + 0.88 * vDepth) * soft;
+            if (vGold > 0.5) alpha *= uTwinkle;
+            gl_FragColor = vec4(vColor, alpha);
+          }
+        `,
       });
-      group.add(new THREE.Points(goldGeo, goldMat));
+      group.add(new THREE.Points(geo, mat));
 
       // Faint wireframe shell for the luminous-globe look
       const wireGeo = new THREE.IcosahedronGeometry(0.99, 1);
       const wireMat = new THREE.MeshBasicMaterial({
-        color: emerald, wireframe: true, transparent: true, opacity: 0.05, depthWrite: false,
+        color: emerald, wireframe: true, transparent: true, opacity: 0.045, depthWrite: false,
       });
       group.add(new THREE.Mesh(wireGeo, wireMat));
 
-      group.rotation.x = 0.25;
+      group.rotation.x = 0.28;
 
       let raf = 0;
       let running = false;
@@ -103,10 +135,10 @@ export default function CoreSphere({ style }: { style?: CSSProperties }) {
 
       const frame = () => {
         const t = clock.getElapsedTime();
-        group.rotation.y = t * ((Math.PI * 2) / 80);          // ~80s per turn
-        const s = 1 + 0.02 * Math.sin((t * Math.PI * 2) / 8);  // ±2% breath over 8s
+        group.rotation.y = t * ((Math.PI * 2) / 55);           // visible slow spin, ~55s/turn
+        const s = 1 + 0.02 * Math.sin((t * Math.PI * 2) / 8);   // ±2% breath over 8s
         group.scale.setScalar(s);
-        goldMat.opacity = 0.55 + 0.4 * Math.sin(t * 2.1);      // gold twinkle
+        mat.uniforms.uTwinkle.value = 0.55 + 0.45 * Math.sin(t * 2.1);
         renderer.render(scene, camera);
       };
 
@@ -116,7 +148,7 @@ export default function CoreSphere({ style }: { style?: CSSProperties }) {
       };
       const updateRunning = () => {
         const should = !reduced && tabVisible && inView;
-        if (should && !running) { running = true; clock.start(); raf = requestAnimationFrame(loop); }
+        if (should && !running) { running = true; raf = requestAnimationFrame(loop); }
         if (!should && running) { running = false; cancelAnimationFrame(raf); }
       };
 
@@ -126,8 +158,8 @@ export default function CoreSphere({ style }: { style?: CSSProperties }) {
       io.observe(mount);
 
       const onResize = () => {
-        const nw = mount.clientWidth || 320;
-        const nh = mount.clientHeight || 320;
+        const nw = mount.clientWidth || 280;
+        const nh = mount.clientHeight || 280;
         camera.aspect = nw / nh;
         camera.updateProjectionMatrix();
         renderer.setSize(nw, nh);
@@ -147,8 +179,8 @@ export default function CoreSphere({ style }: { style?: CSSProperties }) {
         document.removeEventListener("visibilitychange", onVis);
         window.removeEventListener("resize", onResize);
         io.disconnect();
-        mainGeo.dispose(); goldGeo.dispose(); wireGeo.dispose();
-        mainMat.dispose(); goldMat.dispose(); wireMat.dispose();
+        geo.dispose(); wireGeo.dispose();
+        mat.dispose(); wireMat.dispose();
         renderer.dispose();
         if (renderer.domElement.parentNode === mount) mount.removeChild(renderer.domElement);
       };

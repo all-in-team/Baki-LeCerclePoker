@@ -160,6 +160,27 @@ body {
 }
 @keyframes glowBreathe { 0%, 100% { opacity: 0.7; } 50% { opacity: 1; } }
 
+/* P&L tables — wallet addresses: quiet mono, copy on click */
+.wallet-addr {
+  font-family: var(--font-jbmono), ui-monospace, monospace;
+  font-size: 12px; color: var(--text-muted);
+  background: transparent; border: none; cursor: pointer;
+  padding: 2px 4px; white-space: nowrap;
+  display: inline-flex; align-items: center; gap: 6px;
+  transition: color 0.15s;
+}
+.wallet-addr:hover { color: var(--text); }
+
+/* Delete buttons — ghost at rest, red only on hover */
+.btn-del-ghost {
+  display: inline-flex; align-items: center;
+  padding: 6px 8px; border-radius: 6px;
+  background: transparent; border: 1px solid transparent;
+  color: var(--text-dim); cursor: pointer;
+  transition: color 0.15s, background 0.15s, border-color 0.15s;
+}
+.btn-del-ghost:hover { color: #f87171; background: rgba(239,68,68,0.08); border-color: rgba(239,68,68,0.25); }
+
 /* Odometer completion burst — gold particles escaping upward */
 .burst-dot {
   position: absolute; width: 4px; height: 4px; border-radius: 50%;

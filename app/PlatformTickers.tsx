@@ -50,10 +50,12 @@ export default function PlatformTickers({ tickers }: { tickers: PlatformTicker[]
                   {fmtSigned(Math.round(t.pnl30d))}
                 </div>
                 <div style={{ fontSize: 10, color: "#8888A0", marginTop: 4 }}>
-                  30j {deltaPct !== null && (
+                  30j {deltaPct !== null ? (
                     <span style={{ color: deltaPct >= 0 ? "#10B981" : "#EF4444", fontWeight: 600 }}>
                       {deltaPct >= 0 ? "▲" : "▼"} {Math.abs(deltaPct)}%
                     </span>
+                  ) : (
+                    <span style={{ color: "rgba(255,255,255,0.15)", fontWeight: 600 }}>—</span>
                   )}
                 </div>
               </div>

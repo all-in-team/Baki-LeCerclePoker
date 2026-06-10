@@ -92,12 +92,15 @@ export default function WarRoomHero({ totalUsdt, pnl30d, pnl30dPrev, spark30d, a
         zIndex: 2,
       }} />
 
-      {/* THE CORE — particle sphere behind the counter */}
+      {/* THE CORE — lives in the right half of the hero, behind the 30d block.
+          Radial mask fades it out well before the text zone — no hard canvas edge. */}
       <div
-        className="w-[240px] h-[240px] opacity-50 md:w-[400px] md:h-[400px] md:opacity-90"
+        className="opacity-50 md:opacity-90"
         style={{
-          position: "absolute", top: "50%", right: "-6%",
-          transform: "translateY(-50%)", pointerEvents: "none", zIndex: 0,
+          position: "absolute", top: 0, bottom: 0, right: 0, width: "46%",
+          pointerEvents: "none", zIndex: 0,
+          WebkitMaskImage: "radial-gradient(ellipse 58% 80% at 60% 50%, black 40%, transparent 72%)",
+          maskImage: "radial-gradient(ellipse 58% 80% at 60% 50%, black 40%, transparent 72%)",
         }}
       >
         <div ref={sphereLayer} style={{ width: "100%", height: "100%", willChange: "transform" }}>

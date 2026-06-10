@@ -92,6 +92,7 @@ export default function TELEClient({
   const [editingStartDate, setEditingStartDate] = useState<number | null>(null);
   const [startDateVal, setStartDateVal] = useState("");
   const [expandedWallet, setExpandedWallet] = useState<number | null>(null);
+  const [copiedWallet, setCopiedWallet] = useState<number | null>(null);
   const [walletInlineVals, setWalletInlineVals] = useState<{ game_wallets: string[]; cashouts: string[] }>({ game_wallets: [""], cashouts: [""] });
   const [expandedTx, setExpandedTx] = useState<number | null>(null);
   const [manualTx, setManualTx] = useState({ type: "deposit" as "deposit" | "withdrawal", amount: "" });
@@ -253,7 +254,7 @@ export default function TELEClient({
     } finally { setAddPlayerBusy(false); }
   }
 
-  const myPnlAccent: "green" | "red" | "neutral" = kpis.my_total_pnl > 0 ? "green" : kpis.my_total_pnl < 0 ? "red" : "neutral";
+  const myPnlAccent: "gold" | "red" = kpis.my_total_pnl >= 0 ? "gold" : "red";
   const netAccent: "green" | "red" | "neutral" = kpis.total_net > 0 ? "green" : kpis.total_net < 0 ? "red" : "neutral";
 
   const summaryByPlayer = Object.values(
@@ -396,8 +397,8 @@ export default function TELEClient({
 
       {/* KPIs */}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 16, marginBottom: 28 }}>
-        <StatCard label="Total Deposited" value={fmtKpi(kpis.total_deposited) + " USDT"} sub="Tous joueurs" accent="gold" icon={<ArrowDownLeft size={18} />} />
-        <StatCard label="Total Withdrawn" value={fmtKpi(kpis.total_withdrawn) + " USDT"} sub="Tous joueurs" accent="gold" icon={<ArrowUpRight size={18} />} />
+        <StatCard label="Total Deposited" value={fmtKpi(kpis.total_deposited) + " USDT"} sub="Tous joueurs" accent="neutral" icon={<ArrowDownLeft size={18} />} />
+        <StatCard label="Total Withdrawn" value={fmtKpi(kpis.total_withdrawn) + " USDT"} sub="Tous joueurs" accent="neutral" icon={<ArrowUpRight size={18} />} />
         <StatCard label="Players Net P&L" value={(kpis.total_net >= 0 ? "+" : "−") + fmtKpi(Math.abs(kpis.total_net)) + " USDT"} sub="Retraits − Dépôts" accent={netAccent} icon={<TrendingUp size={18} />} />
         <StatCard label="Mon Total P&L" value={(kpis.my_total_pnl >= 0 ? "+" : "−") + fmtKpi(Math.abs(kpis.my_total_pnl)) + " USDT"} sub="Ma part selon chaque deal" accent={myPnlAccent} icon={<Wallet size={18} />} />
       </div>
@@ -427,8 +428,8 @@ export default function TELEClient({
                   Aucun joueur {gameLabel} — ajoute un deal à un joueur depuis son profil
                 </td></tr>
               ) : summaryByPlayer.map(row => {
-                const netC = row.net > 0 ? "var(--green)" : row.net < 0 ? "#f87171" : "var(--text-muted)";
-                const myC = row.my_pnl > 0 ? "var(--green)" : row.my_pnl < 0 ? "#f87171" : "var(--text-muted)";
+                const netC = row.net > 0 ? "var(--green)" : row.net < 0 ? "#f87171" : "rgba(255,255,255,0.15)";
+                const myC = row.my_pnl > 0 ? "var(--green)" : row.my_pnl < 0 ? "#f87171" : "rgba(255,255,255,0.15)";
                 const isEditingAction = editingAction === row.deal_id;
                 const isEditingRb = editingRb === row.deal_id;
                 const isExpanded = expandedWallet === row.player_id;
@@ -481,20 +482,39 @@ export default function TELEClient({
                         <button onClick={() => { setEditingStartDate(row.deal_id); setStartDateVal(row.start_date ?? ""); }} style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "4px 8px", borderRadius: 5, background: "transparent", border: "1px solid transparent", cursor: "pointer", fontSize: 12, fontWeight: 600, color: row.start_date ? "var(--text)" : "var(--text-dim)" }} onMouseEnter={e => (e.currentTarget.style.borderColor = "var(--border)")} onMouseLeave={e => (e.currentTarget.style.borderColor = "transparent")}>{row.start_date ?? "—"}<Pencil size={11} style={{ color: "var(--text-dim)" }} /></button>
                       )}
                     </td>
-                    <td style={{ padding: "12px 16px" }}>
+                    <td style={{ padding: "12px 16px", whiteSpace: "nowrap" }}>
                       {(() => {
                         const gw = gameWalletsByPlayer[row.player_id] ?? [];
                         const count = gw.length || (walletGame ? 1 : 0);
-                        const label = count === 0 ? "Non configuré" : count === 1
-                          ? `${(gw[0]?.address ?? walletGame!).slice(0, 6)}…${(gw[0]?.address ?? walletGame!).slice(-6)}`
-                          : `${count} wallets`;
+                        const fullAddr = count === 1 ? (gw[0]?.address ?? walletGame!) : null;
+                        const openEdit = () => isExpanded ? setExpandedWallet(null) : (player && openInlineWallet(player));
+                        if (count === 0) return (
+                          <button className="wallet-addr" onClick={openEdit} style={{ color: "rgba(255,255,255,0.15)" }}>Non configuré<Pencil size={11} /></button>
+                        );
                         return (
-                          <button onClick={() => isExpanded ? setExpandedWallet(null) : (player && openInlineWallet(player))} style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "4px 8px", borderRadius: 5, background: "transparent", border: "1px solid transparent", cursor: "pointer", fontSize: 12, fontWeight: 600, color: count > 0 ? "#38bdf8" : "var(--text-dim)" }} onMouseEnter={e => (e.currentTarget.style.borderColor = "var(--border)")} onMouseLeave={e => (e.currentTarget.style.borderColor = "transparent")}>{label}<Pencil size={11} style={{ color: "var(--text-dim)" }} /></button>
+                          <span style={{ display: "inline-flex", alignItems: "center", gap: 2 }}>
+                            {fullAddr ? (
+                              <button
+                                className="wallet-addr"
+                                title="Copier l'adresse"
+                                onClick={() => {
+                                  navigator.clipboard.writeText(fullAddr);
+                                  setCopiedWallet(row.player_id);
+                                  setTimeout(() => setCopiedWallet(c => (c === row.player_id ? null : c)), 1200);
+                                }}
+                              >
+                                {copiedWallet === row.player_id ? "copié ✓" : `${fullAddr.slice(0, 6)}…${fullAddr.slice(-6)}`}
+                              </button>
+                            ) : (
+                              <button className="wallet-addr" onClick={openEdit}>{count} wallets</button>
+                            )}
+                            <button className="btn-del-ghost" onClick={openEdit} title="Modifier les wallets" style={{ padding: 3 }}><Pencil size={11} /></button>
+                          </span>
                         );
                       })()}
                     </td>
                     <td style={{ padding: "12px 16px" }}>
-                      <Btn size="sm" variant="danger" onClick={() => deleteDeal(row.deal_id, row.player_name)}><Trash2 size={13} /></Btn>
+                      <button className="btn-del-ghost" title="Supprimer le deal" onClick={() => deleteDeal(row.deal_id, row.player_name)}><Trash2 size={13} /></button>
                     </td>
                   </tr>
                   {isExpanded && (
@@ -556,7 +576,7 @@ export default function TELEClient({
                                     <span style={{ color: "var(--text-dim)", fontSize: 10, fontWeight: 600 }}>{cpLabel}</span>
                                     {cp ? (
                                       <a href={`https://tronscan.org/#/address/${cp}`} target="_blank" rel="noopener noreferrer" title={cp} style={{ display: "inline-flex", alignItems: "center", gap: 3, fontFamily: "monospace", color: "#38bdf8", textDecoration: "none" }} onMouseEnter={e => (e.currentTarget.style.textDecoration = "underline")} onMouseLeave={e => (e.currentTarget.style.textDecoration = "none")}>{cpShort}<ExternalLink size={10} style={{ opacity: 0.7 }} /></a>
-                                    ) : <span style={{ color: "var(--text-dim)" }}>—</span>}
+                                    ) : <span style={{ color: "rgba(255,255,255,0.15)" }}>—</span>}
                                   </span>
                                   <span style={{ textAlign: "right" }}>
                                     {tx.tron_tx_hash ? (
@@ -675,7 +695,7 @@ export default function TELEClient({
                           <span style={{ fontSize: 11, fontFamily: "monospace", color: "var(--text-muted)" }}>{p.wallet_game.slice(0, 6)}…{p.wallet_game.slice(-6)}</span>
                           <a href={`${TRONSCAN}${p.wallet_game}`} target="_blank" rel="noopener noreferrer" style={{ color: "#38bdf8" }}><ExternalLink size={11} /></a>
                         </div>
-                      ) : <span style={{ fontSize: 11, color: "var(--text-dim)" }}>—</span>}
+                      ) : <span style={{ fontSize: 11, color: "rgba(255,255,255,0.15)" }}>—</span>}
                     </div>
                     <div>
                       <div style={{ fontSize: 10, fontWeight: 700, color: "#fb923c", marginBottom: 3, textTransform: "uppercase" }}>WALLET CASHOUT</div>
