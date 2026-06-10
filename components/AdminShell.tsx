@@ -23,7 +23,8 @@ export default function AdminShell({ children }: { children: React.ReactNode }) 
         style={{
           position: "fixed", top: 0, left: 0, right: 0, zIndex: 40,
           height: 56, padding: "0 16px",
-          background: "#121418", borderBottom: "1px solid rgba(255,255,255,0.06)",
+          background: "rgba(10,9,20,0.72)", backdropFilter: "blur(18px)", WebkitBackdropFilter: "blur(18px)",
+          borderBottom: "1px solid rgba(255,255,255,0.06)",
         }}
         className="flex items-center lg:hidden"
       >
@@ -41,8 +42,8 @@ export default function AdminShell({ children }: { children: React.ReactNode }) 
             width: 28, height: 28, borderRadius: 7,
             background: "linear-gradient(135deg, #10B981, #F5C518)",
             display: "flex", alignItems: "center", justifyContent: "center",
-            fontSize: 12, fontWeight: 800, color: "#000",
-          }}>&#9824;</div>
+            fontSize: 11, fontWeight: 800, color: "#000", letterSpacing: "-0.02em",
+          }}>LC</div>
           <span style={{ fontSize: 14, fontWeight: 700, color: "#E8E8EE" }}>Le Cercle</span>
         </div>
       </div>
@@ -60,7 +61,7 @@ export default function AdminShell({ children }: { children: React.ReactNode }) 
 
       <Sidebar isOpen={sidebarOpen} onClose={() => setSidebarOpen(false)} />
 
-      <main className="pt-14 lg:pt-0 lg:ml-[260px]" style={{ flex: 1, minHeight: "100vh", background: "#0A0B0E" }}>
+      <main className="pt-14 lg:pt-0 lg:ml-[260px]" style={{ flex: 1, minHeight: "100vh" }}>
         <div className="p-6 lg:p-10" style={{ maxWidth: 1400 }}>
           {children}
         </div>

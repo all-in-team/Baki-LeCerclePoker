@@ -10,19 +10,27 @@ interface OdometerProps {
   suffix?: string;
   className?: string;
   style?: CSSProperties;
+  onComplete?: () => void;  // fires once when the last digit settles
 }
 
 // Digits roll vertically and settle one by one, left → right.
 // SSR renders all columns at 0; the transition fires on mount.
 // prefers-reduced-motion disables the transition via .odo-track CSS.
 export default function Odometer({
-  value, durationMs = 1500, decimals = 0, signed = false, suffix = "", className = "", style,
+  value, durationMs = 1500, decimals = 0, signed = false, suffix = "", className = "", style, onComplete,
 }: OdometerProps) {
   const [run, setRun] = useState(false);
   useEffect(() => {
     const id = requestAnimationFrame(() => setRun(true));
     return () => cancelAnimationFrame(id);
   }, []);
+  useEffect(() => {
+    if (!run || !onComplete) return;
+    const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    const t = setTimeout(onComplete, reduced ? 0 : durationMs + 80);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [run]);
 
   const text = Math.abs(value).toLocaleString("fr-FR", {
     minimumFractionDigits: decimals, maximumFractionDigits: decimals,

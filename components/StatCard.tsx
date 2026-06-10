@@ -22,9 +22,7 @@ export default function StatCard({ label, value, sub, accent = "neutral", icon }
   const subColor = subIsPositive ? "#10B981" : subIsNegative ? "#EF4444" : "#8888A0";
 
   return (
-    <div style={{
-      background: "#1A1D23",
-      border: "1px solid rgba(255,255,255,0.06)",
+    <div className="glass-card" style={{
       borderRadius: 16,
       padding: "20px 24px",
       display: "flex",
@@ -32,6 +30,7 @@ export default function StatCard({ label, value, sub, accent = "neutral", icon }
       gap: 8,
       position: "relative",
       overflow: "hidden",
+      height: "100%",
     }}>
       <div style={{
         position: "absolute", top: 0, left: 0, right: 0, height: 1,

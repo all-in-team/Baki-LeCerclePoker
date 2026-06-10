@@ -8,6 +8,7 @@ import Link from "next/link";
 import { TrendingUp, Users, Wallet, AlertTriangle, CheckCircle, BarChart3, Activity, Crosshair } from "lucide-react";
 import StatCard from "@/components/StatCard";
 import Odometer from "@/components/Odometer";
+import Tilt from "@/components/Tilt";
 import WarRoomHero from "./WarRoomHero";
 import OpsFeedTerminal from "./OpsFeedTerminal";
 import PlatformTickers, { type PlatformTicker } from "./PlatformTickers";
@@ -80,7 +81,7 @@ export default function DashboardPage() {
   `).get() as { total: number }).total;
 
   return (
-    <div className="animate-fade-in">
+    <div>
       {/* Header */}
       <div style={{ marginBottom: 20, display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 8 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
@@ -108,8 +109,7 @@ export default function DashboardPage() {
         <div className="min-w-0 lg:col-start-3 lg:row-start-1 lg:row-span-2" style={{ maxHeight: 560 }}>
           <OpsFeedTerminal events={events} />
         </div>
-        <div className="lg:col-span-2 min-w-0" style={{
-          background: "#1A1D23", border: "1px solid rgba(255,255,255,0.06)",
+        <div className="lg:col-span-2 min-w-0 glass-card" style={{
           borderRadius: 16, padding: 24,
         }}>
           <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 16 }}>
@@ -129,43 +129,48 @@ export default function DashboardPage() {
 
       {/* KPI StatCards */}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 16, marginBottom: 16 }}>
-        <StatCard
-          label="All-time P&L"
-          value={<Odometer value={Math.round(pnlAllTime.total_usdt)} signed suffix=" USDT" durationMs={800} />}
-          accent={pnlAllTime.total_usdt >= 0 ? "gold" : "red"}
-          icon={<TrendingUp size={18} />}
-        />
-        <StatCard
-          label="Last 30 days"
-          value={<Odometer value={Math.round(pnl30d.total_usdt)} signed suffix=" USDT" durationMs={800} />}
-          accent={pnl30d.total_usdt >= 0 ? "gold" : "red"}
-          sub={`${pctChange(pnl30d.total_usdt, pnl30dPrev.total_usdt)} vs 30j préc.`}
-          icon={<BarChart3 size={18} />}
-        />
-        <StatCard
-          label="Last 7 days"
-          value={<Odometer value={Math.round(pnl7d.total_usdt)} signed suffix=" USDT" durationMs={800} />}
-          accent={pnl7d.total_usdt >= 0 ? "gold" : "red"}
-          sub={`${pctChange(pnl7d.total_usdt, pnl7dPrev.total_usdt)} vs sem. préc.`}
-          icon={<Wallet size={18} />}
-        />
-        <StatCard
-          label="Active Players (7d)"
-          value={<Odometer value={activePlayers7d} durationMs={800} />}
-          accent="green"
-          sub={`/ ${status.active_players} total actifs`}
-          icon={<Users size={18} />}
-        />
+        <Tilt>
+          <StatCard
+            label="All-time P&L"
+            value={<Odometer value={Math.round(pnlAllTime.total_usdt)} signed suffix=" USDT" durationMs={800} />}
+            accent={pnlAllTime.total_usdt >= 0 ? "gold" : "red"}
+            icon={<TrendingUp size={18} />}
+          />
+        </Tilt>
+        <Tilt>
+          <StatCard
+            label="Last 30 days"
+            value={<Odometer value={Math.round(pnl30d.total_usdt)} signed suffix=" USDT" durationMs={800} />}
+            accent={pnl30d.total_usdt >= 0 ? "gold" : "red"}
+            sub={`${pctChange(pnl30d.total_usdt, pnl30dPrev.total_usdt)} vs 30j préc.`}
+            icon={<BarChart3 size={18} />}
+          />
+        </Tilt>
+        <Tilt>
+          <StatCard
+            label="Last 7 days"
+            value={<Odometer value={Math.round(pnl7d.total_usdt)} signed suffix=" USDT" durationMs={800} />}
+            accent={pnl7d.total_usdt >= 0 ? "gold" : "red"}
+            sub={`${pctChange(pnl7d.total_usdt, pnl7dPrev.total_usdt)} vs sem. préc.`}
+            icon={<Wallet size={18} />}
+          />
+        </Tilt>
+        <Tilt>
+          <StatCard
+            label="Active Players (7d)"
+            value={<Odometer value={activePlayers7d} durationMs={800} />}
+            accent="green"
+            sub={`/ ${status.active_players} total actifs`}
+            icon={<Users size={18} />}
+          />
+        </Tilt>
       </div>
 
       <DashboardActions />
 
       {/* Bottom row: Top contributors + Actions en attente */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-        <div style={{
-          background: "#1A1D23", border: "1px solid rgba(255,255,255,0.06)",
-          borderRadius: 16, padding: 24,
-        }}>
+        <div className="glass-card" style={{ borderRadius: 16, padding: 24 }}>
           <div style={{ fontSize: 15, fontWeight: 600, color: "#E8E8EE", marginBottom: 16 }}>
             Top Contributors · 7 derniers jours
           </div>
@@ -206,10 +211,7 @@ export default function DashboardPage() {
           </Link>
         </div>
 
-        <div style={{
-          background: "#1A1D23", border: "1px solid rgba(255,255,255,0.06)",
-          borderRadius: 16, padding: 24,
-        }}>
+        <div className="glass-card" style={{ borderRadius: 16, padding: 24 }}>
           <div style={{ fontSize: 15, fontWeight: 600, color: "#E8E8EE", marginBottom: 12 }}>Actions en attente</div>
           {pendingSettlements === 0 && unpaidAmount === 0 ? (
             <div style={{ display: "flex", alignItems: "center", gap: 8, padding: 12, color: "#10B981" }}>

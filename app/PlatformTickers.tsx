@@ -1,4 +1,5 @@
 import Sparkline from "@/components/Sparkline";
+import Tilt from "@/components/Tilt";
 import { Globe } from "lucide-react";
 
 export interface PlatformTicker {
@@ -24,11 +25,11 @@ export default function PlatformTickers({ tickers }: { tickers: PlatformTicker[]
           ? Math.round(((t.pnl30d - t.pnl30dPrev) / Math.abs(t.pnl30dPrev)) * 100)
           : null;
         return (
-          <div key={t.name} style={{
-            background: "#1A1D23", border: "1px solid rgba(255,255,255,0.06)",
+          <Tilt key={t.name}>
+          <div className="glass-card ticker-card" style={{
             borderRadius: 14, padding: "16px 18px",
             display: "flex", flexDirection: "column", gap: 10,
-            position: "relative", overflow: "hidden",
+            position: "relative", overflow: "hidden", height: "100%",
           }}>
             <div style={{
               position: "absolute", top: 0, left: 0, right: 0, height: 1,
@@ -65,6 +66,7 @@ export default function PlatformTickers({ tickers }: { tickers: PlatformTicker[]
               All-time <span style={{ color: "#8888A0", fontWeight: 600 }}>{fmtSigned(Math.round(t.allTime))} USDT</span>
             </div>
           </div>
+          </Tilt>
         );
       })}
     </div>

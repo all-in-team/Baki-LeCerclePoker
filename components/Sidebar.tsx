@@ -85,7 +85,8 @@ export default function Sidebar({ isOpen, onClose }: SidebarProps) {
         position: "fixed", top: 0, left: 0, zIndex: 50,
         display: "flex", flexDirection: "column",
         width: 260, height: "100vh",
-        background: "#121418",
+        background: "rgba(10,9,20,0.78)",
+        backdropFilter: "blur(22px)", WebkitBackdropFilter: "blur(22px)",
         borderRight: "1px solid rgba(255,255,255,0.06)",
         transition: "transform 300ms ease-in-out",
       }}
@@ -100,10 +101,10 @@ export default function Sidebar({ isOpen, onClose }: SidebarProps) {
             width: 36, height: 36, borderRadius: 12,
             background: "linear-gradient(135deg, #10B981, #F5C518)",
             display: "flex", alignItems: "center", justifyContent: "center",
-            fontSize: 16, fontWeight: 800, color: "#000",
+            fontSize: 13, fontWeight: 800, color: "#000", letterSpacing: "-0.02em",
             boxShadow: "0 4px 16px rgba(16,185,129,0.2)",
             flexShrink: 0,
-          }}>&#9824;</div>
+          }}>LC</div>
           <div>
             <div style={{ fontSize: 14, fontWeight: 700, color: "#E8E8EE", lineHeight: 1.2 }}>Le Cercle</div>
             <div style={{ fontSize: 10, color: "#F5C518", fontWeight: 600, letterSpacing: "0.06em", textTransform: "uppercase" }}>Poker</div>
@@ -148,7 +149,7 @@ export default function Sidebar({ isOpen, onClose }: SidebarProps) {
             {section.items.map(({ href, label, icon: Icon }) => {
               const active = path === href || (href !== "/" && path.startsWith(href));
               return (
-                <Link key={href} href={href} style={{
+                <Link key={href} href={href} className={active ? "nav-active" : undefined} style={{
                   display: "flex", alignItems: "center", gap: 10,
                   padding: section.label ? "8px 12px 8px 20px" : "9px 12px",
                   borderRadius: 10, marginBottom: 2,

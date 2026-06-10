@@ -43,6 +43,7 @@ export function WarRoomPnLChart({ data }: { data: TimePoint[] }) {
   });
 
   return (
+    <div className="chart-reveal">
     <ResponsiveContainer width="100%" height={300}>
       <AreaChart data={cumulativeData} margin={{ top: 10, right: 20, left: 10, bottom: 0 }}>
         <defs>
@@ -62,5 +63,6 @@ export function WarRoomPnLChart({ data }: { data: TimePoint[] }) {
         />
       </AreaChart>
     </ResponsiveContainer>
+    </div>
   );
 }

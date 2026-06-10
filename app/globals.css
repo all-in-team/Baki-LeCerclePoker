@@ -40,11 +40,135 @@
 * { box-sizing: border-box; }
 
 body {
-  background: #0A0B0E;
+  background-color: #06060D;
+  background-image: linear-gradient(175deg, #0B0A1C 0%, #06060D 55%, #06060D 100%);
+  background-attachment: fixed;
   color: #E8E8EE;
   margin: 0;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+}
+
+/* ===== THE CORE — deep space ambiance ===== */
+
+/* Living nebula behind every page (transform-only drift, blur is static) */
+.nebula {
+  position: fixed; inset: 0; z-index: -1;
+  overflow: hidden; pointer-events: none;
+}
+.nebula-blob {
+  position: absolute; border-radius: 50%;
+  filter: blur(130px); will-change: transform;
+}
+.nebula-b1 {
+  width: 55vw; height: 55vw; top: -12%; left: -8%;
+  background: radial-gradient(circle, rgba(76,58,140,0.13), transparent 70%);
+  animation: nebulaDrift1 28s ease-in-out infinite alternate;
+}
+.nebula-b2 {
+  width: 60vw; height: 60vw; bottom: -18%; right: -12%;
+  background: radial-gradient(circle, rgba(42,31,94,0.12), transparent 70%);
+  animation: nebulaDrift2 34s ease-in-out infinite alternate;
+}
+.nebula-b3 {
+  width: 40vw; height: 40vw; top: 35%; left: 45%;
+  background: radial-gradient(circle, rgba(76,58,140,0.09), transparent 70%);
+  animation: nebulaDrift3 23s ease-in-out infinite alternate;
+}
+@keyframes nebulaDrift1 { to { transform: translate3d(9vw, 7vh, 0) scale(1.12); } }
+@keyframes nebulaDrift2 { to { transform: translate3d(-7vw, -9vh, 0) scale(1.18); } }
+@keyframes nebulaDrift3 { to { transform: translate3d(-11vw, 6vh, 0) scale(0.92); } }
+
+/* Thick luxury glass */
+.glass-card {
+  background: linear-gradient(180deg, rgba(21,19,40,0.62), rgba(12,11,24,0.55));
+  -webkit-backdrop-filter: blur(24px);
+  backdrop-filter: blur(24px);
+  border: 1px solid rgba(255,255,255,0.06);
+  border-top-color: rgba(255,255,255,0.13);
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,0.08),
+    0 24px 60px -24px rgba(28,16,80,0.55);
+}
+
+/* Sidebar active item — slow breathing glow */
+.nav-active { position: relative; }
+.nav-active::after {
+  content: ""; position: absolute; inset: 0; border-radius: 10px;
+  background: radial-gradient(70% 120% at 0% 50%, rgba(16,185,129,0.16), transparent 70%);
+  animation: navBreathe 4.5s ease-in-out infinite;
+  pointer-events: none;
+}
+@keyframes navBreathe { 0%, 100% { opacity: 0.4; } 50% { opacity: 1; } }
+
+/* Page transitions (app/template.tsx remounts per navigation) */
+@keyframes pageIn {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.animate-page-in { animation: pageIn 0.3s ease-out; }
+
+/* Main chart — line draws in on open */
+.chart-reveal { animation: chartReveal 1.2s ease-out both; }
+@keyframes chartReveal {
+  from { clip-path: inset(0 100% 0 0); }
+  to { clip-path: inset(0 0 0 0); }
+}
+
+/* Ops feed — periodic shimmer sweep on a random line */
+.feed-shimmer { position: relative; overflow: hidden; }
+.feed-shimmer::after {
+  content: ""; position: absolute; inset: 0;
+  background: linear-gradient(100deg, transparent 20%, rgba(16,185,129,0.10) 50%, transparent 80%);
+  transform: translateX(-100%);
+  animation: feedShimmer 1.3s ease-out forwards;
+}
+@keyframes feedShimmer { to { transform: translateX(100%); } }
+
+/* Platform tickers — hover glow + sparkline redraw */
+.ticker-card { transition: box-shadow 0.3s ease, border-color 0.3s ease; }
+.ticker-card:hover {
+  border-color: rgba(16,185,129,0.28);
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,0.1),
+    0 0 36px -8px rgba(16,185,129,0.3),
+    0 24px 60px -24px rgba(28,16,80,0.55);
+}
+.ticker-card:hover .spark-line {
+  stroke-dasharray: 100 100;
+  animation: sparkDraw 0.9s ease-out forwards;
+}
+@keyframes sparkDraw {
+  from { stroke-dashoffset: 100; }
+  to { stroke-dashoffset: 0; }
+}
+
+/* 3D tilt (driven by components/Tilt.tsx via CSS vars) */
+.tilt {
+  transform: perspective(1000px) rotateX(var(--rx, 0deg)) rotateY(var(--ry, 0deg));
+  transition: transform 0.2s ease-out;
+  will-change: transform;
+}
+
+/* Gold volumetric glow behind the hero counter */
+.counter-glow {
+  position: absolute; pointer-events: none;
+  background: radial-gradient(ellipse 60% 50% at 50% 50%, rgba(245,197,24,0.16), transparent 70%);
+  filter: blur(36px);
+  animation: glowBreathe 7s ease-in-out infinite;
+}
+@keyframes glowBreathe { 0%, 100% { opacity: 0.7; } 50% { opacity: 1; } }
+
+/* Odometer completion burst — gold particles escaping upward */
+.burst-dot {
+  position: absolute; width: 4px; height: 4px; border-radius: 50%;
+  background: #F5C518; opacity: 0; pointer-events: none;
+  box-shadow: 0 0 6px rgba(245,197,24,0.8);
+  animation: burstUp 0.95s ease-out forwards;
+}
+@keyframes burstUp {
+  0% { transform: translate3d(0, 0, 0) scale(1); opacity: 0.95; }
+  100% { transform: translate3d(var(--bx, 0px), var(--by, -70px), 0) scale(0.35); opacity: 0; }
 }
 
 ::-webkit-scrollbar { width: 6px; height: 6px; }
@@ -138,8 +262,16 @@ select option { background: #22252B; }
 .chart-pulse { transform-box: fill-box; transform-origin: center; animation: chartPulse 1.8s ease-out infinite; }
 
 @media (prefers-reduced-motion: reduce) {
-  .animate-fade-in { animation: none; }
+  .animate-fade-in, .animate-page-in { animation: none; }
   .status-dot, .chart-pulse { animation: none !important; }
   .feed-line, .feed-line-new { animation: none !important; opacity: 1 !important; }
   .odo-track { transition: none !important; }
+  .nebula-blob { animation: none !important; }
+  .nav-active::after { animation: none !important; opacity: 0.6; }
+  .chart-reveal { animation: none !important; clip-path: none; }
+  .feed-shimmer::after { animation: none !important; }
+  .ticker-card:hover .spark-line { animation: none !important; stroke-dasharray: none; }
+  .tilt { transform: none !important; }
+  .counter-glow { animation: none !important; }
+  .burst-dot { animation: none !important; opacity: 0 !important; }
 }

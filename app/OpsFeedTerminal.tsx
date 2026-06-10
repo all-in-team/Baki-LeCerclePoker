@@ -1,3 +1,6 @@
+"use client";
+
+import { useEffect, useState } from "react";
 import { Radio } from "lucide-react";
 import type { OpsFeedEvent } from "@/lib/queries";
 
@@ -34,9 +37,24 @@ export default function OpsFeedTerminal({ events }: { events: OpsFeedEvent[] }) 
   const todayParis = new Date().toLocaleDateString("sv-SE", { timeZone: TZ });
   const n = events.length;
 
+  // Every 8-12s, one random line shimmers — suggests live activity
+  const [shimmerIdx, setShimmerIdx] = useState(-1);
+  useEffect(() => {
+    if (n === 0) return;
+    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+    let timer: ReturnType<typeof setTimeout>;
+    const schedule = () => {
+      timer = setTimeout(() => {
+        setShimmerIdx(Math.floor(Math.random() * n));
+        schedule();
+      }, 8000 + Math.random() * 4000);
+    };
+    schedule();
+    return () => clearTimeout(timer);
+  }, [n]);
+
   return (
-    <div style={{
-      background: "#121418", border: "1px solid rgba(255,255,255,0.06)",
+    <div className="glass-card" style={{
       borderRadius: 16, display: "flex", flexDirection: "column",
       height: "100%", minHeight: 0, overflow: "hidden",
     }}>
@@ -78,7 +96,7 @@ export default function OpsFeedTerminal({ events }: { events: OpsFeedEvent[] }) 
           return (
             <div
               key={`${e.ts}-${e.type}-${i}`}
-              className={isNewest ? "feed-line-new" : "feed-line"}
+              className={`${isNewest ? "feed-line-new" : "feed-line"}${i === shimmerIdx ? " feed-shimmer" : ""}`}
               style={{
                 display: "flex", alignItems: "baseline", gap: 10,
                 padding: "6px 18px", fontSize: 12, lineHeight: 1.5,

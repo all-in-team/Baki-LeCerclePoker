@@ -30,7 +30,7 @@ export default function Sparkline({ data, width = 110, height = 32, color = "#10
           fill={color} opacity={0.08}
         />
       )}
-      <polyline points={pts.join(" ")} fill="none" stroke={color} strokeWidth={1.5} strokeLinejoin="round" strokeLinecap="round" />
+      <polyline className="spark-line" pathLength={100} points={pts.join(" ")} fill="none" stroke={color} strokeWidth={1.5} strokeLinejoin="round" strokeLinecap="round" />
       <circle cx={width - pad} cy={lastY} r={2} fill={color} />
     </svg>
   );

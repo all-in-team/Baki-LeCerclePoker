@@ -15,6 +15,11 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
   return (
     <html lang="en">
       <body className={`${inter.className} ${jbMono.variable}`} style={{ display: "flex", minHeight: "100vh" }}>
+        <div className="nebula" aria-hidden>
+          <div className="nebula-blob nebula-b1" />
+          <div className="nebula-blob nebula-b2" />
+          <div className="nebula-blob nebula-b3" />
+        </div>
         <AdminShell>{children}</AdminShell>
       </body>
     </html>

@@ -44,9 +44,8 @@ export default function DashboardActions() {
   }
 
   return (
-    <div style={{
-      display: "flex", gap: 12, marginBottom: 24, padding: "14px 20px",
-      background: "#1A1D23", border: "1px solid rgba(255,255,255,0.06)", borderRadius: 14,
+    <div className="glass-card" style={{
+      display: "flex", gap: 12, marginBottom: 24, padding: "14px 20px", borderRadius: 14,
       alignItems: "center", flexWrap: "wrap",
     }}>
       <span style={{
