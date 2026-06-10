@@ -59,7 +59,7 @@ export default function Odometer({
           </span>
         );
       })}
-      {suffix && <span aria-hidden>{suffix}</span>}
+      {suffix && <span aria-hidden style={{ whiteSpace: "pre" }}>{suffix}</span>}
     </span>
   );
 }

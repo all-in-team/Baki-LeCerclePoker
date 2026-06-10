@@ -94,7 +94,7 @@ export default function DashboardPage() {
 
       {/* Hero + main chart (left 2/3) · Ops feed (right 1/3, full height) */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 mb-4">
-        <div className="lg:col-span-2 flex flex-col gap-4 min-w-0">
+        <div className="lg:col-span-2 min-w-0">
           <WarRoomHero
             totalUsdt={pnlAllTime.total_usdt}
             pnl30d={pnl30d.total_usdt}
@@ -103,21 +103,22 @@ export default function DashboardPage() {
             activeAgents={status.active_players}
             activePlatforms={status.active_games}
           />
-          <div style={{
-            background: "#1A1D23", border: "1px solid rgba(255,255,255,0.06)",
-            borderRadius: 16, padding: 24,
-          }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 16 }}>
-              <Activity size={15} color="#10B981" />
-              <span style={{ fontSize: 14, fontWeight: 600, color: "#E8E8EE" }}>
-                Profit cumulé · All-time
-              </span>
-            </div>
-            <WarRoomPnLChart data={timeline} />
-          </div>
         </div>
-        <div className="min-w-0" style={{ maxHeight: 560 }}>
+        {/* Mobile: feed sits right under the hero. Desktop: right column spanning hero + chart rows. */}
+        <div className="min-w-0 lg:col-start-3 lg:row-start-1 lg:row-span-2" style={{ maxHeight: 560 }}>
           <OpsFeedTerminal events={events} />
+        </div>
+        <div className="lg:col-span-2 min-w-0" style={{
+          background: "#1A1D23", border: "1px solid rgba(255,255,255,0.06)",
+          borderRadius: 16, padding: 24,
+        }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 16 }}>
+            <Activity size={15} color="#10B981" />
+            <span style={{ fontSize: 14, fontWeight: 600, color: "#E8E8EE" }}>
+              Profit cumulé · All-time
+            </span>
+          </div>
+          <WarRoomPnLChart data={timeline} />
         </div>
       </div>
 
