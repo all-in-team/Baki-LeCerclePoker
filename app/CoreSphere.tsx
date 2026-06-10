@@ -31,7 +31,13 @@ export default function CoreSphere({ style }: { style?: CSSProperties }) {
       const camera = new THREE.PerspectiveCamera(45, w / h, 0.1, 50);
       camera.position.z = 3.1;
 
-      const renderer = new THREE.WebGLRenderer({ alpha: true, antialias: true, powerPreference: "low-power" });
+      // No WebGL (old GPU, remote desktop, headless) → no sphere, page stays intact
+      let renderer: import("three").WebGLRenderer;
+      try {
+        renderer = new THREE.WebGLRenderer({ alpha: true, antialias: true, powerPreference: "low-power" });
+      } catch {
+        return;
+      }
       renderer.setSize(w, h);
       renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
       renderer.domElement.style.display = "block";
