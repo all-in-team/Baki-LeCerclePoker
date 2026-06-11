@@ -58,8 +58,8 @@ export default function FigurineDuo() {
       camera.lookAt(0, 0.1, 0);
 
       // soft key + low ambient + gold rim from behind-above for the precious contour
-      scene.add(new THREE.AmbientLight(0xffffff, 0.35));
-      const key = new THREE.DirectionalLight(0xffffff, 1.1);
+      scene.add(new THREE.AmbientLight(0xffffff, 0.55));
+      const key = new THREE.DirectionalLight(0xffffff, 1.6);
       key.position.set(2, 3, 4);
       scene.add(key);
       const rim = new THREE.DirectionalLight(0xf0b90b, 1.7);
