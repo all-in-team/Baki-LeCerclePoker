@@ -22,7 +22,7 @@ const TITLES: [string, string][] = [
   ["/grindhouse/expenses", "Grindhouse — Frais"],
   ["/grindhouse/settlements", "Grindhouse — Settlements"],
   ["/grindhouse/dashboard", "Grindhouse — Dashboard"],
-  ["/grindhouse/weekly", "Grindhouse — Weekly"],
+  ["/grindhouse/weekly", "Grindhouse — Week results"],
 ];
 
 function titleFor(path: string): string {

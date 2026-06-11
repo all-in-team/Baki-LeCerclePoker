@@ -76,7 +76,7 @@ export default function DashboardClient() {
   const missingRates = data?.missing_rates ?? [];
 
   return (
-    <div style={{ padding: "0 28px" }}>
+    <div style={{ padding: "8px 28px 0" }}>
       {/* Period picker */}
       <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 24, flexWrap: "wrap" }}>
         {presetBtn("today", "Aujourd'hui")}
@@ -129,20 +129,24 @@ export default function DashboardClient() {
               const avatarBg = !hasHours ? "rgba(156,163,175,0.2)" : b.sessions_pnl >= 0 ? "rgba(34,197,94,0.15)" : "rgba(248,113,113,0.15)";
               const avatarColor = !hasHours ? "#9CA3AF" : b.sessions_pnl >= 0 ? "#22C55E" : "#f87171";
               return (
-                <div key={b.player_id} style={{ padding: "14px 16px", background: "var(--bg-raised)", border: "1px solid var(--border)", borderRadius: 10, opacity: hasHours ? 1 : 0.5 }}>
+                <div key={b.player_id} style={{ padding: "14px 16px", background: "var(--bg-raised)", border: "1px solid var(--border)", borderRadius: 10, opacity: hasHours ? 1 : 0.45 }}>
                   <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8 }}>
                     <div style={{ width: 30, height: 30, borderRadius: "50%", background: avatarBg, color: avatarColor, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 12, fontWeight: 700, flexShrink: 0 }}>{b.name.slice(0, 2).toUpperCase()}</div>
                     <span style={{ fontWeight: 500, fontSize: 13, color: "var(--text)" }}>{b.name}</span>
                   </div>
-                  <div style={{ fontSize: 12, color: "var(--text-dim)", marginBottom: 6 }}>
-                    {hasHours ? <>
-                      {b.hours.toFixed(1)}h · <span style={{ color: pnlColor(b.sessions_pnl), fontWeight: 500 }}>{pnlSign(b.sessions_pnl)} USDT</span>
-                      {(b.unconverted ?? []).map(c => (
-                        <span key={c.currency} style={{ color: "#F59E0B" }}> · ⚠ {pnlSign(c.pnl)} {c.currency}</span>
-                      ))}
-                    </> : "—"}
-                  </div>
-                  <div style={{ fontSize: 20, fontWeight: 500, color: hrRateColor(b.sessions_pnl, b.hours) }}>{hrRate(b.sessions_pnl, b.hours)}</div>
+                  {hasHours ? (
+                    <>
+                      <div style={{ fontSize: 12, color: "var(--text-dim)", marginBottom: 6 }}>
+                        {b.hours.toFixed(1)}h · <span style={{ color: pnlColor(b.sessions_pnl), fontWeight: 500 }}>{pnlSign(b.sessions_pnl)} USDT</span>
+                        {(b.unconverted ?? []).map(c => (
+                          <span key={c.currency} style={{ color: "#F59E0B" }}> · ⚠ {pnlSign(c.pnl)} {c.currency}</span>
+                        ))}
+                      </div>
+                      <div style={{ fontSize: 20, fontWeight: 500, color: hrRateColor(b.sessions_pnl, b.hours) }}>{hrRate(b.sessions_pnl, b.hours)}</div>
+                    </>
+                  ) : (
+                    <div style={{ fontSize: 12, color: "var(--text-dim)", padding: "8px 0 4px" }}>Aucune session</div>
+                  )}
                 </div>
               );
             })}
@@ -171,7 +175,7 @@ export default function DashboardClient() {
 
         {/* Profitability waterfall */}
         <div style={{ fontSize: 11, fontWeight: 700, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 10 }}>Rentabilité agence</div>
-        <div style={{ padding: "20px 24px", background: "var(--bg-raised)", border: "1px solid var(--border)", borderRadius: 10, marginBottom: 24 }}>
+        <div style={{ padding: "20px 24px", background: "var(--bg-raised)", border: "1px solid var(--border)", borderRadius: 10, marginBottom: 28 }}>
           <div style={{ display: "flex", flexDirection: "column", gap: 8, fontSize: 13 }}>
             <div style={{ display: "flex", justifyContent: "space-between" }}><span>Production brute</span><span style={{ fontWeight: 600, color: pnlColor(data!.total_sessions_pnl) }}>{pnlSign(data!.total_sessions_pnl)}</span></div>
             <div style={{ display: "flex", justifyContent: "space-between" }}><span style={{ color: "var(--text-dim)" }}>− Frais grind attribués</span><span style={{ color: "#f87171" }}>−{fmt(data!.total_grind_fees_attributed)}</span></div>

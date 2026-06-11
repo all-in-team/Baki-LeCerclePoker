@@ -6,7 +6,7 @@ import { useState, useEffect } from "react";
 import {
   X, LogOut, LayoutDashboard, ContactRound, Users, Network,
   Sliders, Settings, Wallet, Scale, BarChart3, FileText,
-  Gamepad2, Receipt, TrendingUp, ChevronDown, ChevronRight, CalendarDays,
+  TrendingUp, ChevronDown, ChevronRight, CalendarDays,
 } from "lucide-react";
 
 type NavItem = { href: string; label: string; icon: React.ComponentType<{ size?: number; strokeWidth?: number }> };
@@ -39,11 +39,9 @@ const GROUPS: NavGroup[] = [
     { href: "/akpoker/settlements", label: "Settlements", icon: Scale },
   ]},
   { label: "GRINDHOUSE", items: [
-    { href: "/grindhouse/sessions", label: "Sessions", icon: Gamepad2 },
-    { href: "/grindhouse/expenses", label: "Frais", icon: Receipt },
-    { href: "/grindhouse/settlements", label: "Settlements", icon: Scale },
+    // Sessions / Frais / Settlements stay reachable by direct URL — just not in the nav
+    { href: "/grindhouse/weekly", label: "Week results", icon: CalendarDays },
     { href: "/grindhouse/dashboard", label: "Dashboard", icon: TrendingUp },
-    { href: "/grindhouse/weekly", label: "Weekly", icon: CalendarDays },
   ]},
 ];
 
