@@ -75,7 +75,11 @@ export default function FigurineDuo() {
           loader.load(url, resolve, undefined, reject));
 
       const loaded = await Promise.all([loadGlb("/models/baki.glb"), loadGlb("/models/hugo.glb")])
-        .catch(() => null);
+        .catch((err) => {
+          // visual fallback stays silent, but the failure must be diagnosable
+          console.warn("[FigurineDuo] model load failed:", err?.message ?? err);
+          return null;
+        });
       if (!loaded || disposed) {
         renderer.dispose();
         return; // model fetch/parse failed (or unmounted) → glow disc only
