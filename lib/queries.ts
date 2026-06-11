@@ -1122,6 +1122,21 @@ export function getLockAwareKPIs(filters?: { game_name?: string; since_date?: st
   return getWalletKPIs(filters);
 }
 
+// KPIs for a game's P&L page, with agency extras (wins/losses outside player deals) folded
+// into my_total_pnl — same composition as the war room (getAgencyTotalPnL = cuts + extras).
+// Extras carry no player_id, so the per-player filtered view must NOT use this.
+export function getLockAwareKPIsWithExtras(
+  filters: { game_name?: string; since_date?: string; end_date?: string },
+  gameKey: string,
+) {
+  const kpis = getLockAwareKPIs(filters) ?? { total_deposited: 0, total_withdrawn: 0, total_net: 0, my_total_pnl: 0 };
+  const extras = getAgencyExtrasNet(gameKey, {
+    from: filters.since_date?.slice(0, 10),
+    to: filters.end_date?.slice(0, 10),
+  });
+  return { ...kpis, my_total_pnl: kpis.my_total_pnl + extras, extras_net: extras };
+}
+
 // ════════════════════════════════════════════════════════════
 // CANONICAL P&L FUNCTIONS — single source of truth
 // Every page, tool, and bot MUST use these. No ad-hoc P&L SQL.

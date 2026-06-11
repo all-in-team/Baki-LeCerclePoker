@@ -1,6 +1,6 @@
 export const dynamic = "force-dynamic";
 import { getDb } from "@/lib/db";
-import { getLockAwareSummaryByPlayer, getLockAwareKPIs, getWalletTransactions, getPlayers, getGames, getPlayerCashouts, getPlayerGameWallets, getWalletMeresForGame } from "@/lib/queries";
+import { getLockAwareSummaryByPlayer, getLockAwareKPIsWithExtras, getWalletTransactions, getPlayers, getGames, getPlayerCashouts, getPlayerGameWallets, getWalletMeresForGame } from "@/lib/queries";
 import { getWeekBounds, getLast12Weeks, toUTCISO, toParisDate, formatRangeLabel, isoWeekToOffset, parisLocalToUTC } from "@/lib/date-utils";
 import PageHeader from "@/components/PageHeader";
 import TELEClient from "@/app/akpoker/pnl/TELEClient";
@@ -65,17 +65,20 @@ export default async function A5POKERPage({ searchParams }: { searchParams: Prom
 
   const filters = { game_name: "A5POKER" as const, since_date: startDate, end_date: endDate };
   let summary = getLockAwareSummaryByPlayer(filters) as any[];
-  let kpis = getLockAwareKPIs(filters) ?? { total_deposited: 0, total_withdrawn: 0, total_net: 0, my_total_pnl: 0 };
+  // my_total_pnl includes agency extras (game-level wins/losses outside deals)
+  let kpis = getLockAwareKPIsWithExtras(filters, "a5poker");
   let transactions = getWalletTransactions({ ...filters, limit: 500 }) as any[];
 
   if (playerFilter) {
     summary = summary.filter((r: any) => r.player_id === playerFilter);
     transactions = transactions.filter((t: any) => t.player_id === playerFilter);
+    // per-player view: extras are agency-level (no player_id) → excluded here
     kpis = {
       total_deposited: summary.reduce((s: number, r: any) => s + (r.total_deposited ?? 0), 0),
       total_withdrawn: summary.reduce((s: number, r: any) => s + (r.total_withdrawn ?? 0), 0),
       total_net: summary.reduce((s: number, r: any) => s + (r.net ?? 0), 0),
       my_total_pnl: summary.reduce((s: number, r: any) => s + (r.my_pnl ?? 0), 0),
+      extras_net: 0,
     };
   }
 
