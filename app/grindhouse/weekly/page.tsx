@@ -1,6 +1,6 @@
 export const dynamic = "force-dynamic";
 import { getDb } from "@/lib/db";
-import { getActiveGrinders, getGrindhouseWeeklyCells, getGrinderDefaultGames } from "@/lib/queries";
+import { getActiveGrinders, getGrindhouseWeeklyCells, getGrindhouseWeeklySessions } from "@/lib/queries";
 import { getWeekBounds, toUTCISO, toParisDate } from "@/lib/date-utils";
 import WeeklyClient, { type WeekCol } from "./WeeklyClient";
 
@@ -43,16 +43,16 @@ export default async function GrindhouseWeeklyPage({ searchParams }: { searchPar
 
   const grinders = getActiveGrinders();
   const cells = getGrindhouseWeeklyCells(from, to);
-  const defaultGames = getGrinderDefaultGames();
-  const fallbackGame = (getDb().prepare(`SELECT id FROM games WHERE status = 'active' ORDER BY id LIMIT 1`).get() as { id: number } | undefined)?.id ?? 1;
+  const sessions = getGrindhouseWeeklySessions(from, to);
+  const games = getDb().prepare(`SELECT id, name FROM games WHERE status = 'active' ORDER BY name`).all() as { id: number; name: string }[];
 
   return (
     <WeeklyClient
       weeks={weeks}
       grinders={grinders}
       cells={cells}
-      defaultGames={defaultGames}
-      fallbackGame={fallbackGame}
+      sessions={sessions}
+      games={games}
       nWeeks={nWeeks}
     />
   );

@@ -3,10 +3,10 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
-import { Check, AlertTriangle, Plus } from "lucide-react";
+import { Check, AlertTriangle, Plus, Trash2 } from "lucide-react";
 import Modal from "@/components/Modal";
 import Btn from "@/components/Btn";
-import type { GrinderRow, GrindhouseWeekCell } from "@/lib/queries";
+import type { GrinderRow, GrindhouseWeekCell, GrindhouseWeekSession } from "@/lib/queries";
 
 export interface WeekCol {
   week_start: string;  // Monday YYYY-MM-DD
@@ -15,92 +15,137 @@ export interface WeekCol {
   range: string;       // "2-8 juin"
 }
 
+interface Game { id: number; name: string; }
+
 interface WeeklyClientProps {
   weeks: WeekCol[];            // most recent first
   grinders: GrinderRow[];
   cells: GrindhouseWeekCell[];
-  defaultGames: Record<number, number>;
-  fallbackGame: number;
+  sessions: GrindhouseWeekSession[];
+  games: Game[];
   nWeeks: number;
+}
+
+// One editable log line in the modal
+interface LogRow {
+  key: number;
+  sessionId: number | null;    // existing session → PATCH/DELETE, null → POST
+  game_id: number | "";
+  pnl: string;
+  hours: string;
 }
 
 interface ModalState {
   grinder: GrinderRow;
   week: WeekCol;
-  cell: GrindhouseWeekCell | null;
 }
 
 function fmtPnl(n: number): string {
   return (n >= 0 ? "+" : "−") + Math.abs(n).toLocaleString("fr-FR", { maximumFractionDigits: 0 });
 }
 
-export default function WeeklyClient({ weeks, grinders, cells, defaultGames, fallbackGame, nWeeks }: WeeklyClientProps) {
+let keySeq = 1;
+
+export default function WeeklyClient({ weeks, grinders, cells, sessions, games, nWeeks }: WeeklyClientProps) {
   const router = useRouter();
   const cellMap = new Map(cells.map(c => [`${c.player_id}|${c.week_start}`, c]));
 
   const [modal, setModal] = useState<ModalState | null>(null);
-  const [pnlVal, setPnlVal] = useState("");
-  const [hoursVal, setHoursVal] = useState("");
+  const [rows, setRows] = useState<LogRow[]>([]);
+  const [deletedIds, setDeletedIds] = useState<number[]>([]);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
 
   const totalPnl = cells.reduce((s, c) => s + c.pnl, 0);
   const totalHours = cells.reduce((s, c) => s + c.hours, 0);
-  const missingCount = grinders.length * weeks.length - cells.filter(c =>
-    grinders.some(g => g.player_id === c.player_id)).length;
+  const grinderIds = new Set(grinders.map(g => g.player_id));
+  const missingCount = grinders.length * weeks.length - cells.filter(c => grinderIds.has(c.player_id)).length;
 
   function openCell(grinder: GrinderRow, week: WeekCol) {
-    const cell = cellMap.get(`${grinder.player_id}|${week.week_start}`) ?? null;
-    setPnlVal(cell && cell.session_count === 1 ? String(cell.pnl) : "");
-    setHoursVal(cell && cell.session_count === 1 && cell.hours > 0 ? String(cell.hours) : "");
+    const existing = sessions.filter(s => s.player_id === grinder.player_id && s.week_start === week.week_start);
+    setRows(existing.length > 0
+      ? existing.map(s => ({
+          key: keySeq++,
+          sessionId: s.id,
+          game_id: s.game_id,
+          pnl: String(s.net_result_usdt),
+          hours: s.duration_hours > 0 ? String(s.duration_hours) : "",
+        }))
+      : [{ key: keySeq++, sessionId: null, game_id: "", pnl: "", hours: "" }]);
+    setDeletedIds([]);
     setError("");
-    setModal({ grinder, week, cell });
+    setModal({ grinder, week });
+  }
+
+  function addRow() {
+    setRows(r => [...r, { key: keySeq++, sessionId: null, game_id: "", pnl: "", hours: "" }]);
+  }
+
+  function removeRow(key: number) {
+    setRows(r => {
+      const row = r.find(x => x.key === key);
+      if (row?.sessionId) setDeletedIds(d => [...d, row.sessionId!]);
+      return r.filter(x => x.key !== key);
+    });
+  }
+
+  function patchRow(key: number, patch: Partial<LogRow>) {
+    setRows(r => r.map(x => (x.key === key ? { ...x, ...patch } : x)));
   }
 
   async function save() {
     if (!modal) return;
-    const pnl = Number(pnlVal);
-    if (pnlVal.trim() === "" || isNaN(pnl)) { setError("P&L USDT requis (nombre)"); return; }
-    const hours = hoursVal.trim() === "" ? 0 : Number(hoursVal);
-    if (isNaN(hours) || hours < 0) { setError("Heures invalides"); return; }
+    // a row counts when P&L is filled; game is then mandatory
+    const filled = rows.filter(r => r.pnl.trim() !== "");
+    for (const r of filled) {
+      if (isNaN(Number(r.pnl))) { setError("P&L invalide sur une ligne"); return; }
+      if (r.game_id === "") { setError("Game requis sur chaque ligne avec un P&L"); return; }
+      if (r.hours.trim() !== "" && (isNaN(Number(r.hours)) || Number(r.hours) < 0)) { setError("Heures invalides sur une ligne"); return; }
+    }
+    if (filled.length === 0 && deletedIds.length === 0) { setError("Au moins une ligne valide (game + P&L) requise"); return; }
+
     setSaving(true);
     setError("");
     try {
-      const { grinder, week, cell } = modal;
-      let res: Response;
-      if (cell?.single_session_id) {
-        // exactly one session that week → edit it in place
-        res = await fetch(`/api/grindhouse-sessions/${cell.single_session_id}`, {
-          method: "PATCH",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ net_result_usdt: pnl, duration_hours: hours }),
-        });
-      } else {
-        // empty week (insert) or multi-session week (add an extra entry)
-        res = await fetch("/api/grindhouse-sessions", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            player_id: grinder.player_id,
-            game_id: defaultGames[grinder.player_id] ?? fallbackGame,
-            session_date: week.week_start,
-            duration_hours: hours,
-            net_result_usdt: pnl,
-            notes: "weekly quick-add",
-          }),
-        });
+      const { grinder, week } = modal;
+      // deletions of removed existing sessions
+      for (const id of deletedIds) {
+        const res = await fetch(`/api/grindhouse-sessions/${id}`, { method: "DELETE" });
+        if (!res.ok) throw new Error(`DELETE ${id} → ${res.status}`);
       }
-      if (!res.ok) {
-        const j = await res.json().catch(() => null);
-        setError(j?.error ?? `Erreur ${res.status}`);
-        setSaving(false);
-        return;
+      for (const r of filled) {
+        if (r.sessionId) {
+          const res = await fetch(`/api/grindhouse-sessions/${r.sessionId}`, {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              game_id: Number(r.game_id),
+              net_result_usdt: Number(r.pnl),
+              duration_hours: r.hours.trim() === "" ? 0 : Number(r.hours),
+            }),
+          });
+          if (!res.ok) throw new Error(`PATCH → ${res.status}`);
+        } else {
+          const res = await fetch("/api/grindhouse-sessions", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              player_id: grinder.player_id,
+              game_id: Number(r.game_id),
+              session_date: week.week_start,
+              duration_hours: r.hours.trim() === "" ? 0 : Number(r.hours),
+              net_result_usdt: Number(r.pnl),
+              notes: "weekly quick-add",
+            }),
+          });
+          if (!res.ok) throw new Error(`POST → ${res.status}`);
+        }
       }
       setModal(null);
       setSaving(false);
       router.refresh();
-    } catch {
-      setError("Erreur réseau");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Erreur réseau");
       setSaving(false);
     }
   }
@@ -127,7 +172,7 @@ export default function WeeklyClient({ weeks, grinders, cells, defaultGames, fal
       {/* Grid */}
       <div className="glass-card" style={{ overflow: "hidden" }}>
         <div style={{ overflowX: "auto", maxHeight: "62vh", overflowY: "auto" }}>
-          <table style={{ borderCollapse: "separate", borderSpacing: 0, width: "100%", minWidth: weeks.length * 92 + 160 }}>
+          <table style={{ borderCollapse: "separate", borderSpacing: 0, width: "100%", minWidth: weeks.length * 96 + 160 }}>
             <thead>
               <tr>
                 <th style={{
@@ -141,7 +186,7 @@ export default function WeeklyClient({ weeks, grinders, cells, defaultGames, fal
                   <th key={w.week_start} style={{
                     position: "sticky", top: 0, zIndex: 10,
                     background: "#13141C", padding: "8px 10px", textAlign: "center",
-                    borderBottom: "1px solid rgba(255,255,255,0.07)", minWidth: 88,
+                    borderBottom: "1px solid rgba(255,255,255,0.07)", minWidth: 92,
                   }}>
                     <div style={{ fontSize: 11, fontWeight: 700, color: "#E8E8EE" }}>{w.iso}</div>
                     <div style={{ fontSize: 9, fontWeight: 500, color: "#555568", whiteSpace: "nowrap" }}>{w.range}</div>
@@ -171,7 +216,7 @@ export default function WeeklyClient({ weeks, grinders, cells, defaultGames, fal
                         <button
                           onClick={() => openCell(g, w)}
                           className={missing ? "weekly-cell weekly-missing" : "weekly-cell"}
-                          title={missing ? `Ajouter — ${g.name} ${w.iso}` : `${cell!.session_count} session(s) — modifier`}
+                          title={missing ? `Ajouter — ${g.name} ${w.iso}` : `${cell!.session_count} log(s), ${cell!.games_count} game(s) — modifier`}
                         >
                           {missing ? (
                             <>
@@ -179,13 +224,20 @@ export default function WeeklyClient({ weeks, grinders, cells, defaultGames, fal
                               <span className="weekly-add"><Plus size={10} /> Add</span>
                             </>
                           ) : (
-                            <>
-                              <span className="tabular-nums" style={{
-                                fontWeight: 600, fontSize: 12,
-                                color: cell!.pnl > 0 ? "#10B981" : cell!.pnl < 0 ? "#EF4444" : "#8888A0",
-                              }}>{fmtPnl(cell!.pnl)}</span>
-                              <Check size={10} style={{ color: "rgba(16,185,129,0.5)", flexShrink: 0 }} />
-                            </>
+                            <span style={{ display: "inline-flex", flexDirection: "column", alignItems: "center", gap: 1 }}>
+                              <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
+                                <span className="tabular-nums" style={{
+                                  fontWeight: 600, fontSize: 12,
+                                  color: cell!.pnl > 0 ? "#10B981" : cell!.pnl < 0 ? "#EF4444" : "#8888A0",
+                                }}>{fmtPnl(cell!.pnl)}</span>
+                                <Check size={10} style={{ color: "rgba(16,185,129,0.5)", flexShrink: 0 }} />
+                              </span>
+                              {cell!.games_count > 1 && (
+                                <span style={{ fontSize: 8.5, fontWeight: 600, color: "#555568", letterSpacing: "0.03em" }}>
+                                  {cell!.games_count} games
+                                </span>
+                              )}
+                            </span>
                           )}
                         </button>
                       </td>
@@ -222,43 +274,68 @@ export default function WeeklyClient({ weeks, grinders, cells, defaultGames, fal
         </div>
       </div>
 
-      {/* Quick-add / edit modal */}
+      {/* Multi-game weekly log editor */}
       <Modal
         open={modal !== null}
         onClose={() => setModal(null)}
         title={modal ? `${modal.grinder.name} — Semaine ${modal.week.iso.slice(1)} (${modal.week.range})` : ""}
-        width={420}
+        width={520}
       >
         {modal && (
-          <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-            {modal.cell && modal.cell.session_count > 1 && (
+          <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+            {/* column labels */}
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 110px 90px 30px", gap: 8, fontSize: 10, fontWeight: 700, color: "#555568", textTransform: "uppercase", letterSpacing: "0.06em" }}>
+              <span>Game</span><span>P&L USDT</span><span>Heures</span><span />
+            </div>
+            {rows.map(r => (
+              <div key={r.key} style={{ display: "grid", gridTemplateColumns: "1fr 110px 90px 30px", gap: 8, alignItems: "center" }}>
+                <select
+                  value={r.game_id}
+                  onChange={e => patchRow(r.key, { game_id: e.target.value === "" ? "" : Number(e.target.value) })}
+                >
+                  <option value="">— Game —</option>
+                  {games.map(g => <option key={g.id} value={g.id}>{g.name}</option>)}
+                </select>
+                <input
+                  type="number" step="0.01" placeholder="-250 / 1200"
+                  value={r.pnl}
+                  onChange={e => patchRow(r.key, { pnl: e.target.value })}
+                />
+                <input
+                  type="number" step="0.5" min="0" placeholder="0"
+                  value={r.hours}
+                  onChange={e => patchRow(r.key, { hours: e.target.value })}
+                />
+                <button
+                  className="btn-del-ghost"
+                  title="Retirer ce log"
+                  onClick={() => removeRow(r.key)}
+                  style={{ padding: 5, justifySelf: "center" }}
+                >
+                  <Trash2 size={13} />
+                </button>
+              </div>
+            ))}
+
+            <button
+              onClick={addRow}
+              style={{
+                display: "inline-flex", alignItems: "center", gap: 6, alignSelf: "flex-start",
+                padding: "6px 12px", borderRadius: 999, fontSize: 12, fontWeight: 600,
+                background: "rgba(16,185,129,0.08)", border: "1px solid rgba(16,185,129,0.2)",
+                color: "#10B981", cursor: "pointer",
+              }}
+            >
+              <Plus size={12} /> Ajouter un log
+            </button>
+
+            {deletedIds.length > 0 && (
               <div style={{ fontSize: 11, color: "#F59E0B" }}>
-                {modal.cell.session_count} sessions déjà loggées cette semaine — l&apos;entrée sera AJOUTÉE au total.
+                {deletedIds.length} log{deletedIds.length > 1 ? "s" : ""} existant{deletedIds.length > 1 ? "s" : ""} sera{deletedIds.length > 1 ? "ont" : ""} supprimé{deletedIds.length > 1 ? "s" : ""} au save.
               </div>
             )}
-            <div>
-              <label style={{ display: "block", fontSize: 11, fontWeight: 700, color: "#8888A0", textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 6 }}>
-                P&L USDT *
-              </label>
-              <input
-                type="number" step="0.01" autoFocus value={pnlVal}
-                onChange={e => setPnlVal(e.target.value)}
-                onKeyDown={e => { if (e.key === "Enter") save(); }}
-                placeholder="-250 ou 1200"
-              />
-            </div>
-            <div>
-              <label style={{ display: "block", fontSize: 11, fontWeight: 700, color: "#8888A0", textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 6 }}>
-                Heures (optionnel)
-              </label>
-              <input
-                type="number" step="0.5" min="0" value={hoursVal}
-                onChange={e => setHoursVal(e.target.value)}
-                onKeyDown={e => { if (e.key === "Enter") save(); }}
-                placeholder="0"
-              />
-            </div>
             {error && <div style={{ fontSize: 12, color: "#EF4444" }}>{error}</div>}
+
             <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
               <Btn size="sm" onClick={() => setModal(null)}>Cancel</Btn>
               <Btn size="sm" variant="primary" onClick={save} disabled={saving}>

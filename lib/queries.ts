@@ -1589,7 +1589,7 @@ export interface GrindhouseWeekCell {
   pnl: number;
   hours: number;
   session_count: number;
-  single_session_id: number | null;  // set when exactly one session → editable in place
+  games_count: number;
 }
 export function getGrindhouseWeeklyCells(from: string, to: string): GrindhouseWeekCell[] {
   const db = getDb();
@@ -1599,11 +1599,32 @@ export function getGrindhouseWeeklyCells(from: string, to: string): GrindhouseWe
            SUM(s.net_result_usdt) AS pnl,
            COALESCE(SUM(s.duration_hours), 0) AS hours,
            COUNT(*) AS session_count,
-           CASE WHEN COUNT(*) = 1 THEN MIN(s.id) ELSE NULL END AS single_session_id
+           COUNT(DISTINCT s.game_id) AS games_count
     FROM grindhouse_sessions s
     WHERE s.session_date >= ? AND s.session_date <= ?
     GROUP BY s.player_id, week_start
   `).all(from, to) as GrindhouseWeekCell[];
+}
+
+// Per-session detail for the weekly modal (prefill, edit, delete)
+export interface GrindhouseWeekSession {
+  id: number;
+  player_id: number;
+  game_id: number;
+  week_start: string;
+  net_result_usdt: number;
+  duration_hours: number;
+}
+export function getGrindhouseWeeklySessions(from: string, to: string): GrindhouseWeekSession[] {
+  const db = getDb();
+  return db.prepare(`
+    SELECT s.id, s.player_id, s.game_id,
+           date(s.session_date, '-' || ((CAST(strftime('%w', s.session_date) AS INTEGER) + 6) % 7) || ' days') AS week_start,
+           s.net_result_usdt, s.duration_hours
+    FROM grindhouse_sessions s
+    WHERE s.session_date >= ? AND s.session_date <= ?
+    ORDER BY s.id
+  `).all(from, to) as GrindhouseWeekSession[];
 }
 
 // Default game for the weekly quick-add: each grinder's most recent session's game
