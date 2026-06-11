@@ -1,6 +1,8 @@
-// Reserved focal zone on the right of the hero — a 3D object will be mounted
-// here later. For now: just a soft gold ground-glow disc. No text may ever
-// depend on this zone.
+import FigurineDuo from "./FigurineDuo";
+
+// Focal zone on the right of the hero: the two figurines on a turntable,
+// anchored by a soft gold ground-glow disc. No text may ever depend on
+// this zone — if WebGL or the models are unavailable, only the disc remains.
 export default function FocalSlot() {
   return (
     <div
@@ -13,6 +15,7 @@ export default function FocalSlot() {
         background: "radial-gradient(ellipse 50% 50% at 50% 50%, rgba(240,185,11,0.06), transparent 70%)",
         filter: "blur(2px)",
       }} />
+      <FigurineDuo />
     </div>
   );
 }
