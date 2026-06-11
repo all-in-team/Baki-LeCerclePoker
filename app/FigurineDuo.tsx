@@ -23,9 +23,10 @@ export default function FigurineDuo() {
       if (started || disposed) return;
       started = true;
 
-      const [THREE, { GLTFLoader }] = await Promise.all([
+      const [THREE, { GLTFLoader }, { RoomEnvironment }] = await Promise.all([
         import("three"),
         import("three/examples/jsm/loaders/GLTFLoader.js"),
+        import("three/examples/jsm/environments/RoomEnvironment.js"),
       ]);
       if (disposed) return;
 
@@ -50,21 +51,30 @@ export default function FigurineDuo() {
       renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
       renderer.outputColorSpace = THREE.SRGBColorSpace;
       renderer.toneMapping = THREE.ACESFilmicToneMapping;
+      renderer.toneMappingExposure = 1.3; // tuned at the render harness (1.4 blew side faces)
       renderer.domElement.style.display = "block";
 
       const scene = new THREE.Scene();
       const camera = new THREE.PerspectiveCamera(38, w / h, 0.1, 50);
-      camera.position.set(0, 0.55, 4.2);
+      camera.position.set(0, 0.55, 4.9); // far enough that the turntable swing never clips the frame
       camera.lookAt(0, 0.1, 0);
 
-      // soft key + low ambient + gold rim from behind-above for the precious contour
-      scene.add(new THREE.AmbientLight(0xffffff, 0.55));
+      // studio: environment map makes the TRELLIS PBR materials pop
+      const pmrem = new THREE.PMREMGenerator(renderer);
+      scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
+      pmrem.dispose();
+
+      // warm sky/ground + key + gold rim + soft frontal fill to open the faces
+      scene.add(new THREE.HemisphereLight(0xfff4e0, 0x202028, 0.9));
       const key = new THREE.DirectionalLight(0xffffff, 1.6);
       key.position.set(2, 3, 4);
       scene.add(key);
-      const rim = new THREE.DirectionalLight(0xf0b90b, 1.7);
+      const rim = new THREE.DirectionalLight(0xf0b90b, 2.2);
       rim.position.set(-1.2, 3.2, -3);
       scene.add(rim);
+      const fill = new THREE.DirectionalLight(0xffffff, 0.5);
+      fill.position.copy(camera.position);
+      scene.add(fill);
 
       const group = new THREE.Group();
       scene.add(group);
@@ -88,7 +98,7 @@ export default function FigurineDuo() {
 
       // normalize each model to the same height, feet on the ground line,
       // side by side and slightly back-to-back
-      const TARGET_H = 1.8;
+      const TARGET_H = 2.0; // +~15% vs original 1.8 — they were getting lost in the slot
       const place = (gltf: { scene: import("three").Group }, x: number, rotY: number) => {
         const obj = gltf.scene;
         const pre = new THREE.Box3().setFromObject(obj);
@@ -102,8 +112,8 @@ export default function FigurineDuo() {
         obj.position.y = -box.min.y - TARGET_H / 2; // group vertically centered around 0
         group.add(obj);
       };
-      place(baki, -0.55, THREE.MathUtils.degToRad(20));
-      place(hugo, 0.55, THREE.MathUtils.degToRad(-20));
+      place(baki, -0.75, THREE.MathUtils.degToRad(20));
+      place(hugo, 0.75, THREE.MathUtils.degToRad(-20));
 
       mount.appendChild(renderer.domElement);
 
@@ -173,5 +183,16 @@ export default function FigurineDuo() {
     };
   }, []);
 
-  return <div ref={mountRef} aria-hidden style={{ position: "absolute", inset: 0 }} />;
+  return (
+    <div aria-hidden style={{ position: "absolute", inset: 0 }}>
+      {/* emerald halo + reinforced gold ground glow — silhouettes detach from the obsidian */}
+      <div style={{
+        position: "absolute", inset: 0,
+        background:
+          "radial-gradient(ellipse 56% 62% at 50% 52%, rgba(16,185,129,0.11), transparent 70%), " +
+          "radial-gradient(ellipse 62% 20% at 50% 88%, rgba(240,185,11,0.10), transparent 72%)",
+      }} />
+      <div ref={mountRef} style={{ position: "absolute", inset: 0 }} />
+    </div>
+  );
 }
