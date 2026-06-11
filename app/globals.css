@@ -121,6 +121,27 @@ body {
   }
 }
 
+/* Grindhouse weekly grid cells */
+.weekly-cell {
+  width: 100%; min-height: 34px;
+  display: inline-flex; align-items: center; justify-content: center; gap: 5px;
+  padding: 6px 8px; border-radius: 8px;
+  background: transparent; border: 1px solid transparent; cursor: pointer;
+  transition: background 0.12s, border-color 0.12s;
+}
+.weekly-cell:hover { background: rgba(255,255,255,0.04); border-color: rgba(255,255,255,0.08); }
+.weekly-missing {
+  background: rgba(245,158,11,0.06);
+  color: #F59E0B;
+}
+.weekly-missing:hover { background: rgba(245,158,11,0.12); border-color: rgba(245,158,11,0.3); }
+.weekly-add {
+  display: none; align-items: center; gap: 2px;
+  font-size: 10px; font-weight: 600; color: #F59E0B;
+}
+.weekly-missing:hover .weekly-add { display: inline-flex; }
+.weekly-missing:hover svg:first-child { display: none; }
+
 /* Topbar pills */
 .topbar-pill {
   display: inline-flex; align-items: center; gap: 7px;

@@ -6,7 +6,7 @@ import { useState, useEffect } from "react";
 import {
   X, LogOut, LayoutDashboard, ContactRound, Users, Network,
   Sliders, Settings, Wallet, Scale, BarChart3, FileText,
-  Gamepad2, Receipt, TrendingUp, ChevronDown, ChevronRight,
+  Gamepad2, Receipt, TrendingUp, ChevronDown, ChevronRight, CalendarDays,
 } from "lucide-react";
 
 type NavItem = { href: string; label: string; icon: React.ComponentType<{ size?: number; strokeWidth?: number }> };
@@ -43,6 +43,7 @@ const GROUPS: NavGroup[] = [
     { href: "/grindhouse/expenses", label: "Frais", icon: Receipt },
     { href: "/grindhouse/settlements", label: "Settlements", icon: Scale },
     { href: "/grindhouse/dashboard", label: "Dashboard", icon: TrendingUp },
+    { href: "/grindhouse/weekly", label: "Weekly", icon: CalendarDays },
   ]},
 ];
 

@@ -1569,3 +1569,54 @@ export function getDashboardStatus(): DashboardStatus {
   } catch { /* table absent on fresh DB before migration */ }
   return { active_players, active_games, active_grinders };
 }
+
+// J) Grindhouse weekly grid — read-only aggregation per grinder × ISO week
+export interface GrinderRow { player_id: number; name: string; }
+export function getActiveGrinders(): GrinderRow[] {
+  const db = getDb();
+  return db.prepare(`
+    SELECT gg.player_id, p.name
+    FROM grindhouse_grinders gg
+    JOIN players p ON p.id = gg.player_id
+    WHERE gg.status = 'active'
+    ORDER BY p.name COLLATE NOCASE
+  `).all() as GrinderRow[];
+}
+
+export interface GrindhouseWeekCell {
+  player_id: number;
+  week_start: string;          // Monday YYYY-MM-DD
+  pnl: number;
+  hours: number;
+  session_count: number;
+  single_session_id: number | null;  // set when exactly one session → editable in place
+}
+export function getGrindhouseWeeklyCells(from: string, to: string): GrindhouseWeekCell[] {
+  const db = getDb();
+  return db.prepare(`
+    SELECT s.player_id,
+           date(s.session_date, '-' || ((CAST(strftime('%w', s.session_date) AS INTEGER) + 6) % 7) || ' days') AS week_start,
+           SUM(s.net_result_usdt) AS pnl,
+           COALESCE(SUM(s.duration_hours), 0) AS hours,
+           COUNT(*) AS session_count,
+           CASE WHEN COUNT(*) = 1 THEN MIN(s.id) ELSE NULL END AS single_session_id
+    FROM grindhouse_sessions s
+    WHERE s.session_date >= ? AND s.session_date <= ?
+    GROUP BY s.player_id, week_start
+  `).all(from, to) as GrindhouseWeekCell[];
+}
+
+// Default game for the weekly quick-add: each grinder's most recent session's game
+export function getGrinderDefaultGames(): Record<number, number> {
+  const db = getDb();
+  const rows = db.prepare(`
+    SELECT s1.player_id, s1.game_id
+    FROM grindhouse_sessions s1
+    WHERE s1.id = (
+      SELECT s2.id FROM grindhouse_sessions s2
+      WHERE s2.player_id = s1.player_id
+      ORDER BY s2.created_at DESC, s2.id DESC LIMIT 1
+    )
+  `).all() as { player_id: number; game_id: number }[];
+  return Object.fromEntries(rows.map(r => [r.player_id, r.game_id]));
+}
