@@ -38,6 +38,15 @@ interface LogRow {
 }
 
 const CREATE_GAME = "__create__";
+const COMMON_CURRENCIES = ["USDT", "INR", "EUR", "USD", "CNY", "MYR"];
+const OTHER_CURRENCY = "__other__";
+
+// USDT first, then alphabetical — stable order everywhere currencies are listed
+function currencyOrder(a: string, b: string): number {
+  if (a === "USDT") return -1;
+  if (b === "USDT") return 1;
+  return a.localeCompare(b);
+}
 
 interface ModalState {
   grinder: GrinderRow;
@@ -52,7 +61,15 @@ let keySeq = 1;
 
 export default function WeeklyClient({ weeks, grinders, cells, sessions, games, variants, nWeeks }: WeeklyClientProps) {
   const router = useRouter();
-  const cellMap = new Map(cells.map(c => [`${c.player_id}|${c.week_start}`, c]));
+  // One entry per player×week, holding one row per currency (never summed together)
+  const cellMap = new Map<string, GrindhouseWeekCell[]>();
+  for (const c of cells) {
+    const k = `${c.player_id}|${c.week_start}`;
+    const arr = cellMap.get(k) ?? [];
+    arr.push(c);
+    cellMap.set(k, arr);
+  }
+  for (const arr of cellMap.values()) arr.sort((a, b) => currencyOrder(a.currency, b.currency));
 
   const [modal, setModal] = useState<ModalState | null>(null);
   const [rows, setRows] = useState<LogRow[]>([]);
@@ -64,6 +81,8 @@ export default function WeeklyClient({ weeks, grinders, cells, sessions, games, 
   const [extraGames, setExtraGames] = useState<Game[]>([]);   // created this session, until router.refresh lands
   const [createForKey, setCreateForKey] = useState<number | null>(null);
   const [newGameName, setNewGameName] = useState("");
+  const [newGameCurrency, setNewGameCurrency] = useState("USDT");
+  const [customCurrency, setCustomCurrency] = useState("");
   const [creatingGame, setCreatingGame] = useState(false);
   const knownIds = new Set(games.map(g => g.id));
   const allGames = [...games, ...extraGames.filter(g => !knownIds.has(g.id))];
@@ -71,13 +90,15 @@ export default function WeeklyClient({ weeks, grinders, cells, sessions, games, 
   async function createGame() {
     const name = newGameName.trim();
     if (!name) { setError("Nom de la game requis"); return; }
+    const currency = (newGameCurrency === OTHER_CURRENCY ? customCurrency : newGameCurrency).trim().toUpperCase();
+    if (!/^[A-Z]{3,5}$/.test(currency)) { setError("Currency invalide (3-5 lettres, ex: INR)"); return; }
     setCreatingGame(true);
     setError("");
     try {
       const res = await fetch("/api/games", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name }),
+        body: JSON.stringify({ name, currency }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error ?? `POST /api/games → ${res.status}`);
@@ -85,6 +106,8 @@ export default function WeeklyClient({ weeks, grinders, cells, sessions, games, 
       if (createForKey !== null) patchRow(createForKey, { game_id: data.id });
       setCreateForKey(null);
       setNewGameName("");
+      setNewGameCurrency("USDT");
+      setCustomCurrency("");
       router.refresh();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Erreur réseau");
@@ -93,10 +116,14 @@ export default function WeeklyClient({ weeks, grinders, cells, sessions, games, 
     }
   }
 
-  const totalPnl = cells.reduce((s, c) => s + c.pnl, 0);
+  // Footer totals — one total PER currency, raw amounts are never mixed (invariant #3)
+  const totalsByCurrency = new Map<string, number>();
+  for (const c of cells) totalsByCurrency.set(c.currency, (totalsByCurrency.get(c.currency) ?? 0) + c.pnl);
+  const totalEntries = [...totalsByCurrency.entries()].sort(([a], [b]) => currencyOrder(a, b));
   const totalHours = cells.reduce((s, c) => s + c.hours, 0);
   const grinderIds = new Set(grinders.map(g => g.player_id));
-  const missingCount = grinders.length * weeks.length - cells.filter(c => grinderIds.has(c.player_id)).length;
+  const filledKeys = new Set(cells.filter(c => grinderIds.has(c.player_id)).map(c => `${c.player_id}|${c.week_start}`));
+  const missingCount = grinders.length * weeks.length - filledKeys.size;
 
   function openCell(grinder: GrinderRow, week: WeekCol) {
     const existing = sessions.filter(s => s.player_id === grinder.player_id && s.week_start === week.week_start);
@@ -113,6 +140,8 @@ export default function WeeklyClient({ weeks, grinders, cells, sessions, games, 
     setDeletedIds([]);
     setCreateForKey(null);
     setNewGameName("");
+    setNewGameCurrency("USDT");
+    setCustomCurrency("");
     setError("");
     setModal({ grinder, week });
   }
@@ -251,14 +280,16 @@ export default function WeeklyClient({ weeks, grinders, cells, sessions, games, 
                     borderBottom: "1px solid rgba(255,255,255,0.04)",
                   }}>{g.name}</td>
                   {weeks.map(w => {
-                    const cell = cellMap.get(`${g.player_id}|${w.week_start}`) ?? null;
-                    const missing = !cell;
+                    const cellRows = cellMap.get(`${g.player_id}|${w.week_start}`) ?? [];
+                    const missing = cellRows.length === 0;
+                    const sessionCount = cellRows.reduce((s, c) => s + c.session_count, 0);
+                    const gamesCount = cellRows.reduce((s, c) => s + c.games_count, 0);
                     return (
                       <td key={w.week_start} style={{ padding: 3, borderBottom: "1px solid rgba(255,255,255,0.04)" }}>
                         <button
                           onClick={() => openCell(g, w)}
                           className={missing ? "weekly-cell weekly-missing" : "weekly-cell"}
-                          title={missing ? `Ajouter — ${g.name} ${w.iso}` : `${cell!.session_count} log(s), ${cell!.games_count} game(s) — modifier`}
+                          title={missing ? `Ajouter — ${g.name} ${w.iso}` : `${sessionCount} log(s), ${gamesCount} game(s) — modifier`}
                         >
                           {missing ? (
                             <>
@@ -267,16 +298,23 @@ export default function WeeklyClient({ weeks, grinders, cells, sessions, games, 
                             </>
                           ) : (
                             <span style={{ display: "inline-flex", flexDirection: "column", alignItems: "center", gap: 1 }}>
-                              <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
-                                <span className="tabular-nums" style={{
-                                  fontWeight: 600, fontSize: 12,
-                                  color: cell!.pnl > 0 ? "#10B981" : cell!.pnl < 0 ? "#EF4444" : "#8888A0",
-                                }}>{fmtPnl(cell!.pnl)}</span>
-                                <Check size={10} style={{ color: "rgba(16,185,129,0.5)", flexShrink: 0 }} />
-                              </span>
-                              {cell!.games_count > 1 && (
+                              {cellRows.map((c, idx) => (
+                                <span key={c.currency} style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
+                                  <span className="tabular-nums" style={{
+                                    fontWeight: 600, fontSize: cellRows.length > 1 ? 11 : 12,
+                                    color: c.pnl > 0 ? "#10B981" : c.pnl < 0 ? "#EF4444" : "#8888A0",
+                                  }}>
+                                    {fmtPnl(c.pnl)}
+                                    {c.currency !== "USDT" && (
+                                      <span style={{ fontSize: 8.5, fontWeight: 600, color: "#8888A0" }}> {c.currency}</span>
+                                    )}
+                                  </span>
+                                  {idx === 0 && <Check size={10} style={{ color: "rgba(16,185,129,0.5)", flexShrink: 0 }} />}
+                                </span>
+                              ))}
+                              {gamesCount > 1 && (
                                 <span style={{ fontSize: 8.5, fontWeight: 600, color: "#555568", letterSpacing: "0.03em" }}>
-                                  {cell!.games_count} games
+                                  {gamesCount} games
                                 </span>
                               )}
                             </span>
@@ -298,7 +336,17 @@ export default function WeeklyClient({ weeks, grinders, cells, sessions, games, 
           background: "#0F1017", fontSize: 12,
         }}>
           <span style={{ color: "#8888A0" }}>
-            Total P&L <b className="tabular-nums" style={{ color: totalPnl >= 0 ? "#10B981" : "#EF4444" }}>{fmtPnl(totalPnl)} USDT</b>
+            Total P&L{" "}
+            {totalEntries.length === 0 ? (
+              <b className="tabular-nums" style={{ color: "#8888A0" }}>+0 USDT</b>
+            ) : (
+              totalEntries.map(([cur, v], i) => (
+                <span key={cur}>
+                  {i > 0 && <span style={{ color: "#555568" }}> · </span>}
+                  <b className="tabular-nums" style={{ color: v >= 0 ? "#10B981" : "#EF4444" }}>{fmtPnl(v)} {cur}</b>
+                </span>
+              ))
+            )}
           </span>
           <span style={{ color: "#8888A0" }}>
             Total heures <b className="tabular-nums" style={{ color: "#E8E8EE" }}>{totalHours.toLocaleString("fr-FR", { maximumFractionDigits: 1 })}h</b>
@@ -388,10 +436,27 @@ export default function WeeklyClient({ weeks, grinders, cells, sessions, games, 
                       onKeyDown={e => { if (e.key === "Enter") { e.preventDefault(); createGame(); } }}
                       style={{ flex: 1 }}
                     />
+                    <select
+                      value={newGameCurrency}
+                      onChange={e => setNewGameCurrency(e.target.value)}
+                      title="Currency de la game"
+                      style={{ width: 86 }}
+                    >
+                      {COMMON_CURRENCIES.map(c => <option key={c} value={c}>{c}</option>)}
+                      <option value={OTHER_CURRENCY}>Autre…</option>
+                    </select>
+                    {newGameCurrency === OTHER_CURRENCY && (
+                      <input
+                        type="text" placeholder="THB" maxLength={5}
+                        value={customCurrency}
+                        onChange={e => setCustomCurrency(e.target.value.toUpperCase())}
+                        style={{ width: 60 }}
+                      />
+                    )}
                     <Btn size="sm" variant="primary" onClick={createGame} disabled={creatingGame}>
                       {creatingGame ? "..." : "Créer"}
                     </Btn>
-                    <Btn size="sm" onClick={() => { setCreateForKey(null); setNewGameName(""); }}>Annuler</Btn>
+                    <Btn size="sm" onClick={() => { setCreateForKey(null); setNewGameName(""); setNewGameCurrency("USDT"); setCustomCurrency(""); }}>Annuler</Btn>
                   </div>
                 )}
               </div>

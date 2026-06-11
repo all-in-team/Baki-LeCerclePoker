@@ -8,10 +8,16 @@ export async function PATCH(req: NextRequest, { params }: Ctx) {
   const body = await req.json();
   const db = getDb();
 
+  if (body.currency !== undefined) {
+    const cur = String(body.currency).trim().toUpperCase();
+    if (!/^[A-Z]{3,5}$/.test(cur)) return NextResponse.json({ error: "currency invalide (3-5 lettres)" }, { status: 400 });
+    body.currency = cur;
+  }
+
   const allowed = [
     "exact_action_pct", "exact_rakeback_pct", "exact_insurance_pct",
     "perceived_action_pct", "perceived_rakeback_pct", "perceived_insurance_pct",
-    "status",
+    "status", "currency",
   ];
   const sets: string[] = [];
   const vals: Record<string, unknown> = { id: Number(id) };

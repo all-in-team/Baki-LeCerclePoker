@@ -15,7 +15,7 @@ const GAME_COLORS: Record<string, { bg: string; color: string }> = {
 };
 
 interface GameRow {
-  id: number; name: string; status: string;
+  id: number; name: string; status: string; currency: string;
   exact_action_pct: number | null; exact_rakeback_pct: number | null; exact_insurance_pct: number | null;
   perceived_action_pct: number | null; perceived_rakeback_pct: number | null; perceived_insurance_pct: number | null;
 }
@@ -23,7 +23,12 @@ interface GameRow {
 interface EditForm {
   exact_action_pct: string; exact_rakeback_pct: string; exact_insurance_pct: string;
   perceived_action_pct: string; perceived_rakeback_pct: string; perceived_insurance_pct: string;
+  currency: string;        // one of COMMON_CURRENCIES or OTHER_CURRENCY
+  customCurrency: string;  // free input when "Autre…"
 }
+
+const COMMON_CURRENCIES = ["USDT", "INR", "EUR", "USD", "CNY", "MYR"];
+const OTHER_CURRENCY = "__other__";
 
 interface Props { games: GameRow[]; }
 
@@ -34,7 +39,7 @@ const inputStyle: React.CSSProperties = { width: "100%", padding: "7px 10px", bo
 export default function GamesConfigClient({ games }: Props) {
   const router = useRouter();
   const [editGame, setEditGame] = useState<GameRow | null>(null);
-  const [form, setForm] = useState<EditForm>({ exact_action_pct: "", exact_rakeback_pct: "", exact_insurance_pct: "", perceived_action_pct: "", perceived_rakeback_pct: "", perceived_insurance_pct: "" });
+  const [form, setForm] = useState<EditForm>({ exact_action_pct: "", exact_rakeback_pct: "", exact_insurance_pct: "", perceived_action_pct: "", perceived_rakeback_pct: "", perceived_insurance_pct: "", currency: "USDT", customCurrency: "" });
   const [saving, setSaving] = useState(false);
   const [showArchived, setShowArchived] = useState(false);
 
@@ -43,6 +48,8 @@ export default function GamesConfigClient({ games }: Props) {
 
   function openEdit(g: GameRow) {
     setEditGame(g);
+    const cur = (g.currency ?? "USDT").toUpperCase();
+    const isCommon = COMMON_CURRENCIES.includes(cur);
     setForm({
       exact_action_pct: g.exact_action_pct != null ? String(g.exact_action_pct) : "",
       exact_rakeback_pct: g.exact_rakeback_pct != null ? String(g.exact_rakeback_pct) : "",
@@ -50,11 +57,15 @@ export default function GamesConfigClient({ games }: Props) {
       perceived_action_pct: g.perceived_action_pct != null ? String(g.perceived_action_pct) : "",
       perceived_rakeback_pct: g.perceived_rakeback_pct != null ? String(g.perceived_rakeback_pct) : "",
       perceived_insurance_pct: g.perceived_insurance_pct != null ? String(g.perceived_insurance_pct) : "",
+      currency: isCommon ? cur : OTHER_CURRENCY,
+      customCurrency: isCommon ? "" : cur,
     });
   }
 
   async function handleSave() {
     if (!editGame) return;
+    const currency = (form.currency === OTHER_CURRENCY ? form.customCurrency : form.currency).trim().toUpperCase();
+    if (!/^[A-Z]{3,5}$/.test(currency)) { alert("Currency invalide (3-5 lettres, ex: INR)"); return; }
     setSaving(true);
     try {
       const res = await fetch(`/api/games/${editGame.id}`, {
@@ -66,6 +77,7 @@ export default function GamesConfigClient({ games }: Props) {
           perceived_action_pct: form.perceived_action_pct ? Number(form.perceived_action_pct) : null,
           perceived_rakeback_pct: form.perceived_rakeback_pct ? Number(form.perceived_rakeback_pct) : null,
           perceived_insurance_pct: form.perceived_insurance_pct ? Number(form.perceived_insurance_pct) : null,
+          currency,
         }),
       });
       if (!res.ok) { const d = await res.json(); alert(d.error ?? "Erreur"); return; }
@@ -112,6 +124,11 @@ export default function GamesConfigClient({ games }: Props) {
         <div style={{ padding: "12px 16px", background: "var(--bg-surface)", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
           <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
             <span style={{ background: gc.bg, color: gc.color, padding: "3px 10px", borderRadius: 5, fontSize: 12, fontWeight: 700 }}>{g.name}</span>
+            <span style={{
+              fontSize: 9, padding: "2px 7px", borderRadius: 3, fontWeight: 700, letterSpacing: "0.05em",
+              background: g.currency === "USDT" ? "rgba(34,197,94,0.10)" : "rgba(245,158,11,0.12)",
+              color: g.currency === "USDT" ? "#22C55E" : "#F59E0B",
+            }}>{g.currency ?? "USDT"}</span>
             {g.status === "archived" && <span style={{ fontSize: 9, padding: "1px 6px", borderRadius: 3, background: "rgba(156,163,175,0.15)", color: "#9CA3AF", fontWeight: 600 }}>ARCHIVED</span>}
           </div>
           <div style={{ display: "flex", gap: 6 }}>
@@ -185,6 +202,28 @@ export default function GamesConfigClient({ games }: Props) {
                 </div>
               ))}
             </div>
+          </div>
+        </div>
+        <div style={{ marginTop: 14, padding: "12px", background: "var(--bg-surface)", borderRadius: 8, border: "1px solid var(--border)" }}>
+          <div style={{ fontSize: 11, fontWeight: 700, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.07em", marginBottom: 8 }}>Currency</div>
+          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+            <select
+              value={form.currency}
+              onChange={e => setForm({ ...form, currency: e.target.value })}
+              style={{ ...inputStyle, textAlign: "left", width: "auto", minWidth: 120 }}
+            >
+              {COMMON_CURRENCIES.map(c => <option key={c} value={c}>{c}</option>)}
+              <option value={OTHER_CURRENCY}>Autre…</option>
+            </select>
+            {form.currency === OTHER_CURRENCY && (
+              <input
+                type="text" placeholder="ex: THB" maxLength={5}
+                value={form.customCurrency}
+                onChange={e => setForm({ ...form, customCurrency: e.target.value.toUpperCase() })}
+                style={{ ...inputStyle, width: 90 }}
+              />
+            )}
+            <span style={{ fontSize: 10, color: "var(--text-dim)" }}>Pas de conversion auto — les montants de cette game restent dans sa devise.</span>
           </div>
         </div>
         <div style={{ fontSize: 11, color: "var(--text-dim)", marginTop: 10, padding: "8px 0" }}>

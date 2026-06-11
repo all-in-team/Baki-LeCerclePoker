@@ -1307,7 +1307,9 @@ export function getAgencyExtrasNet(gameKey: string, period?: Period): number {
 // D-bis) Grindhouse agency net — same formula as /grindhouse/dashboard "Rentabilité nette"
 // (app/api/grindhouse-profitability): per active grinder pool_net = sessions_pnl - attributed
 // grind fees, agency keeps 50% of each pool; then general grind fees (player_id NULL),
-// resto and autres come off the agency side. All grindhouse amounts are USDT.
+// resto and autres come off the agency side. Expenses are USDT.
+// USDT-ONLY: sessions of non-USDT games (games.currency != 'USDT') are EXCLUDED — there is
+// no FX rate for them (Phase 2), and raw cross-currency sums violate invariant #3.
 export function getGrindhouseAgencyNet(period?: Period): number {
   const db = getDb();
   try {
@@ -1316,6 +1318,7 @@ export function getGrindhouseAgencyNet(period?: Period): number {
       SELECT COALESCE(SUM(s.net_result_usdt), 0) AS v
       FROM grindhouse_sessions s
       JOIN grindhouse_grinders gg ON gg.player_id = s.player_id AND gg.status = 'active'
+      JOIN games gm ON gm.id = s.game_id AND COALESCE(gm.currency, 'USDT') = 'USDT'
       WHERE 1=1`;
     if (period?.from) { sessSql += ` AND s.session_date >= ?`; sessParams.push(period.from); }
     if (period?.to) { sessSql += ` AND s.session_date <= ?`; sessParams.push(period.to); }
@@ -1367,6 +1370,7 @@ export function getGrindhouseNetOverTime(period?: Period): GrindhouseDailyNet[] 
       SELECT s.session_date AS day, COALESCE(SUM(s.net_result_usdt), 0) AS v
       FROM grindhouse_sessions s
       JOIN grindhouse_grinders gg ON gg.player_id = s.player_id AND gg.status = 'active'
+      JOIN games gm ON gm.id = s.game_id AND COALESCE(gm.currency, 'USDT') = 'USDT'
       WHERE 1=1${range("s.session_date", sessParams)}
       GROUP BY day
     `).all(...sessParams) as { day: string; v: number }[];
@@ -1695,6 +1699,7 @@ export function getActiveGrinders(): GrinderRow[] {
 export interface GrindhouseWeekCell {
   player_id: number;
   week_start: string;          // Monday YYYY-MM-DD
+  currency: string;            // game currency — one cell row per currency
   pnl: number;
   hours: number;
   session_count: number;
@@ -1702,16 +1707,20 @@ export interface GrindhouseWeekCell {
 }
 export function getGrindhouseWeeklyCells(from: string, to: string): GrindhouseWeekCell[] {
   const db = getDb();
+  // One row per player × week × currency — amounts of different currencies are NEVER
+  // summed together (invariant #3, no FX conversion in grindhouse).
   return db.prepare(`
     SELECT s.player_id,
            date(s.session_date, '-' || ((CAST(strftime('%w', s.session_date) AS INTEGER) + 6) % 7) || ' days') AS week_start,
+           COALESCE(g.currency, 'USDT') AS currency,
            SUM(s.net_result_usdt) AS pnl,
            COALESCE(SUM(s.duration_hours), 0) AS hours,
            COUNT(*) AS session_count,
            COUNT(DISTINCT s.game_id) AS games_count
     FROM grindhouse_sessions s
+    JOIN games g ON g.id = s.game_id
     WHERE s.session_date >= ? AND s.session_date <= ?
-    GROUP BY s.player_id, week_start
+    GROUP BY s.player_id, week_start, currency
   `).all(from, to) as GrindhouseWeekCell[];
 }
 

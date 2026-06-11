@@ -10,12 +10,16 @@ const GAME_BADGES: Record<string, { short: string; bg: string; color: string }> 
   ClubGG: { short: "CG", bg: "rgba(234,179,8,0.15)", color: "#EAB308" },
 };
 
+interface CurrencyTotal { currency: string; sessions_pnl: number; hours: number; grinder_share: number; agency_share: number }
+
 interface ProfitData {
   total_sessions_pnl: number; total_grind_fees_attributed: number; total_pool_net: number;
   total_grinder_share: number; agency_brute: number; general_grind_fees: number;
   resto_fees: number; autre_fees: number; agency_net: number; total_hours: number;
-  breakdown: { player_id: number; name: string; hours: number; sessions_pnl: number; grind_fees: number; pool_net: number; grinder_share: number; agency_share: number }[];
-  per_game?: { game_id: number; game_name: string; hours: number; pnl: number }[];
+  usdt_hours?: number;
+  by_currency?: CurrencyTotal[];   // non-USDT games — raw amounts, never merged with USDT
+  breakdown: { player_id: number; name: string; hours: number; sessions_pnl: number; grind_fees: number; pool_net: number; grinder_share: number; agency_share: number; by_currency?: { currency: string; pnl: number; hours: number }[] }[];
+  per_game?: { game_id: number; game_name: string; currency?: string; hours: number; pnl: number }[];
 }
 
 type Preset = "today" | "7d" | "30d" | "custom";
@@ -69,6 +73,7 @@ export default function DashboardClient() {
   const inputStyle: React.CSSProperties = { padding: "6px 10px", borderRadius: 7, fontSize: 12, background: "var(--bg-surface)", color: "var(--text)", border: "1px solid var(--border)", outline: "none", boxSizing: "border-box" };
 
   const hasData = data && data.total_hours > 0;
+  const otherCurrencies = data?.by_currency?.filter(c => c.sessions_pnl !== 0 || c.hours > 0) ?? [];
 
   return (
     <div style={{ padding: "0 28px" }}>
@@ -102,10 +107,15 @@ export default function DashboardClient() {
           <div style={{ padding: "18px 20px", background: "var(--bg-raised)", border: "1px solid var(--border)", borderRadius: 10 }}>
             <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 10, fontWeight: 700, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 8 }}><TrendingUp size={13} /> P&L net</div>
             <div style={{ fontSize: 32, fontWeight: 600, color: pnlColor(data!.total_sessions_pnl) }}>{pnlSign(data!.total_sessions_pnl)}<span style={{ fontSize: 14, fontWeight: 400, marginLeft: 4 }}>USDT</span></div>
+            {otherCurrencies.map(c => (
+              <div key={c.currency} style={{ fontSize: 14, fontWeight: 600, color: pnlColor(c.sessions_pnl), marginTop: 2 }}>
+                {pnlSign(c.sessions_pnl)} <span style={{ fontWeight: 400, color: "var(--text-dim)" }}>{c.currency}</span>
+              </div>
+            ))}
           </div>
           <div style={{ padding: "18px 20px", background: "var(--bg-raised)", border: "1px solid var(--border)", borderRadius: 10 }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 10, fontWeight: 700, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 8 }}><Zap size={13} /> Taux moyen</div>
-            <div style={{ fontSize: 32, fontWeight: 600, color: hrRateColor(data!.total_sessions_pnl, data!.total_hours) }}>{hrRate(data!.total_sessions_pnl, data!.total_hours)}</div>
+            <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 10, fontWeight: 700, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 8 }}><Zap size={13} /> Taux moyen{otherCurrencies.length > 0 ? " (USDT)" : ""}</div>
+            <div style={{ fontSize: 32, fontWeight: 600, color: hrRateColor(data!.total_sessions_pnl, data!.usdt_hours ?? data!.total_hours) }}>{hrRate(data!.total_sessions_pnl, data!.usdt_hours ?? data!.total_hours)}</div>
           </div>
         </div>
 
@@ -124,7 +134,12 @@ export default function DashboardClient() {
                     <span style={{ fontWeight: 500, fontSize: 13, color: "var(--text)" }}>{b.name}</span>
                   </div>
                   <div style={{ fontSize: 12, color: "var(--text-dim)", marginBottom: 6 }}>
-                    {hasHours ? <>{b.hours.toFixed(1)}h · <span style={{ color: pnlColor(b.sessions_pnl), fontWeight: 500 }}>{pnlSign(b.sessions_pnl)} USDT</span></> : "—"}
+                    {hasHours ? <>
+                      {b.hours.toFixed(1)}h · <span style={{ color: pnlColor(b.sessions_pnl), fontWeight: 500 }}>{pnlSign(b.sessions_pnl)} USDT</span>
+                      {(b.by_currency ?? []).map(c => (
+                        <span key={c.currency}> · <span style={{ color: pnlColor(c.pnl), fontWeight: 500 }}>{pnlSign(c.pnl)} {c.currency}</span></span>
+                      ))}
+                    </> : "—"}
                   </div>
                   <div style={{ fontSize: 20, fontWeight: 500, color: hrRateColor(b.sessions_pnl, b.hours) }}>{hrRate(b.sessions_pnl, b.hours)}</div>
                 </div>
@@ -142,8 +157,8 @@ export default function DashboardClient() {
               <tr key={g.game_id} style={{ borderBottom: "1px solid var(--border)" }}>
                 <td style={{ padding: "10px 14px" }}><span style={{ background: gb.bg, color: gb.color, padding: "2px 8px", borderRadius: 4, fontSize: 10, fontWeight: 700 }}>{gb.short}</span><span style={{ marginLeft: 8, fontSize: 12, color: "var(--text)" }}>{g.game_name}</span></td>
                 <td style={{ padding: "10px 14px", textAlign: "right", fontSize: 12, color: "var(--text-muted)" }}>{g.hours.toFixed(1)}h</td>
-                <td style={{ padding: "10px 14px", textAlign: "right", fontSize: 12, fontWeight: 600, color: pnlColor(g.pnl) }}>{pnlSign(g.pnl)}</td>
-                <td style={{ padding: "10px 14px", textAlign: "right", fontSize: 12, fontWeight: 600, color: hrRateColor(g.pnl, g.hours) }}>{hrRate(g.pnl, g.hours)}</td>
+                <td style={{ padding: "10px 14px", textAlign: "right", fontSize: 12, fontWeight: 600, color: pnlColor(g.pnl) }}>{pnlSign(g.pnl)}{g.currency && g.currency !== "USDT" ? <span style={{ fontWeight: 400, color: "var(--text-dim)" }}> {g.currency}</span> : null}</td>
+                <td style={{ padding: "10px 14px", textAlign: "right", fontSize: 12, fontWeight: 600, color: hrRateColor(g.pnl, g.hours) }}>{g.currency && g.currency !== "USDT" ? (g.hours > 0 ? `${g.pnl >= 0 ? "+" : ""}${(g.pnl / g.hours).toFixed(0)} ${g.currency}/h` : "—") : hrRate(g.pnl, g.hours)}</td>
               </tr>
             ); })}</tbody></table>
           </div>
@@ -163,10 +178,24 @@ export default function DashboardClient() {
             {data!.general_grind_fees > 0 && <div style={{ display: "flex", justifyContent: "space-between" }}><span style={{ color: "var(--text-dim)" }}>− Frais grind généraux</span><span style={{ color: "#f87171" }}>−{fmt(data!.general_grind_fees)}</span></div>}
             {data!.resto_fees > 0 && <div style={{ display: "flex", justifyContent: "space-between" }}><span style={{ color: "var(--text-dim)" }}>− Frais resto</span><span style={{ color: "#f87171" }}>−{fmt(data!.resto_fees)}</span></div>}
             {data!.autre_fees > 0 && <div style={{ display: "flex", justifyContent: "space-between" }}><span style={{ color: "var(--text-dim)" }}>− Frais autres</span><span style={{ color: "#f87171" }}>−{fmt(data!.autre_fees)}</span></div>}
+            {otherCurrencies.length > 0 && (<>
+              <div style={{ height: 1, background: "var(--border)", margin: "4px 0" }} />
+              {otherCurrencies.map(c => (
+                <div key={c.currency} style={{ display: "flex", justifyContent: "space-between", fontSize: 12 }}>
+                  <span style={{ color: "var(--text-dim)" }}>{c.currency} (non converti) — brute {pnlSign(c.sessions_pnl)} · − 50% grinders</span>
+                  <span style={{ fontWeight: 600, color: pnlColor(c.agency_share) }}>{pnlSign(c.agency_share)} {c.currency}</span>
+                </div>
+              ))}
+            </>)}
             <div style={{ height: 2, background: "var(--border)", margin: "6px 0" }} />
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
               <span style={{ fontSize: 15, fontWeight: 600 }}>Rentabilité nette</span>
-              <span style={{ fontSize: 20, fontWeight: 600, color: pnlColor(data!.agency_net) }}>{pnlSign(data!.agency_net)} USDT</span>
+              <span style={{ fontSize: 20, fontWeight: 600, color: pnlColor(data!.agency_net) }}>
+                {pnlSign(data!.agency_net)} USDT
+                {otherCurrencies.map(c => (
+                  <span key={c.currency} style={{ fontSize: 14, color: pnlColor(c.agency_share) }}> · {pnlSign(c.agency_share)} {c.currency}</span>
+                ))}
+              </span>
             </div>
           </div>
         </div>

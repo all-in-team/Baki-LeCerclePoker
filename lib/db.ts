@@ -1447,4 +1447,16 @@ function initSchema(db: Database.Database) {
     console.error(`[MIGRATION:drop_games_name_check_v1] FAILED:`, err.message);
     console.error(err.stack);
   }
+
+  // Per-game currency — grindhouse session amounts inherit it. No FX conversion (Phase 2);
+  // totals are displayed per currency, never summed across currencies (invariant #3).
+  try {
+    const fix = db.prepare(`INSERT OR IGNORE INTO _applied_fixes (name) VALUES (?)`).run("add_games_currency_v1");
+    if (fix.changes > 0) {
+      db.exec(`ALTER TABLE games ADD COLUMN currency TEXT NOT NULL DEFAULT 'USDT'`);
+      console.log("[MIGRATION] add_games_currency_v1 applied");
+    }
+  } catch (err: any) {
+    console.error(`[MIGRATION:add_games_currency_v1] FAILED:`, err.message);
+  }
 }

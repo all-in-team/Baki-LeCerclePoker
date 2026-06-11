@@ -6,7 +6,7 @@ import GamesConfigClient from "./GamesConfigClient";
 export default function GamesConfigPage() {
   const db = getDb();
   const games = db.prepare(`
-    SELECT id, name, status,
+    SELECT id, name, status, COALESCE(currency, 'USDT') AS currency,
       exact_action_pct, exact_rakeback_pct, exact_insurance_pct,
       perceived_action_pct, perceived_rakeback_pct, perceived_insurance_pct
     FROM games ORDER BY status ASC, name ASC
