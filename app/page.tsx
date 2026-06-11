@@ -5,7 +5,7 @@ import {
 } from "@/lib/queries";
 import { getDb } from "@/lib/db";
 import Link from "next/link";
-import { TrendingUp, Users, Wallet, AlertTriangle, CheckCircle, BarChart3, Activity, Crosshair } from "lucide-react";
+import { TrendingUp, Users, Wallet, AlertTriangle, CheckCircle, BarChart3, Activity } from "lucide-react";
 import StatCard from "@/components/StatCard";
 import Odometer from "@/components/Odometer";
 import WarRoomHero from "./WarRoomHero";
@@ -81,17 +81,6 @@ export default function DashboardPage() {
 
   return (
     <div>
-      {/* Header */}
-      <div style={{ marginBottom: 20, display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 8 }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-          <Crosshair size={18} color="#F5C518" />
-          <h1 style={{ fontSize: 22, fontWeight: 700, color: "#E8E8EE", margin: 0, letterSpacing: "0.02em" }}>War Room</h1>
-        </div>
-        <span className="font-term" style={{ fontSize: 11, color: "#555568", letterSpacing: "0.08em" }}>
-          LE CERCLE · {today}
-        </span>
-      </div>
-
       {/* Hero + main chart (left 2/3) · Ops feed (right 1/3, full height) */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 mb-4">
         <div className="lg:col-span-2 min-w-0">

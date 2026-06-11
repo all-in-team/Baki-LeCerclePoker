@@ -3,6 +3,7 @@
 import { usePathname } from "next/navigation";
 import { useState, useEffect } from "react";
 import Sidebar from "./Sidebar";
+import Topbar from "./Topbar";
 import { Menu } from "lucide-react";
 
 export default function AdminShell({ children }: { children: React.ReactNode }) {
@@ -39,11 +40,16 @@ export default function AdminShell({ children }: { children: React.ReactNode }) 
         </button>
         <div style={{ marginLeft: 12, display: "flex", alignItems: "center", gap: 8 }}>
           <div style={{
-            width: 28, height: 28, borderRadius: 7,
-            background: "linear-gradient(135deg, #10B981, #F5C518)",
+            width: 28, height: 28, borderRadius: 8,
+            background: "#11141A", border: "1px solid rgba(255,255,255,0.08)",
             display: "flex", alignItems: "center", justifyContent: "center",
-            fontSize: 11, fontWeight: 800, color: "#000", letterSpacing: "-0.02em",
-          }}>LC</div>
+            fontSize: 11, fontWeight: 800, letterSpacing: "-0.02em",
+          }}>
+            <span style={{
+              background: "linear-gradient(120deg, #10B981, #F0B90B)",
+              WebkitBackgroundClip: "text", backgroundClip: "text", color: "transparent",
+            }}>LC</span>
+          </div>
           <span style={{ fontSize: 14, fontWeight: 700, color: "#E8E8EE" }}>Le Cercle</span>
         </div>
       </div>
@@ -61,8 +67,9 @@ export default function AdminShell({ children }: { children: React.ReactNode }) 
 
       <Sidebar isOpen={sidebarOpen} onClose={() => setSidebarOpen(false)} />
 
-      <main className="pt-14 lg:pt-0 lg:ml-[260px]" style={{ flex: 1, minHeight: "100vh" }}>
-        <div className="p-6 lg:p-10" style={{ maxWidth: 1400 }}>
+      <main className="pt-14 lg:pt-0 lg:ml-[284px]" style={{ flex: 1, minHeight: "100vh" }}>
+        <div className="p-6 lg:px-10 lg:pt-4 lg:pb-10" style={{ maxWidth: 1400 }}>
+          <Topbar pathname={pathname ?? "/"} />
           {children}
         </div>
       </main>
