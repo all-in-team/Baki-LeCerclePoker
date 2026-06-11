@@ -1308,21 +1308,24 @@ export function getAgencyExtrasNet(gameKey: string, period?: Period): number {
 // (app/api/grindhouse-profitability): per active grinder pool_net = sessions_pnl - attributed
 // grind fees, agency keeps 50% of each pool; then general grind fees (player_id NULL),
 // resto and autres come off the agency side. Expenses are USDT.
-// USDT-ONLY: sessions of non-USDT games (games.currency != 'USDT') are EXCLUDED — there is
-// no FX rate for them (Phase 2), and raw cross-currency sums violate invariant #3.
+// CURRENCY: non-USDT sessions are converted to USDT via toUsdt() (manual rate in settings,
+// invariant #3). A currency with NO configured rate contributes 0 (excluded, never summed raw)
+// — the grindhouse dashboard surfaces the missing rate.
 export function getGrindhouseAgencyNet(period?: Period): number {
   const db = getDb();
   try {
     const sessParams: string[] = [];
     let sessSql = `
-      SELECT COALESCE(SUM(s.net_result_usdt), 0) AS v
+      SELECT COALESCE(gm.currency, 'USDT') AS currency, COALESCE(SUM(s.net_result_usdt), 0) AS v
       FROM grindhouse_sessions s
       JOIN grindhouse_grinders gg ON gg.player_id = s.player_id AND gg.status = 'active'
-      JOIN games gm ON gm.id = s.game_id AND COALESCE(gm.currency, 'USDT') = 'USDT'
+      JOIN games gm ON gm.id = s.game_id
       WHERE 1=1`;
     if (period?.from) { sessSql += ` AND s.session_date >= ?`; sessParams.push(period.from); }
     if (period?.to) { sessSql += ` AND s.session_date <= ?`; sessParams.push(period.to); }
-    const sessionsPnl = (db.prepare(sessSql).get(...sessParams) as { v: number }).v;
+    sessSql += ` GROUP BY currency`;
+    const sessRows = db.prepare(sessSql).all(...sessParams) as { currency: string; v: number }[];
+    const sessionsPnl = sessRows.reduce((s, r) => s + toUsdt(r.v, r.currency), 0);
 
     const attParams: string[] = [];
     let attSql = `
@@ -1367,14 +1370,15 @@ export function getGrindhouseNetOverTime(period?: Period): GrindhouseDailyNet[] 
 
     const sessParams: string[] = [];
     const sessions = db.prepare(`
-      SELECT s.session_date AS day, COALESCE(SUM(s.net_result_usdt), 0) AS v
+      SELECT s.session_date AS day, COALESCE(gm.currency, 'USDT') AS currency,
+             COALESCE(SUM(s.net_result_usdt), 0) AS v
       FROM grindhouse_sessions s
       JOIN grindhouse_grinders gg ON gg.player_id = s.player_id AND gg.status = 'active'
-      JOIN games gm ON gm.id = s.game_id AND COALESCE(gm.currency, 'USDT') = 'USDT'
+      JOIN games gm ON gm.id = s.game_id
       WHERE 1=1${range("s.session_date", sessParams)}
-      GROUP BY day
-    `).all(...sessParams) as { day: string; v: number }[];
-    for (const r of sessions) add(r.day, r.v * 0.5);
+      GROUP BY day, currency
+    `).all(...sessParams) as { day: string; currency: string; v: number }[];
+    for (const r of sessions) add(r.day, toUsdt(r.v, r.currency) * 0.5);
 
     const attParams: string[] = [];
     const attributed = db.prepare(`
@@ -1630,40 +1634,48 @@ export interface OpsFeedEvent {
 }
 export function getOpsFeed(limit = 20): OpsFeedEvent[] {
   const db = getDb();
-  return db.prepare(`
+  const rows = db.prepare(`
     SELECT * FROM (
       SELECT s.created_at AS ts, 'session' AS type, p.name AS label,
-             g.name AS detail, s.net_result_usdt AS amount
+             g.name AS detail, s.net_result_usdt AS amount,
+             COALESCE(g.currency, 'USDT') AS currency
       FROM grindhouse_sessions s
       JOIN players p ON p.id = s.player_id
       JOIN games g ON g.id = s.game_id
 
       UNION ALL
       SELECT gs.paid_at, 'gh_settle', p.name,
-             gs.period_start || ' → ' || gs.period_end, gs.grinder_share
+             gs.period_start || ' → ' || gs.period_end, gs.grinder_share, 'USDT'
       FROM grindhouse_settlements gs
       JOIN players p ON p.id = gs.player_id
       WHERE gs.status = 'paid' AND gs.paid_at IS NOT NULL
 
       UNION ALL
       SELECT ws.received_at, 'settlement', p.name,
-             'semaine ' || ws.week_start, ws.pnl_player
+             'semaine ' || ws.week_start, ws.pnl_player, 'USDT'
       FROM weekly_settlements ws
       JOIN players p ON p.id = ws.player_id
       WHERE ws.payment_received = 1 AND ws.received_at IS NOT NULL
 
       UNION ALL
       SELECT e.created_at, 'expense', UPPER(e.type),
-             e.description, -ABS(e.amount_usdt)
+             e.description, -ABS(e.amount_usdt), 'USDT'
       FROM grindhouse_expenses e
 
       UNION ALL
-      SELECT p.created_at, 'onboard', p.name, NULL, NULL
+      SELECT p.created_at, 'onboard', p.name, NULL, NULL, 'USDT'
       FROM players p
     )
     ORDER BY ts DESC
     LIMIT ?
-  `).all(limit) as OpsFeedEvent[];
+  `).all(limit) as (OpsFeedEvent & { currency: string })[];
+  // Feed amounts are displayed as USDT — convert non-USDT session amounts; if no rate is
+  // configured, keep the raw amount but tag the currency in the detail (never mislabel).
+  return rows.map(({ currency, ...r }) => {
+    if (r.amount === null || currency === "USDT") return r;
+    if (getExchangeRate(currency) > 0) return { ...r, amount: toUsdt(r.amount, currency) };
+    return { ...r, detail: r.detail ? `${r.detail} · ${currency}` : currency };
+  });
 }
 
 // I) War Room status line counts
@@ -1700,16 +1712,19 @@ export interface GrindhouseWeekCell {
   player_id: number;
   week_start: string;          // Monday YYYY-MM-DD
   currency: string;            // game currency — one cell row per currency
-  pnl: number;
+  pnl: number;                 // raw amount in `currency`
+  pnl_usdt: number;            // converted via toUsdt(); 0 when rate_missing
+  rate_missing: boolean;       // non-USDT currency with no configured exchange rate
   hours: number;
   session_count: number;
   games_count: number;
 }
 export function getGrindhouseWeeklyCells(from: string, to: string): GrindhouseWeekCell[] {
   const db = getDb();
-  // One row per player × week × currency — amounts of different currencies are NEVER
-  // summed together (invariant #3, no FX conversion in grindhouse).
-  return db.prepare(`
+  // One row per player × week × currency, converted to USDT via toUsdt() (invariant #3).
+  // Currencies without a configured rate get pnl_usdt=0 + rate_missing=true so the UI can
+  // warn instead of silently dropping or raw-summing them.
+  const rows = db.prepare(`
     SELECT s.player_id,
            date(s.session_date, '-' || ((CAST(strftime('%w', s.session_date) AS INTEGER) + 6) % 7) || ' days') AS week_start,
            COALESCE(g.currency, 'USDT') AS currency,
@@ -1721,7 +1736,12 @@ export function getGrindhouseWeeklyCells(from: string, to: string): GrindhouseWe
     JOIN games g ON g.id = s.game_id
     WHERE s.session_date >= ? AND s.session_date <= ?
     GROUP BY s.player_id, week_start, currency
-  `).all(from, to) as GrindhouseWeekCell[];
+  `).all(from, to) as Omit<GrindhouseWeekCell, "pnl_usdt" | "rate_missing">[];
+  return rows.map(r => ({
+    ...r,
+    pnl_usdt: toUsdt(r.pnl, r.currency),
+    rate_missing: r.currency !== "USDT" && getExchangeRate(r.currency) === 0,
+  }));
 }
 
 // Per-session detail for the weekly modal (prefill, edit, delete)

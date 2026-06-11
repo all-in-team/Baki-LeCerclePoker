@@ -53,7 +53,7 @@ export default function SettingsClient({
 
   // Wallet mères state
   type WM = { id: number; address: string; label: string | null; game_id: number | null; game_name?: string; status?: string; retired_at?: string | null; created_at: string };
-  type GameInfo = { id: number; name: string; status?: string };
+  type GameInfo = { id: number; name: string; status?: string; currency?: string };
   const [walletMeres, setWalletMeres] = useState<WM[]>([]);
   const [games, setGames] = useState<GameInfo[]>([]);
   const [wmAddr, setWmAddr] = useState("");
@@ -101,6 +101,23 @@ export default function SettingsClient({
     } catch {}
   }
 
+  // Rate fields: static base (CNY, EUR) + one auto-generated entry per distinct game
+  // currency that doesn't have a rate field yet (USDT/USD are 1:1, no rate needed)
+  const gameCurrencies = [...new Set(games.map(g => (g.currency ?? "USDT").toUpperCase()))]
+    .filter(c => c !== "USDT" && c !== "USD");
+  const rateFields = [
+    ...EXCHANGE_RATE_FIELDS,
+    ...gameCurrencies
+      .filter(c => !EXCHANGE_RATE_FIELDS.some(f => f.key === `exchange_rate_${c.toLowerCase()}_usdt`))
+      .sort()
+      .map(c => ({
+        key: `exchange_rate_${c.toLowerCase()}_usdt`,
+        label: `${c} → USDT`,
+        desc: `Taux ${c} vers USDT (games grindhouse en ${c})`,
+        placeholder: "0.0117",
+      })),
+  ];
+
   function set(key: string, val: string) {
     setValues(v => ({ ...v, [key]: val }));
     setSaved(false);
@@ -117,7 +134,7 @@ export default function SettingsClient({
       }
     }
     // Validate exchange rates
-    for (const { key, label } of EXCHANGE_RATE_FIELDS) {
+    for (const { key, label } of rateFields) {
       const v = (values[key] ?? "").trim();
       if (v && (isNaN(parseFloat(v)) || parseFloat(v) <= 0)) {
         setError(`${label} : taux invalide (nombre positif requis)`);
@@ -138,7 +155,7 @@ export default function SettingsClient({
     try {
       const payload: Record<string, string | null> = {};
       for (const f of TELE_FIELDS) payload[f.key] = (values[f.key] ?? "").trim() || null;
-      for (const f of EXCHANGE_RATE_FIELDS) payload[f.key] = (values[f.key] ?? "").trim() || null;
+      for (const f of rateFields) payload[f.key] = (values[f.key] ?? "").trim() || null;
       for (const f of ALERT_FIELDS) payload[f.key] = (values[f.key] ?? "").trim() || null;
 
       const res = await fetch("/api/settings", {
@@ -173,7 +190,7 @@ export default function SettingsClient({
             Les rapports Wepoker sont en <strong style={{ color: "var(--text)" }}>CNY</strong>. Ces taux convertissent automatiquement tous les montants en USDT pour le P&L unifié.
           </div>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
-            {EXCHANGE_RATE_FIELDS.map(({ key, label, desc, placeholder }) => {
+            {rateFields.map(({ key, label, desc, placeholder }) => {
               const val = values[key] ?? "";
               const valid = !val || (!isNaN(parseFloat(val)) && parseFloat(val) > 0);
               return (

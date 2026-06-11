@@ -15,7 +15,7 @@ export interface WeekCol {
   range: string;       // "2-8 juin"
 }
 
-interface Game { id: number; name: string; }
+interface Game { id: number; name: string; currency?: string; }
 
 interface WeeklyClientProps {
   weeks: WeekCol[];            // most recent first
@@ -102,7 +102,7 @@ export default function WeeklyClient({ weeks, grinders, cells, sessions, games, 
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error ?? `POST /api/games → ${res.status}`);
-      setExtraGames(g => [...g, { id: data.id, name: data.name }]);
+      setExtraGames(g => [...g, { id: data.id, name: data.name, currency: data.currency ?? "USDT" }]);
       if (createForKey !== null) patchRow(createForKey, { game_id: data.id });
       setCreateForKey(null);
       setNewGameName("");
@@ -116,10 +116,15 @@ export default function WeeklyClient({ weeks, grinders, cells, sessions, games, 
     }
   }
 
-  // Footer totals — one total PER currency, raw amounts are never mixed (invariant #3)
-  const totalsByCurrency = new Map<string, number>();
-  for (const c of cells) totalsByCurrency.set(c.currency, (totalsByCurrency.get(c.currency) ?? 0) + c.pnl);
-  const totalEntries = [...totalsByCurrency.entries()].sort(([a], [b]) => currencyOrder(a, b));
+  // Footer totals — everything converted to USDT (pnl_usdt, via manual rates); currencies
+  // WITHOUT a configured rate are excluded from the USDT total and shown raw with a warning
+  // (raw amounts are never mixed — invariant #3)
+  const totalPnlUsdt = cells.reduce((s, c) => s + c.pnl_usdt, 0);
+  const missingTotals = new Map<string, number>();
+  for (const c of cells) {
+    if (c.rate_missing) missingTotals.set(c.currency, (missingTotals.get(c.currency) ?? 0) + c.pnl);
+  }
+  const missingEntries = [...missingTotals.entries()].sort(([a], [b]) => currencyOrder(a, b));
   const totalHours = cells.reduce((s, c) => s + c.hours, 0);
   const grinderIds = new Set(grinders.map(g => g.player_id));
   const filledKeys = new Set(cells.filter(c => grinderIds.has(c.player_id)).map(c => `${c.player_id}|${c.week_start}`));
@@ -296,29 +301,35 @@ export default function WeeklyClient({ weeks, grinders, cells, sessions, games, 
                               <AlertTriangle size={11} style={{ opacity: 0.65 }} />
                               <span className="weekly-add"><Plus size={10} /> Add</span>
                             </>
-                          ) : (
-                            <span style={{ display: "inline-flex", flexDirection: "column", alignItems: "center", gap: 1 }}>
-                              {cellRows.map((c, idx) => (
-                                <span key={c.currency} style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
-                                  <span className="tabular-nums" style={{
-                                    fontWeight: 600, fontSize: cellRows.length > 1 ? 11 : 12,
-                                    color: c.pnl > 0 ? "#10B981" : c.pnl < 0 ? "#EF4444" : "#8888A0",
-                                  }}>
-                                    {fmtPnl(c.pnl)}
-                                    {c.currency !== "USDT" && (
-                                      <span style={{ fontSize: 8.5, fontWeight: 600, color: "#8888A0" }}> {c.currency}</span>
-                                    )}
+                          ) : (() => {
+                            // single USDT figure (converted); rate-less currencies shown raw + ⚠
+                            const cellUsdt = cellRows.reduce((s, c) => s + c.pnl_usdt, 0);
+                            const cellMissing = cellRows.filter(c => c.rate_missing);
+                            const hasConverted = cellRows.some(c => !c.rate_missing);
+                            return (
+                              <span style={{ display: "inline-flex", flexDirection: "column", alignItems: "center", gap: 1 }}>
+                                <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
+                                  {hasConverted && (
+                                    <span className="tabular-nums" style={{
+                                      fontWeight: 600, fontSize: 12,
+                                      color: cellUsdt > 0 ? "#10B981" : cellUsdt < 0 ? "#EF4444" : "#8888A0",
+                                    }}>{fmtPnl(cellUsdt)}</span>
+                                  )}
+                                  <Check size={10} style={{ color: "rgba(16,185,129,0.5)", flexShrink: 0 }} />
+                                </span>
+                                {cellMissing.map(c => (
+                                  <span key={c.currency} className="tabular-nums" style={{ fontSize: 9, fontWeight: 600, color: "#F59E0B" }} title={`Taux ${c.currency} → USDT manquant (Settings)`}>
+                                    ⚠ {fmtPnl(c.pnl)} {c.currency}
                                   </span>
-                                  {idx === 0 && <Check size={10} style={{ color: "rgba(16,185,129,0.5)", flexShrink: 0 }} />}
-                                </span>
-                              ))}
-                              {gamesCount > 1 && (
-                                <span style={{ fontSize: 8.5, fontWeight: 600, color: "#555568", letterSpacing: "0.03em" }}>
-                                  {gamesCount} games
-                                </span>
-                              )}
-                            </span>
-                          )}
+                                ))}
+                                {gamesCount > 1 && (
+                                  <span style={{ fontSize: 8.5, fontWeight: 600, color: "#555568", letterSpacing: "0.03em" }}>
+                                    {gamesCount} games
+                                  </span>
+                                )}
+                              </span>
+                            );
+                          })()}
                         </button>
                       </td>
                     );
@@ -337,16 +348,13 @@ export default function WeeklyClient({ weeks, grinders, cells, sessions, games, 
         }}>
           <span style={{ color: "#8888A0" }}>
             Total P&L{" "}
-            {totalEntries.length === 0 ? (
-              <b className="tabular-nums" style={{ color: "#8888A0" }}>+0 USDT</b>
-            ) : (
-              totalEntries.map(([cur, v], i) => (
-                <span key={cur}>
-                  {i > 0 && <span style={{ color: "#555568" }}> · </span>}
-                  <b className="tabular-nums" style={{ color: v >= 0 ? "#10B981" : "#EF4444" }}>{fmtPnl(v)} {cur}</b>
-                </span>
-              ))
-            )}
+            <b className="tabular-nums" style={{ color: totalPnlUsdt >= 0 ? "#10B981" : "#EF4444" }}>{fmtPnl(totalPnlUsdt)} USDT</b>
+            {missingEntries.map(([cur, v]) => (
+              <span key={cur} title={`Taux ${cur} → USDT manquant — exclu du total (Settings)`}>
+                <span style={{ color: "#555568" }}> · </span>
+                <b className="tabular-nums" style={{ color: "#F59E0B" }}>⚠ {fmtPnl(v)} {cur}</b>
+              </span>
+            ))}
           </span>
           <span style={{ color: "#8888A0" }}>
             Total heures <b className="tabular-nums" style={{ color: "#E8E8EE" }}>{totalHours.toLocaleString("fr-FR", { maximumFractionDigits: 1 })}h</b>
@@ -378,7 +386,7 @@ export default function WeeklyClient({ weeks, grinders, cells, sessions, games, 
             </datalist>
             {/* column labels */}
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 92px 64px 28px", gap: 8, fontSize: 10, fontWeight: 700, color: "#555568", textTransform: "uppercase", letterSpacing: "0.06em" }}>
-              <span>Game</span><span>Variante</span><span>P&L USDT</span><span>Heures</span><span />
+              <span>Game</span><span>Variante</span><span>P&L</span><span>Heures</span><span />
             </div>
             {rows.map(r => (
               <div key={r.key} style={{ display: "flex", flexDirection: "column", gap: 8 }}>
@@ -404,11 +412,19 @@ export default function WeeklyClient({ weeks, grinders, cells, sessions, games, 
                     value={r.variant}
                     onChange={e => patchRow(r.key, { variant: e.target.value })}
                   />
-                  <input
-                    type="number" step="0.01" placeholder="-250 / 1200"
-                    value={r.pnl}
-                    onChange={e => patchRow(r.key, { pnl: e.target.value })}
-                  />
+                  <div style={{ display: "flex", flexDirection: "column", gap: 2, minWidth: 0 }}>
+                    <input
+                      type="number" step="0.01" placeholder="-250 / 1200"
+                      value={r.pnl}
+                      onChange={e => patchRow(r.key, { pnl: e.target.value })}
+                      style={{ width: "100%", boxSizing: "border-box" }}
+                    />
+                    {r.game_id !== "" && (
+                      <span style={{ fontSize: 9, fontWeight: 700, color: "#555568", letterSpacing: "0.05em", textAlign: "right" }}>
+                        {allGames.find(g => g.id === r.game_id)?.currency ?? "USDT"}
+                      </span>
+                    )}
+                  </div>
                   <input
                     type="number" step="0.5" min="0" placeholder="0"
                     value={r.hours}

@@ -1448,8 +1448,9 @@ function initSchema(db: Database.Database) {
     console.error(err.stack);
   }
 
-  // Per-game currency — grindhouse session amounts inherit it. No FX conversion (Phase 2);
-  // totals are displayed per currency, never summed across currencies (invariant #3).
+  // Per-game currency — grindhouse session amounts inherit it. NOTE: despite its name,
+  // grindhouse_sessions.net_result_usdt stores the RAW amount in the game's currency;
+  // aggregates convert via toUsdt() (manual rate per currency in settings, invariant #3).
   try {
     const fix = db.prepare(`INSERT OR IGNORE INTO _applied_fixes (name) VALUES (?)`).run("add_games_currency_v1");
     if (fix.changes > 0) {

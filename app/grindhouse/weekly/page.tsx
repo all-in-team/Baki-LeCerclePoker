@@ -44,7 +44,7 @@ export default async function GrindhouseWeeklyPage({ searchParams }: { searchPar
   const grinders = getActiveGrinders();
   const cells = getGrindhouseWeeklyCells(from, to);
   const sessions = getGrindhouseWeeklySessions(from, to);
-  const games = getDb().prepare(`SELECT id, name FROM games WHERE status = 'active' ORDER BY name`).all() as { id: number; name: string }[];
+  const games = getDb().prepare(`SELECT id, name, COALESCE(currency, 'USDT') AS currency FROM games WHERE status = 'active' ORDER BY name`).all() as { id: number; name: string; currency: string }[];
   const variants = getGrindhouseVariants();
 
   return (

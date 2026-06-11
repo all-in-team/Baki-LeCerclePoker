@@ -1,14 +1,15 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getDb } from "@/lib/db";
+import { toUsdt, getExchangeRate } from "@/lib/queries";
 
 // NOTE: getGrindhouseAgencyNet() in lib/queries.ts (war room net worth) replicates the
 // agency_net formula below in aggregate form. Any change to the split or fee logic here
 // MUST be mirrored there, or the war room total silently diverges from this dashboard.
 //
-// CURRENCY RULE (invariant #3): the waterfall (pool, shares, fees → agency_net) is
-// USDT-only — sessions of non-USDT games are reported separately in `by_currency`
-// (50/50 split on raw pnl, no fee attribution since expenses are USDT) and are NEVER
-// summed with USDT amounts. No FX conversion (Phase 2).
+// CURRENCY RULE (invariant #3): non-USDT session amounts are converted to USDT via
+// toUsdt() (manual rate per currency in settings). A currency with NO configured rate is
+// EXCLUDED from the waterfall and reported in `missing_rates` / `unconverted` — raw
+// amounts are never summed across currencies.
 export async function GET(req: NextRequest) {
   const from = req.nextUrl.searchParams.get("from") ?? "2020-01-01";
   const to = req.nextUrl.searchParams.get("to") ?? new Date().toISOString().slice(0, 10);
@@ -18,12 +19,11 @@ export async function GET(req: NextRequest) {
     SELECT gg.player_id, p.name FROM grindhouse_grinders gg JOIN players p ON p.id = gg.player_id WHERE gg.status = 'active'
   `).all() as { player_id: number; name: string }[];
 
-  let totalSessionsPnl = 0;          // USDT only
+  let totalSessionsPnl = 0;          // USDT (converted)
   let totalGrindFeesAttributed = 0;  // USDT (expenses)
-  let totalGrinderShare = 0;         // USDT only
-  let totalHours = 0;                // all sessions, any currency
-  let usdtHours = 0;                 // hours on USDT games (for $/h rate)
-  const byCurrencyTotals = new Map<string, { sessions_pnl: number; hours: number }>();
+  let totalGrinderShare = 0;         // USDT
+  let totalHours = 0;                // all sessions
+  const unconvertedTotals = new Map<string, { sessions_pnl: number; hours: number }>();
   const breakdown: any[] = [];
 
   for (const g of grinders) {
@@ -37,10 +37,20 @@ export async function GET(req: NextRequest) {
       GROUP BY currency
     `).all(g.player_id, from, to) as { currency: string; pnl: number; hours: number }[];
 
-    const usdtRow = perCur.find(r => r.currency === "USDT");
-    const pnl = usdtRow?.pnl ?? 0;
+    let pnl = 0;
+    const unconverted: { currency: string; pnl: number; hours: number }[] = [];
+    for (const r of perCur) {
+      if (r.currency === "USDT" || getExchangeRate(r.currency) > 0) {
+        pnl += toUsdt(r.pnl, r.currency);
+      } else {
+        unconverted.push({ currency: r.currency, pnl: r.pnl, hours: r.hours });
+        const t = unconvertedTotals.get(r.currency) ?? { sessions_pnl: 0, hours: 0 };
+        t.sessions_pnl += r.pnl;
+        t.hours += r.hours;
+        unconvertedTotals.set(r.currency, t);
+      }
+    }
     const hours = perCur.reduce((s, r) => s + r.hours, 0);
-    const otherCur = perCur.filter(r => r.currency !== "USDT");
 
     const grindFees = (db.prepare(`SELECT COALESCE(SUM(amount_usdt), 0) AS v FROM grindhouse_expenses WHERE player_id = ? AND type = 'grind' AND date >= ? AND date <= ?`).get(g.player_id, from, to) as any).v;
     const poolNet = pnl - grindFees;
@@ -50,18 +60,11 @@ export async function GET(req: NextRequest) {
     totalGrindFeesAttributed += grindFees;
     totalGrinderShare += share;
     totalHours += hours;
-    usdtHours += usdtRow?.hours ?? 0;
-    for (const r of otherCur) {
-      const t = byCurrencyTotals.get(r.currency) ?? { sessions_pnl: 0, hours: 0 };
-      t.sessions_pnl += r.pnl;
-      t.hours += r.hours;
-      byCurrencyTotals.set(r.currency, t);
-    }
     breakdown.push({
       player_id: g.player_id, name: g.name, hours,
       sessions_pnl: pnl, grind_fees: grindFees, pool_net: poolNet,
       grinder_share: share, agency_share: poolNet - share,
-      by_currency: otherCur.map(r => ({ currency: r.currency, pnl: r.pnl, hours: r.hours })),
+      unconverted,
     });
   }
 
@@ -72,15 +75,22 @@ export async function GET(req: NextRequest) {
   const agencyBrute = totalSessionsPnl - totalGrindFeesAttributed - totalGrinderShare;
   const agencyNet = agencyBrute - generalGrindFees - restoFees - autreFees;
 
-  const perGame = db.prepare(`
+  const perGameRaw = db.prepare(`
     SELECT g.id AS game_id, g.name AS game_name, COALESCE(g.currency, 'USDT') AS currency,
       COALESCE(SUM(gs.duration_hours), 0) AS hours,
       COALESCE(SUM(gs.net_result_usdt), 0) AS pnl
     FROM grindhouse_sessions gs
     JOIN games g ON g.id = gs.game_id
     WHERE gs.session_date >= ? AND gs.session_date <= ?
-    GROUP BY g.id ORDER BY pnl DESC
+    GROUP BY g.id
   `).all(from, to) as { game_id: number; game_name: string; currency: string; hours: number; pnl: number }[];
+  const perGame = perGameRaw
+    .map(g => ({
+      ...g,
+      pnl_usdt: toUsdt(g.pnl, g.currency),
+      rate_missing: g.currency !== "USDT" && getExchangeRate(g.currency) === 0,
+    }))
+    .sort((a, b) => b.pnl_usdt - a.pnl_usdt);
 
   return NextResponse.json({
     period: { from, to },
@@ -94,15 +104,9 @@ export async function GET(req: NextRequest) {
     autre_fees: autreFees,
     agency_net: agencyNet,
     total_hours: totalHours,
-    usdt_hours: usdtHours,
-    // non-USDT games, raw amounts per currency — displayed separately, never converted/merged
-    by_currency: [...byCurrencyTotals.entries()].map(([currency, t]) => ({
-      currency,
-      sessions_pnl: t.sessions_pnl,
-      hours: t.hours,
-      grinder_share: t.sessions_pnl * 0.5,
-      agency_share: t.sessions_pnl * 0.5,
-    })),
+    // currencies with no configured exchange rate — excluded from the USDT figures above
+    missing_rates: [...unconvertedTotals.keys()],
+    unconverted: [...unconvertedTotals.entries()].map(([currency, t]) => ({ currency, ...t })),
     breakdown,
     per_game: perGame,
   });

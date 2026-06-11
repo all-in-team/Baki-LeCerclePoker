@@ -1,6 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getDb } from "@/lib/db";
 
+// ⚠ CURRENCY GAP: sums net_result_usdt raw across ALL games — sessions of non-USDT games
+// (games.currency != 'USDT') are NOT converted via toUsdt() here, unlike the profitability
+// dashboard. Do NOT settle a grinder with non-USDT sessions until this is fixed.
 function computeSettlement(db: any, playerId: number, from: string, to: string) {
   const sessionsPnl = (db.prepare(`
     SELECT COALESCE(SUM(net_result_usdt), 0) AS total
