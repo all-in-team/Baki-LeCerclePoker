@@ -6,6 +6,21 @@ export async function GET() {
   return NextResponse.json(getGames());
 }
 
+export async function POST(req: NextRequest) {
+  const body = await req.json();
+  const name = typeof body.name === "string" ? body.name.trim() : "";
+  if (!name) return NextResponse.json({ error: "name requis" }, { status: 400 });
+  if (name.length > 40) return NextResponse.json({ error: "name trop long (40 max)" }, { status: 400 });
+
+  const db = getDb();
+  const existing = db.prepare(`SELECT id, name FROM games WHERE LOWER(name) = LOWER(?)`).get(name) as { id: number; name: string } | undefined;
+  if (existing) return NextResponse.json({ error: `"${existing.name}" existe déjà`, id: existing.id }, { status: 409 });
+
+  const r = db.prepare(`INSERT INTO games (name, status) VALUES (?, 'active')`).run(name);
+  const row = db.prepare(`SELECT id, name, status FROM games WHERE id = ?`).get(Number(r.lastInsertRowid));
+  return NextResponse.json(row, { status: 201 });
+}
+
 export async function PATCH(req: NextRequest) {
   const body = await req.json();
   const { id } = body;

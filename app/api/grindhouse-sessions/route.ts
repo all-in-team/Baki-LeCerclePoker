@@ -17,16 +17,17 @@ export async function GET(req: NextRequest) {
 
 export async function POST(req: NextRequest) {
   const body = await req.json();
-  const { player_id, game_id, session_date, duration_hours, net_result_usdt, notes } = body;
+  const { player_id, game_id, session_date, duration_hours, net_result_usdt, notes, variant } = body;
 
   if (!player_id || !game_id || duration_hours == null || net_result_usdt == null)
     return NextResponse.json({ error: "player_id, game_id, duration_hours, net_result_usdt requis" }, { status: 400 });
 
+  const variantClean = typeof variant === "string" && variant.trim() !== "" ? variant.trim() : null;
   const db = getDb();
   const r = db.prepare(`
-    INSERT INTO grindhouse_sessions (player_id, game_id, session_date, duration_hours, net_result_usdt, notes)
-    VALUES (?, ?, ?, ?, ?, ?)
-  `).run(player_id, game_id, session_date ?? new Date().toISOString().slice(0, 10), duration_hours, net_result_usdt, notes ?? null);
+    INSERT INTO grindhouse_sessions (player_id, game_id, session_date, duration_hours, net_result_usdt, notes, variant)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+  `).run(player_id, game_id, session_date ?? new Date().toISOString().slice(0, 10), duration_hours, net_result_usdt, notes ?? null, variantClean);
 
   const row = db.prepare(`
     SELECT gs.*, p.name AS player_name, g.name AS game_name

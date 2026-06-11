@@ -1399,4 +1399,52 @@ function initSchema(db: Database.Database) {
     console.error(`[MIGRATION:fix_player_game_ids_fk_v1] FAILED:`, err.message);
     console.error(err.stack);
   }
+
+  // Free-text variant per grindhouse session (Squid, Holdem, PLO…) — filters come later
+  try {
+    const fix = db.prepare(`INSERT OR IGNORE INTO _applied_fixes (name) VALUES (?)`).run("add_session_variant_v1");
+    if (fix.changes > 0) {
+      db.exec(`ALTER TABLE grindhouse_sessions ADD COLUMN variant TEXT`);
+      console.log("[MIGRATION] add_session_variant_v1 applied");
+    }
+  } catch (err: any) {
+    console.error(`[MIGRATION:add_session_variant_v1] FAILED:`, err.message);
+  }
+
+  // Drop the closed name CHECK on games so games can be created from the UI
+  // (POST /api/games). Same rebuild pattern as add_aapkmy_game_v1; UNIQUE stays.
+  try {
+    const fix = db.prepare(`INSERT OR IGNORE INTO _applied_fixes (name) VALUES (?)`).run("drop_games_name_check_v1");
+    if (fix.changes > 0) {
+      db.pragma("foreign_keys = OFF");
+      try {
+        db.exec(`
+          BEGIN;
+          CREATE TABLE games_new (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL UNIQUE,
+            status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active','archived')),
+            default_action_pct REAL,
+            exact_action_pct REAL,
+            exact_rakeback_pct REAL,
+            exact_insurance_pct REAL,
+            perceived_action_pct REAL,
+            perceived_rakeback_pct REAL,
+            perceived_insurance_pct REAL
+          );
+          INSERT INTO games_new (id, name, status, default_action_pct, exact_action_pct, exact_rakeback_pct, exact_insurance_pct, perceived_action_pct, perceived_rakeback_pct, perceived_insurance_pct)
+            SELECT id, name, status, default_action_pct, exact_action_pct, exact_rakeback_pct, exact_insurance_pct, perceived_action_pct, perceived_rakeback_pct, perceived_insurance_pct FROM games;
+          DROP TABLE games;
+          ALTER TABLE games_new RENAME TO games;
+          COMMIT;
+        `);
+      } finally {
+        db.pragma("foreign_keys = ON");
+      }
+      console.log("[MIGRATION] drop_games_name_check_v1 applied");
+    }
+  } catch (err: any) {
+    console.error(`[MIGRATION:drop_games_name_check_v1] FAILED:`, err.message);
+    console.error(err.stack);
+  }
 }

@@ -23,6 +23,7 @@ interface WeeklyClientProps {
   cells: GrindhouseWeekCell[];
   sessions: GrindhouseWeekSession[];
   games: Game[];
+  variants: string[];          // distinct variants already logged (autocomplete)
   nWeeks: number;
 }
 
@@ -31,9 +32,12 @@ interface LogRow {
   key: number;
   sessionId: number | null;    // existing session → PATCH/DELETE, null → POST
   game_id: number | "";
+  variant: string;
   pnl: string;
   hours: string;
 }
+
+const CREATE_GAME = "__create__";
 
 interface ModalState {
   grinder: GrinderRow;
@@ -46,7 +50,7 @@ function fmtPnl(n: number): string {
 
 let keySeq = 1;
 
-export default function WeeklyClient({ weeks, grinders, cells, sessions, games, nWeeks }: WeeklyClientProps) {
+export default function WeeklyClient({ weeks, grinders, cells, sessions, games, variants, nWeeks }: WeeklyClientProps) {
   const router = useRouter();
   const cellMap = new Map(cells.map(c => [`${c.player_id}|${c.week_start}`, c]));
 
@@ -55,6 +59,39 @@ export default function WeeklyClient({ weeks, grinders, cells, sessions, games, 
   const [deletedIds, setDeletedIds] = useState<number[]>([]);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
+
+  // Inline game creation (per-row mini form inside the modal)
+  const [extraGames, setExtraGames] = useState<Game[]>([]);   // created this session, until router.refresh lands
+  const [createForKey, setCreateForKey] = useState<number | null>(null);
+  const [newGameName, setNewGameName] = useState("");
+  const [creatingGame, setCreatingGame] = useState(false);
+  const knownIds = new Set(games.map(g => g.id));
+  const allGames = [...games, ...extraGames.filter(g => !knownIds.has(g.id))];
+
+  async function createGame() {
+    const name = newGameName.trim();
+    if (!name) { setError("Nom de la game requis"); return; }
+    setCreatingGame(true);
+    setError("");
+    try {
+      const res = await fetch("/api/games", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error ?? `POST /api/games → ${res.status}`);
+      setExtraGames(g => [...g, { id: data.id, name: data.name }]);
+      if (createForKey !== null) patchRow(createForKey, { game_id: data.id });
+      setCreateForKey(null);
+      setNewGameName("");
+      router.refresh();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Erreur réseau");
+    } finally {
+      setCreatingGame(false);
+    }
+  }
 
   const totalPnl = cells.reduce((s, c) => s + c.pnl, 0);
   const totalHours = cells.reduce((s, c) => s + c.hours, 0);
@@ -68,17 +105,20 @@ export default function WeeklyClient({ weeks, grinders, cells, sessions, games, 
           key: keySeq++,
           sessionId: s.id,
           game_id: s.game_id,
+          variant: s.variant ?? "",
           pnl: String(s.net_result_usdt),
           hours: s.duration_hours > 0 ? String(s.duration_hours) : "",
         }))
-      : [{ key: keySeq++, sessionId: null, game_id: "", pnl: "", hours: "" }]);
+      : [{ key: keySeq++, sessionId: null, game_id: "", variant: "", pnl: "", hours: "" }]);
     setDeletedIds([]);
+    setCreateForKey(null);
+    setNewGameName("");
     setError("");
     setModal({ grinder, week });
   }
 
   function addRow() {
-    setRows(r => [...r, { key: keySeq++, sessionId: null, game_id: "", pnl: "", hours: "" }]);
+    setRows(r => [...r, { key: keySeq++, sessionId: null, game_id: "", variant: "", pnl: "", hours: "" }]);
   }
 
   function removeRow(key: number) {
@@ -122,6 +162,7 @@ export default function WeeklyClient({ weeks, grinders, cells, sessions, games, 
               game_id: Number(r.game_id),
               net_result_usdt: Number(r.pnl),
               duration_hours: r.hours.trim() === "" ? 0 : Number(r.hours),
+              variant: r.variant.trim() === "" ? null : r.variant.trim(),
             }),
           });
           if (!res.ok) throw new Error(`PATCH → ${res.status}`);
@@ -136,6 +177,7 @@ export default function WeeklyClient({ weeks, grinders, cells, sessions, games, 
               duration_hours: r.hours.trim() === "" ? 0 : Number(r.hours),
               net_result_usdt: Number(r.pnl),
               notes: "weekly quick-add",
+              variant: r.variant.trim() === "" ? null : r.variant.trim(),
             }),
           });
           if (!res.ok) throw new Error(`POST → ${res.status}`);
@@ -279,41 +321,79 @@ export default function WeeklyClient({ weeks, grinders, cells, sessions, games, 
         open={modal !== null}
         onClose={() => setModal(null)}
         title={modal ? `${modal.grinder.name} — Semaine ${modal.week.iso.slice(1)} (${modal.week.range})` : ""}
-        width={520}
+        width={620}
       >
         {modal && (
           <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+            <datalist id="gh-variants">
+              {variants.map(v => <option key={v} value={v} />)}
+            </datalist>
             {/* column labels */}
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 110px 90px 30px", gap: 8, fontSize: 10, fontWeight: 700, color: "#555568", textTransform: "uppercase", letterSpacing: "0.06em" }}>
-              <span>Game</span><span>P&L USDT</span><span>Heures</span><span />
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 92px 64px 28px", gap: 8, fontSize: 10, fontWeight: 700, color: "#555568", textTransform: "uppercase", letterSpacing: "0.06em" }}>
+              <span>Game</span><span>Variante</span><span>P&L USDT</span><span>Heures</span><span />
             </div>
             {rows.map(r => (
-              <div key={r.key} style={{ display: "grid", gridTemplateColumns: "1fr 110px 90px 30px", gap: 8, alignItems: "center" }}>
-                <select
-                  value={r.game_id}
-                  onChange={e => patchRow(r.key, { game_id: e.target.value === "" ? "" : Number(e.target.value) })}
-                >
-                  <option value="">— Game —</option>
-                  {games.map(g => <option key={g.id} value={g.id}>{g.name}</option>)}
-                </select>
-                <input
-                  type="number" step="0.01" placeholder="-250 / 1200"
-                  value={r.pnl}
-                  onChange={e => patchRow(r.key, { pnl: e.target.value })}
-                />
-                <input
-                  type="number" step="0.5" min="0" placeholder="0"
-                  value={r.hours}
-                  onChange={e => patchRow(r.key, { hours: e.target.value })}
-                />
-                <button
-                  className="btn-del-ghost"
-                  title="Retirer ce log"
-                  onClick={() => removeRow(r.key)}
-                  style={{ padding: 5, justifySelf: "center" }}
-                >
-                  <Trash2 size={13} />
-                </button>
+              <div key={r.key} style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 92px 64px 28px", gap: 8, alignItems: "center" }}>
+                  <select
+                    value={createForKey === r.key ? CREATE_GAME : r.game_id}
+                    onChange={e => {
+                      if (e.target.value === CREATE_GAME) {
+                        setCreateForKey(r.key);
+                        setNewGameName("");
+                      } else {
+                        if (createForKey === r.key) setCreateForKey(null);
+                        patchRow(r.key, { game_id: e.target.value === "" ? "" : Number(e.target.value) });
+                      }
+                    }}
+                  >
+                    <option value="">— Game —</option>
+                    {allGames.map(g => <option key={g.id} value={g.id}>{g.name}</option>)}
+                    <option value={CREATE_GAME}>+ Créer une game…</option>
+                  </select>
+                  <input
+                    type="text" list="gh-variants" placeholder="Squid, Holdem, PLO…"
+                    value={r.variant}
+                    onChange={e => patchRow(r.key, { variant: e.target.value })}
+                  />
+                  <input
+                    type="number" step="0.01" placeholder="-250 / 1200"
+                    value={r.pnl}
+                    onChange={e => patchRow(r.key, { pnl: e.target.value })}
+                  />
+                  <input
+                    type="number" step="0.5" min="0" placeholder="0"
+                    value={r.hours}
+                    onChange={e => patchRow(r.key, { hours: e.target.value })}
+                  />
+                  <button
+                    className="btn-del-ghost"
+                    title="Retirer ce log"
+                    onClick={() => removeRow(r.key)}
+                    style={{ padding: 5, justifySelf: "center" }}
+                  >
+                    <Trash2 size={13} />
+                  </button>
+                </div>
+                {createForKey === r.key && (
+                  <div style={{
+                    display: "flex", gap: 8, alignItems: "center",
+                    padding: "8px 10px", borderRadius: 10,
+                    background: "rgba(16,185,129,0.05)", border: "1px solid rgba(16,185,129,0.18)",
+                  }}>
+                    <input
+                      type="text" placeholder="Nom de la game" autoFocus
+                      value={newGameName}
+                      onChange={e => setNewGameName(e.target.value)}
+                      onKeyDown={e => { if (e.key === "Enter") { e.preventDefault(); createGame(); } }}
+                      style={{ flex: 1 }}
+                    />
+                    <Btn size="sm" variant="primary" onClick={createGame} disabled={creatingGame}>
+                      {creatingGame ? "..." : "Créer"}
+                    </Btn>
+                    <Btn size="sm" onClick={() => { setCreateForKey(null); setNewGameName(""); }}>Annuler</Btn>
+                  </div>
+                )}
               </div>
             ))}
 

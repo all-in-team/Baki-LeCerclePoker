@@ -8,14 +8,17 @@ export async function PATCH(req: NextRequest, { params }: Ctx) {
   const body = await req.json();
   const db = getDb();
 
-  const allowed = ["player_id", "game_id", "session_date", "duration_hours", "net_result_usdt", "notes"];
+  const allowed = ["player_id", "game_id", "session_date", "duration_hours", "net_result_usdt", "notes", "variant"];
   const sets: string[] = [];
   const vals: Record<string, unknown> = { id: Number(id) };
 
   for (const key of allowed) {
     if (body[key] !== undefined) {
       sets.push(`${key} = @${key}`);
-      vals[key] = body[key];
+      // blank variant means "cleared" — store NULL, keeps DISTINCT autocomplete clean
+      vals[key] = key === "variant"
+        ? (typeof body[key] === "string" && body[key].trim() !== "" ? body[key].trim() : null)
+        : body[key];
     }
   }
 

@@ -1723,17 +1723,33 @@ export interface GrindhouseWeekSession {
   week_start: string;
   net_result_usdt: number;
   duration_hours: number;
+  variant: string | null;
 }
 export function getGrindhouseWeeklySessions(from: string, to: string): GrindhouseWeekSession[] {
   const db = getDb();
   return db.prepare(`
     SELECT s.id, s.player_id, s.game_id,
            date(s.session_date, '-' || ((CAST(strftime('%w', s.session_date) AS INTEGER) + 6) % 7) || ' days') AS week_start,
-           s.net_result_usdt, s.duration_hours
+           s.net_result_usdt, s.duration_hours, s.variant
     FROM grindhouse_sessions s
     WHERE s.session_date >= ? AND s.session_date <= ?
     ORDER BY s.id
   `).all(from, to) as GrindhouseWeekSession[];
+}
+
+// Distinct variants already logged — feeds the autocomplete datalist in the weekly modal
+export function getGrindhouseVariants(): string[] {
+  const db = getDb();
+  try {
+    const rows = db.prepare(`
+      SELECT DISTINCT variant FROM grindhouse_sessions
+      WHERE variant IS NOT NULL AND TRIM(variant) != ''
+      ORDER BY variant COLLATE NOCASE
+    `).all() as { variant: string }[];
+    return rows.map(r => r.variant);
+  } catch {
+    return []; // variant column absent before add_session_variant_v1
+  }
 }
 
 // Default game for the weekly quick-add: each grinder's most recent session's game
