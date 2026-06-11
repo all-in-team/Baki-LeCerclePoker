@@ -7,7 +7,7 @@ import type { OpsFeedEvent } from "@/lib/queries";
 const TZ = "Europe/Paris";
 
 const TYPE_LABEL: Record<OpsFeedEvent["type"], string> = {
-  session: "SESSION",
+  session: "GRINDHOUSE",
   settlement: "SETTLEMENT",
   gh_settle: "GH SETTLE",
   expense: "FRAIS",
