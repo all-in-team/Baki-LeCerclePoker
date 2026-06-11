@@ -194,6 +194,13 @@ When summarizing this conversation:
 - If a tool returns the same result twice, STOP and reassess.
 - Background "wait for deploy" loops are FORBIDDEN. The deploy script handles waiting with a hard 5-min cap.
 
+## Builds & long-running commands
+
+- npm run build : lance en background, check le résultat avec UNE seule vérification après coup (tail du log), ne JAMAIS attendre en boucle ("churning") pendant que le build tourne
+- Si un build prend > 3 min en local → skip le build local, push direct, Railway buildera server-side (l'auto-deploy est fiable et le build Railway est le vrai test)
+- Pattern obligatoire : (1) lancer build en bg, (2) faire autre chose d'utile ou rendre la main immédiatement, (3) une seule vérification du résultat quand l'utilisateur ou la suite logique le demande
+- Ne jamais bloquer la conversation en attendant un process background
+
 ## Money-critical commits
 
 - Any commit touching wallet sync, wallet_transactions, P&L math, wallet_meres, settlements → MUST run money-auditor before push.
