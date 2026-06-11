@@ -196,10 +196,11 @@ When summarizing this conversation:
 
 ## Builds & long-running commands
 
-- npm run build : lance en background, check le résultat avec UNE seule vérification après coup (tail du log), ne JAMAIS attendre en boucle ("churning") pendant que le build tourne
-- Si un build prend > 3 min en local → skip le build local, push direct, Railway buildera server-side (l'auto-deploy est fiable et le build Railway est le vrai test)
-- Pattern obligatoire : (1) lancer build en bg, (2) faire autre chose d'utile ou rendre la main immédiatement, (3) une seule vérification du résultat quand l'utilisateur ou la suite logique le demande
-- Ne jamais bloquer la conversation en attendant un process background
+- Le push vers main EST la validation (Railway build = vrai test). Le build local est SKIPPÉ par défaut.
+- Workflow standard : (1) écrire le code, (2) commit + push immédiatement, (3) UNE vérification curl /api/version après ~2 min pour confirmer le deploy.
+- npm run build local : UNIQUEMENT si explicitement demandé par l'utilisateur. Dans ce cas : timeout 5 min max via `timeout 300 npm run build`, jamais en background détaché.
+- INTERDIT : lancer un process en background avec & qui survit à la fin du tour. Tout process lancé doit être terminé (kill) avant de rendre la main.
+- Avant chaque nouvelle session de travail : pkill -f "next build" 2>/dev/null; pkill -f "npm run" 2>/dev/null (cleanup des zombies éventuels).
 
 ## Money-critical commits
 
