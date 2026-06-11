@@ -8,10 +8,13 @@ import { TrendingUp, TrendingDown } from "lucide-react";
 
 interface WarRoomHeroProps {
   totalUsdt: number;
+  gamesUsdt: number;       // breakdown: game agency cuts (no extras)
+  grindhouseUsdt: number;  // breakdown: grindhouse agency net
+  extrasUsdt: number;      // breakdown: agency extras
   pnl30d: number;
   pnl30dPrev: number;
   spark30d: number[];      // cumulative total, last 30 days
-  activeAgents: number;
+  activePlayers: number;
   activePlatforms: number;
 }
 
@@ -19,7 +22,7 @@ function fmtSigned(n: number): string {
   return (n >= 0 ? "+" : "") + n.toLocaleString("fr-FR", { maximumFractionDigits: 0 });
 }
 
-export default function WarRoomHero({ totalUsdt, pnl30d, pnl30dPrev, spark30d, activeAgents, activePlatforms }: WarRoomHeroProps) {
+export default function WarRoomHero({ totalUsdt, gamesUsdt, grindhouseUsdt, extrasUsdt, pnl30d, pnl30dPrev, spark30d, activePlayers, activePlatforms }: WarRoomHeroProps) {
   const up30 = pnl30d >= 0;
   const deltaPct = pnl30dPrev !== 0
     ? Math.round(((pnl30d - pnl30dPrev) / Math.abs(pnl30dPrev)) * 100)
@@ -89,6 +92,14 @@ export default function WarRoomHero({ totalUsdt, pnl30d, pnl30dPrev, spark30d, a
                 </div>
               )}
             </div>
+            {/* Net worth breakdown — transparency on what the headline number contains */}
+            <div className="tabular-nums" style={{ marginTop: 10, fontSize: 11, color: "#555568", letterSpacing: "0.02em" }}>
+              Games <span style={{ color: "#8888A0", fontWeight: 600 }}>{fmtSigned(Math.round(gamesUsdt))}</span>
+              <span style={{ color: "#33333F" }}> · </span>
+              Grindhouse <span style={{ color: "#8888A0", fontWeight: 600 }}>{fmtSigned(Math.round(grindhouseUsdt))}</span>
+              <span style={{ color: "#33333F" }}> · </span>
+              Extras <span style={{ color: "#8888A0", fontWeight: 600 }}>{fmtSigned(Math.round(extrasUsdt))}</span>
+            </div>
           </div>
 
           <div className="font-term" style={{
@@ -98,7 +109,7 @@ export default function WarRoomHero({ totalUsdt, pnl30d, pnl30dPrev, spark30d, a
             <span className="status-dot" style={{ color: "#10B981", fontSize: 10 }}>●</span>
             <span style={{ color: "#10B981" }}>SYSTEMS OPERATIONAL</span>
             <span style={{ color: "#555568" }}>—</span>
-            <span>{activeAgents} AGENTS</span>
+            <span>{activePlayers} PLAYERS</span>
             <span style={{ color: "#555568" }}>—</span>
             <span>{activePlatforms} PLATEFORMES</span>
           </div>

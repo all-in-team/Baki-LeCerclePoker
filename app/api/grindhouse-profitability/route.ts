@@ -1,6 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getDb } from "@/lib/db";
 
+// NOTE: getGrindhouseAgencyNet() in lib/queries.ts (war room net worth) replicates the
+// agency_net formula below in aggregate form. Any change to the split or fee logic here
+// MUST be mirrored there, or the war room total silently diverges from this dashboard.
 export async function GET(req: NextRequest) {
   const from = req.nextUrl.searchParams.get("from") ?? "2020-01-01";
   const to = req.nextUrl.searchParams.get("to") ?? new Date().toISOString().slice(0, 10);

@@ -1304,9 +1304,107 @@ export function getAgencyExtrasNet(gameKey: string, period?: Period): number {
   return extras.reduce((s, e) => s + (e.type === "win" ? e.amount : -e.amount), 0);
 }
 
+// D-bis) Grindhouse agency net — same formula as /grindhouse/dashboard "Rentabilité nette"
+// (app/api/grindhouse-profitability): per active grinder pool_net = sessions_pnl - attributed
+// grind fees, agency keeps 50% of each pool; then general grind fees (player_id NULL),
+// resto and autres come off the agency side. All grindhouse amounts are USDT.
+export function getGrindhouseAgencyNet(period?: Period): number {
+  const db = getDb();
+  try {
+    const sessParams: string[] = [];
+    let sessSql = `
+      SELECT COALESCE(SUM(s.net_result_usdt), 0) AS v
+      FROM grindhouse_sessions s
+      JOIN grindhouse_grinders gg ON gg.player_id = s.player_id AND gg.status = 'active'
+      WHERE 1=1`;
+    if (period?.from) { sessSql += ` AND s.session_date >= ?`; sessParams.push(period.from); }
+    if (period?.to) { sessSql += ` AND s.session_date <= ?`; sessParams.push(period.to); }
+    const sessionsPnl = (db.prepare(sessSql).get(...sessParams) as { v: number }).v;
+
+    const attParams: string[] = [];
+    let attSql = `
+      SELECT COALESCE(SUM(e.amount_usdt), 0) AS v
+      FROM grindhouse_expenses e
+      JOIN grindhouse_grinders gg ON gg.player_id = e.player_id AND gg.status = 'active'
+      WHERE e.type = 'grind'`;
+    if (period?.from) { attSql += ` AND e.date >= ?`; attParams.push(period.from); }
+    if (period?.to) { attSql += ` AND e.date <= ?`; attParams.push(period.to); }
+    const attributedGrindFees = (db.prepare(attSql).get(...attParams) as { v: number }).v;
+
+    const feeParams: string[] = [];
+    let feeSql = `
+      SELECT COALESCE(SUM(CASE WHEN e.player_id IS NULL AND e.type = 'grind' THEN e.amount_usdt ELSE 0 END), 0) AS general_grind,
+             COALESCE(SUM(CASE WHEN e.type IN ('resto', 'autre') THEN e.amount_usdt ELSE 0 END), 0) AS other_fees
+      FROM grindhouse_expenses e
+      WHERE 1=1`;
+    if (period?.from) { feeSql += ` AND e.date >= ?`; feeParams.push(period.from); }
+    if (period?.to) { feeSql += ` AND e.date <= ?`; feeParams.push(period.to); }
+    const fees = db.prepare(feeSql).get(...feeParams) as { general_grind: number; other_fees: number };
+
+    return (sessionsPnl - attributedGrindFees) * 0.5 - fees.general_grind - fees.other_fees;
+  } catch {
+    return 0; // grindhouse tables absent on fresh DB before migration
+  }
+}
+
+// Daily decomposition of getGrindhouseAgencyNet — the formula is linear in sessions and
+// expenses, so per-day terms sum exactly to the period total.
+export interface GrindhouseDailyNet { date: string; net: number }
+export function getGrindhouseNetOverTime(period?: Period): GrindhouseDailyNet[] {
+  const db = getDb();
+  try {
+    const dayMap = new Map<string, number>();
+    const add = (day: string, v: number) => dayMap.set(day, (dayMap.get(day) ?? 0) + v);
+    const range = (col: string, params: string[]) => {
+      let sql = "";
+      if (period?.from) { sql += ` AND ${col} >= ?`; params.push(period.from); }
+      if (period?.to) { sql += ` AND ${col} <= ?`; params.push(period.to); }
+      return sql;
+    };
+
+    const sessParams: string[] = [];
+    const sessions = db.prepare(`
+      SELECT s.session_date AS day, COALESCE(SUM(s.net_result_usdt), 0) AS v
+      FROM grindhouse_sessions s
+      JOIN grindhouse_grinders gg ON gg.player_id = s.player_id AND gg.status = 'active'
+      WHERE 1=1${range("s.session_date", sessParams)}
+      GROUP BY day
+    `).all(...sessParams) as { day: string; v: number }[];
+    for (const r of sessions) add(r.day, r.v * 0.5);
+
+    const attParams: string[] = [];
+    const attributed = db.prepare(`
+      SELECT e.date AS day, COALESCE(SUM(e.amount_usdt), 0) AS v
+      FROM grindhouse_expenses e
+      JOIN grindhouse_grinders gg ON gg.player_id = e.player_id AND gg.status = 'active'
+      WHERE e.type = 'grind'${range("e.date", attParams)}
+      GROUP BY day
+    `).all(...attParams) as { day: string; v: number }[];
+    for (const r of attributed) add(r.day, -r.v * 0.5);
+
+    const feeParams: string[] = [];
+    const agencyFees = db.prepare(`
+      SELECT e.date AS day, COALESCE(SUM(e.amount_usdt), 0) AS v
+      FROM grindhouse_expenses e
+      WHERE ((e.player_id IS NULL AND e.type = 'grind') OR e.type IN ('resto', 'autre'))${range("e.date", feeParams)}
+      GROUP BY day
+    `).all(...feeParams) as { day: string; v: number }[];
+    for (const r of agencyFees) add(r.day, -r.v);
+
+    return [...dayMap.entries()]
+      .map(([date, net]) => ({ date, net }))
+      .sort((a, b) => a.date.localeCompare(b.date));
+  } catch {
+    return []; // grindhouse tables absent on fresh DB before migration
+  }
+}
+
 // E) Total agency P&L across all games
 export interface AgencyTotalPnL {
   total_usdt: number;
+  games_usdt: number;          // game agency cuts only (no extras, no grindhouse)
+  extras_usdt: number;         // all agency extras, USDT
+  grindhouse_usdt: number;     // grindhouse agency net ("Rentabilité nette")
   akpoker_usdt: number;
   akpoker_extras_usdt: number;
   kkpoker_usdt: number;
@@ -1333,8 +1431,14 @@ export function getAgencyTotalPnL(period?: Period): AgencyTotalPnL {
   const wpExtrasCny = getAgencyExtrasNet("wepoker", period);
   const rate = getCnyRate();
   const wpExtrasUsdt = convertCnyToUsdt(wpExtrasCny, rate);
+  const grindhouse = getGrindhouseAgencyNet(period);
+  const gamesUsdt = akTotal + kkTotal + a5Total + wpTotalUsdt;
+  const extrasUsdt = akExtras + kkExtras + a5Extras + wpExtrasUsdt;
   return {
-    total_usdt: akTotal + akExtras + kkTotal + kkExtras + a5Total + a5Extras + wpTotalUsdt + wpExtrasUsdt,
+    total_usdt: gamesUsdt + extrasUsdt + grindhouse,
+    games_usdt: gamesUsdt,
+    extras_usdt: extrasUsdt,
+    grindhouse_usdt: grindhouse,
     akpoker_usdt: akTotal + akExtras,
     akpoker_extras_usdt: akExtras,
     kkpoker_usdt: kkTotal + kkExtras,
@@ -1430,7 +1534,7 @@ export function getTopContributors(period: Period, limit = 5): ContributorRow[] 
 
 // G) P&L time series for charts
 export interface PnLTimePoint {
-  date: string; akpoker_usdt: number; kkpoker_usdt: number; a5poker_usdt: number; wepoker_usdt: number; total_usdt: number;
+  date: string; akpoker_usdt: number; kkpoker_usdt: number; a5poker_usdt: number; wepoker_usdt: number; grindhouse_usdt: number; total_usdt: number;
 }
 export function getPnLOverTime(period: Period): PnLTimePoint[] {
   const db = getDb();
@@ -1471,7 +1575,7 @@ export function getPnLOverTime(period: Period): PnLTimePoint[] {
   `).all(...[period?.from, period?.to].filter(Boolean)) as any[];
 
   const dayMap = new Map<string, PnLTimePoint>();
-  const getDay = (day: string) => dayMap.get(day) ?? { date: day, akpoker_usdt: 0, kkpoker_usdt: 0, a5poker_usdt: 0, wepoker_usdt: 0, total_usdt: 0 };
+  const getDay = (day: string) => dayMap.get(day) ?? { date: day, akpoker_usdt: 0, kkpoker_usdt: 0, a5poker_usdt: 0, wepoker_usdt: 0, grindhouse_usdt: 0, total_usdt: 0 };
   for (const r of akDaily) {
     const e = getDay(r.day); e.akpoker_usdt += r.agency; e.total_usdt += r.agency; dayMap.set(r.day, e);
   }
@@ -1504,13 +1608,18 @@ export function getPnLOverTime(period: Period): PnLTimePoint[] {
     }
   }
 
+  // Grindhouse agency net per day (sessions, fees — see getGrindhouseNetOverTime)
+  for (const r of getGrindhouseNetOverTime(period)) {
+    const e = getDay(r.date); e.grindhouse_usdt += r.net; e.total_usdt += r.net; dayMap.set(r.date, e);
+  }
+
   return [...dayMap.values()].sort((a, b) => a.date.localeCompare(b.date));
 }
 
 // H) War Room ops feed — READ-ONLY aggregation of recent agency events
 export interface OpsFeedEvent {
   ts: string;                                              // "YYYY-MM-DD HH:MM:SS" UTC
-  type: "session" | "settlement" | "expense" | "onboard";
+  type: "session" | "settlement" | "gh_settle" | "expense" | "onboard";
   label: string;
   detail: string | null;
   amount: number | null;                                   // USDT, signed
@@ -1526,7 +1635,7 @@ export function getOpsFeed(limit = 20): OpsFeedEvent[] {
       JOIN games g ON g.id = s.game_id
 
       UNION ALL
-      SELECT gs.paid_at, 'settlement', p.name,
+      SELECT gs.paid_at, 'gh_settle', p.name,
              gs.period_start || ' → ' || gs.period_end, gs.grinder_share
       FROM grindhouse_settlements gs
       JOIN players p ON p.id = gs.player_id

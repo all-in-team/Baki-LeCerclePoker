@@ -1,3 +1,4 @@
+import Link from "next/link";
 import Sparkline from "@/components/Sparkline";
 import { Globe } from "lucide-react";
 
@@ -8,6 +9,7 @@ export interface PlatformTicker {
   pnl30dPrev: number;
   allTime: number;
   spark: number[];   // cumulative 30d
+  href?: string;     // optional click-through target
 }
 
 function fmtSigned(n: number): string {
@@ -23,8 +25,8 @@ export default function PlatformTickers({ tickers }: { tickers: PlatformTicker[]
         const deltaPct = t.pnl30dPrev !== 0
           ? Math.round(((t.pnl30d - t.pnl30dPrev) / Math.abs(t.pnl30dPrev)) * 100)
           : null;
-        return (
-          <div key={t.name} className="glass-card ticker-card" style={{
+        const card = (
+          <div className="glass-card ticker-card" style={{
             padding: "16px 18px",
             display: "flex", flexDirection: "column", gap: 10,
             position: "relative", overflow: "hidden", height: "100%",
@@ -67,6 +69,13 @@ export default function PlatformTickers({ tickers }: { tickers: PlatformTicker[]
               All-time <span style={{ color: "#8888A0", fontWeight: 600 }}>{fmtSigned(Math.round(t.allTime))} USDT</span>
             </div>
           </div>
+        );
+        return t.href ? (
+          <Link key={t.name} href={t.href} style={{ textDecoration: "none", color: "inherit", display: "block", height: "100%" }}>
+            {card}
+          </Link>
+        ) : (
+          <div key={t.name} style={{ height: "100%" }}>{card}</div>
         );
       })}
     </div>

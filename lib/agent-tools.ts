@@ -380,7 +380,7 @@ export async function executeTool(name: string, input: any): Promise<string> {
         wp.forEach(r => lines.push(`  ${r.player_name} [${r.action_pct}%] — agency: winnings ${fmtAmount(r.agency_winnings_split_cny)} + RB ${fmtAmount(r.agency_rakeback_split_cny)} + ins ${fmtAmount(r.agency_insurance_split_cny)} = ${fmtAmount(r.total_agency_cny)} CNY (${fmtAmount(r.total_agency_usdt)} USDT)`));
       }
       if (!playerId) {
-        lines.push(`\nTotal agency: ${fmtAmount(total.total_usdt)} USDT (AK: ${fmtAmount(total.akpoker_usdt)}, KK: ${fmtAmount(total.kkpoker_usdt)}, WP: ${fmtAmount(total.wepoker_usdt)})`);
+        lines.push(`\nTotal agency: ${fmtAmount(total.total_usdt)} USDT (AK: ${fmtAmount(total.akpoker_usdt)}, KK: ${fmtAmount(total.kkpoker_usdt)}, WP: ${fmtAmount(total.wepoker_usdt)}, GH: ${fmtAmount(total.grindhouse_usdt)})`);
         if (total.akpoker_extras_usdt) lines.push(`  dont extras AK: ${fmtAmount(total.akpoker_extras_usdt)} USDT`);
         if (total.kkpoker_extras_usdt) lines.push(`  dont extras KK: ${fmtAmount(total.kkpoker_extras_usdt)} USDT`);
         if (total.wepoker_extras_cny) lines.push(`  dont extras WP: ${fmtAmount(total.wepoker_extras_cny)} CNY`);
@@ -671,7 +671,7 @@ export async function executeTool(name: string, input: any): Promise<string> {
       const contributors = getTopContributors(period, 20);
       if (contributors.length === 0) return `Aucun revenu sur ${label}.`;
       const lines = contributors.map(c => `${c.player_name} — AK: ${fmtAmount(c.akpoker_usdt)} · KK: ${fmtAmount(c.kkpoker_usdt)} · WP: ${fmtAmount(c.wepoker_usdt)} · total: ${fmtAmount(c.agency_usdt)} USDT`);
-      return `Revenu (${label}):\n${lines.join("\n")}\nTotal: ${fmtAmount(total.total_usdt)} USDT (AK: ${fmtAmount(total.akpoker_usdt)}, KK: ${fmtAmount(total.kkpoker_usdt)}, WP: ${total.wepoker_cny.toFixed(0)} CNY = ${fmtAmount(total.wepoker_usdt)})`;
+      return `Revenu (${label}):\n${lines.join("\n")}\nTotal: ${fmtAmount(total.total_usdt)} USDT (AK: ${fmtAmount(total.akpoker_usdt)}, KK: ${fmtAmount(total.kkpoker_usdt)}, WP: ${total.wepoker_cny.toFixed(0)} CNY = ${fmtAmount(total.wepoker_usdt)}, GH: ${fmtAmount(total.grindhouse_usdt)})`;
     }
 
     if (name === "top_players_this_week") {

@@ -9,6 +9,7 @@ const TZ = "Europe/Paris";
 const TYPE_LABEL: Record<OpsFeedEvent["type"], string> = {
   session: "SESSION",
   settlement: "SETTLEMENT",
+  gh_settle: "GH SETTLE",
   expense: "FRAIS",
   onboard: "ONBOARD",
 };
@@ -16,6 +17,7 @@ const TYPE_LABEL: Record<OpsFeedEvent["type"], string> = {
 const TYPE_COLOR: Record<OpsFeedEvent["type"], string> = {
   session: "#10B981",
   settlement: "#F5C518",
+  gh_settle: "#A855F7",
   expense: "#EF4444",
   onboard: "#3B82F6",
 };
@@ -91,6 +93,7 @@ export default function OpsFeedTerminal({ events }: { events: OpsFeedEvent[] }) 
           const delay = (n - 1 - i) * 50;
           const isNewest = i === 0;
           const amountColor = e.type === "settlement" ? "#F5C518"
+            : e.type === "gh_settle" ? "#A855F7"
             : e.amount !== null && e.amount < 0 ? "#EF4444"
             : "#10B981";
           return (
