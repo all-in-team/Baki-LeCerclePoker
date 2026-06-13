@@ -219,8 +219,8 @@ export default function TELEClient({
   }
 
   async function addNewPlayer() {
-    const teleGame = games.find(g => g.name === "TELE");
-    if (!teleGame) { alert("TELE game introuvable — contacte l'admin"); return; }
+    const teleGame = games.find(g => g.id === gameId);
+    if (!teleGame) { alert("Game introuvable — contacte l'admin"); return; }
     const action = Number(newPlayer.action_pct);
     const rb = Number(newPlayer.rakeback_pct);
     if (isNaN(action) || action < 0 || action > 100) { alert("Action % invalide"); return; }
