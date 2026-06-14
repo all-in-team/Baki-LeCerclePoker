@@ -34,6 +34,24 @@ export interface GameBreakdown {
   earned_lifetime: number;
   paid_lifetime: number;
   due_now: number;
+  // ── Additive audit-trail fields (NO math change — intermediate values only) ──
+  player_pnl_lifetime: number | null; // raw player net BEFORE ×action (wallet); null for Wepoker composite
+  effective_action_pct: number;       // the disclosed action % applied (the "deal agence %")
+  currency: string;                   // native currency of the driver: 'USDT' | 'CNY'
+  agency_pnl_native: number;          // agency P&L in native currency (= agency_pnl_lifetime for USDT)
+  cny_rate_missing: boolean;          // true if Wepoker CNY→USDT rate is unset (=0)
+  is_composite: boolean;              // Wepoker uses winnings/rake/insurance formula, not a single net×action
+}
+
+// Structured result of the agency P&L computation — exposes intermediates for audit.
+interface AgencyPnLDetail {
+  agency_pnl: number;       // USDT — IDENTICAL to the legacy scalar return (drives earned/due)
+  player_pnl: number | null;
+  effective_action_pct: number;
+  currency: string;
+  agency_pnl_native: number;
+  cny_rate_missing: boolean;
+  is_composite: boolean;
 }
 
 export interface WindowStatus {
@@ -98,27 +116,28 @@ function getAgencyPnLDisclosed(
   referredPlayerId: number,
   gameId: number,
   rel: AffRel,
-): number {
+): AgencyPnLDetail {
   const db = getDb();
+  const zero: AgencyPnLDetail = { agency_pnl: 0, player_pnl: 0, effective_action_pct: 0, currency: "USDT", agency_pnl_native: 0, cny_rate_missing: false, is_composite: false };
 
   const deal = db.prepare(
     `SELECT action_pct, rakeback_pct, COALESCE(insurance_pct, 0) AS insurance_pct, start_date, end_date
      FROM player_game_deals WHERE player_id = ? AND game_id = ?`
   ).get(referredPlayerId, gameId) as Deal | undefined;
 
-  if (!deal) return 0;
+  if (!deal) return zero;
 
   const perGame = db.prepare(
     `SELECT disclosed_action_pct, disclosed_rakeback_pct, disclosed_insurance_pct, excluded
      FROM affiliate_relationship_games WHERE relationship_id = ? AND game_id = ?`
   ).get(rel.id, gameId) as { disclosed_action_pct: number | null; disclosed_rakeback_pct: number | null; disclosed_insurance_pct: number | null; excluded: number } | undefined;
 
-  if (perGame?.excluded) return 0;
+  if (perGame?.excluded) return zero;
 
   const game = db.prepare(
     `SELECT name, perceived_action_pct, perceived_rakeback_pct, perceived_insurance_pct FROM games WHERE id = ?`
   ).get(gameId) as { name: string; perceived_action_pct: number | null; perceived_rakeback_pct: number | null; perceived_insurance_pct: number | null } | undefined;
-  if (!game) return 0;
+  if (!game) return zero;
 
   // Cascade: per-relation-game → game perceived → relation-level → deal
   const effAction = perGame?.disclosed_action_pct ?? game.perceived_action_pct ?? rel.disclosed_action_pct ?? deal.action_pct;
@@ -144,7 +163,16 @@ function getAgencyPnLDisclosed(
       row.rake * effRb / 100 +
       row.insurance * effIns / 100;
 
-    return convertCnyToUsdt(agencyCny, getCnyRate());
+    const cnyRate = getCnyRate();
+    return {
+      agency_pnl: convertCnyToUsdt(agencyCny, cnyRate), // identical to legacy: convertCnyToUsdt(agencyCny, getCnyRate())
+      player_pnl: null,
+      effective_action_pct: effAction,
+      currency: "CNY",
+      agency_pnl_native: agencyCny,
+      cny_rate_missing: cnyRate === 0,
+      is_composite: true,
+    };
   }
 
   // Wallet-based P&L (USDT) — mirrors getWalletSummaryByPlayer lines 377-394
@@ -170,7 +198,16 @@ function getAgencyPnLDisclosed(
     WHERE ${conditions.join(" AND ")}
   `).get(...params) as { net: number };
 
-  return row.net * effAction / 100;
+  const agency_pnl = row.net * effAction / 100; // identical to legacy return
+  return {
+    agency_pnl,
+    player_pnl: row.net,
+    effective_action_pct: effAction,
+    currency: "USDT",
+    agency_pnl_native: agency_pnl,
+    cny_rate_missing: false,
+    is_composite: false,
+  };
 }
 
 // ── 3. Compute commission for one relationship ──────────
@@ -204,7 +241,8 @@ export function computeAffiliateCommission(relationshipId: number): CommissionRe
 
   for (const g of games) {
     const { rate, label } = getCommissionRate(rel, g.game_id);
-    const agencyPnl = getAgencyPnLDisclosed(rel.referred_player_id, g.game_id, rel);
+    const detail = getAgencyPnLDisclosed(rel.referred_player_id, g.game_id, rel);
+    const agencyPnl = detail.agency_pnl;
     const earnedLifetime = Math.max(0, agencyPnl * rate);
 
     const paidRow = db.prepare(
@@ -223,6 +261,12 @@ export function computeAffiliateCommission(relationshipId: number): CommissionRe
       earned_lifetime: earnedLifetime,
       paid_lifetime: paidRow.paid,
       due_now: dueNow,
+      player_pnl_lifetime: detail.player_pnl,
+      effective_action_pct: detail.effective_action_pct,
+      currency: detail.currency,
+      agency_pnl_native: detail.agency_pnl_native,
+      cny_rate_missing: detail.cny_rate_missing,
+      is_composite: detail.is_composite,
     });
   }
 

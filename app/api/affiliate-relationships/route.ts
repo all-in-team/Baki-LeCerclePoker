@@ -22,8 +22,17 @@ export async function GET(req: NextRequest) {
     ORDER BY ar.created_at DESC
   `).all(...params) as any[];
 
+  const paymentsStmt = db.prepare(`
+    SELECT ap.paid_at, ap.amount_usdt, ap.game_id, g.name AS game_name, ap.tx_hash, ap.week_start_date, ap.week_end_date, ap.notes
+    FROM affiliate_payments ap
+    LEFT JOIN games g ON g.id = ap.game_id
+    WHERE ap.relationship_id = ?
+    ORDER BY ap.paid_at DESC
+  `);
+
   return NextResponse.json(rows.map(r => {
     const commission = computeAffiliateCommission(r.id);
+    const payments = paymentsStmt.all(r.id);
     return {
       id: r.id,
       affiliate: { id: r.affiliate_player_id, name: r.affiliate_name, telegram_handle: r.affiliate_handle },
@@ -41,6 +50,7 @@ export async function GET(req: NextRequest) {
       total_due_now: commission?.total_due_now ?? 0,
       total_paid_lifetime: commission?.total_paid_lifetime ?? 0,
       last_paid_at: commission?.last_paid_at ?? null,
+      payments,
     };
   }));
 }

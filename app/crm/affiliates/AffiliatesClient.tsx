@@ -25,6 +25,12 @@ interface Agent {
 interface GameBreakdown {
   game_id: number; game_name: string; rate: number; rate_label: string;
   agency_pnl_lifetime: number; earned_lifetime: number; paid_lifetime: number; due_now: number;
+  player_pnl_lifetime: number | null; effective_action_pct: number; currency: string;
+  agency_pnl_native: number; cny_rate_missing: boolean; is_composite: boolean;
+}
+interface AffPayment {
+  paid_at: string; amount_usdt: number; game_id: number; game_name: string | null;
+  tx_hash: string | null; week_start_date: string; week_end_date: string; notes: string | null;
 }
 interface EnrichedRel {
   id: number; status: string; start_date: string;
@@ -35,6 +41,7 @@ interface EnrichedRel {
   exclude_agency_extras: number; notes: string | null;
   games: GameBreakdown[];
   total_due_now: number; total_paid_lifetime: number; last_paid_at: string | null;
+  payments: AffPayment[];
 }
 
 interface AgentSummary {
@@ -119,7 +126,7 @@ export default function AffiliatesClient({ agents, players, activeGames, existin
   const [backfillApplied, setBackfillApplied] = useState(false);
 
   // Pay
-  const [payTarget, setPayTarget] = useState<{ relId: number; gameId: number; gameName: string; due: number; affName: string; refName: string } | null>(null);
+  const [payTarget, setPayTarget] = useState<{ relId: number; gameId: number; gameName: string; due: number; affName: string; refName: string; earned: number; paid: number } | null>(null);
   const [payForm, setPayForm] = useState({ amount: "", tx_hash: "", notes: "", week_start: lastMonday(), week_end: lastSunday() });
 
   const loadEnriched = useCallback(async () => {
@@ -288,8 +295,8 @@ export default function AffiliatesClient({ agents, players, activeGames, existin
     loadEnriched(); router.refresh();
   }
 
-  function openPay(relId: number, gameId: number, gameName: string, due: number, affName: string, refName: string) {
-    setPayTarget({ relId, gameId, gameName, due, affName, refName });
+  function openPay(relId: number, gameId: number, gameName: string, due: number, affName: string, refName: string, earned = 0, paid = 0) {
+    setPayTarget({ relId, gameId, gameName, due, affName, refName, earned, paid });
     setPayForm({ amount: due.toFixed(2), tx_hash: "", notes: "", week_start: lastMonday(), week_end: lastSunday() });
   }
 
@@ -577,7 +584,7 @@ export default function AffiliatesClient({ agents, players, activeGames, existin
           onClose={() => setDrawerAgent(null)}
           onEditRel={(r) => { openEdit(r); setDrawerAgent(null); }}
           onTerminateRel={(id) => { terminate(id); }}
-          onPayRel={(relId, gameId, gameName, due, affName, refName) => openPay(relId, gameId, gameName, due, affName, refName)}
+          onPayRel={(relId, gameId, gameName, due, affName, refName, earned, paid) => openPay(relId, gameId, gameName, due, affName, refName, earned, paid)}
           gameBadges={GAME_BADGES}
         />
       )}
@@ -628,6 +635,12 @@ export default function AffiliatesClient({ agents, players, activeGames, existin
       {/* Pay modal */}
       <Modal open={!!payTarget} onClose={() => setPayTarget(null)} title={`Payer — ${payTarget?.affName ?? ""} (${payTarget?.refName ?? ""} · ${payTarget?.gameName ?? ""})`} width={440}>
         <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+          {payTarget && (
+            <div style={{ padding: "10px 12px", borderRadius: 8, background: "rgba(34,197,94,0.06)", border: "1px solid rgba(34,197,94,0.2)", fontSize: 13, color: "var(--text-muted)", lineHeight: 1.6 }}>
+              Payer <strong style={{ color: "#22C55E" }}>{payTarget.due.toFixed(2)} USDT</strong> à <strong style={{ color: "var(--text)" }}>{payTarget.affName}</strong> pour <strong style={{ color: "var(--text)" }}>{payTarget.refName}</strong> ({payTarget.gameName}) ?<br />
+              <span style={{ fontSize: 12 }}>Earned {payTarget.earned.toFixed(2)} − Payé {payTarget.paid.toFixed(2)} = <strong style={{ color: "#22C55E" }}>{payTarget.due.toFixed(2)}</strong></span>
+            </div>
+          )}
           <div>
             <label style={{ fontSize: 11, fontWeight: 700, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.07em", display: "block", marginBottom: 6 }}>Montant USDT</label>
             <input type="number" step="0.01" min={0} value={payForm.amount} onChange={e => setPayForm({ ...payForm, amount: e.target.value })}
