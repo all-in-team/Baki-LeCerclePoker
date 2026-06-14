@@ -15,7 +15,7 @@ const GAME_BADGES: Record<string, { short: string; bg: string; color: string }> 
   ClubGG:  { short: "CG", bg: "rgba(234,179,8,0.15)",  color: "#EAB308" },
 };
 
-interface Player { id: number; name: string; telegram_handle: string | null; }
+interface Player { id: number; name: string; telegram_handle: string | null; telegram_id: number | null; }
 interface Game { id: number; name: string; perceived_action_pct: number | null; perceived_rakeback_pct: number | null; perceived_insurance_pct: number | null; }
 interface Agent {
   affiliate_player_id: number; joined_at: string; profile_status: string;
@@ -101,6 +101,12 @@ export default function AffiliatesClient({ agents, players, activeGames, existin
   const [enrichedRels, setEnrichedRels] = useState<EnrichedRel[]>([]);
   const [loading, setLoading] = useState(true);
 
+  // Add agent (promote existing player → affiliate_profile)
+  const [addAgentOpen, setAddAgentOpen] = useState(false);
+  const [agentPlayerId, setAgentPlayerId] = useState(0);
+  const [searchAgent, setSearchAgent] = useState("");
+  const [savingAgent, setSavingAgent] = useState(false);
+
   const [drawerAgent, setDrawerAgent] = useState<AgentSummary | null>(null);
   const [gameRates, setGameRates] = useState<GameRateRow[]>([]);
   const [showExcluded, setShowExcluded] = useState(false);
@@ -179,6 +185,23 @@ export default function AffiliatesClient({ agents, players, activeGames, existin
   function openCreate() {
     setForm(emptyForm()); setSearchAff(""); setSearchRef("");
     setCreateOpen(true);
+  }
+
+  function openAddAgent() {
+    setAgentPlayerId(0); setSearchAgent(""); setAddAgentOpen(true);
+  }
+
+  async function handleCreateAgent() {
+    if (!agentPlayerId) return;
+    setSavingAgent(true);
+    try {
+      const res = await fetch("/api/affiliate-profiles", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ player_id: agentPlayerId }),
+      });
+      if (!res.ok) { const d = await res.json(); alert(d.error ?? "Erreur"); return; }
+      setAddAgentOpen(false); router.refresh();
+    } catch (e: any) { alert(e.message); } finally { setSavingAgent(false); }
   }
 
   function openEdit(r: EnrichedRel) {
@@ -289,6 +312,10 @@ export default function AffiliatesClient({ agents, players, activeGames, existin
   }
 
   const playerName = (id: number) => players.find(p => p.id === id)?.name ?? `#${id}`;
+
+  const agentIds = new Set(agents.map(a => a.affiliate_player_id));
+  const agentCandidates = players.filter(p => !agentIds.has(p.id) && (!searchAgent || p.name.toLowerCase().includes(searchAgent.toLowerCase()) || (p.telegram_handle ?? "").toLowerCase().includes(searchAgent.toLowerCase())));
+  const selectedAgentPlayer = players.find(p => p.id === agentPlayerId) ?? null;
 
   const filteredAff = players.filter(p => p.id !== form.referred_player_id && (!searchAff || p.name.toLowerCase().includes(searchAff.toLowerCase()) || (p.telegram_handle ?? "").toLowerCase().includes(searchAff.toLowerCase())));
   const usedReferredIds = new Set(existingReferredIds);
@@ -472,6 +499,9 @@ export default function AffiliatesClient({ agents, players, activeGames, existin
             <RefreshCw size={14} /> Backfill telegram_id ({backfillCount ?? brokenTgCount} agent{(backfillCount ?? brokenTgCount) > 1 ? "s" : ""})
           </button>
         )}
+        <button onClick={openAddAgent} style={{ display: "flex", alignItems: "center", gap: 6, padding: "8px 16px", borderRadius: 8, fontSize: 13, fontWeight: 600, cursor: "pointer", background: "rgba(59,130,246,0.12)", border: "1px solid rgba(59,130,246,0.3)", color: "#3B82F6" }}>
+          <Plus size={14} /> Ajouter agent
+        </button>
         <button onClick={openCreate} style={{ display: "flex", alignItems: "center", gap: 6, padding: "8px 16px", borderRadius: 8, fontSize: 13, fontWeight: 600, cursor: "pointer", background: "rgba(34,197,94,0.12)", border: "1px solid rgba(34,197,94,0.3)", color: "#22C55E" }}>
           <Plus size={14} /> Ajouter filleul
         </button>
@@ -551,6 +581,27 @@ export default function AffiliatesClient({ agents, players, activeGames, existin
           gameBadges={GAME_BADGES}
         />
       )}
+
+      {/* Add agent modal */}
+      <Modal open={addAgentOpen} onClose={() => setAddAgentOpen(false)} title="Ajouter un agent" width={480}>
+        <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+          {renderPlayerPicker("Player à promouvoir agent", agentPlayerId, id => setAgentPlayerId(id), searchAgent, setSearchAgent, agentCandidates)}
+          {selectedAgentPlayer && !selectedAgentPlayer.telegram_id && (
+            <div style={{ padding: "9px 12px", borderRadius: 7, fontSize: 12, background: "rgba(245,158,11,0.10)", border: "1px solid rgba(245,158,11,0.3)", color: "#F59E0B" }}>
+              ⚠️ Ce joueur n'a pas de <code>telegram_id</code> — il ne pourra pas ouvrir sa Mini App tant qu'il n'a pas DM le bot ou été backfillé (bouton Backfill). La création reste possible.
+            </div>
+          )}
+          <div style={{ fontSize: 11, color: "var(--text-dim)" }}>
+            Commission fixe 50% des profits agency (filleuls onboardés ≤30j). Identique à <code>/startaffi</code>.
+          </div>
+        </div>
+        <div style={{ display: "flex", justifyContent: "flex-end", gap: 10, marginTop: 16 }}>
+          <button onClick={() => setAddAgentOpen(false)} style={{ padding: "8px 18px", borderRadius: 7, fontSize: 13, cursor: "pointer", background: "none", border: "1px solid var(--border)", color: "var(--text-muted)" }}>Annuler</button>
+          <button onClick={handleCreateAgent} disabled={savingAgent || !agentPlayerId} style={{ padding: "8px 18px", borderRadius: 7, fontSize: 13, fontWeight: 600, cursor: savingAgent ? "wait" : "pointer", background: "rgba(59,130,246,0.15)", border: "1px solid rgba(59,130,246,0.3)", color: "#3B82F6", opacity: savingAgent || !agentPlayerId ? 0.5 : 1 }}>
+            {savingAgent ? "..." : "Créer agent"}
+          </button>
+        </div>
+      </Modal>
 
       {/* Create modal */}
       <Modal open={createOpen} onClose={() => setCreateOpen(false)} title="Ajouter un filleul" width={520}>
