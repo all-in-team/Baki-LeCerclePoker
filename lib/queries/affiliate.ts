@@ -243,7 +243,10 @@ export function computeAffiliateCommission(relationshipId: number): CommissionRe
     const { rate, label } = getCommissionRate(rel, g.game_id);
     const detail = getAgencyPnLDisclosed(rel.referred_player_id, g.game_id, rel);
     const agencyPnl = detail.agency_pnl;
-    const earnedLifetime = Math.max(0, agencyPnl * rate);
+    // NOTE: per-(rel,game) floor REMOVED — negatives must propagate up to the agent-level
+    // cumul (cross-makeup). The single max(0) now lives in computeAgentCommission.
+    // earned_lifetime here is the SIGNED raw contribution (agencyPnl × rate), informational only.
+    const earnedLifetime = agencyPnl * rate;
 
     const paidRow = db.prepare(
       `SELECT COALESCE(SUM(amount_usdt), 0) AS paid
@@ -287,30 +290,91 @@ export function computeAffiliateCommission(relationshipId: number): CommissionRe
   };
 }
 
-// ── 4. All pending payouts grouped by affiliate ─────────
+// ── 4. AGENT-LEVEL commission (cross-makeup + carry-forward) ──────────────
+// Validated formula (Baki, money-critical):
+//   cumul_agence = Σ part_agence_lifetime over ALL active filleuls × ELIGIBLE games
+//                  (positives AND negatives mixed — cross-makeup)
+//   earned       = max(0, cumul_agence) × 0.50   (single floor, at agent level)
+//   due_now      = max(0, earned − paid_agent)   (carry-forward is automatic since
+//                  cumul is lifetime: a past loss stays in the sum until future gains fill it)
+
+export interface AgentFilleulLine {
+  relationship_id: number;
+  referred: { id: number; name: string; telegram_handle: string | null };
+  part_agence_eligible: number; // signed Σ of this filleul's eligible per-game agency P&L
+}
+
+export interface AgentCommissionResult {
+  affiliate_player_id: number;
+  cumul_agence_eligible: number; // signed — can be negative (carry-forward debt)
+  earned: number;                // max(0, cumul) × 0.50
+  paid: number;                  // Σ all payments across the agent's relationships (any status)
+  due_now: number;               // max(0, earned − paid)
+  filleuls: AgentFilleulLine[];
+}
+
+export function computeAgentCommission(affiliatePlayerId: number): AgentCommissionResult {
+  const db = getDb();
+
+  const rels = db.prepare(
+    `SELECT id FROM affiliate_relationships WHERE affiliate_player_id = ? AND status = 'active'`
+  ).all(affiliatePlayerId) as { id: number }[];
+
+  let cumul = 0;
+  const filleuls: AgentFilleulLine[] = [];
+  for (const { id } of rels) {
+    const c = computeAffiliateCommission(id);
+    if (!c) continue;
+    // Eligible games only (deal within the 30-day window → rate_label 'éligible').
+    const partEligible = c.breakdown
+      .filter(b => b.rate_label === "éligible")
+      .reduce((s, b) => s + b.agency_pnl_lifetime, 0);
+    cumul += partEligible;
+    filleuls.push({ relationship_id: id, referred: c.referred, part_agence_eligible: partEligible });
+  }
+
+  // paid = every payment ever made on ANY of the agent's relationships (status-agnostic,
+  // so money paid is never lost from the ledger).
+  const paidRow = db.prepare(
+    `SELECT COALESCE(SUM(amount_usdt), 0) AS paid
+     FROM affiliate_payments
+     WHERE relationship_id IN (SELECT id FROM affiliate_relationships WHERE affiliate_player_id = ?)`
+  ).get(affiliatePlayerId) as { paid: number };
+
+  const earned = Math.max(0, cumul) * 0.50;
+  const due_now = Math.max(0, earned - paidRow.paid);
+
+  return {
+    affiliate_player_id: affiliatePlayerId,
+    cumul_agence_eligible: cumul,
+    earned,
+    paid: paidRow.paid,
+    due_now,
+    filleuls,
+  };
+}
+
+// ── 5. All pending payouts grouped by affiliate (agent-level) ─────────
 
 export function getPendingPayoutsForAllAffiliates(): AffiliateGroup[] {
   const db = getDb();
-  const rels = db.prepare(
-    `SELECT id FROM affiliate_relationships WHERE status = 'active'`
-  ).all() as { id: number }[];
+  const agents = db.prepare(
+    `SELECT DISTINCT affiliate_player_id FROM affiliate_relationships WHERE status = 'active'`
+  ).all() as { affiliate_player_id: number }[];
 
-  const commissions: CommissionResult[] = [];
-  for (const r of rels) {
-    const c = computeAffiliateCommission(r.id);
-    if (c && c.total_due_now > 0) commissions.push(c);
+  const groups: AffiliateGroup[] = [];
+  for (const { affiliate_player_id } of agents) {
+    const ac = computeAgentCommission(affiliate_player_id);
+    if (ac.due_now <= 0) continue;
+    const player = db.prepare(
+      `SELECT id, name, telegram_handle FROM players WHERE id = ?`
+    ).get(affiliate_player_id) as { id: number; name: string; telegram_handle: string | null } | undefined;
+    groups.push({
+      affiliate: { id: affiliate_player_id, name: player?.name ?? `#${affiliate_player_id}`, telegram_handle: player?.telegram_handle ?? null },
+      total_due: ac.due_now,
+      relationships: [],
+    });
   }
 
-  const grouped = new Map<number, AffiliateGroup>();
-  for (const c of commissions) {
-    const key = c.affiliate.id;
-    if (!grouped.has(key)) {
-      grouped.set(key, { affiliate: c.affiliate, total_due: 0, relationships: [] });
-    }
-    const g = grouped.get(key)!;
-    g.relationships.push(c);
-    g.total_due += c.total_due_now;
-  }
-
-  return [...grouped.values()].sort((a, b) => b.total_due - a.total_due);
+  return groups.sort((a, b) => b.total_due - a.total_due);
 }

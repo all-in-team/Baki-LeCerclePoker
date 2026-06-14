@@ -44,11 +44,14 @@ interface EnrichedRel {
   payments: AffPayment[];
 }
 
+interface AgentCommission { cumul_agence_eligible: number; earned: number; paid: number; due_now: number; }
 interface AgentSummary {
   agent: Agent;
   filleuls: EnrichedRel[];
-  totalCommissionEarned: number;
-  totalDueNow: number;
+  cumulAgence: number;
+  earned: number;
+  paid: number;
+  due: number;
 }
 
 interface BackfillResult {
@@ -76,6 +79,7 @@ interface Props {
   players: Player[];
   activeGames: Game[];
   existingReferredIds: number[];
+  agentCommissions: Record<number, AgentCommission>;
 }
 
 const emptyForm = () => ({
@@ -96,7 +100,7 @@ function lastSunday(): string {
 
 const fmt = (n: number) => n.toFixed(2);
 
-export default function AffiliatesClient({ agents, players, activeGames, existingReferredIds }: Props) {
+export default function AffiliatesClient({ agents, players, activeGames, existingReferredIds, agentCommissions }: Props) {
   const router = useRouter();
   const [createOpen, setCreateOpen] = useState(false);
   const [editRel, setEditRel] = useState<EnrichedRel | null>(null);
@@ -126,7 +130,7 @@ export default function AffiliatesClient({ agents, players, activeGames, existin
   const [backfillApplied, setBackfillApplied] = useState(false);
 
   // Pay
-  const [payTarget, setPayTarget] = useState<{ relId: number; gameId: number; gameName: string; due: number; affName: string; refName: string; earned: number; paid: number } | null>(null);
+  const [payTarget, setPayTarget] = useState<{ agentId: number; agentName: string; due: number; earned: number; paid: number } | null>(null);
   const [payForm, setPayForm] = useState({ amount: "", tx_hash: "", notes: "", week_start: lastMonday(), week_end: lastSunday() });
 
   const loadEnriched = useCallback(async () => {
@@ -142,9 +146,8 @@ export default function AffiliatesClient({ agents, players, activeGames, existin
   // Build agent summaries
   const agentSummaries: AgentSummary[] = agents.map(agent => {
     const filleuls = enrichedRels.filter(r => r.affiliate.id === agent.affiliate_player_id);
-    const totalCommissionEarned = filleuls.reduce((s, r) => s + (r.games ?? []).reduce((gs, g) => gs + g.earned_lifetime, 0), 0);
-    const totalDueNow = filleuls.reduce((s, r) => s + (r.total_due_now ?? 0), 0);
-    return { agent, filleuls, totalCommissionEarned, totalDueNow };
+    const ac = agentCommissions[agent.affiliate_player_id] ?? { cumul_agence_eligible: 0, earned: 0, paid: 0, due_now: 0 };
+    return { agent, filleuls, cumulAgence: ac.cumul_agence_eligible, earned: ac.earned, paid: ac.paid, due: ac.due_now };
   });
 
   const brokenTgCount = agents.filter(a => !a.telegram_id).length;
@@ -295,8 +298,8 @@ export default function AffiliatesClient({ agents, players, activeGames, existin
     loadEnriched(); router.refresh();
   }
 
-  function openPay(relId: number, gameId: number, gameName: string, due: number, affName: string, refName: string, earned = 0, paid = 0) {
-    setPayTarget({ relId, gameId, gameName, due, affName, refName, earned, paid });
+  function openPayAgent(agentId: number, agentName: string, due: number, earned: number, paid: number) {
+    setPayTarget({ agentId, agentName, due, earned, paid });
     setPayForm({ amount: due.toFixed(2), tx_hash: "", notes: "", week_start: lastMonday(), week_end: lastSunday() });
   }
 
@@ -307,14 +310,14 @@ export default function AffiliatesClient({ agents, players, activeGames, existin
       const res = await fetch("/api/affiliate-payments", {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          relationship_id: payTarget.relId, game_id: payTarget.gameId,
+          affiliate_player_id: payTarget.agentId,
           amount_usdt: Number(payForm.amount),
           week_start_date: payForm.week_start, week_end_date: payForm.week_end,
           tx_hash: payForm.tx_hash || null, notes: payForm.notes || null,
         }),
       });
       if (!res.ok) { const d = await res.json(); alert(d.error ?? "Erreur"); return; }
-      setPayTarget(null); loadEnriched();
+      setPayTarget(null); setDrawerAgent(null); loadEnriched(); router.refresh();
     } catch (e: any) { alert(e.message); } finally { setSaving(false); }
   }
 
@@ -532,10 +535,10 @@ export default function AffiliatesClient({ agents, players, activeGames, existin
           {agentSummaries.length === 0 && (
             <tr><td colSpan={7} style={{ padding: 24, textAlign: "center", color: "var(--text-dim)" }}>Aucun agent actif</td></tr>
           )}
-          {agentSummaries.map(({ agent, filleuls, totalCommissionEarned, totalDueNow }) => {
+          {agentSummaries.map(({ agent, filleuls, cumulAgence, earned, paid, due }) => {
             const activeFilleuls = filleuls.filter(r => r.status === "active");
             return (
-              <tr key={agent.affiliate_player_id} onClick={() => setDrawerAgent({ agent, filleuls, totalCommissionEarned, totalDueNow })}
+              <tr key={agent.affiliate_player_id} onClick={() => setDrawerAgent({ agent, filleuls, cumulAgence, earned, paid, due })}
                 style={{ borderBottom: "1px solid var(--border)", cursor: "pointer", transition: "background 0.1s" }}
                 onMouseEnter={e => (e.currentTarget.style.background = "rgba(255,255,255,0.02)")}
                 onMouseLeave={e => (e.currentTarget.style.background = "transparent")}>
@@ -559,11 +562,11 @@ export default function AffiliatesClient({ agents, players, activeGames, existin
                     )}
                   </div>
                 </td>
-                <td style={{ textAlign: "right", padding: "12px 8px", fontWeight: 600, color: totalCommissionEarned > 0 ? "var(--text)" : "var(--text-dim)" }}>
-                  {totalCommissionEarned > 0 ? `${fmt(totalCommissionEarned)} USDT` : "—"}
+                <td style={{ textAlign: "right", padding: "12px 8px", fontWeight: 600, color: earned > 0 ? "var(--text)" : cumulAgence < 0 ? "#EF4444" : "var(--text-dim)" }}>
+                  {earned > 0 ? `${fmt(earned)} USDT` : cumulAgence < 0 ? `cumul ${fmt(cumulAgence)}` : "—"}
                 </td>
-                <td style={{ textAlign: "right", padding: "12px 8px", fontWeight: 600, color: totalDueNow > 0 ? "#22C55E" : "var(--text-dim)" }}>
-                  {totalDueNow > 0 ? `${fmt(totalDueNow)}` : "—"}
+                <td style={{ textAlign: "right", padding: "12px 8px", fontWeight: 600, color: due > 0 ? "#22C55E" : "var(--text-dim)" }}>
+                  {due > 0 ? `${fmt(due)}` : "—"}
                 </td>
                 <td style={{ textAlign: "center", padding: "12px 8px", fontSize: 12, color: "var(--text-muted)" }}>
                   {agent.joined_at?.slice(0, 10) ?? "—"}
@@ -584,7 +587,7 @@ export default function AffiliatesClient({ agents, players, activeGames, existin
           onClose={() => setDrawerAgent(null)}
           onEditRel={(r) => { openEdit(r); setDrawerAgent(null); }}
           onTerminateRel={(id) => { terminate(id); }}
-          onPayRel={(relId, gameId, gameName, due, affName, refName, earned, paid) => openPay(relId, gameId, gameName, due, affName, refName, earned, paid)}
+          onPayAgent={(agentId, agentName, due, earned, paid) => openPayAgent(agentId, agentName, due, earned, paid)}
           gameBadges={GAME_BADGES}
         />
       )}
@@ -633,12 +636,12 @@ export default function AffiliatesClient({ agents, players, activeGames, existin
       </Modal>
 
       {/* Pay modal */}
-      <Modal open={!!payTarget} onClose={() => setPayTarget(null)} title={`Payer — ${payTarget?.affName ?? ""} (${payTarget?.refName ?? ""} · ${payTarget?.gameName ?? ""})`} width={440}>
+      <Modal open={!!payTarget} onClose={() => setPayTarget(null)} title={`Payer l'agent — ${payTarget?.agentName ?? ""}`} width={440}>
         <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
           {payTarget && (
             <div style={{ padding: "10px 12px", borderRadius: 8, background: "rgba(34,197,94,0.06)", border: "1px solid rgba(34,197,94,0.2)", fontSize: 13, color: "var(--text-muted)", lineHeight: 1.6 }}>
-              Payer <strong style={{ color: "#22C55E" }}>{payTarget.due.toFixed(2)} USDT</strong> à <strong style={{ color: "var(--text)" }}>{payTarget.affName}</strong> pour <strong style={{ color: "var(--text)" }}>{payTarget.refName}</strong> ({payTarget.gameName}) ?<br />
-              <span style={{ fontSize: 12 }}>Earned {payTarget.earned.toFixed(2)} − Payé {payTarget.paid.toFixed(2)} = <strong style={{ color: "#22C55E" }}>{payTarget.due.toFixed(2)}</strong></span>
+              Payer <strong style={{ color: "#22C55E" }}>{payTarget.due.toFixed(2)} USDT</strong> à <strong style={{ color: "var(--text)" }}>{payTarget.agentName}</strong> ?<br />
+              <span style={{ fontSize: 12 }}>Commission agent (Earned) {payTarget.earned.toFixed(2)} − Déjà payé {payTarget.paid.toFixed(2)} = <strong style={{ color: "#22C55E" }}>{payTarget.due.toFixed(2)}</strong></span>
             </div>
           )}
           <div>

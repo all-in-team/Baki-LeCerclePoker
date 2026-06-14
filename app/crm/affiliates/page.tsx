@@ -1,5 +1,6 @@
 export const dynamic = "force-dynamic";
 import { getDb } from "@/lib/db";
+import { computeAgentCommission } from "@/lib/queries/affiliate";
 import PageHeader from "@/components/PageHeader";
 import AffiliatesClient from "./AffiliatesClient";
 
@@ -19,6 +20,16 @@ export default function AffiliatesPage() {
   const activeGames = db.prepare(`SELECT id, name, perceived_action_pct, perceived_rakeback_pct, perceived_insurance_pct FROM games WHERE status = 'active' ORDER BY id`).all() as any[];
   const existingReferredIds = db.prepare(`SELECT referred_player_id FROM affiliate_relationships WHERE status != 'terminated'`).all().map((r: any) => r.referred_player_id) as number[];
 
+  // Agent-level commission (cross-makeup) computed server-side — single source of truth,
+  // identical to the Mini App /portal (both call computeAgentCommission).
+  const agentCommissions: Record<number, { cumul_agence_eligible: number; earned: number; paid: number; due_now: number }> = {};
+  for (const a of agents) {
+    const ac = computeAgentCommission(a.affiliate_player_id);
+    agentCommissions[a.affiliate_player_id] = {
+      cumul_agence_eligible: ac.cumul_agence_eligible, earned: ac.earned, paid: ac.paid, due_now: ac.due_now,
+    };
+  }
+
   return (
     <>
       <PageHeader title="Affiliates" subtitle="Agents actifs et leurs filleuls" />
@@ -27,6 +38,7 @@ export default function AffiliatesPage() {
         players={players}
         activeGames={activeGames}
         existingReferredIds={existingReferredIds}
+        agentCommissions={agentCommissions}
       />
     </>
   );

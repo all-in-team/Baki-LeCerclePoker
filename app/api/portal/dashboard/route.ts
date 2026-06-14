@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createHmac, timingSafeEqual } from "crypto";
 import { getDb } from "@/lib/db";
-import { computeAffiliateCommission } from "@/lib/queries/affiliate";
+import { computeAffiliateCommission, computeAgentCommission } from "@/lib/queries/affiliate";
 
 const OWNER_TG_IDS = new Set(
   (process.env.TELEGRAM_OWNER_IDS ?? "1298290355,1486389037")
@@ -40,24 +40,26 @@ function buildAgentDashboard(agentPlayerId: number, db: any) {
     `SELECT id FROM affiliate_relationships WHERE affiliate_player_id = ? AND status = 'active'`
   ).all(player.id) as { id: number }[];
 
-  let totalEarned = 0;
-  let totalPaid = 0;
+  // Agent-level commission (cross-makeup) — single source of truth, shared with /crm/affiliates
+  const ac = computeAgentCommission(player.id);
   const filleuls: any[] = [];
 
   for (const r of rels) {
     const commission = computeAffiliateCommission(r.id);
     if (!commission) continue;
-    totalEarned += commission.total_earned_lifetime;
-    totalPaid += commission.total_paid_lifetime;
+    // per-filleul ELIGIBLE agency P&L (signed) — what this filleul contributes to the agent cumul
+    const partEligible = commission.breakdown
+      .filter(b => b.rate_label === "éligible")
+      .reduce((s, b) => s + b.agency_pnl_lifetime, 0);
     filleuls.push({
       name: commission.referred.name,
       handle: commission.referred.telegram_handle,
       window_status: commission.window_status,
       games: commission.breakdown.map(b => ({
         game_name: b.game_name, rate_label: b.rate_label,
-        rate_pct: Math.round(b.rate * 100), earned: b.earned_lifetime, due_now: b.due_now,
+        rate_pct: Math.round(b.rate * 100), agency_pnl: b.agency_pnl_lifetime, currency: b.currency,
       })),
-      total_earned: commission.total_earned_lifetime,
+      part_agence_eligible: partEligible, // signed (can be negative)
     });
   }
 
@@ -75,7 +77,7 @@ function buildAgentDashboard(agentPlayerId: number, db: any) {
   return {
     mode: "agent" as const,
     affiliate: { name: player.name, handle: player.telegram_handle, joined_at: player.created_at?.slice(0, 10) ?? null },
-    summary: { lifetime_usdt: totalEarned, paid_usdt: totalPaid, pending_usdt: Math.max(0, totalEarned - totalPaid) },
+    summary: { lifetime_usdt: ac.earned, paid_usdt: ac.paid, pending_usdt: ac.due_now, cumul_agence: ac.cumul_agence_eligible },
     share_link: `https://t.me/${botUsername}?start=ref_${player.id}`,
     filleuls,
     payments,
@@ -118,29 +120,18 @@ export async function POST(req: NextRequest) {
     let totalDueAll = 0;
     let totalPaidAll = 0;
     const agentSummaries = agents.map(a => {
-      const rels = db.prepare(
-        `SELECT id FROM affiliate_relationships WHERE affiliate_player_id = ? AND status = 'active'`
-      ).all(a.affiliate_player_id) as { id: number }[];
-
-      let lifetime = 0, paid = 0, filleulsCount = 0;
-      for (const r of rels) {
-        const c = computeAffiliateCommission(r.id);
-        if (!c) continue;
-        lifetime += c.total_earned_lifetime;
-        paid += c.total_paid_lifetime;
-        filleulsCount++;
-      }
-      const pending = Math.max(0, lifetime - paid);
-      totalDueAll += pending;
-      totalPaidAll += paid;
+      // Agent-level commission (cross-makeup) — same function as /crm/affiliates → guaranteed consistency
+      const ac = computeAgentCommission(a.affiliate_player_id);
+      totalDueAll += ac.due_now;
+      totalPaidAll += ac.paid;
 
       return {
         player_id: a.affiliate_player_id,
         name: a.name,
         handle: a.telegram_handle,
         joined_at: a.joined_at?.slice(0, 10) ?? null,
-        filleuls_count: filleulsCount,
-        summary: { lifetime, paid, pending },
+        filleuls_count: ac.filleuls.length,
+        summary: { lifetime: ac.earned, paid: ac.paid, pending: ac.due_now },
       };
     });
 

@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getDb } from "@/lib/db";
-import { computeAffiliateCommission } from "@/lib/queries/affiliate";
+import { computeAgentCommission } from "@/lib/queries/affiliate";
 
 export async function GET(req: NextRequest) {
   const relId = req.nextUrl.searchParams.get("relationship_id");
@@ -16,26 +16,37 @@ export async function GET(req: NextRequest) {
   return NextResponse.json(rows);
 }
 
+// AGENT-LEVEL payment (D2): pays the agent's global due (cross-makeup).
+// affiliate_payments still requires relationship_id + game_id (NOT NULL), so the row is
+// attached to a representative active relationship/game of the agent — paid_agent sums
+// across ALL the agent's relationships, so attribution choice does not affect the total.
 export async function POST(req: NextRequest) {
   const body = await req.json();
-  const { relationship_id, game_id, amount_usdt, week_start_date, week_end_date, tx_hash, notes } = body;
+  const { affiliate_player_id, amount_usdt, week_start_date, week_end_date, tx_hash, notes } = body;
 
-  if (!relationship_id || !game_id || !amount_usdt || !week_start_date || !week_end_date)
-    return NextResponse.json({ error: "relationship_id, game_id, amount_usdt, week_start_date, week_end_date requis" }, { status: 400 });
+  if (!affiliate_player_id || !amount_usdt || !week_start_date || !week_end_date)
+    return NextResponse.json({ error: "affiliate_player_id, amount_usdt, week_start_date, week_end_date requis" }, { status: 400 });
 
   if (amount_usdt <= 0)
     return NextResponse.json({ error: "amount_usdt doit être > 0" }, { status: 400 });
 
   const db = getDb();
 
-  const rel = db.prepare(
-    `SELECT id, status FROM affiliate_relationships WHERE id = ?`
-  ).get(relationship_id) as { id: number; status: string } | undefined;
-  if (!rel) return NextResponse.json({ error: "Relation introuvable" }, { status: 404 });
-  if (rel.status !== "active") return NextResponse.json({ error: "Relation non active" }, { status: 400 });
+  const repRel = db.prepare(
+    `SELECT id, origin_game_id, referred_player_id FROM affiliate_relationships
+     WHERE affiliate_player_id = ? AND status = 'active' ORDER BY id LIMIT 1`
+  ).get(affiliate_player_id) as { id: number; origin_game_id: number | null; referred_player_id: number } | undefined;
+  if (!repRel) return NextResponse.json({ error: "Agent sans relation active" }, { status: 400 });
 
-  const snapshot = computeAffiliateCommission(relationship_id);
-  const gameBreakdown = snapshot?.breakdown.find(b => b.game_id === game_id);
+  let gameId = repRel.origin_game_id;
+  if (!gameId) {
+    const g = db.prepare(`SELECT game_id FROM player_game_deals WHERE player_id = ? LIMIT 1`).get(repRel.referred_player_id) as { game_id: number } | undefined;
+    gameId = g?.game_id ?? null;
+  }
+  if (!gameId) return NextResponse.json({ error: "Aucun game rattaché à l'agent — impossible d'enregistrer le paiement" }, { status: 400 });
+
+  // Agent-level audit snapshot (state at payment time)
+  const ac = computeAgentCommission(affiliate_player_id);
 
   const r = db.prepare(`
     INSERT INTO affiliate_payments
@@ -43,12 +54,9 @@ export async function POST(req: NextRequest) {
        snapshot_agency_pnl_lifetime, snapshot_commission_rate, snapshot_total_earned, snapshot_total_paid_before)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
-    relationship_id, game_id, week_start_date, week_end_date, amount_usdt,
+    repRel.id, gameId, week_start_date, week_end_date, amount_usdt,
     tx_hash ?? null, notes ?? null,
-    gameBreakdown?.agency_pnl_lifetime ?? null,
-    gameBreakdown?.rate ?? null,
-    gameBreakdown?.earned_lifetime ?? null,
-    gameBreakdown?.paid_lifetime ?? null,
+    ac.cumul_agence_eligible, 0.50, ac.earned, ac.paid,
   );
 
   return NextResponse.json({ ok: true, id: Number(r.lastInsertRowid) }, { status: 201 });
