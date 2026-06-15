@@ -72,6 +72,43 @@ function buildAgentDashboard(agentPlayerId: number, db: any) {
     ORDER BY ap.paid_at DESC LIMIT 20
   `).all(player.id) as any[];
 
+  // ── Gamification data (DISPLAY-ONLY: counts + recent tx lines, no money aggregation,
+  //    no cross-currency sum — each line keeps its native amount+currency) ──
+  const refRows = db.prepare(
+    `SELECT referred_player_id FROM affiliate_relationships WHERE affiliate_player_id = ? AND status = 'active'`
+  ).all(player.id) as { referred_player_id: number }[];
+  const refIds = refRows.map(r => r.referred_player_id);
+
+  let activity: { ts: string; type: string; amount: number; currency: string; player_name: string }[] = [];
+  let momentum = { filleuls_total: refIds.length, filleuls_active_30d: 0, actions_30d: 0, actions_prev_30d: 0 };
+
+  if (refIds.length > 0) {
+    const ph = refIds.map(() => "?").join(",");
+    const ts = `COALESCE(wt.tx_datetime, wt.tx_date)`;
+    const guard = `(wt.source IS NULL OR wt.source != 'unknown')`;
+
+    activity = db.prepare(`
+      SELECT ${ts} AS ts, wt.type, wt.amount, wt.currency, p.name AS player_name
+      FROM wallet_transactions wt JOIN players p ON p.id = wt.player_id
+      WHERE wt.player_id IN (${ph}) AND ${guard} AND ${ts} >= datetime('now','-14 days')
+      ORDER BY ts DESC LIMIT 12
+    `).all(...refIds) as typeof activity;
+
+    const a30 = db.prepare(`
+      SELECT COUNT(DISTINCT wt.player_id) AS act, COUNT(*) AS cnt
+      FROM wallet_transactions wt
+      WHERE wt.player_id IN (${ph}) AND ${guard} AND ${ts} >= datetime('now','-30 days')
+    `).get(...refIds) as { act: number; cnt: number };
+
+    const aPrev = db.prepare(`
+      SELECT COUNT(*) AS cnt FROM wallet_transactions wt
+      WHERE wt.player_id IN (${ph}) AND ${guard}
+        AND ${ts} >= datetime('now','-60 days') AND ${ts} < datetime('now','-30 days')
+    `).get(...refIds) as { cnt: number };
+
+    momentum = { filleuls_total: refIds.length, filleuls_active_30d: a30.act, actions_30d: a30.cnt, actions_prev_30d: aPrev.cnt };
+  }
+
   const botUsername = process.env.TELEGRAM_BOT_USERNAME || "LeCercle_Lebot";
 
   return {
@@ -81,6 +118,8 @@ function buildAgentDashboard(agentPlayerId: number, db: any) {
     share_link: `https://t.me/${botUsername}?start=ref_${player.id}`,
     filleuls,
     payments,
+    activity,
+    momentum,
   };
 }
 

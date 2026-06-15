@@ -36,6 +36,8 @@ interface Filleul {
   games: FilleulGame[];
   part_agence_eligible: number;
 }
+interface ActivityItem { ts: string; type: string; amount: number; currency: string; player_name: string; }
+interface Momentum { filleuls_total: number; filleuls_active_30d: number; actions_30d: number; actions_prev_30d: number; }
 interface DashboardData {
   mode?: "agent";
   affiliate: { name: string; handle: string | null; joined_at: string | null };
@@ -43,6 +45,8 @@ interface DashboardData {
   share_link: string;
   filleuls: Filleul[];
   payments: { paid_at: string; game_name: string; amount_usdt: number; tx_hash: string | null; notes: string | null }[];
+  activity?: ActivityItem[];
+  momentum?: Momentum;
 }
 
 type ApiResponse = OwnerData | DashboardData;
@@ -60,6 +64,26 @@ const GAME_COLORS: Record<string, string> = {
 
 const cardStyle: React.CSSProperties = { background: "var(--tg-theme-secondary-bg-color, #1a1a1a)", borderRadius: 12, padding: "14px 16px" };
 const hintStyle: React.CSSProperties = { color: "var(--tg-theme-hint-color, #707579)", fontSize: 12 };
+
+// Count-up animation (display only — animates a number from 0 to target on mount)
+function useCountUp(target: number, durationMs = 1100) {
+  const [val, setVal] = useState(0);
+  useEffect(() => {
+    const t = num(target);
+    if (t <= 0) { setVal(t); return; }
+    let raf = 0; let start = 0;
+    const tick = (now: number) => {
+      if (!start) start = now;
+      const p = Math.min(1, (now - start) / durationMs);
+      const eased = 1 - Math.pow(1 - p, 3); // easeOutCubic
+      setVal(t * eased);
+      if (p < 1) raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, [target, durationMs]);
+  return val;
+}
 
 // ── Error boundary: any render error → clean degraded state, never a blank crash ──
 class PortalErrorBoundary extends Component<{ children: ReactNode }, { hasError: boolean }> {
@@ -238,6 +262,10 @@ function AgentDashboard({ data, selectedAgentId, onBack, containerStyle }: { dat
   const accent = "var(--tg-theme-button-color, #2ea043)";
   const link = "var(--tg-theme-link-color, #2ea043)";
   const list = filleuls ?? [];
+  const activity = data.activity ?? [];
+  const momentum = data.momentum;
+  const animatedEarned = useCountUp(num(summary?.lifetime_usdt));
+  const actionDelta = momentum ? num(momentum.actions_30d) - num(momentum.actions_prev_30d) : 0;
 
   return (
     <div style={containerStyle}>
@@ -253,19 +281,47 @@ function AgentDashboard({ data, selectedAgentId, onBack, containerStyle }: { dat
         <div style={hintStyle}>Agent depuis {affiliate.joined_at ?? "—"}</div>
       </div>
 
-      {/* Stats (agent-level, cross-makeup) */}
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: 10, marginBottom: 16 }}>
+      {/* HERO — animated lifetime earned (count-up, gold→green) */}
+      <div style={{ ...cardStyle, marginBottom: 12, textAlign: "center", background: "linear-gradient(160deg, rgba(212,175,55,0.10), rgba(34,197,94,0.06))", border: "1px solid rgba(212,175,55,0.25)" }}>
+        <div style={{ ...hintStyle, marginBottom: 6, letterSpacing: "0.05em", textTransform: "uppercase", fontSize: 11 }}>💰 Commission lifetime</div>
+        <div style={{ fontSize: 40, fontWeight: 800, lineHeight: 1.1, fontVariantNumeric: "tabular-nums", background: "linear-gradient(90deg, #D4AF37, #22C55E)", WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent", backgroundClip: "text" as const }}>
+          {fmt(animatedEarned)}
+        </div>
+        <div style={{ ...hintStyle, marginTop: 2, fontSize: 12 }}>USDT générés pour toi</div>
+      </div>
+
+      {/* Payé / Dû */}
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 16 }}>
         {[
-          { label: "Commission (lifetime)", icon: "💰", value: num(summary?.lifetime_usdt) },
-          { label: "Payé", icon: "✅", value: num(summary?.paid_usdt) },
-          { label: "Dû maintenant", icon: "⏳", value: num(summary?.pending_usdt) },
+          { label: "✅ Payé", value: num(summary?.paid_usdt) },
+          { label: "⏳ Dû maintenant", value: num(summary?.pending_usdt) },
         ].map(st => (
           <div key={st.label} style={cardStyle}>
-            <div style={{ ...hintStyle, marginBottom: 4 }}>{st.icon} {st.label}</div>
+            <div style={{ ...hintStyle, marginBottom: 4 }}>{st.label}</div>
             <div style={{ fontSize: 18, fontWeight: 700, color: st.value > 0 ? accent : "var(--tg-theme-text-color, #fff)" }}>{fmt(st.value)} USDT</div>
           </div>
         ))}
       </div>
+
+      {/* MOMENTUM — vs soi-même (jamais vs autres agents) */}
+      {momentum && (
+        <div style={{ ...cardStyle, marginBottom: 16 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <div>
+              <div style={{ fontSize: 13, fontWeight: 700 }}>📊 Ces 30 jours</div>
+              <div style={{ ...hintStyle, marginTop: 2 }}>{momentum.actions_30d} actions de tes filleuls · {momentum.filleuls_active_30d}/{momentum.filleuls_total} filleuls actifs</div>
+            </div>
+            <div style={{ textAlign: "right" }}>
+              {actionDelta > 0
+                ? <span style={{ color: GREEN, fontWeight: 700, fontSize: 14 }}>🔥 +{actionDelta}</span>
+                : actionDelta < 0
+                  ? <span style={{ color: "#EAB308", fontWeight: 600, fontSize: 12 }}>↘ relance tes filleuls</span>
+                  : <span style={{ ...hintStyle, fontSize: 12 }}>stable</span>}
+              <div style={{ ...hintStyle, fontSize: 10 }}>vs 30j précédents</div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Cumul croisé (mirrors CRM drawer) */}
       <div style={{ ...cardStyle, marginBottom: cumul < 0 ? 10 : 24 }}>
@@ -325,6 +381,35 @@ function AgentDashboard({ data, selectedAgentId, onBack, containerStyle }: { dat
             </div>
           );
         })}
+      </div>
+
+      {/* Activity feed — filleul moves (last 14d) */}
+      <div style={{ marginBottom: 24 }}>
+        <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 10 }}>⚡ Activité de tes filleuls</div>
+        {activity.length === 0 ? (
+          <div style={{ ...cardStyle, textAlign: "center" }}><div style={hintStyle}>Pas d'activité récente — relance tes filleuls pour qu'ils jouent 🎯</div></div>
+        ) : (
+          <div style={{ ...cardStyle, display: "flex", flexDirection: "column", gap: 8 }}>
+            {activity.map((a, i) => {
+              const isDep = a.type === "deposit";
+              return (
+                <div key={i} style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                  <span style={{ fontSize: 16 }}>{isDep ? "📥" : "📤"}</span>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontSize: 13 }}>
+                      <b>{a.player_name}</b> <span style={hintStyle}>a {isDep ? "déposé" : "retiré"}</span>
+                    </div>
+                    <div style={{ ...hintStyle, fontSize: 10 }}>{(a.ts ?? "").slice(0, 10)}</div>
+                  </div>
+                  <span style={{ fontWeight: 700, fontSize: 13, color: isDep ? GREEN : GREY, fontVariantNumeric: "tabular-nums" }}>
+                    {isDep ? "+" : "−"}{fmt(a.amount)} {a.currency || "USDT"}
+                  </span>
+                </div>
+              );
+            })}
+            <div style={{ ...hintStyle, fontSize: 10, textAlign: "center", marginTop: 2 }}>Plus tes filleuls jouent, plus ton cumul monte 🔥</div>
+          </div>
+        )}
       </div>
 
       {/* Payments */}
