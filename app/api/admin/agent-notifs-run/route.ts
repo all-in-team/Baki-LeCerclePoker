@@ -31,6 +31,12 @@ export async function POST(req: NextRequest) {
   const onlyAgent = req.nextUrl.searchParams.get("agent");
   const db = getDb();
 
+  // Per-run calibration overrides (defaults from env consts above). Clamped to sane ranges.
+  const qThreshold = Number(req.nextUrl.searchParams.get("threshold"));
+  const qDays = Number(req.nextUrl.searchParams.get("days"));
+  const depositThreshold = Number.isFinite(qThreshold) && qThreshold > 0 ? qThreshold : DEPOSIT_THRESHOLD_USDT;
+  const lookbackDays = Number.isFinite(qDays) && qDays > 0 ? Math.min(qDays, 90) : LOOKBACK_DAYS;
+
   // Significant action = filleul USDT deposit >= threshold, recent, source-guarded (invariant #10).
   // USDT-only → the threshold compares a single USDT amount, no cross-currency aggregation (invariant #3).
   const candidates = db.prepare(`
@@ -45,7 +51,7 @@ export async function POST(req: NextRequest) {
       AND (wt.source IS NULL OR wt.source != 'unknown')
       AND COALESCE(wt.tx_datetime, wt.tx_date) >= datetime('now', ?)
     ORDER BY ts DESC
-  `).all(DEPOSIT_THRESHOLD_USDT, `-${LOOKBACK_DAYS} days`) as any[];
+  `).all(depositThreshold, `-${lookbackDays} days`) as any[];
 
   const alreadySent = db.prepare(`SELECT 1 FROM agent_activity_notifs WHERE agent_player_id = ? AND action_ref = ? AND dry_run = 0`);
   const sentTodayQ = db.prepare(`SELECT COUNT(*) AS n FROM agent_activity_notifs WHERE agent_player_id = ? AND dry_run = 0 AND date(notified_at) = date('now')`);
@@ -76,7 +82,7 @@ export async function POST(req: NextRequest) {
     runCount.set(c.agent_id, (runCount.get(c.agent_id) ?? 0) + 1);
   }
 
-  const thresholds = { deposit_threshold_usdt: DEPOSIT_THRESHOLD_USDT, throttle_per_day: THROTTLE_PER_DAY, lookback_days: LOOKBACK_DAYS, send_delay_ms: SEND_DELAY_MS };
+  const thresholds = { deposit_threshold_usdt: depositThreshold, throttle_per_day: THROTTLE_PER_DAY, lookback_days: lookbackDays, send_delay_ms: SEND_DELAY_MS };
 
   if (!apply) {
     // DRY-RUN — record candidates (dry_run=1), NO sendMessage
