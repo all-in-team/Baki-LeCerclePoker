@@ -1460,4 +1460,27 @@ function initSchema(db: Database.Database) {
   } catch (err: any) {
     console.error(`[MIGRATION:add_games_currency_v1] FAILED:`, err.message);
   }
+
+  try {
+    const fix = db.prepare(`INSERT OR IGNORE INTO _applied_fixes (name) VALUES (?)`).run("add_agent_activity_notifs_v1");
+    if (fix.changes > 0) {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS agent_activity_notifs (
+          id                INTEGER PRIMARY KEY AUTOINCREMENT,
+          agent_player_id   INTEGER NOT NULL REFERENCES players(id) ON DELETE CASCADE,
+          filleul_player_id INTEGER NOT NULL REFERENCES players(id) ON DELETE CASCADE,
+          action_type       TEXT NOT NULL,   -- 'deposit' | 'big_session'
+          action_ref        TEXT NOT NULL,   -- unique id of the source action (e.g. 'deposit:<wallet_tx_id>') for dedup
+          amount_usdt       REAL,
+          notified_at       TEXT NOT NULL DEFAULT (datetime('now')),
+          dry_run           INTEGER NOT NULL DEFAULT 1,
+          UNIQUE(agent_player_id, action_ref)
+        );
+        CREATE INDEX IF NOT EXISTS idx_agent_notifs_agent_day ON agent_activity_notifs(agent_player_id, dry_run, notified_at);
+      `);
+      console.log("[MIGRATION] add_agent_activity_notifs_v1 applied");
+    }
+  } catch (err: any) {
+    console.error(`[MIGRATION:add_agent_activity_notifs_v1] FAILED:`, err.message);
+  }
 }
