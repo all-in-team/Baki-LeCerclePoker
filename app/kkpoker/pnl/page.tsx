@@ -1,6 +1,6 @@
 export const dynamic = "force-dynamic";
 import { getDb } from "@/lib/db";
-import { getLockAwareSummaryByPlayer, getLockAwareKPIsWithExtras, getWalletTransactions, getPlayers, getGames, getPlayerCashouts, getPlayerGameWallets, getWalletMeresForGame } from "@/lib/queries";
+import { getLockAwareSummaryByPlayer, getLockAwareKPIsWithExtras, getWalletTransactions, getPlayers, getGames, getPlayerCashouts, getPlayerGameWallets, getWalletMeresForGame, getNetPnlSeries } from "@/lib/queries";
 import { getWeekBounds, getLast12Weeks, toUTCISO, toParisDate, formatRangeLabel, isoWeekToOffset, parisLocalToUTC } from "@/lib/date-utils";
 import PageHeader from "@/components/PageHeader";
 import TELEClient from "@/app/akpoker/pnl/TELEClient";
@@ -82,6 +82,9 @@ export default async function KKPOKERPage({ searchParams }: { searchParams: Prom
     };
   }
 
+  // Cumulative Players Net P&L series — same filters/period as the cards (player-scoped when filtered)
+  const netSeries = getNetPnlSeries({ ...filters, player_id: playerFilter }) as { day: string; cumulative_net: number }[];
+
   const players = getPlayers() as any[];
   const games = (getGames() as any[]).filter((g) => g.name === "KKPOKER");
   const kkGameId = (getDb().prepare(`SELECT id FROM games WHERE name = 'KKPOKER'`).get() as { id: number } | undefined)?.id;
@@ -126,6 +129,7 @@ export default async function KKPOKERPage({ searchParams }: { searchParams: Prom
         gameLabel="KKPOKER"
         useLegacyWalletFallback={false}
         gameId={kkGameId ?? 5}
+        netSeries={netSeries}
       />
       <AgencyExtras gameKey="kkpoker" />
     </>

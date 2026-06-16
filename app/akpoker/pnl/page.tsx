@@ -1,6 +1,6 @@
 export const dynamic = "force-dynamic";
 import { getDb } from "@/lib/db";
-import { getWalletTransactions, getPlayers, getGames, getPlayerCashouts, getPlayerGameWallets, getWalletMeresForGame, getLockAwareSummaryByPlayer, getLockAwareKPIs } from "@/lib/queries";
+import { getWalletTransactions, getPlayers, getGames, getPlayerCashouts, getPlayerGameWallets, getWalletMeresForGame, getLockAwareSummaryByPlayer, getLockAwareKPIs, getNetPnlSeries } from "@/lib/queries";
 import { getWeekBounds, getLast12Weeks, toUTCISO, toParisDate, formatRangeLabel, isoWeekToOffset, parisLocalToUTC } from "@/lib/date-utils";
 import PageHeader from "@/components/PageHeader";
 import TELEClient from "./TELEClient";
@@ -115,6 +115,7 @@ export default async function TELEPage({ searchParams }: { searchParams: Promise
       my_total_pnl: filtered.reduce((s: number, r: any) => s + (r.my_pnl ?? 0), 0),
     };
   }
+  const netSeries = getNetPnlSeries({ ...filters, player_id: playerFilter }) as { day: string; cumulative_net: number }[];
   const players = getPlayers() as any[];
   const games = (getGames() as any[]).filter((g) => g.name === "TELE");
   const teleGameId = (getDb().prepare(`SELECT id FROM games WHERE name = 'TELE'`).get() as { id: number } | undefined)?.id;
@@ -157,6 +158,7 @@ export default async function TELEPage({ searchParams }: { searchParams: Promise
         weeks={weeks.map(w => ({ isoWeek: w.isoWeek, label: w.label }))}
         archived
         gameId={teleGameId ?? 1}
+        netSeries={netSeries}
       />
       <AgencyExtras gameKey="akpoker" />
     </>

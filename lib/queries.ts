@@ -432,6 +432,39 @@ export function getWalletKPIs(filters?: { game_name?: string; since_date?: strin
   `).get(params) as { total_deposited: number; total_withdrawn: number; total_net: number; my_total_pnl: number };
 }
 
+// Cumulative Players Net P&L time series over the active period — day-grouped version of the
+// EXACT getWalletKPIs net (Σ withdrawal − deposit, joined to the deal window, source-guarded,
+// game-currency raw). The last cumulative point == getWalletKPIs.total_net for the same filters
+// (non-locked periods). Game currency, no toUsdt (matches the card, which sums raw too).
+export function getNetPnlSeries(filters?: { game_name?: string; since_date?: string; end_date?: string; player_id?: number }) {
+  const db = getDb();
+  const conditions: string[] = [];
+  const params: Record<string, unknown> = {};
+  if (filters?.game_name) { conditions.push(`g.name = @game_name`); params.game_name = filters.game_name; }
+  if (filters?.player_id) { conditions.push(`p.id = @player_id`); params.player_id = filters.player_id; }
+  const srcF = `AND (wt.source IS NULL OR wt.source != 'unknown')`;
+  const sdCond = `AND (pgd.start_date IS NULL OR wt.tx_datetime >= pgd.start_date)`;
+  const deCond = `AND (pgd.end_date IS NULL OR wt.tx_datetime <= pgd.end_date)`;
+  const sinceCond = filters?.since_date ? `AND wt.tx_datetime >= @since_date` : "";
+  const endCond = filters?.end_date ? `AND wt.tx_datetime <= @end_date` : "";
+  if (filters?.since_date) params.since_date = filters.since_date;
+  if (filters?.end_date) params.end_date = filters.end_date;
+
+  const rows = db.prepare(`
+    SELECT substr(COALESCE(wt.tx_datetime, wt.tx_date), 1, 10) AS day,
+           COALESCE(SUM(CASE WHEN wt.type='withdrawal' THEN wt.amount ELSE -wt.amount END), 0) AS net_day
+    FROM players p
+    JOIN player_game_deals pgd ON pgd.player_id = p.id
+    JOIN games g ON g.id = pgd.game_id
+    JOIN wallet_transactions wt ON wt.player_id = p.id AND wt.game_id = pgd.game_id ${srcF} ${sinceCond} ${endCond} ${sdCond} ${deCond}
+    ${conditions.length > 0 ? "WHERE " + conditions.join(" AND ") : ""}
+    GROUP BY day ORDER BY day
+  `).all(params) as { day: string; net_day: number }[];
+
+  let cum = 0;
+  return rows.map(r => { cum += r.net_day; return { day: r.day, cumulative_net: cum }; });
+}
+
 export function getPlayerWalletStats(playerId: number) {
   const db = getDb();
   return db.prepare(`

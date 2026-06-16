@@ -1,6 +1,6 @@
 export const dynamic = "force-dynamic";
 import { getDb } from "@/lib/db";
-import { getLockAwareSummaryByPlayer, getLockAwareKPIsWithExtras, getWalletTransactions, getPlayers, getGames, getPlayerCashouts, getPlayerGameWallets, getWalletMeresForGame } from "@/lib/queries";
+import { getLockAwareSummaryByPlayer, getLockAwareKPIsWithExtras, getWalletTransactions, getPlayers, getGames, getPlayerCashouts, getPlayerGameWallets, getWalletMeresForGame, getNetPnlSeries } from "@/lib/queries";
 import { getWeekBounds, getLast12Weeks, toUTCISO, toParisDate, formatRangeLabel, isoWeekToOffset, parisLocalToUTC } from "@/lib/date-utils";
 import PageHeader from "@/components/PageHeader";
 import TELEClient from "@/app/akpoker/pnl/TELEClient";
@@ -82,6 +82,8 @@ export default async function A5POKERPage({ searchParams }: { searchParams: Prom
     };
   }
 
+  const netSeries = getNetPnlSeries({ ...filters, player_id: playerFilter }) as { day: string; cumulative_net: number }[];
+
   const players = getPlayers() as any[];
   const games = (getGames() as any[]).filter((g) => g.name === "A5POKER");
   const a5GameId = (getDb().prepare(`SELECT id FROM games WHERE name = 'A5POKER'`).get() as { id: number } | undefined)?.id;
@@ -126,6 +128,7 @@ export default async function A5POKERPage({ searchParams }: { searchParams: Prom
         gameLabel="A5POKER"
         useLegacyWalletFallback={false}
         gameId={a5GameId ?? 6}
+        netSeries={netSeries}
       />
       <AgencyExtras gameKey="a5poker" />
     </>

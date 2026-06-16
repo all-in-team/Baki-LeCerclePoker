@@ -7,6 +7,7 @@ import StatCard from "@/components/StatCard";
 import Btn from "@/components/Btn";
 import Modal from "@/components/Modal";
 import WalletChartsWrapper from "./WalletChartsWrapper";
+import NetPnlChart from "./NetPnlChart";
 
 interface PlayerGameRow {
   deal_id: number;
@@ -51,9 +52,11 @@ export default function TELEClient({
   gameLabel = "TELE AKPOKER",
   useLegacyWalletFallback = true,
   gameId,
+  netSeries = [],
 }: {
   initialSummary: PlayerGameRow[];
   kpis: KPIs;
+  netSeries?: { day: string; cumulative_net: number }[];
   initialTransactions: WalletTx[];
   players: Player[];
   games: Game[];
@@ -402,6 +405,9 @@ export default function TELEClient({
         <StatCard label="Players Net P&L" value={(kpis.total_net >= 0 ? "+" : "−") + fmtKpi(Math.abs(kpis.total_net)) + " USDT"} sub="Retraits − Dépôts" accent={netAccent} icon={<TrendingUp size={18} />} />
         <StatCard label="Mon Total P&L" value={(kpis.my_total_pnl >= 0 ? "+" : "−") + fmtKpi(Math.abs(kpis.my_total_pnl)) + " USDT"} sub="Ma part selon chaque deal" accent={myPnlAccent} icon={<Wallet size={18} />} />
       </div>
+
+      {/* Players Net P&L evolution — driven by the active period filter */}
+      <NetPnlChart series={netSeries} cardNet={kpis.total_net} currency="USDT" rangeLabel={rangeLabel} />
 
       {/* Summary table */}
       <div style={{ background: "var(--bg-raised)", border: "1px solid var(--border)", borderRadius: 10, marginBottom: 28 }}>
