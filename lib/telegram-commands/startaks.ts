@@ -33,7 +33,13 @@ export async function handleStartAks(chatId: number) {
   );
 
   // Hold the player on the session so the % callbacks know who we're configuring.
+  // tid anchors the flow to the Onboarding topic; subsequent callbacks/raw messages
+  // inherit it via message_thread_id. NULL → falls back to General (player not set up
+  // via the forum-aware path, e.g. linked through an older /linkgroup).
   const tid = player.onboarding_topic_id ?? undefined;
+  if (tid === undefined) {
+    console.warn(`[AKS] player ${player.id} (${player.name}) has NULL onboarding_topic_id — /startaks flow will post in General. Run /linkgroup again or sync-group-structure to backfill topics.`);
+  }
   setSession(chatId, "aks_awaiting_pct" as Step, player.id, player.telegram_id);
 
   // Owner picks the action % for THIS player before the pitch is sent.
