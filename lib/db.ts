@@ -1483,4 +1483,17 @@ function initSchema(db: Database.Database) {
   } catch (err: any) {
     console.error(`[MIGRATION:add_agent_activity_notifs_v1] FAILED:`, err.message);
   }
+
+  // Seed AKS game (wallet-based, mirror of A5POKER). The games.name CHECK was
+  // dropped in drop_games_name_check_v1, so a plain INSERT OR IGNORE suffices.
+  // Wallet mère is configured later via Config Wallets — not seeded here.
+  try {
+    const fixAks = db.prepare(`INSERT OR IGNORE INTO _applied_fixes (name) VALUES (?)`).run("add_aks_game_v1");
+    if (fixAks.changes > 0) {
+      db.prepare(`INSERT OR IGNORE INTO games (name, status, default_action_pct, currency) VALUES ('AKS', 'active', 30, 'USDT')`).run();
+      console.log("[MIGRATION] add_aks_game_v1 applied");
+    }
+  } catch (err: any) {
+    console.error(`[MIGRATION:add_aks_game_v1] FAILED:`, err.message);
+  }
 }

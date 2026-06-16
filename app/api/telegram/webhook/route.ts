@@ -13,6 +13,8 @@ import {
   handleStartKkpoker,
   handleA5pokerCallback,
   handleStartA5poker,
+  handleAksCallback,
+  handleStartAks,
   handleAffiliation,
   handleMyAffi,
   handleStartAffi,
@@ -69,6 +71,8 @@ export async function POST(req: NextRequest) {
       await handleKkpokerCallback(cb.id, cbData, cbChatId, cbThreadId, cb.from, cb.message?.message_id);
     } else if (cbData.startsWith("a5_")) {
       await handleA5pokerCallback(cb.id, cbData, cbChatId, cbThreadId, cb.from, cb.message?.message_id);
+    } else if (cbData.startsWith("aks_")) {
+      await handleAksCallback(cb.id, cbData, cbChatId, cbThreadId, cb.from, cb.message?.message_id);
     } else if (cbData.startsWith("onboard:")) {
       await handleOnboardCallback(cb.id, cbData, cbChatId, cbThreadId);
     } else if (cbData.startsWith("onboard_")) {
@@ -180,6 +184,7 @@ export async function POST(req: NextRequest) {
       else if (cmd === "/broadcast")   await handleBroadcast(msg, chatId);
       else if (cmd === "/startkkpoker" || cmd === "/start_kkpoker") await handleStartKkpoker(chatId);
       else if (cmd === "/starta5poker" || cmd === "/start_a5poker") await handleStartA5poker(chatId);
+      else if (cmd === "/startaks" || cmd === "/start_aks") await handleStartAks(chatId);
       else if (cmd === "/startaapkmy" || cmd === "/start_aapkmy") await handleStartAapkmy(chatId, threadId);
     } catch (e: any) {
       console.error("[TG CMD]", e);

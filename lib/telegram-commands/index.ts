@@ -24,6 +24,8 @@ export { handleKkpokerCallback } from "@/lib/games/kkpoker/onboarding";
 export { handleStartKkpoker } from "./startkkpoker";
 export { handleA5pokerCallback } from "@/lib/games/a5poker/onboarding";
 export { handleStartA5poker } from "./starta5poker";
+export { handleAksCallback } from "@/lib/games/aks/onboarding";
+export { handleStartAks } from "./startaks";
 export { handleStartAapkmy } from "./startaapkmy";
 export { handleAffiliation, handleAffiliationRawMessage } from "./affiliation";
 export { handleMyAffi } from "./myaffi";

@@ -2,6 +2,7 @@ import { getDb } from "@/lib/db";
 import { sendMsg, sendMsgKeyboard, setSession, mentionOf, trackOnboardingStep, AGENT_CHAT_ID, type Step } from "./helpers";
 // PITCH_MSG imports removed — neutral default, game-specific pitches are inline in sendKkpokerPitch/sendA5pokerPitch
 import { consumePendingGroupData } from "./onboarding";
+import { AKS_GAME_LINK } from "@/lib/games/aks/config";
 
 const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
 
@@ -259,5 +260,51 @@ export async function sendA5pokerPitch(
   await sendMsgKeyboard(chatId, `Qu'est-ce que tu en penses ?`, [
     [{ text: "🤝 Avec vous", callback_data: "a5_choice_with_us" }],
     [{ text: "❓ J'ai une question", callback_data: "a5_choice_question" }],
+  ], tid);
+}
+
+// AKS pitch — action % is MODULABLE, chosen by the owner at /startaks launch and
+// passed in here. The deal is upserted (re-running /startaks with a new % updates it).
+export async function sendAksPitch(
+  chatId: number,
+  playerId: number,
+  player: { name: string; telegram_id: number | null; telegram_handle: string | null },
+  actionPct: number,
+  onboardingTopicId?: number,
+) {
+  const db = getDb();
+  const aksGameId = (db.prepare(`SELECT id FROM games WHERE name = 'AKS'`).get() as { id: number } | undefined)?.id;
+  if (aksGameId) {
+    db.prepare(
+      `INSERT INTO player_game_deals (player_id, game_id, action_pct, rakeback_pct) VALUES (?, ?, ?, 0)
+       ON CONFLICT(player_id, game_id) DO UPDATE SET action_pct = excluded.action_pct`
+    ).run(playerId, aksGameId, actionPct);
+  }
+
+  const playerPct = 100 - actionPct;
+
+  setSession(chatId, "aks_pitch_sent" as Step, playerId, player.telegram_id);
+  if (player.telegram_id) trackOnboardingStep(player.telegram_id, "pitch_sent");
+
+  const tid = onboardingTopicId;
+  const tag = mentionOf(player);
+  await sendMsg(chatId,
+    `${tag}\n\n🃏 <b>${player.name}</b> — on te propose AKS !\n\n` +
+    `On t'explique comment ça marche et on te setup en quelques minutes.`,
+    tid
+  );
+  await sleep(2000);
+  await sendMsg(chatId,
+    `Voilà le deal qu'on propose AKS :\n\n` +
+    `🎯 <b>Action ${playerPct}/${actionPct}</b> — Tu joues ${playerPct}% de ton action, on prend ${actionPct}%. ` +
+    `C'est symétrique : win/win, lose/lose. L'avantage : tu peux jouer plus cher sans te pénaliser.\n\n` +
+    `🃏 <b>Welcome AKS · Action ${playerPct}/${actionPct}</b>\n` +
+    `Rejoins la game : ${AKS_GAME_LINK}`,
+    tid
+  );
+  await sleep(3000);
+  await sendMsgKeyboard(chatId, `Qu'est-ce que tu en penses ?`, [
+    [{ text: "🤝 Avec vous", callback_data: "aks_choice_with_us" }],
+    [{ text: "❓ J'ai une question", callback_data: "aks_choice_question" }],
   ], tid);
 }
