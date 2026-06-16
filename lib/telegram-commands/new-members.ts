@@ -298,6 +298,8 @@ export async function sendAksPitch(
     `Voilà le deal qu'on propose AKS :\n\n` +
     `🎯 <b>Action ${playerPct}/${actionPct}</b> — Tu joues ${playerPct}% de ton action, on prend ${actionPct}%. ` +
     `C'est symétrique : win/win, lose/lose. L'avantage : tu peux jouer plus cher sans te pénaliser.\n\n` +
+    `🛡️ <b>1000 USDT de liquidité garantie</b> — On couvre ton float jusqu'à 1K (bug site / ban / dispute), tant que tu joues fair.\n\n` +
+    `⚡ <b>Règle d'or</b> : max 1K sur le compte. Tout l'extra → cash out direct chez toi. Au-dessus de 1K, c'est ton risque, donc sécurise.\n\n` +
     `🃏 <b>Welcome AKS · Action ${playerPct}/${actionPct}</b>\n` +
     `Rejoins la game : ${AKS_GAME_LINK}`,
     tid
