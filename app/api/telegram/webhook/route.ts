@@ -203,7 +203,36 @@ export async function POST(req: NextRequest) {
     const session = getSession(chatId);
     if (session) {
       const isOwner = OWNER_IDS.has(senderId);
-      const isExpectedPlayer = session.expected_tg_id != null && senderId === session.expected_tg_id;
+      let isExpectedPlayer = session.expected_tg_id != null && senderId === session.expected_tg_id;
+
+      // AUTO-HEAL: a session is bound to a player but expected_tg_id is NULL because the
+      // player has no telegram_id (e.g. linked via /linkgroup, which only sets the group).
+      // Such a player can click buttons (callbacks bypass this gate) but every text message
+      // — wallet addresses, custom %, etc. — was silently dropped here, freezing the flow.
+      // If the message comes from that player's OWN linked group, adopt the sender:
+      // backfill players.telegram_id and pin the session to them, then process normally.
+      // Guard: only when the player's telegram_id is still NULL or already equals the sender,
+      // and the chat is exactly that player's telegram_group_id — so no one can be mis-assigned.
+      if (!isOwner && !isExpectedPlayer && session.expected_tg_id == null && session.player_id && senderId) {
+        try {
+          const { getDb } = await import("@/lib/db");
+          const db = getDb();
+          const p = db.prepare(`SELECT telegram_group_id, telegram_id FROM players WHERE id = ?`)
+            .get(session.player_id) as { telegram_group_id: string | null; telegram_id: number | null } | undefined;
+          if (p && p.telegram_group_id && String(p.telegram_group_id) === String(chatId)
+              && (p.telegram_id == null || p.telegram_id === senderId)) {
+            if (p.telegram_id == null) {
+              db.prepare(`UPDATE players SET telegram_id = ? WHERE id = ?`).run(senderId, session.player_id);
+            }
+            db.prepare(`UPDATE telegram_sessions SET expected_tg_id = ? WHERE chat_id = ?`).run(senderId, String(chatId));
+            isExpectedPlayer = true;
+            console.log(`[AUTO-HEAL] player ${session.player_id} adopted telegram_id=${senderId} from its group ${chatId} (was NULL) — session unblocked`);
+          }
+        } catch (e: any) {
+          console.error("[AUTO-HEAL] failed:", e?.message ?? e);
+        }
+      }
+
       if (isOwner || isExpectedPlayer) {
         try { await handleRawMessage(text, chatId, threadId); } catch (e: any) {
           console.error("[TG FLOW]", e);
