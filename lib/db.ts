@@ -1519,4 +1519,18 @@ function initSchema(db: Database.Database) {
   } catch (err: any) {
     console.error(`[MIGRATION:add_deal_acceptances_v1] FAILED:`, err.message);
   }
+
+  // Robust affiliate attribution: capture the referred user's telegram_id on the lead so
+  // the ref_<agent> deep link works even when the filleul has no @username (referred_handle
+  // is NOT NULL, so a synthetic "tg:<id>" handle is stored alongside). Conversion then
+  // matches by telegram_id, not @handle. (Bug: Maxico/Maxime lost attribution to agent Theo.)
+  try {
+    const fix = db.prepare(`INSERT OR IGNORE INTO _applied_fixes (name) VALUES (?)`).run("add_affiliate_lead_telegram_id_v1");
+    if (fix.changes > 0) {
+      try { db.exec(`ALTER TABLE affiliate_leads ADD COLUMN referred_telegram_id INTEGER`); } catch {}
+      console.log("[MIGRATION] add_affiliate_lead_telegram_id_v1 applied");
+    }
+  } catch (err: any) {
+    console.error(`[MIGRATION:add_affiliate_lead_telegram_id_v1] FAILED:`, err.message);
+  }
 }

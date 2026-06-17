@@ -120,27 +120,43 @@ export async function handleNewMembers(members: any[], chatTitle: string, chatId
         .run(String(groupData.groupId), groupData.alertesTopicId, groupData.liveplayTopicId, playerId);
     }
 
-    if (isNew && member.username) {
-      const handle = member.username.toLowerCase();
+    // Convert a pending ref_ lead. Match by telegram_id FIRST (robust — survives a missing
+    // @username, the exact gap that lost Maxime→Theo), then by @handle as fallback. Unlike
+    // the old handle-only block, this also CREATES the affiliate_relationships row so the
+    // attribution actually shows up under the agent (idempotent via the existing-rel guard).
+    if (isNew) {
+      const handle = member.username ? member.username.toLowerCase() : null;
       const lead = db.prepare(
-        `SELECT id, affiliate_player_id FROM affiliate_leads WHERE LOWER(referred_handle) = ? AND status = 'pending'`
-      ).get(handle) as { id: number; affiliate_player_id: number } | undefined;
+        `SELECT id, affiliate_player_id FROM affiliate_leads
+         WHERE status = 'pending'
+           AND (referred_telegram_id = ? OR (? IS NOT NULL AND LOWER(referred_handle) = ?))
+         LIMIT 1`
+      ).get(member.id, handle, handle) as { id: number; affiliate_player_id: number } | undefined;
       if (lead) {
         db.prepare(
           `UPDATE affiliate_leads SET status = 'converted', converted_at = datetime('now'), converted_player_id = ? WHERE id = ?`
         ).run(playerId, lead.id);
-        console.log(`[AFFILIATE] Lead ${lead.id} converted: @${handle} → player ${playerId}`);
+        const existingRel = db.prepare(`SELECT 1 FROM affiliate_relationships WHERE referred_player_id = ?`).get(playerId);
+        if (!existingRel) {
+          db.prepare(
+            `INSERT INTO affiliate_relationships (affiliate_player_id, referred_player_id, origin_game_id, start_date) VALUES (?, ?, NULL, date('now'))`
+          ).run(lead.affiliate_player_id, playerId);
+          console.log(`[AFFILIATE] Lead ${lead.id} converted + relationship created: affiliate=${lead.affiliate_player_id} → player ${playerId}`);
+        } else {
+          console.log(`[AFFILIATE] Lead ${lead.id} converted (relationship already existed) → player ${playerId}`);
+        }
+        const mention = handle ? `<i>@${handle}</i>` : `<b>${name}</b>`;
         const affiliate = db.prepare(
           `SELECT name, telegram_group_id FROM players WHERE id = ?`
         ).get(lead.affiliate_player_id) as { name: string; telegram_group_id: string | null } | undefined;
         if (affiliate?.telegram_group_id) {
           await sendMsg(parseInt(affiliate.telegram_group_id),
-            `🎉 Ton filleul <i>@${handle}</i> vient de rejoindre !\n\nOn prend le relais pour l'onboarder. Tu seras notifié quand il sera connecté.`
+            `🎉 Ton filleul ${mention} vient de rejoindre !\n\nOn prend le relais pour l'onboarder. Tu seras notifié quand il sera connecté.`
           );
         }
         await sendMsg(AGENT_CHAT_ID,
           `🤝 <b>Lead affiliate converti</b>\n` +
-          `Filleul : <i>@${handle}</i> → player #${playerId}\n` +
+          `Filleul : ${mention} → player #${playerId}\n` +
           `Affiliate : <b>${affiliate?.name ?? "?"}</b>`
         );
       }
