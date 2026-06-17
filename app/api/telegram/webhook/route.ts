@@ -15,6 +15,7 @@ import {
   handleStartA5poker,
   handleAksCallback,
   handleStartAks,
+  handleAapkmyCallback,
   handleAffiliation,
   handleMyAffi,
   handleStartAffi,
@@ -73,6 +74,8 @@ export async function POST(req: NextRequest) {
       await handleA5pokerCallback(cb.id, cbData, cbChatId, cbThreadId, cb.from, cb.message?.message_id);
     } else if (cbData.startsWith("aks_")) {
       await handleAksCallback(cb.id, cbData, cbChatId, cbThreadId, cb.from, cb.message?.message_id);
+    } else if (cbData.startsWith("aapk_")) {
+      await handleAapkmyCallback(cb.id, cbData, cbChatId, cbThreadId, cb.from, cb.message?.message_id);
     } else if (cbData.startsWith("onboard:")) {
       await handleOnboardCallback(cb.id, cbData, cbChatId, cbThreadId);
     } else if (cbData.startsWith("onboard_")) {

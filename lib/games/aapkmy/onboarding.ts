@@ -1,13 +1,87 @@
 import { getDb } from "@/lib/db";
 import {
-  sendMsg, setSession, OWNER_IDS, AGENT_CHAT_ID,
+  sendMsg, answerCbQuery, editMessageReplyMarkup, getSession, setSession, OWNER_IDS, AGENT_CHAT_ID,
   type Step,
 } from "@/lib/telegram-commands/helpers";
+import { recordDealAcceptance } from "@/lib/queries";
 import { AAPKMY_GAME_NAME, AAPKMY_DOWNLOAD_LINK, AAPKMY_CLUB_ID } from "./config";
+
+// AAPKMY deal is a fixed 20% action (no player_game_deals row; identity-only game).
+const AAPKMY_ACTION_PCT = 20;
 
 function getAapkmyGameId(): number | null {
   const row = getDb().prepare(`SELECT id FROM games WHERE name = ?`).get(AAPKMY_GAME_NAME) as { id: number } | undefined;
   return row?.id ?? null;
+}
+
+// ── Callback handler for AAPKMY onboarding buttons ──
+export async function handleAapkmyCallback(
+  callbackQueryId: string,
+  data: string,
+  chatId: number,
+  messageThreadId?: number,
+  from?: any,
+  messageId?: number,
+) {
+  await answerCbQuery(callbackQueryId);
+
+  const session = getSession(chatId);
+  if (!session) {
+    await sendMsg(chatId, "🔧 Petit souci technique, je te reviens dans un instant.");
+    return;
+  }
+
+  const db = getDb();
+  const player = session.player_id
+    ? db.prepare(`SELECT id, name FROM players WHERE id = ?`).get(session.player_id) as { id: number; name: string } | undefined
+    : null;
+  const playerName = player?.name ?? from?.first_name ?? "Joueur";
+  const tid = messageThreadId;
+
+  // ── Question ──
+  if (data === "aapk_question") {
+    if (session.step === ("awaiting_human_response" as Step)) {
+      await sendMsg(chatId, "Ta question est en cours de traitement, on te répond bientôt 👍", tid);
+      return;
+    }
+    if (messageId) await editMessageReplyMarkup(chatId, messageId).catch(() => {});
+    setSession(chatId, "awaiting_human_response" as Step, session.player_id, session.expected_tg_id, "question_pending");
+    await sendMsg(chatId, `Pas de souci, pose ta question ici. Baki vient voir 👇`, tid);
+    await sendMsg(AGENT_CHAT_ID,
+      `💬 <b>Question AAPK onboarding — ${playerName}</b>\n` +
+      `@baki77777 — réponds dans le chat <code>${chatId}</code>`
+    );
+    return;
+  }
+
+  // ── J'accepte → record acceptance, THEN reveal download + club ID ──
+  if (data === "aapk_accept") {
+    if (session.step !== ("aapkmy_pitch_sent" as Step)) return;
+    if (messageId) await editMessageReplyMarkup(chatId, messageId).catch(() => {});
+
+    const gameId = getAapkmyGameId();
+    if (session.player_id && gameId) {
+      recordDealAcceptance(session.player_id, gameId, AAPKMY_ACTION_PCT);
+      db.prepare(`UPDATE players SET status = 'active' WHERE id = ?`).run(session.player_id);
+    }
+
+    setSession(chatId, "aapkmy_waiting_id" as Step, session.player_id, session.expected_tg_id);
+
+    // Download link + club ID revealed ONLY now — after explicit acceptance.
+    await sendMsg(chatId,
+      `✅ <b>Deal accepté !</b>\n\n` +
+      `📥 Download: ${AAPKMY_DOWNLOAD_LINK}\n` +
+      `🏠 Club ID: <code>${AAPKMY_CLUB_ID}</code>\n\n` +
+      `Une fois installé et le club rejoint, envoie-moi ton ID AAPK ici.`,
+      tid
+    );
+
+    await sendMsg(AGENT_CHAT_ID,
+      `🎉 <b>Deal accepté AAPK — ${playerName}</b>\n` +
+      `<i>En attente de l'ID AAPK...</i>`
+    );
+    return;
+  }
 }
 
 export async function handleAapkmyRawMessage(

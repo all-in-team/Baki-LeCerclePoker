@@ -1,6 +1,6 @@
 import { getDb } from "@/lib/db";
-import { sendMsg, setSession, AGENT_CHAT_ID } from "./helpers";
-import { AAPKMY_GAME_NAME, AAPKMY_DOWNLOAD_LINK, AAPKMY_CLUB_ID } from "@/lib/games/aapkmy/config";
+import { sendMsg, sendMsgKeyboard, setSession, AGENT_CHAT_ID } from "./helpers";
+import { AAPKMY_GAME_NAME, AAPKMY_CLUB_ID } from "@/lib/games/aapkmy/config";
 import type { Step } from "./helpers";
 
 export async function handleStartAapkmy(chatId: number, threadId?: number) {
@@ -36,15 +36,19 @@ export async function handleStartAapkmy(chatId: number, threadId?: number) {
     `🎮 <b>/startaapkmy</b> triggered for <b>${player.name}</b> (id=${player.id}) in group <code>${chatId}</code>`
   );
 
-  setSession(chatId, "aapkmy_waiting_id" as Step, player.id, player.telegram_id);
+  setSession(chatId, "aapkmy_pitch_sent" as Step, player.id, player.telegram_id);
 
-  await sendMsg(chatId,
+  // Anti-bypass: download link + club ID are NOT shown here. They are revealed only
+  // after the player clicks "J'accepte" (handleAapkmyCallback → aapk_accept).
+  await sendMsgKeyboard(chatId,
     `🎰 <b>Welcome AAPK</b>\n\n` +
     `💼 Deal: 20% action pour LeCercle\n` +
     `💱 Taux: 1$ = 6.6 chips\n\n` +
-    `📥 Download: ${AAPKMY_DOWNLOAD_LINK}\n` +
-    `🏠 Club ID: <code>${AAPKMY_CLUB_ID}</code>\n\n` +
-    `Une fois installé et le club rejoint, envoie-moi ton ID AAPK ici.`,
+    `Tu valides le deal ?`,
+    [
+      [{ text: "✅ J'accepte le deal", callback_data: "aapk_accept" }],
+      [{ text: "❓ J'ai une question", callback_data: "aapk_question" }],
+    ],
     tid
   );
 }

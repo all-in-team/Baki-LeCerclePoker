@@ -4,7 +4,7 @@ import {
   getSession, setSession, TRC20_RE, AGENT_CHAT_ID,
   type Step,
 } from "@/lib/telegram-commands/helpers";
-import { addPlayerCashout, addPlayerGameWallet } from "@/lib/queries";
+import { addPlayerCashout, addPlayerGameWallet, recordDealAcceptance } from "@/lib/queries";
 import { KKPOKER_GAME_NAME, KKPOKER_GAME_LINK } from "./config";
 
 const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
@@ -109,12 +109,16 @@ export async function handleKkpokerCallback(
     if (messageId) await editMessageReplyMarkup(chatId, messageId).catch(() => {});
 
     if (session.player_id) {
+      const gameId = getKkpokerGameId();
+      const deal = getKkpokerDeal(session.player_id);
+      if (gameId) recordDealAcceptance(session.player_id, gameId, deal?.action_pct ?? null);
       db.prepare(`UPDATE players SET status = 'active' WHERE id = ?`).run(session.player_id);
     }
 
     await sendMsg(chatId, `✅ <b>Deal accepté !</b>`, tid);
 
     await sleep(1500);
+    // Link revealed only after the explicit "Je signe" acceptance above.
     await sendMsg(chatId,
       `Voici le lien pour rejoindre la game :\n` +
       `👉 ${KKPOKER_GAME_LINK}`,

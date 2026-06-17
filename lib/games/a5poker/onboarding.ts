@@ -4,7 +4,7 @@ import {
   getSession, setSession, TRC20_RE, AGENT_CHAT_ID,
   type Step,
 } from "@/lib/telegram-commands/helpers";
-import { addPlayerCashout, addPlayerGameWallet } from "@/lib/queries";
+import { addPlayerCashout, addPlayerGameWallet, recordDealAcceptance } from "@/lib/queries";
 import { A5POKER_GAME_NAME, A5POKER_GAME_LINK } from "./config";
 
 const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
@@ -109,6 +109,9 @@ export async function handleA5pokerCallback(
     if (messageId) await editMessageReplyMarkup(chatId, messageId).catch(() => {});
 
     if (session.player_id) {
+      const gameId = getA5pokerGameId();
+      const deal = getA5pokerDeal(session.player_id);
+      if (gameId) recordDealAcceptance(session.player_id, gameId, deal?.action_pct ?? null);
       db.prepare(`UPDATE players SET status = 'active' WHERE id = ?`).run(session.player_id);
     }
 

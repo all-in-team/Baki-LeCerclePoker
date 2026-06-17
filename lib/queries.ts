@@ -253,6 +253,14 @@ export function deletePlayerGameDeal(id: number) {
   getDb().prepare(`DELETE FROM player_game_deals WHERE id = ?`).run(id);
 }
 
+// Append-only trace of explicit deal acceptances (anti-bypass gate proof).
+// Audit only — never read by any P&L computation.
+export function recordDealAcceptance(playerId: number, gameId: number, actionPct: number | null) {
+  return getDb().prepare(
+    `INSERT INTO deal_acceptances (player_id, game_id, action_pct) VALUES (?, ?, ?)`
+  ).run(playerId, gameId, actionPct).lastInsertRowid;
+}
+
 // ── Apps ─────────────────────────────────────────────────
 export function getApps() {
   const db = getDb();

@@ -4,7 +4,7 @@ import {
   getSession, setSession, TRC20_RE, AGENT_CHAT_ID,
   type Step,
 } from "@/lib/telegram-commands/helpers";
-import { addPlayerCashout, addPlayerGameWallet } from "@/lib/queries";
+import { addPlayerCashout, addPlayerGameWallet, recordDealAcceptance } from "@/lib/queries";
 import { sendAksPitch } from "@/lib/telegram-commands/new-members";
 import { AKS_GAME_NAME, AKS_GAME_LINK } from "./config";
 
@@ -82,57 +82,26 @@ export async function handleAksCallback(
     return;
   }
 
-  // ── Avec vous → show contract ──
-  if (data === "aks_choice_with_us") {
+  // ── J'accepte le deal → record acceptance, THEN reveal link, then wallet check ──
+  // This is the anti-bypass gate: the Mini App link is sent ONLY here, after an
+  // explicit acceptance click, never in the pitch.
+  if (data === "aks_accept") {
     if (session.step !== ("aks_pitch_sent" as Step)) return;
     if (messageId) await editMessageReplyMarkup(chatId, messageId).catch(() => {});
 
-    let actionPctDisplay = "30";
-    let playerPctDisplay = "70";
-    if (player) {
-      const deal = getAksDeal(player.id);
-      if (deal) {
-        actionPctDisplay = String(deal.action_pct);
-        playerPctDisplay = String(100 - deal.action_pct);
-      }
-    }
-
-    setSession(chatId, "aks_contract_shown" as Step, session.player_id, session.expected_tg_id);
-
-    await sendMsg(chatId, `Bien joué. Voilà le contrat AKS, pas de surprise :`, tid);
-    await sleep(2000);
-    await sendMsg(chatId,
-      `💰 <b>Action symétrique ${playerPctDisplay}/${actionPctDisplay}</b> :\n` +
-      `- Tu gagnes 1000 → tu nous envoies ${actionPctDisplay}% (${playerPctDisplay}% pour toi)\n` +
-      `- Tu perds 1000 → on couvre ${actionPctDisplay}% de tes pertes\n\n` +
-      `C'est win/win, lose/lose. L'avantage : tu peux jouer plus cher sans te pénaliser.\n\n` +
-      `En cas de bug / ban / dispute, on est là. C'est notre engagement.`,
-      tid
-    );
-    await sleep(3000);
-    await sendMsgKeyboard(chatId,
-      `Tu valides ?`,
-      [
-        [{ text: "✅ Je signe", callback_data: "aks_contract_sign" }],
-        [{ text: "❓ J'ai une question", callback_data: "aks_choice_question" }],
-      ],
-      tid
-    );
-    return;
-  }
-
-  // ── Je signe → wallet check ──
-  if (data === "aks_contract_sign") {
-    if (session.step !== ("aks_contract_shown" as Step)) return;
-    if (messageId) await editMessageReplyMarkup(chatId, messageId).catch(() => {});
-
+    const gameId = getAksGameId();
+    const deal = player ? getAksDeal(player.id) : null;
     if (session.player_id) {
+      if (gameId) recordDealAcceptance(session.player_id, gameId, deal?.action_pct ?? null);
       db.prepare(`UPDATE players SET status = 'active' WHERE id = ?`).run(session.player_id);
     }
 
     setSession(chatId, "aks_wallet_check" as Step, session.player_id, session.expected_tg_id);
 
     await sendMsg(chatId, `✅ <b>Deal accepté !</b>`, tid);
+    await sleep(1200);
+    // Link revealed ONLY now — after explicit acceptance.
+    await sendMsg(chatId, `🃏 Parfait ! Rejoins la game AKS 👉 ${AKS_GAME_LINK}`, tid);
     await sleep(1500);
     await sendMsgKeyboard(chatId,
       `Avant de finaliser, question rapide : tu as déjà un wallet crypto USDT en TRC20 (réseau Tron) ?`,
@@ -144,8 +113,8 @@ export async function handleAksCallback(
     );
 
     await sendMsg(AGENT_CHAT_ID,
-      `🎉 <b>Nouveau joueur signé AKS</b>\n` +
-      `Nom : <b>${playerName}</b>\n` +
+      `🎉 <b>Deal accepté AKS — ${playerName}</b>\n` +
+      `Action : ${deal?.action_pct ?? "?"}%\n` +
       `<i>En attente wallet check...</i>`
     );
     return;
@@ -159,8 +128,6 @@ export async function handleAksCallback(
     await sendMsg(chatId,
       `Top. On va te demander 2 adresses Tron USDT TRC20.\n\n` +
       `⚠️ <b>CRITIQUE</b> : utilise bien TRC20, jamais ERC20 ni BEP20. Sinon fonds perdus.\n\n` +
-      `Voici le lien pour rejoindre la game :\n` +
-      `👉 ${AKS_GAME_LINK}\n\n` +
       `<b>Étape 1 — Ton adresse de RETRAIT</b>\n` +
       `C'est l'adresse où tu veux recevoir tes cashouts.\n` +
       `Envoie-la maintenant (format T... 34 caractères).`,

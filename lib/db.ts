@@ -1496,4 +1496,27 @@ function initSchema(db: Database.Database) {
   } catch (err: any) {
     console.error(`[MIGRATION:add_aks_game_v1] FAILED:`, err.message);
   }
+
+  // Deal acceptance trace — append-only audit log of explicit deal acceptances.
+  // Written when a player clicks "✅ J'accepte" in any onboarding flow, BEFORE the
+  // game link is revealed (anti-bypass). Proof of which deal/% was accepted, when.
+  // Not used in any P&L computation — audit only.
+  try {
+    const fix = db.prepare(`INSERT OR IGNORE INTO _applied_fixes (name) VALUES (?)`).run("add_deal_acceptances_v1");
+    if (fix.changes > 0) {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS deal_acceptances (
+          id          INTEGER PRIMARY KEY AUTOINCREMENT,
+          player_id   INTEGER NOT NULL REFERENCES players(id) ON DELETE CASCADE,
+          game_id     INTEGER NOT NULL REFERENCES games(id) ON DELETE CASCADE,
+          action_pct  REAL,
+          accepted_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+        CREATE INDEX IF NOT EXISTS idx_deal_acceptances_player ON deal_acceptances(player_id, game_id);
+      `);
+      console.log("[MIGRATION] add_deal_acceptances_v1 applied");
+    }
+  } catch (err: any) {
+    console.error(`[MIGRATION:add_deal_acceptances_v1] FAILED:`, err.message);
+  }
 }

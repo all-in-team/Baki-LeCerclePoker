@@ -2,7 +2,6 @@ import { getDb } from "@/lib/db";
 import { sendMsg, sendMsgKeyboard, setSession, mentionOf, trackOnboardingStep, AGENT_CHAT_ID, type Step } from "./helpers";
 // PITCH_MSG imports removed — neutral default, game-specific pitches are inline in sendKkpokerPitch/sendA5pokerPitch
 import { consumePendingGroupData } from "./onboarding";
-import { AKS_GAME_LINK } from "@/lib/games/aks/config";
 
 const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
 
@@ -299,14 +298,14 @@ export async function sendAksPitch(
     `🎯 <b>Action ${playerPct}/${actionPct}</b> — Tu joues ${playerPct}% de ton action, on prend ${actionPct}%. ` +
     `C'est symétrique : win/win, lose/lose. L'avantage : tu peux jouer plus cher sans te pénaliser.\n\n` +
     `🛡️ <b>1000 USDT de liquidité garantie</b> — On couvre ton float jusqu'à 1K (bug site / ban / dispute), tant que tu joues fair.\n\n` +
-    `⚡ <b>Règle d'or</b> : max 1K sur le compte. Tout l'extra → cash out direct chez toi. Au-dessus de 1K, c'est ton risque, donc sécurise.\n\n` +
-    `🃏 <b>Welcome AKS · Action ${playerPct}/${actionPct}</b>\n` +
-    `Rejoins la game : ${AKS_GAME_LINK}`,
+    `⚡ <b>Règle d'or</b> : max 1K sur le compte. Tout l'extra → cash out direct chez toi. Au-dessus de 1K, c'est ton risque, donc sécurise.`,
     tid
   );
   await sleep(3000);
-  await sendMsgKeyboard(chatId, `Qu'est-ce que tu en penses ?`, [
-    [{ text: "🤝 Avec vous", callback_data: "aks_choice_with_us" }],
+  // Anti-bypass: le lien Mini App n'est PAS dans le pitch. Il n'arrive qu'après
+  // un clic explicite sur "J'accepte" (handleAksCallback → aks_accept).
+  await sendMsgKeyboard(chatId, `Tu valides le deal ?`, [
+    [{ text: "✅ J'accepte le deal", callback_data: "aks_accept" }],
     [{ text: "❓ J'ai une question", callback_data: "aks_choice_question" }],
   ], tid);
 }
