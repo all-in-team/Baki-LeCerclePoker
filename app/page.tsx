@@ -55,7 +55,7 @@ export default function DashboardPage() {
   const spark30d = cumAll.filter(p => p.date >= d30).map(p => p.v);
 
   // Per-platform 30d cumulative sparklines
-  const sparkFor = (key: "akpoker_usdt" | "kkpoker_usdt" | "a5poker_usdt" | "wepoker_usdt" | "grindhouse_usdt") => {
+  const sparkFor = (key: "akpoker_usdt" | "kkpoker_usdt" | "a5poker_usdt" | "aks_usdt" | "wepoker_usdt" | "grindhouse_usdt") => {
     let c = 0;
     return timeline.map(p => { c += p[key]; return { date: p.date, v: c }; })
       .filter(p => p.date >= d30).map(p => p.v);
@@ -65,6 +65,7 @@ export default function DashboardPage() {
     { name: "AKPOKER", color: "#F5C518", pnl30d: pnl30d.akpoker_usdt, pnl30dPrev: pnl30dPrev.akpoker_usdt, allTime: pnlAllTime.akpoker_usdt, spark: sparkFor("akpoker_usdt") },
     { name: "KKPOKER", color: "#3B82F6", pnl30d: pnl30d.kkpoker_usdt, pnl30dPrev: pnl30dPrev.kkpoker_usdt, allTime: pnlAllTime.kkpoker_usdt, spark: sparkFor("kkpoker_usdt") },
     { name: "A5POKER", color: "#F59E0B", pnl30d: pnl30d.a5poker_usdt, pnl30dPrev: pnl30dPrev.a5poker_usdt, allTime: pnlAllTime.a5poker_usdt, spark: sparkFor("a5poker_usdt") },
+    { name: "AKS", color: "#EC4899", pnl30d: pnl30d.aks_usdt, pnl30dPrev: pnl30dPrev.aks_usdt, allTime: pnlAllTime.aks_usdt, spark: sparkFor("aks_usdt") },
     { name: "WEPOKER", color: "#10B981", pnl30d: pnl30d.wepoker_usdt, pnl30dPrev: pnl30dPrev.wepoker_usdt, allTime: pnlAllTime.wepoker_usdt, spark: sparkFor("wepoker_usdt") },
     { name: "GRINDHOUSE", color: "#A855F7", pnl30d: pnl30d.grindhouse_usdt, pnl30dPrev: pnl30dPrev.grindhouse_usdt, allTime: pnlAllTime.grindhouse_usdt, spark: sparkFor("grindhouse_usdt"), href: "/grindhouse/dashboard" },
   ];
