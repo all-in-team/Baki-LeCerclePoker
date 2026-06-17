@@ -1638,7 +1638,7 @@ export function getPnLOverTime(period: Period): PnLTimePoint[] {
 
   const walletDailyByGame = (gameName: string) => db.prepare(`
     SELECT substr(wt.tx_datetime, 1, 10) AS day,
-      COALESCE(SUM(CASE WHEN wt.type='withdrawal' THEN wt.amount ELSE -wt.amount END) * pgd.action_pct / 100.0, 0) AS agency
+      COALESCE(SUM((CASE WHEN wt.type='withdrawal' THEN wt.amount ELSE -wt.amount END) * pgd.action_pct / 100.0), 0) AS agency
     FROM wallet_transactions wt
     JOIN player_game_deals pgd ON pgd.player_id = wt.player_id AND pgd.game_id = wt.game_id
     JOIN games g ON g.id = wt.game_id AND LOWER(g.name) = LOWER(?)
