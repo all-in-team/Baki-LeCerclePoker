@@ -63,7 +63,7 @@ export default async function CrmPlayerPage({ params, searchParams }: { params: 
 
       {/* Total agence — toutes games confondues (cohérent avec Top Contributors / net worth) */}
       <div style={{ background: "var(--bg-raised)", border: "1px solid var(--border)", borderRadius: 12, padding: 20, marginBottom: 16 }}>
-        <div style={{ fontSize: 11, fontWeight: 600, color: "var(--text-muted)", textTransform: "uppercase", marginBottom: 8 }}>Agency cut · toutes games</div>
+        <div style={{ fontSize: 11, fontWeight: 600, color: "var(--text-muted)", textTransform: "uppercase", marginBottom: 8 }}>Agency cut · total joueur (games{grind.is_grinder ? " + grindhouse" : ""})</div>
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12, fontSize: 13 }}>
           <div>All-time: <b style={{ color: "#D4AF37" }}>{fmtAmt(pnl.total_agency_usdt_all)}</b></div>
           <div>30j: <b>{fmtAmt(pnl.total_agency_usdt_30d)}</b></div>

@@ -1539,6 +1539,45 @@ export function getGrinderProfitability(playerId: number, period?: Period): Grin
   }
 }
 
+// Daily decomposition of getGrinderProfitability.agency_share_usdt for ONE grinder — per-grinder
+// analog of getGrindhouseNetOverTime, WITHOUT the global agency fees (general-grind/resto/autre),
+// since those aren't attributable to a single grinder. Linear, so the sum over the period equals
+// getGrinderProfitability(playerId, period).agency_share_usdt. Feeds the CRM agency-cut graph.
+export function getGrinderNetOverTime(playerId: number, period?: Period): GrindhouseDailyNet[] {
+  const db = getDb();
+  try {
+    const isGrinder = !!db.prepare(`SELECT 1 FROM grindhouse_grinders WHERE player_id = ?`).get(playerId);
+    if (!isGrinder) return [];
+    const from = period?.from ?? "2020-01-01";
+    const to = period?.to ?? new Date().toISOString().slice(0, 10);
+    const dayMap = new Map<string, number>();
+    const add = (d: string, v: number) => dayMap.set(d, (dayMap.get(d) ?? 0) + v);
+
+    // Sessions per day per currency → toUsdt (rate-missing → 0, matching getGrinderProfitability) × 0.5
+    const sess = db.prepare(`
+      SELECT s.session_date AS day, COALESCE(gm.currency, 'USDT') AS currency, COALESCE(SUM(s.net_result_usdt), 0) AS v
+      FROM grindhouse_sessions s
+      JOIN games gm ON gm.id = s.game_id
+      WHERE s.player_id = ? AND s.session_date >= ? AND s.session_date <= ?
+      GROUP BY day, currency
+    `).all(playerId, from, to) as { day: string; currency: string; v: number }[];
+    for (const r of sess) add(r.day, toUsdt(r.v, r.currency) * 0.5);
+
+    // Attributed 'grind' fees per day → −0.5 (the grinder eats half of their attributed grind fees)
+    const att = db.prepare(`
+      SELECT e.date AS day, COALESCE(SUM(e.amount_usdt), 0) AS v
+      FROM grindhouse_expenses e
+      WHERE e.player_id = ? AND e.type = 'grind' AND e.date >= ? AND e.date <= ?
+      GROUP BY day
+    `).all(playerId, from, to) as { day: string; v: number }[];
+    for (const r of att) add(r.day, -r.v * 0.5);
+
+    return [...dayMap.entries()].map(([date, net]) => ({ date, net })).sort((a, b) => a.date.localeCompare(b.date));
+  } catch {
+    return [];
+  }
+}
+
 // E) Total agency P&L across all games
 export interface AgencyTotalPnL {
   total_usdt: number;
@@ -1711,10 +1750,16 @@ export interface PlayerGamePnL {
 }
 export interface PlayerPnLAllGames {
   games: PlayerGamePnL[];           // only games where the player has a deal or any activity
-  // Per-player agency cut summed over the 5 games only. Summed across all players this equals
-  // getAgencyTotalPnL.games_usdt (NOT .total_usdt — that adds operator-level agency_extras +
-  // grindhouse, which are not attributable to a single player). Matches getTopContributors,
-  // which is also game-cuts-only, for the same period.
+  // Per-player grindhouse agency share (= getGrinderProfitability.agency_share_usdt), 0 if not a grinder.
+  grindhouse_usdt_all: number;
+  grindhouse_usdt_30d: number;
+  grindhouse_usdt_7d: number;
+  // Per-player agency cut = the 5 poker games + grindhouse share, for each window. By design this
+  // matches getTopContributors (which now also adds the per-grinder grind share) for the same period,
+  // so the CRM card / graph endpoint == the player's Top Contributors row.
+  // NOTE: summed across all players this does NOT equal getAgencyTotalPnL.total_usdt — the per-player
+  // grind share is GROSS of the global general-grind/resto/autre fees (operator-level, not attributable
+  // to one grinder), and agency_extras are operator-level too. Same class of gap as extras.
   total_agency_usdt_all: number;
   total_agency_usdt_30d: number;
   total_agency_usdt_7d: number;     // == this player's getTopContributors row for {from:d7,to:today}
@@ -1776,7 +1821,20 @@ export function getPlayerPnLAllGames(playerId: number): PlayerPnLAllGames {
     if (row.has_deal || hasActivity) games.push(row);
   }
 
-  return { games, total_agency_usdt_all: total_all, total_agency_usdt_30d: total_30, total_agency_usdt_7d: total_7 };
+  // Grindhouse agency share (per grinder) — included in the player's agency-cut total so the CRM
+  // card / graph endpoint == Top Contributors row (which also adds it). 0 for non-grinders.
+  const gAll = getGrinderProfitability(playerId).agency_share_usdt;
+  const g30 = getGrinderProfitability(playerId, p30).agency_share_usdt;
+  const g7 = getGrinderProfitability(playerId, p7).agency_share_usdt;
+  total_all += gAll;
+  total_30 += g30;
+  total_7 += g7;
+
+  return {
+    games,
+    grindhouse_usdt_all: gAll, grindhouse_usdt_30d: g30, grindhouse_usdt_7d: g7,
+    total_agency_usdt_all: total_all, total_agency_usdt_30d: total_30, total_agency_usdt_7d: total_7,
+  };
 }
 
 // Daily cumulative AGENCY CUT (operator's share) for one player, ALL agency games combined, in USDT.
@@ -1831,6 +1889,12 @@ export function getPlayerAgencyCutSeries(playerId: number, period?: Period): { d
     dayMap.set(r.day, (dayMap.get(r.day) ?? 0) + usdt);
   }
 
+  // Grindhouse agency share per day (per grinder, no global fees). Sum == getGrinderProfitability
+  // for the period → keeps the curve endpoint == getPlayerPnLAllGames total (poker + grind).
+  for (const r of getGrinderNetOverTime(playerId, period)) {
+    dayMap.set(r.date, (dayMap.get(r.date) ?? 0) + r.net);
+  }
+
   let cum = 0;
   return [...dayMap.entries()]
     .sort((a, b) => a[0].localeCompare(b[0]))
@@ -1838,11 +1902,12 @@ export function getPlayerAgencyCutSeries(playerId: number, period?: Period): { d
 }
 
 // F) Top contributors by agency cut
-// NOTE: scope must stay aligned with AGENCY_GAMES / getPlayerPnLAllGames (same 5 games, same
-// agency fields) — a player's row here == their getPlayerPnLAllGames total for the same period.
+// NOTE: scope must stay aligned with AGENCY_GAMES / getPlayerPnLAllGames — a player's row here
+// == their getPlayerPnLAllGames total for the same period (5 poker games + per-grinder grind share).
 export interface ContributorRow {
   player_id: number; player_name: string; agency_usdt: number;
   akpoker_usdt: number; kkpoker_usdt: number; a5poker_usdt: number; aks_usdt: number; wepoker_usdt: number;
+  grindhouse_usdt: number;
 }
 export function getTopContributors(period: Period, limit = 5): ContributorRow[] {
   const ak = getAkpokerPnL(undefined, period);
@@ -1853,7 +1918,7 @@ export function getTopContributors(period: Period, limit = 5): ContributorRow[] 
 
   const byPlayer = new Map<number, ContributorRow>();
   const get = (r: { player_id: number; player_name: string }) =>
-    byPlayer.get(r.player_id) ?? { player_id: r.player_id, player_name: r.player_name, agency_usdt: 0, akpoker_usdt: 0, kkpoker_usdt: 0, a5poker_usdt: 0, aks_usdt: 0, wepoker_usdt: 0 };
+    byPlayer.get(r.player_id) ?? { player_id: r.player_id, player_name: r.player_name, agency_usdt: 0, akpoker_usdt: 0, kkpoker_usdt: 0, a5poker_usdt: 0, aks_usdt: 0, wepoker_usdt: 0, grindhouse_usdt: 0 };
   for (const r of ak) {
     const e = get(r); e.akpoker_usdt += r.agency_cut_usdt; e.agency_usdt += r.agency_cut_usdt; byPlayer.set(r.player_id, e);
   }
@@ -1869,6 +1934,18 @@ export function getTopContributors(period: Period, limit = 5): ContributorRow[] 
   for (const r of wp) {
     const e = get(r); e.wepoker_usdt += r.total_agency_usdt; e.agency_usdt += r.total_agency_usdt; byPlayer.set(r.player_id, e);
   }
+
+  // Grindhouse per-grinder agency share (any status, to match getPlayerPnLAllGames on the CRM fiche).
+  // getGrinderProfitability defaults to lifetime when period has no from/to — pass through the period.
+  try {
+    const grinders = getDb().prepare(`SELECT gg.player_id, p.name FROM grindhouse_grinders gg JOIN players p ON p.id = gg.player_id`).all() as { player_id: number; name: string }[];
+    for (const g of grinders) {
+      const share = getGrinderProfitability(g.player_id, period).agency_share_usdt;
+      if (share === 0) continue;
+      const e = get({ player_id: g.player_id, player_name: g.name });
+      e.grindhouse_usdt += share; e.agency_usdt += share; byPlayer.set(g.player_id, e);
+    }
+  } catch { /* grindhouse tables absent on fresh DB before migration */ }
 
   return [...byPlayer.values()].sort((a, b) => b.agency_usdt - a.agency_usdt).slice(0, limit);
 }
