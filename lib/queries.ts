@@ -1502,6 +1502,8 @@ export interface AgencyTotalPnL {
   wepoker_extras_cny: number;
   wepoker_usdt: number;
 }
+// NOTE: the games summed here define the agency P&L scope — keep aligned with AGENCY_GAMES /
+// getPlayerPnLAllGames (CRM player page) and getTopContributors so all four stay consistent.
 export function getAgencyTotalPnL(period?: Period): AgencyTotalPnL {
   const ak = getAkpokerPnL(undefined, period);
   const kk = getKkpokerPnL(undefined, period);
@@ -1594,7 +1596,137 @@ export function getActivePlayersCount(period: Period): number {
   return combined.size;
 }
 
+// E-bis) Canonical agency-games config + per-player P&L across all of them.
+//
+// IMPORTANT — this is the SINGLE source of truth for "which games count toward agency P&L".
+// It is NOT the full `games` table: Xpoker / ClubGG / AAPKMY exist in `games` but are
+// deliberately EXCLUDED from agency aggregates (no deal/settlement flow, not in net worth).
+// Deriving the list from `games WHERE status='active'` would over-include them and break the
+// invariant that "CRM player total == Top Contributors == per-game pages == net worth".
+//
+// To add a game to agency P&L: add ONE entry here.
+//   kind 'wallet'  → wallet-based USDT P&L via getWalletSummaryByPlayer (action_pct on net)
+//   kind 'wepoker' → rakeback-based CNY P&L via getWepokerPnL (3-component, converted to USDT)
+// Keep getAgencyTotalPnL (net worth card) and getTopContributors in sync with this list.
+export type AgencyGameKind = "wallet" | "wepoker";
+export interface AgencyGameConfig {
+  key: string;        // games.name, matched EXACTLY (case-sensitive in getWalletSummaryByPlayer)
+  label: string;      // user-facing label
+  kind: AgencyGameKind;
+  basePath: string;   // route base; links use `${basePath}/pnl` and `${basePath}/settlements`
+  archived?: boolean; // kept for historical P&L even though archived (e.g. AKPOKER/TELE)
+}
+export const AGENCY_GAMES: AgencyGameConfig[] = [
+  { key: "TELE",    label: "AKPOKER", kind: "wallet",  basePath: "/akpoker", archived: true },
+  { key: "KKPOKER", label: "KKPOKER", kind: "wallet",  basePath: "/kkpoker" },
+  { key: "A5POKER", label: "A5POKER", kind: "wallet",  basePath: "/a5poker" },
+  { key: "AKS",     label: "AKS",     kind: "wallet",  basePath: "/aks" },
+  { key: "Wepoker", label: "WEPOKER", kind: "wepoker", basePath: "/wepoker" },
+];
+
+// Generic per-player wallet P&L for ONE game — same math as getAkpokerPnL/getKkpokerPnL/etc
+// (those are thin wrappers over getWalletSummaryByPlayer with a hard-coded game_name), so this
+// stays byte-for-byte consistent with Top Contributors and the per-game P&L pages.
+function walletPlayerPnL(gameKey: string, playerId: number, period?: Period): AkpokerPnLRow | undefined {
+  const { since, until } = periodToDateRange(period);
+  const rows = getWalletSummaryByPlayer({ game_name: gameKey, since_date: since, end_date: until }) as any[];
+  const r = rows.find((x) => x.player_id === playerId);
+  if (!r) return undefined;
+  return {
+    player_id: r.player_id, player_name: r.player_name, action_pct: r.action_pct ?? 0,
+    deposited: r.total_deposited ?? 0, withdrawn: r.total_withdrawn ?? 0,
+    net_usdt: r.net ?? 0, agency_cut_usdt: r.my_pnl ?? 0,
+  };
+}
+
+export interface PlayerGamePnL {
+  game_key: string; label: string; kind: AgencyGameKind; basePath: string; archived: boolean;
+  has_deal: boolean;
+  deal: any | null;                 // player_game_deals row (action_pct, rakeback_pct, insurance_pct, start_date)
+  currency: string;                 // player-side display currency: "USDT" | "CNY"
+  player_pnl_all: number; player_pnl_30d: number; player_pnl_7d: number;   // in `currency`
+  agency_cut_usdt_all: number; agency_cut_usdt_30d: number; agency_cut_usdt_7d: number; // USDT (net-worth contribution)
+  deposited: number; withdrawn: number;
+  // wepoker-only breakdown (CNY), null for wallet games
+  wp: {
+    agency_cut_cny: number; agency_cut_usdt: number;
+    agency_winnings_cny: number; agency_rakeback_cny: number; agency_insurance_cny: number;
+    winnings_cny: number; rake_cny: number; insurance_cny: number;
+  } | null;
+}
+export interface PlayerPnLAllGames {
+  games: PlayerGamePnL[];           // only games where the player has a deal or any activity
+  // Per-player agency cut summed over the 5 games only. Summed across all players this equals
+  // getAgencyTotalPnL.games_usdt (NOT .total_usdt — that adds operator-level agency_extras +
+  // grindhouse, which are not attributable to a single player). Matches getTopContributors,
+  // which is also game-cuts-only, for the same period.
+  total_agency_usdt_all: number;
+  total_agency_usdt_30d: number;
+  total_agency_usdt_7d: number;     // == this player's getTopContributors row for {from:d7,to:today}
+}
+
+// Config-driven player P&L across ALL agency games (see AGENCY_GAMES). Reuses the exact same
+// underlying functions as the per-game pages and Top Contributors, so totals are consistent
+// by construction. Used by the CRM player page (/crm/[id]).
+export function getPlayerPnLAllGames(playerId: number): PlayerPnLAllGames {
+  const today = new Date().toISOString().slice(0, 10);
+  const d7 = daysAgo(7);
+  const d30 = daysAgo(30);
+  const p30: Period = { from: d30, to: today };
+  const p7: Period = { from: d7, to: today };
+
+  const games: PlayerGamePnL[] = [];
+  let total_all = 0, total_30 = 0, total_7 = 0;
+
+  for (const cfg of AGENCY_GAMES) {
+    const deal = getPlayerDealsForGame(playerId, cfg.key) ?? null;
+    let row: PlayerGamePnL;
+
+    if (cfg.kind === "wepoker") {
+      const all = getWepokerPnL(playerId)[0];
+      const r30 = getWepokerPnL(playerId, p30)[0];
+      const r7 = getWepokerPnL(playerId, p7)[0];
+      row = {
+        game_key: cfg.key, label: cfg.label, kind: cfg.kind, basePath: cfg.basePath, archived: !!cfg.archived,
+        has_deal: !!deal, deal, currency: "CNY",
+        player_pnl_all: all?.player_pnl_cny ?? 0, player_pnl_30d: r30?.player_pnl_cny ?? 0, player_pnl_7d: r7?.player_pnl_cny ?? 0,
+        agency_cut_usdt_all: all?.total_agency_usdt ?? 0, agency_cut_usdt_30d: r30?.total_agency_usdt ?? 0, agency_cut_usdt_7d: r7?.total_agency_usdt ?? 0,
+        deposited: 0, withdrawn: 0,
+        wp: all ? {
+          agency_cut_cny: all.total_agency_cny, agency_cut_usdt: all.total_agency_usdt,
+          agency_winnings_cny: all.agency_winnings_split_cny, agency_rakeback_cny: all.agency_rakeback_split_cny, agency_insurance_cny: all.agency_insurance_split_cny,
+          winnings_cny: all.winnings_cny, rake_cny: all.rake_cny, insurance_cny: all.insurance_cny,
+        } : null,
+      };
+    } else {
+      const all = walletPlayerPnL(cfg.key, playerId);
+      const r30 = walletPlayerPnL(cfg.key, playerId, p30);
+      const r7 = walletPlayerPnL(cfg.key, playerId, p7);
+      row = {
+        game_key: cfg.key, label: cfg.label, kind: cfg.kind, basePath: cfg.basePath, archived: !!cfg.archived,
+        has_deal: !!deal, deal, currency: "USDT",
+        player_pnl_all: all?.net_usdt ?? 0, player_pnl_30d: r30?.net_usdt ?? 0, player_pnl_7d: r7?.net_usdt ?? 0,
+        agency_cut_usdt_all: all?.agency_cut_usdt ?? 0, agency_cut_usdt_30d: r30?.agency_cut_usdt ?? 0, agency_cut_usdt_7d: r7?.agency_cut_usdt ?? 0,
+        deposited: all?.deposited ?? 0, withdrawn: all?.withdrawn ?? 0,
+        wp: null,
+      };
+    }
+
+    total_all += row.agency_cut_usdt_all;
+    total_30 += row.agency_cut_usdt_30d;
+    total_7 += row.agency_cut_usdt_7d;
+
+    // Include the game if the player has a deal OR any recorded activity in it.
+    const hasActivity = row.player_pnl_all !== 0 || row.agency_cut_usdt_all !== 0 || row.deposited !== 0 || row.withdrawn !== 0;
+    if (row.has_deal || hasActivity) games.push(row);
+  }
+
+  return { games, total_agency_usdt_all: total_all, total_agency_usdt_30d: total_30, total_agency_usdt_7d: total_7 };
+}
+
 // F) Top contributors by agency cut
+// NOTE: scope must stay aligned with AGENCY_GAMES / getPlayerPnLAllGames (same 5 games, same
+// agency fields) — a player's row here == their getPlayerPnLAllGames total for the same period.
 export interface ContributorRow {
   player_id: number; player_name: string; agency_usdt: number;
   akpoker_usdt: number; kkpoker_usdt: number; a5poker_usdt: number; aks_usdt: number; wepoker_usdt: number;
