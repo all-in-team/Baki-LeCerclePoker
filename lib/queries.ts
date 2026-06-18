@@ -1484,6 +1484,61 @@ export function getGrindhouseNetOverTime(period?: Period): GrindhouseDailyNet[] 
   }
 }
 
+// D-ter) Per-grinder grindhouse profitability for ONE player — the same per-grinder math as the
+// /grindhouse/dashboard breakdown rows (app/api/grindhouse-profitability/route.ts). Reused on the
+// CRM player page. Returns sessions P&L ("winnings") and the agency share for THIS grinder only.
+//   sessions_pnl_usdt = Σ_currency toUsdt(SUM(net_result_usdt), currency)  (rates per invariant #3;
+//     currencies with no configured rate are EXCLUDED and reported in `unconverted`, never summed raw)
+//   agency_share_usdt = poolNet - (poolNet * 0.5), poolNet = sessions_pnl_usdt - attributed grind fees
+// NOTE: the 50/50 split is HARDCODED to 0.5 to match the dashboard route exactly (it ignores
+// grindhouse_grinders.deal_percentage). The per-grinder agency share does NOT include the global
+// general-grind / resto / autre fees (those are agency-level, subtracted once in getGrindhouseAgencyNet).
+export interface GrinderProfitability {
+  is_grinder: boolean;
+  sessions_pnl_usdt: number;   // "Winnings grindhouse"
+  agency_share_usdt: number;   // "P&L agence (grindhouse)"
+  grind_fees_usdt: number;     // attributed 'grind' expenses for this grinder
+  hours: number;
+  unconverted: { currency: string; pnl: number; hours: number }[]; // excluded from USDT (no rate)
+}
+export function getGrinderProfitability(playerId: number, period?: Period): GrinderProfitability {
+  const empty: GrinderProfitability = { is_grinder: false, sessions_pnl_usdt: 0, agency_share_usdt: 0, grind_fees_usdt: 0, hours: 0, unconverted: [] };
+  const db = getDb();
+  try {
+    const isGrinder = !!db.prepare(`SELECT 1 FROM grindhouse_grinders WHERE player_id = ?`).get(playerId);
+    if (!isGrinder) return empty;
+
+    const from = period?.from ?? "2020-01-01";
+    const to = period?.to ?? new Date().toISOString().slice(0, 10);
+
+    const perCur = db.prepare(`
+      SELECT COALESCE(gm.currency, 'USDT') AS currency,
+             COALESCE(SUM(s.net_result_usdt), 0) AS pnl,
+             COALESCE(SUM(s.duration_hours), 0) AS hours
+      FROM grindhouse_sessions s
+      JOIN games gm ON gm.id = s.game_id
+      WHERE s.player_id = ? AND s.session_date >= ? AND s.session_date <= ?
+      GROUP BY currency
+    `).all(playerId, from, to) as { currency: string; pnl: number; hours: number }[];
+
+    let pnl = 0;
+    const unconverted: { currency: string; pnl: number; hours: number }[] = [];
+    for (const r of perCur) {
+      if (r.currency === "USDT" || getExchangeRate(r.currency) > 0) pnl += toUsdt(r.pnl, r.currency);
+      else unconverted.push({ currency: r.currency, pnl: r.pnl, hours: r.hours });
+    }
+    const hours = perCur.reduce((s, r) => s + r.hours, 0);
+
+    const grindFees = (db.prepare(`SELECT COALESCE(SUM(amount_usdt), 0) AS v FROM grindhouse_expenses WHERE player_id = ? AND type = 'grind' AND date >= ? AND date <= ?`).get(playerId, from, to) as any).v;
+    const poolNet = pnl - grindFees;
+    const share = poolNet * 0.5;
+
+    return { is_grinder: true, sessions_pnl_usdt: pnl, agency_share_usdt: poolNet - share, grind_fees_usdt: grindFees, hours, unconverted };
+  } catch {
+    return empty; // grindhouse tables absent on fresh DB before migration
+  }
+}
+
 // E) Total agency P&L across all games
 export interface AgencyTotalPnL {
   total_usdt: number;

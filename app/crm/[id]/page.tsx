@@ -1,5 +1,5 @@
 export const dynamic = "force-dynamic";
-import { getPlayerById, getCrmNotes, getWalletTransactions, getPlayerPnLAllGames, getPlayerAgencyCutSeries, type PlayerGamePnL } from "@/lib/queries";
+import { getPlayerById, getCrmNotes, getWalletTransactions, getPlayerPnLAllGames, getPlayerAgencyCutSeries, getGrinderProfitability, type PlayerGamePnL } from "@/lib/queries";
 import { getCnyRate } from "@/lib/currency";
 import { getDb } from "@/lib/db";
 import Link from "next/link";
@@ -32,6 +32,10 @@ export default async function CrmPlayerPage({ params, searchParams }: { params: 
   // Config-driven P&L across ALL agency games (see AGENCY_GAMES in lib/queries.ts).
   // Totals here are consistent with Top Contributors and the net worth card by construction.
   const pnl = getPlayerPnLAllGames(playerId);
+
+  // Grindhouse — minimal section, shown only if this player is a grinder. Lifetime figures,
+  // same per-grinder math as the /grindhouse/dashboard breakdown row.
+  const grind = getGrinderProfitability(playerId);
 
   // Agency-cut evolution chart — period filter via ?range= (7d / 30d / lifetime, default lifetime).
   // cardNet comes from getPlayerPnLAllGames totals, so the curve's endpoint is checked against the
@@ -148,6 +152,31 @@ export default async function CrmPlayerPage({ params, searchParams }: { params: 
       {pnl.games.length === 0 && (
         <div style={{ background: "var(--bg-raised)", border: "1px solid var(--border)", borderRadius: 12, padding: 40, textAlign: "center", color: "var(--text-muted)", marginBottom: 16 }}>
           Aucun deal ni activité pour ce joueur
+        </div>
+      )}
+
+      {/* Grindhouse — visible uniquement si le joueur est grinder. 2 chiffres essentiels (lifetime). */}
+      {grind.is_grinder && (
+        <div style={{ background: "var(--bg-raised)", border: "1px solid var(--border)", borderRadius: 12, padding: 20, marginBottom: 16 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
+            <span style={{ fontSize: 18, fontWeight: 700, color: "#EC4899" }}>GRINDHOUSE</span>
+            <span style={{ fontSize: 11, color: "var(--text-dim)" }}>lifetime</span>
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+            <div style={{ border: "1px solid var(--border)", borderRadius: 8, padding: 14 }}>
+              <div style={{ fontSize: 11, fontWeight: 600, color: "var(--text-muted)", textTransform: "uppercase", marginBottom: 8 }}>Winnings grindhouse</div>
+              <div style={{ fontSize: 18, fontWeight: 700, color: grind.sessions_pnl_usdt >= 0 ? "var(--green)" : "#EF4444" }}>{fmtAmt(grind.sessions_pnl_usdt)}</div>
+            </div>
+            <div style={{ border: "1px solid var(--border)", borderRadius: 8, padding: 14 }}>
+              <div style={{ fontSize: 11, fontWeight: 600, color: "var(--text-muted)", textTransform: "uppercase", marginBottom: 8 }}>P&L agence (grindhouse)</div>
+              <div style={{ fontSize: 18, fontWeight: 700, color: "#D4AF37" }}>{fmtAmt(grind.agency_share_usdt)}</div>
+            </div>
+          </div>
+          {grind.unconverted.length > 0 && (
+            <div style={{ fontSize: 11, color: "#F59E0B", marginTop: 10 }}>
+              ⚠️ Exclu (taux manquant) : {grind.unconverted.map((u) => `${u.pnl.toLocaleString("fr-FR", { maximumFractionDigits: 0 })} ${u.currency}`).join(", ")}
+            </div>
+          )}
         </div>
       )}
 
