@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback } from "react";
 import { useRouter } from "next/navigation";
-import { Plus, Pencil, XCircle, DollarSign, Loader2, RefreshCw, ChevronRight, Users } from "lucide-react";
+import { Plus, Pencil, XCircle, DollarSign, Loader2, RefreshCw, ChevronRight, ChevronDown, Users } from "lucide-react";
 import Modal from "@/components/Modal";
 import AgentDetailDrawer from "./AgentDetailDrawer";
 
@@ -100,6 +100,14 @@ function lastSunday(): string {
 
 const fmt = (n: number) => n.toFixed(2);
 
+// Eligibility window for a relationship — mirrors getEligibilityWindowStatus (relStart + 30d).
+// Display-only; no money math.
+function windowInfo(start_date: string): { open: boolean; expires: string } {
+  const relStart = new Date(start_date + "T00:00:00Z");
+  const expires = new Date(relStart.getTime() + 30 * 86400000);
+  return { open: Date.now() <= expires.getTime(), expires: expires.toISOString().slice(0, 10) };
+}
+
 export default function AffiliatesClient({ agents, players, activeGames, existingReferredIds, agentCommissions }: Props) {
   const router = useRouter();
   const [createOpen, setCreateOpen] = useState(false);
@@ -119,6 +127,10 @@ export default function AffiliatesClient({ agents, players, activeGames, existin
   const [savingAgent, setSavingAgent] = useState(false);
 
   const [drawerAgent, setDrawerAgent] = useState<AgentSummary | null>(null);
+  const [collapsed, setCollapsed] = useState<Set<number>>(new Set());
+  const toggleCollapse = (id: number) => setCollapsed(prev => {
+    const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n;
+  });
   const [gameRates, setGameRates] = useState<GameRateRow[]>([]);
   const [showExcluded, setShowExcluded] = useState(false);
 
@@ -517,68 +529,117 @@ export default function AffiliatesClient({ agents, players, activeGames, existin
         </button>
       </div>
 
-      {/* Agents table */}
+      {/* Branches view — agent (parent) → filleuls listed underneath. Survol rapide;
+          le drawer auditable reste accessible au clic. Pur rendu, aucun calcul touché. */}
       {loading && <div style={{ textAlign: "center", padding: 12, color: "var(--text-dim)", fontSize: 12 }}>Chargement...</div>}
-      <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
-        <thead>
-          <tr style={{ borderBottom: "1px solid var(--border)", color: "var(--text-muted)", fontSize: 11, textTransform: "uppercase", letterSpacing: "0.05em" }}>
-            <th style={{ textAlign: "left", padding: "8px" }}>Agent</th>
-            <th style={{ textAlign: "center", padding: "8px" }}>Telegram</th>
-            <th style={{ textAlign: "center", padding: "8px" }}>Filleuls</th>
-            <th style={{ textAlign: "right", padding: "8px" }}>Commission totale</th>
-            <th style={{ textAlign: "right", padding: "8px" }}>Due now</th>
-            <th style={{ textAlign: "center", padding: "8px" }}>Actif depuis</th>
-            <th style={{ textAlign: "center", padding: "8px", width: 40 }}></th>
-          </tr>
-        </thead>
-        <tbody>
-          {agentSummaries.length === 0 && (
-            <tr><td colSpan={7} style={{ padding: 24, textAlign: "center", color: "var(--text-dim)" }}>Aucun agent actif</td></tr>
-          )}
-          {agentSummaries.map(({ agent, filleuls, cumulAgence, earned, paid, due }) => {
-            const activeFilleuls = filleuls.filter(r => r.status === "active");
-            return (
-              <tr key={agent.affiliate_player_id} onClick={() => setDrawerAgent({ agent, filleuls, cumulAgence, earned, paid, due })}
-                style={{ borderBottom: "1px solid var(--border)", cursor: "pointer", transition: "background 0.1s" }}
+      {agentSummaries.length === 0 && (
+        <div style={{ padding: 24, textAlign: "center", color: "var(--text-dim)", border: "1px solid var(--border)", borderRadius: 10 }}>Aucun agent actif</div>
+      )}
+      <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+        {agentSummaries.map((summary) => {
+          const { agent, filleuls, cumulAgence, earned, paid, due } = summary;
+          const activeFilleuls = filleuls.filter(r => r.status === "active");
+          const isCollapsed = collapsed.has(agent.affiliate_player_id);
+          return (
+            <div key={agent.affiliate_player_id} style={{ border: "1px solid var(--border)", borderRadius: 10, background: "var(--bg-raised)", overflow: "hidden" }}>
+              {/* Agent header (parent) */}
+              <div
+                onClick={() => setDrawerAgent(summary)}
+                style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 14px", cursor: "pointer", transition: "background 0.1s" }}
                 onMouseEnter={e => (e.currentTarget.style.background = "rgba(255,255,255,0.02)")}
                 onMouseLeave={e => (e.currentTarget.style.background = "transparent")}>
-                <td style={{ padding: "12px 8px" }}>
-                  <span style={{ fontWeight: 600, color: "var(--text)" }}>{agent.name}</span>
-                  {agent.telegram_handle && <span style={{ fontSize: 11, color: "var(--text-dim)", marginLeft: 6 }}>@{agent.telegram_handle}</span>}
-                </td>
-                <td style={{ textAlign: "center", padding: "12px 8px" }}>
-                  {agent.telegram_id ? (
-                    <span style={{ color: "#22C55E", fontSize: 12, fontWeight: 600 }}>OK</span>
-                  ) : (
-                    <span style={{ color: "#EF4444", fontSize: 11, fontWeight: 600 }}>A fix</span>
-                  )}
-                </td>
-                <td style={{ textAlign: "center", padding: "12px 8px" }}>
-                  <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 6 }}>
-                    <Users size={13} style={{ color: "var(--text-dim)" }} />
-                    <span style={{ fontWeight: 600 }}>{activeFilleuls.length}</span>
-                    {filleuls.length > activeFilleuls.length && (
-                      <span style={{ fontSize: 10, color: "var(--text-dim)" }}>({filleuls.length})</span>
-                    )}
+                <button
+                  onClick={(e) => { e.stopPropagation(); toggleCollapse(agent.affiliate_player_id); }}
+                  title={isCollapsed ? "Déplier" : "Replier"}
+                  style={{ background: "none", border: "none", cursor: "pointer", color: "var(--text-dim)", display: "flex", padding: 0 }}>
+                  {isCollapsed ? <ChevronRight size={16} /> : <ChevronDown size={16} />}
+                </button>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                    <span style={{ fontWeight: 700, color: "var(--text)", fontSize: 14 }}>{agent.name}</span>
+                    {agent.telegram_handle && <span style={{ fontSize: 11, color: "var(--text-dim)" }}>@{agent.telegram_handle}</span>}
+                    {agent.telegram_id
+                      ? <span style={{ color: "#22C55E", fontSize: 10, fontWeight: 600, border: "1px solid rgba(34,197,94,0.3)", borderRadius: 4, padding: "1px 5px" }}>TG OK</span>
+                      : <span style={{ color: "#EF4444", fontSize: 10, fontWeight: 600, border: "1px solid rgba(239,68,68,0.3)", borderRadius: 4, padding: "1px 5px" }}>TG à fix</span>}
                   </div>
-                </td>
-                <td style={{ textAlign: "right", padding: "12px 8px", fontWeight: 600, color: earned > 0 ? "var(--text)" : cumulAgence < 0 ? "#EF4444" : "var(--text-dim)" }}>
-                  {earned > 0 ? `${fmt(earned)} USDT` : cumulAgence < 0 ? `cumul ${fmt(cumulAgence)}` : "—"}
-                </td>
-                <td style={{ textAlign: "right", padding: "12px 8px", fontWeight: 600, color: due > 0 ? "#22C55E" : "var(--text-dim)" }}>
-                  {due > 0 ? `${fmt(due)}` : "—"}
-                </td>
-                <td style={{ textAlign: "center", padding: "12px 8px", fontSize: 12, color: "var(--text-muted)" }}>
-                  {agent.joined_at?.slice(0, 10) ?? "—"}
-                </td>
-                <td style={{ textAlign: "center", padding: "12px 8px" }}>
-                  <ChevronRight size={14} style={{ color: "var(--text-dim)" }} />
-                </td>
-              </tr>
-            );
-          })}
-        </tbody>
-      </table>
+                  <div style={{ fontSize: 11, color: "var(--text-muted)", marginTop: 2, display: "flex", alignItems: "center", gap: 10 }}>
+                    <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
+                      <Users size={12} /> {activeFilleuls.length} filleul{activeFilleuls.length > 1 ? "s" : ""}
+                      {filleuls.length > activeFilleuls.length && <span style={{ color: "var(--text-dim)" }}> ({filleuls.length} total)</span>}
+                    </span>
+                    {agent.joined_at && <span>· depuis {agent.joined_at.slice(0, 10)}</span>}
+                  </div>
+                </div>
+                <div style={{ textAlign: "right" }}>
+                  <div style={{ fontSize: 10, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.04em" }}>Commission</div>
+                  <div style={{ fontWeight: 700, fontSize: 13, color: earned > 0 ? "var(--text)" : cumulAgence < 0 ? "#EF4444" : "var(--text-dim)" }}>
+                    {earned > 0 ? `${fmt(earned)} USDT` : cumulAgence < 0 ? `cumul ${fmt(cumulAgence)}` : "—"}
+                  </div>
+                </div>
+                <div style={{ textAlign: "right", minWidth: 86 }}>
+                  <div style={{ fontSize: 10, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.04em" }}>Dû now</div>
+                  <div style={{ fontWeight: 700, fontSize: 13, color: due > 0 ? "#22C55E" : "var(--text-dim)" }}>{due > 0 ? `${fmt(due)}` : "—"}</div>
+                </div>
+                {due > 0 && (
+                  <button
+                    onClick={(e) => { e.stopPropagation(); openPayAgent(agent.affiliate_player_id, agent.name, due, earned, paid); }}
+                    style={{ display: "flex", alignItems: "center", gap: 4, padding: "6px 10px", borderRadius: 7, fontSize: 12, fontWeight: 600, cursor: "pointer", background: "rgba(34,197,94,0.12)", border: "1px solid rgba(34,197,94,0.3)", color: "#22C55E" }}>
+                    <DollarSign size={12} /> Payer
+                  </button>
+                )}
+                <ChevronRight size={14} style={{ color: "var(--text-dim)" }} />
+              </div>
+
+              {/* Filleuls (children) */}
+              {!isCollapsed && (
+                <div style={{ borderTop: "1px solid var(--border)", paddingLeft: 14 }}>
+                  {filleuls.length === 0 && (
+                    <div style={{ padding: "10px 14px", fontSize: 12, color: "var(--text-dim)", fontStyle: "italic" }}>Aucun filleul</div>
+                  )}
+                  {filleuls.map((r) => {
+                    const win = windowInfo(r.start_date);
+                    const games = r.games.filter(g => g.agency_pnl_lifetime !== 0 || g.rate_label === "éligible");
+                    const isTerminated = r.status === "terminated";
+                    return (
+                      <div
+                        key={r.id}
+                        onClick={() => setDrawerAgent(summary)}
+                        title="Voir le détail auditable"
+                        style={{ display: "flex", alignItems: "center", gap: 10, padding: "9px 14px 9px 8px", borderTop: "1px solid var(--border)", borderLeft: "2px solid var(--border)", cursor: "pointer", opacity: isTerminated ? 0.5 : 1, transition: "background 0.1s" }}
+                        onMouseEnter={e => (e.currentTarget.style.background = "rgba(255,255,255,0.02)")}
+                        onMouseLeave={e => (e.currentTarget.style.background = "transparent")}>
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                            <span style={{ fontSize: 13, fontWeight: 600, color: "var(--text)" }}>{r.referred.name}</span>
+                            {r.referred.telegram_handle && <span style={{ fontSize: 10, color: "var(--text-dim)" }}>@{r.referred.telegram_handle}</span>}
+                            {games.map(g => {
+                              const b = GAME_BADGES[g.game_name] ?? { short: g.game_name.slice(0, 2).toUpperCase(), bg: "rgba(148,163,184,0.15)", color: "#94A3B8" };
+                              return <span key={g.game_id} style={{ fontSize: 9, fontWeight: 700, background: b.bg, color: b.color, borderRadius: 4, padding: "1px 5px" }}>{b.short}</span>;
+                            })}
+                            {isTerminated && <span style={{ fontSize: 9, color: "var(--text-dim)", border: "1px solid var(--border)", borderRadius: 4, padding: "1px 5px" }}>terminé</span>}
+                          </div>
+                        </div>
+                        {/* Éligibilité (fenêtre 30j) */}
+                        <span style={{ fontSize: 10, fontWeight: 600, borderRadius: 4, padding: "2px 7px", whiteSpace: "nowrap",
+                          background: win.open ? "rgba(34,197,94,0.10)" : "rgba(148,163,184,0.10)",
+                          color: win.open ? "#22C55E" : "var(--text-dim)",
+                          border: "1px solid " + (win.open ? "rgba(34,197,94,0.3)" : "var(--border)") }}>
+                          {win.open ? `éligible · jusqu'au ${win.expires}` : `hors fenêtre · depuis ${win.expires}`}
+                        </span>
+                        <div style={{ textAlign: "right", minWidth: 70 }}>
+                          <div style={{ fontSize: 9, color: "var(--text-muted)", textTransform: "uppercase" }}>Dû</div>
+                          <div style={{ fontSize: 12, fontWeight: 600, color: r.total_due_now > 0 ? "#22C55E" : "var(--text-dim)" }}>{r.total_due_now > 0 ? fmt(r.total_due_now) : "—"}</div>
+                        </div>
+                        <ChevronRight size={13} style={{ color: "var(--text-dim)" }} />
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
 
       {/* Agent detail drawer */}
       {drawerAgent && (
