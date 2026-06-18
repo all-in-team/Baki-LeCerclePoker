@@ -1,5 +1,6 @@
 export const dynamic = "force-dynamic";
 import { getPlayerById, getCrmNotes, getWalletTransactions, getPlayerPnLAllGames, getPlayerAgencyCutSeries, getGrinderProfitability, type PlayerGamePnL } from "@/lib/queries";
+import { getPlayerAffiliation } from "@/lib/queries/affiliate";
 import { getCnyRate } from "@/lib/currency";
 import { getDb } from "@/lib/db";
 import Link from "next/link";
@@ -37,6 +38,10 @@ export default async function CrmPlayerPage({ params, searchParams }: { params: 
   // same per-grinder math as the /grindhouse/dashboard breakdown row.
   const grind = getGrinderProfitability(playerId);
 
+  // Affiliation — simple eligibility line, shown only if the player is affiliated under an agent.
+  // Reuses getEligibilityWindowStatus (relStart + 30d), consistent with the /crm/affiliates badge.
+  const affiliation = getPlayerAffiliation(playerId);
+
   // Agency-cut evolution chart — period filter via ?range= (7d / 30d / lifetime, default lifetime).
   // cardNet comes from getPlayerPnLAllGames totals, so the curve's endpoint is checked against the
   // authoritative per-period total (NetPnlChart shows a warning if they ever diverge).
@@ -60,6 +65,24 @@ export default async function CrmPlayerPage({ params, searchParams }: { params: 
   return (
     <div>
       <PageHeader title={player.name} subtitle={`${player.telegram_handle ? `@${player.telegram_handle}` : ""} ${player.telegram_id ? `· ID ${player.telegram_id}` : ""} · ${player.status}`} />
+
+      {/* Affiliation — éligibilité du deal affilié (texte simple), seulement si affilié */}
+      {affiliation.affiliated && (
+        <div style={{
+          display: "flex", alignItems: "center", gap: 8, marginBottom: 16,
+          background: "var(--bg-raised)", border: "1px solid var(--border)", borderRadius: 10, padding: "10px 14px", fontSize: 13,
+        }}>
+          <span>{affiliation.is_open ? "🟢" : "⚪"}</span>
+          <span style={{ color: "var(--text)" }}>
+            Affilié sous <b>{affiliation.agent?.name ?? "—"}</b>
+            {affiliation.agent?.telegram_handle && <span style={{ color: "var(--text-dim)" }}> @{affiliation.agent.telegram_handle}</span>}
+            {" · "}
+            {affiliation.is_open
+              ? <span style={{ color: "#22C55E" }}>deal éligible jusqu&apos;au {affiliation.expires_on}</span>
+              : <span style={{ color: "var(--text-dim)" }}>éligibilité expirée le {affiliation.expires_on}</span>}
+          </span>
+        </div>
+      )}
 
       {/* Total agence — toutes games confondues (cohérent avec Top Contributors / net worth) */}
       <div style={{ background: "var(--bg-raised)", border: "1px solid var(--border)", borderRadius: 12, padding: 20, marginBottom: 16 }}>

@@ -100,12 +100,13 @@ function lastSunday(): string {
 
 const fmt = (n: number) => n.toFixed(2);
 
-// Eligibility window for a relationship — mirrors getEligibilityWindowStatus (relStart + 30d).
-// Display-only; no money math.
+// Eligibility window for a relationship — mirrors getEligibilityWindowStatus EXACTLY
+// (open while daysSince <= 30), so this badge agrees with the /crm/[id] line. Display-only.
 function windowInfo(start_date: string): { open: boolean; expires: string } {
   const relStart = new Date(start_date + "T00:00:00Z");
+  const daysSince = Math.floor((Date.now() - relStart.getTime()) / 86400000);
   const expires = new Date(relStart.getTime() + 30 * 86400000);
-  return { open: Date.now() <= expires.getTime(), expires: expires.toISOString().slice(0, 10) };
+  return { open: daysSince <= 30, expires: expires.toISOString().slice(0, 10) };
 }
 
 export default function AffiliatesClient({ agents, players, activeGames, existingReferredIds, agentCommissions }: Props) {

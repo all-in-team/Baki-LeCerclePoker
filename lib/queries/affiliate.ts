@@ -108,6 +108,42 @@ export function getEligibilityWindowStatus(rel: AffRel): WindowStatus {
   return { is_open: false, days_elapsed: daysSince - 30 };
 }
 
+// Affiliation status for ONE referred player — used by the CRM player page (/crm/[id]) to show a
+// simple eligibility line. Reuses getEligibilityWindowStatus (relStart-based 30-day window), so it
+// stays consistent with the /crm/affiliates branches badge. expires_on = relStart + 30 days (the
+// last eligible day; window is open while daysSince <= 30).
+export interface PlayerAffiliation {
+  affiliated: boolean;
+  agent: { id: number; name: string; telegram_handle: string | null } | null;
+  start_date: string | null;
+  is_open: boolean;
+  expires_on: string | null; // YYYY-MM-DD
+}
+export function getPlayerAffiliation(playerId: number): PlayerAffiliation {
+  const db = getDb();
+  const empty: PlayerAffiliation = { affiliated: false, agent: null, start_date: null, is_open: false, expires_on: null };
+  const rel = db.prepare(
+    `SELECT * FROM affiliate_relationships WHERE referred_player_id = ? AND status = 'active' ORDER BY start_date DESC LIMIT 1`
+  ).get(playerId) as AffRel | undefined;
+  if (!rel) return empty;
+
+  const agent = db.prepare(
+    `SELECT id, name, telegram_handle FROM players WHERE id = ?`
+  ).get(rel.affiliate_player_id) as { id: number; name: string; telegram_handle: string | null } | undefined;
+
+  const win = getEligibilityWindowStatus(rel);
+  const relStart = new Date(rel.start_date + "T00:00:00Z");
+  const expires_on = new Date(relStart.getTime() + 30 * 86400000).toISOString().slice(0, 10);
+
+  return {
+    affiliated: true,
+    agent: agent ? { id: agent.id, name: agent.name, telegram_handle: agent.telegram_handle } : null,
+    start_date: rel.start_date,
+    is_open: win.is_open,
+    expires_on,
+  };
+}
+
 // ── 2. Disclosed agency P&L ─────────────────────────────
 // Mirrors the real agency P&L formula from lib/queries.ts
 // but substitutes disclosed rates when provided.
