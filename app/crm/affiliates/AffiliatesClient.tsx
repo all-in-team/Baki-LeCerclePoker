@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { Plus, Pencil, XCircle, DollarSign, Loader2, RefreshCw, ChevronRight, ChevronDown, Users } from "lucide-react";
 import Modal from "@/components/Modal";
 import AgentDetailDrawer from "./AgentDetailDrawer";
+import { windowInfo } from "./eligibility";
 
 const GAME_BADGES: Record<string, { short: string; bg: string; color: string }> = {
   TELE:    { short: "AK", bg: "rgba(212,175,55,0.15)", color: "#D4AF37" },
@@ -99,15 +100,6 @@ function lastSunday(): string {
 }
 
 const fmt = (n: number) => n.toFixed(2);
-
-// Eligibility window for a relationship — mirrors getEligibilityWindowStatus EXACTLY
-// (open while daysSince <= 30), so this badge agrees with the /crm/[id] line. Display-only.
-function windowInfo(start_date: string): { open: boolean; expires: string } {
-  const relStart = new Date(start_date + "T00:00:00Z");
-  const daysSince = Math.floor((Date.now() - relStart.getTime()) / 86400000);
-  const expires = new Date(relStart.getTime() + 30 * 86400000);
-  return { open: daysSince <= 30, expires: expires.toISOString().slice(0, 10) };
-}
 
 export default function AffiliatesClient({ agents, players, activeGames, existingReferredIds, agentCommissions }: Props) {
   const router = useRouter();

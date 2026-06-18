@@ -2,6 +2,7 @@
 
 import { useEffect, useState, type ReactNode } from "react";
 import { X, Pencil, XCircle, DollarSign, Users, ChevronDown, ChevronRight, AlertTriangle } from "lucide-react";
+import { windowInfo } from "./eligibility";
 
 interface GameBreakdown {
   game_id: number; game_name: string; rate: number; rate_label: string;
@@ -138,6 +139,7 @@ export default function AgentDetailDrawer({ agentSummary, onClose, onEditRel, on
           {ordered.map(r => {
             const games = r.games ?? [];
             const part = partAgenceEligible(r);
+            const win = windowInfo(r.start_date);
             const st = STATUS_STYLE[r.status] ?? STATUS_STYLE.terminated;
             const isOpen = expanded.has(r.id);
             const payOpen = showPayments.has(r.id);
@@ -159,6 +161,16 @@ export default function AgentDetailDrawer({ agentSummary, onClose, onEditRel, on
                     <div style={{ fontSize: 12, color: "var(--text-dim)", marginTop: 3 }}>
                       Part agence (éligible) <Amt n={part} />
                     </div>
+                    {/* Relation-level eligibility window (relStart + 30j) — same source as /crm/[id] */}
+                    <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", fontSize: 11, color: "var(--text-dim)", marginTop: 4 }}>
+                      <span>Affilié depuis le {r.start_date}</span>
+                      <span style={{ fontWeight: 600, borderRadius: 4, padding: "1px 6px",
+                        background: win.open ? "rgba(34,197,94,0.10)" : "rgba(156,163,175,0.12)",
+                        color: win.open ? GREEN : "var(--text-dim)",
+                        border: "1px solid " + (win.open ? "rgba(34,197,94,0.3)" : "var(--border)") }}>
+                        {win.open ? `🟢 éligible jusqu'au ${win.expires}` : `⚪ fenêtre fermée le ${win.expires}`}
+                      </span>
+                    </div>
                   </div>
                   <span style={{ fontSize: 10, color: "var(--text-dim)", textTransform: "uppercase", letterSpacing: "0.05em" }}>{isOpen ? "▾" : "détail ▸"}</span>
                 </div>
@@ -173,7 +185,7 @@ export default function AgentDetailDrawer({ agentSummary, onClose, onEditRel, on
                           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
                             <span style={{ fontSize: 12, fontWeight: 700, color: "var(--text)" }}>{g.game_name}</span>
                             <span style={{ fontSize: 10, fontWeight: 600, color: eligible ? GREEN : "#EAB308" }}>
-                              {eligible ? "✅ fenêtre 30j" : "❌ hors fenêtre — non compté"}
+                              {eligible ? "✅ comptée (deal dans la fenêtre)" : "❌ non comptée (deal hors fenêtre)"}
                             </span>
                           </div>
                           {g.is_composite ? (
