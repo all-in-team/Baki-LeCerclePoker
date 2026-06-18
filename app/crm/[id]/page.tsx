@@ -1,9 +1,15 @@
 export const dynamic = "force-dynamic";
-import { getPlayerById, getCrmNotes, getWalletTransactions, getPlayerPnLAllGames, type PlayerGamePnL } from "@/lib/queries";
+import { getPlayerById, getCrmNotes, getWalletTransactions, getPlayerPnLAllGames, getPlayerAgencyCutSeries, type PlayerGamePnL } from "@/lib/queries";
 import { getCnyRate } from "@/lib/currency";
 import { getDb } from "@/lib/db";
 import Link from "next/link";
 import PageHeader from "@/components/PageHeader";
+import NetPnlChart from "@/app/akpoker/pnl/NetPnlChart";
+
+function daysAgo(n: number): string {
+  const d = new Date(); d.setDate(d.getDate() - n);
+  return d.toISOString().slice(0, 10);
+}
 
 function fmtAmt(n: number, currency = "USDT"): string {
   return `${n >= 0 ? "+" : ""}${n.toLocaleString("fr-FR", { maximumFractionDigits: 0 })} ${currency}`;
@@ -13,8 +19,9 @@ const GAME_COLOR: Record<string, string> = {
   AKPOKER: "#D4AF37", KKPOKER: "#3B82F6", A5POKER: "#8B5CF6", AKS: "#F59E0B", WEPOKER: "#10B981",
 };
 
-export default async function CrmPlayerPage({ params }: { params: Promise<{ id: string }> }) {
+export default async function CrmPlayerPage({ params, searchParams }: { params: Promise<{ id: string }>; searchParams: Promise<{ range?: string }> }) {
   const { id } = await params;
+  const { range: rangeParam } = await searchParams;
   const playerId = parseInt(id);
   if (isNaN(playerId)) return <div>Invalid player ID</div>;
 
@@ -25,6 +32,19 @@ export default async function CrmPlayerPage({ params }: { params: Promise<{ id: 
   // Config-driven P&L across ALL agency games (see AGENCY_GAMES in lib/queries.ts).
   // Totals here are consistent with Top Contributors and the net worth card by construction.
   const pnl = getPlayerPnLAllGames(playerId);
+
+  // Agency-cut evolution chart — period filter via ?range= (7d / 30d / lifetime, default lifetime).
+  // cardNet comes from getPlayerPnLAllGames totals, so the curve's endpoint is checked against the
+  // authoritative per-period total (NetPnlChart shows a warning if they ever diverge).
+  const range = rangeParam === "7d" || rangeParam === "30d" ? rangeParam : "lifetime";
+  const today = new Date().toISOString().slice(0, 10);
+  const seriesPeriod = range === "7d" ? { from: daysAgo(7), to: today } : range === "30d" ? { from: daysAgo(30), to: today } : undefined;
+  const agencySeries = getPlayerAgencyCutSeries(playerId, seriesPeriod);
+  const agencyCardNet = range === "7d" ? pnl.total_agency_usdt_7d : range === "30d" ? pnl.total_agency_usdt_30d : pnl.total_agency_usdt_all;
+  const rangeLabel = range === "7d" ? "7 derniers jours" : range === "30d" ? "30 derniers jours" : "Lifetime";
+  const RANGES: { key: string; label: string }[] = [
+    { key: "7d", label: "7j" }, { key: "30d", label: "30j" }, { key: "lifetime", label: "Lifetime" },
+  ];
 
   const notes = getCrmNotes(playerId) as any[];
   const recentTx = getWalletTransactions({ player_id: playerId, limit: 20 }) as any[];
@@ -51,6 +71,25 @@ export default async function CrmPlayerPage({ params }: { params: Promise<{ id: 
           </div>
         )}
       </div>
+
+      {/* Évolution Agency Cut — toutes games confondues, cumulé. Filtres période via ?range= */}
+      <div style={{ display: "flex", justifyContent: "flex-end", gap: 4, marginBottom: 8 }}>
+        {RANGES.map((r) => (
+          <Link key={r.key} href={`/crm/${playerId}?range=${r.key}`} style={{
+            padding: "3px 12px", borderRadius: 6, fontSize: 11, fontWeight: 600, textDecoration: "none",
+            background: range === r.key ? "rgba(255,255,255,0.07)" : "transparent",
+            color: range === r.key ? "var(--text)" : "var(--text-dim)",
+            border: "1px solid " + (range === r.key ? "var(--border)" : "transparent"),
+          }}>{r.label}</Link>
+        ))}
+      </div>
+      <NetPnlChart
+        series={agencySeries}
+        cardNet={agencyCardNet}
+        currency="USDT"
+        title={`Évolution Agency Cut — ${player.name}`}
+        rangeLabel={`Agency cut cumulé (toutes games) · ${rangeLabel}`}
+      />
 
       {/* Une section par game où le joueur a un deal / de l'activité */}
       {pnl.games.map((g: PlayerGamePnL) => (

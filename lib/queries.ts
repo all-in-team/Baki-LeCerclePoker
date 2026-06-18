@@ -1724,6 +1724,64 @@ export function getPlayerPnLAllGames(playerId: number): PlayerPnLAllGames {
   return { games, total_agency_usdt_all: total_all, total_agency_usdt_30d: total_30, total_agency_usdt_7d: total_7 };
 }
 
+// Daily cumulative AGENCY CUT (operator's share) for one player, ALL agency games combined, in USDT.
+// Mirrors getPnLOverTime's per-game math but scoped to a single player and summed into one series.
+// CRITICAL: action_pct is INSIDE the SUM (per-tx weighting) — same correct math as the getPnLOverTime
+// fix; do NOT pull it out (that reintroduced the GROUP BY bug). The last cumulative point over the
+// full period equals getPlayerPnLAllGames.total_agency_usdt_* for the same period (action_pct is
+// constant within a player+game), which == the player's getTopContributors row / net-worth share.
+// Output shape matches getNetPnlSeries so the existing NetPnlChart consumes it unchanged.
+export function getPlayerAgencyCutSeries(playerId: number, period?: Period): { day: string; cumulative_net: number }[] {
+  const db = getDb();
+  const { since, until } = periodToDateRange(period);
+  const rate = getCnyRate();
+  const dayMap = new Map<string, number>(); // day (YYYY-MM-DD) -> agency cut USDT that day
+
+  // Wallet games (USDT): per-tx net × that player's action_pct, summed per day.
+  for (const cfg of AGENCY_GAMES.filter((g) => g.kind === "wallet")) {
+    const rows = db.prepare(`
+      SELECT substr(wt.tx_datetime, 1, 10) AS day,
+        COALESCE(SUM((CASE WHEN wt.type='withdrawal' THEN wt.amount ELSE -wt.amount END) * pgd.action_pct / 100.0), 0) AS agency
+      FROM wallet_transactions wt
+      JOIN player_game_deals pgd ON pgd.player_id = wt.player_id AND pgd.game_id = wt.game_id
+      JOIN games g ON g.id = wt.game_id AND g.name = ?
+      WHERE wt.player_id = ?
+        AND (wt.source IS NULL OR wt.source != 'unknown')
+        AND (pgd.start_date IS NULL OR wt.tx_datetime >= pgd.start_date)
+        AND (pgd.end_date IS NULL OR wt.tx_datetime <= pgd.end_date)
+        ${since ? "AND wt.tx_datetime >= ?" : ""}
+        ${until ? "AND wt.tx_datetime <= ?" : ""}
+      GROUP BY day
+    `).all(...[cfg.key, playerId, since, until].filter((v) => v !== undefined)) as { day: string; agency: number }[];
+    for (const r of rows) dayMap.set(r.day, (dayMap.get(r.day) ?? 0) + r.agency);
+  }
+
+  // Wepoker (CNY, 3-component) → converted to USDT per day (linear, so daily-then-convert == total).
+  const wp = db.prepare(`
+    SELECT COALESCE(rr.report_date, substr(rr.created_at, 1, 10)) AS day,
+      COALESCE(SUM(re.winnings_amount * COALESCE(pgd.action_pct, 0) / 100.0), 0) AS wl,
+      COALESCE(SUM(re.amount * COALESCE(pgd.rakeback_pct, 0) / 100.0), 0) AS rb,
+      COALESCE(SUM(re.insurance_amount * COALESCE(pgd.insurance_pct, 0) / 100.0), 0) AS ins
+    FROM rakeback_entries re
+    JOIN rakeback_reports rr ON rr.id = re.report_id
+    LEFT JOIN player_game_deals pgd ON pgd.player_id = re.player_id AND pgd.game_id = rr.game_id
+    WHERE re.player_id = ?
+      AND (pgd.start_date IS NULL OR COALESCE(rr.report_date, substr(rr.created_at, 1, 10)) >= pgd.start_date)
+      ${period?.from ? "AND COALESCE(rr.report_date, substr(rr.created_at, 1, 10)) >= ?" : ""}
+      ${period?.to ? "AND COALESCE(rr.report_date, substr(rr.created_at, 1, 10)) <= ?" : ""}
+    GROUP BY day
+  `).all(...[playerId, period?.from, period?.to].filter((v) => v !== undefined)) as { day: string; wl: number; rb: number; ins: number }[];
+  for (const r of wp) {
+    const usdt = convertCnyToUsdt(r.wl + r.rb + r.ins, rate);
+    dayMap.set(r.day, (dayMap.get(r.day) ?? 0) + usdt);
+  }
+
+  let cum = 0;
+  return [...dayMap.entries()]
+    .sort((a, b) => a[0].localeCompare(b[0]))
+    .map(([day, v]) => { cum += v; return { day, cumulative_net: cum }; });
+}
+
 // F) Top contributors by agency cut
 // NOTE: scope must stay aligned with AGENCY_GAMES / getPlayerPnLAllGames (same 5 games, same
 // agency fields) — a player's row here == their getPlayerPnLAllGames total for the same period.

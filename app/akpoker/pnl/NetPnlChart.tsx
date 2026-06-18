@@ -4,7 +4,7 @@ import { useState } from "react";
 import { ComposedChart, Area, Line, BarChart, Bar, Cell, XAxis, YAxis, Tooltip, ResponsiveContainer, ReferenceLine } from "recharts";
 
 interface Point { day: string; cumulative_net: number; }
-interface Props { series: Point[]; cardNet: number; currency?: string; rangeLabel?: string; }
+interface Props { series: Point[]; cardNet: number; currency?: string; rangeLabel?: string; title?: string; }
 
 const GREEN = "#22C55E", GREEN_PALE = "#5B8A6B", RED = "#EF4444", GREY = "#64748B";
 const signed = (n: number, cur: string) => `${n >= 0 ? "+" : "−"}${Math.abs(n).toLocaleString("fr-FR", { minimumFractionDigits: 0, maximumFractionDigits: 0 })} ${cur}`;
@@ -17,14 +17,14 @@ function weekStart(dStr: string) {
   return d.toISOString().slice(0, 10);
 }
 
-export default function NetPnlChart({ series, cardNet, currency = "USDT", rangeLabel }: Props) {
+export default function NetPnlChart({ series, cardNet, currency = "USDT", rangeLabel, title = "Évolution Players Net P&L" }: Props) {
   const [mode, setMode] = useState<"cumul" | "daily">("cumul");
   const wrap: React.CSSProperties = { background: "var(--bg-raised)", border: "1px solid var(--border)", borderRadius: 10, padding: "16px 20px 10px", marginBottom: 28 };
 
   if (!series || series.length === 0) {
     return (
       <div style={{ ...wrap, padding: "22px 20px", textAlign: "center", color: "var(--text-dim)", fontSize: 13 }}>
-        Évolution Players Net P&L — aucune transaction sur cette période.
+        {title} — aucune transaction sur cette période.
       </div>
     );
   }
@@ -70,7 +70,7 @@ export default function NetPnlChart({ series, cardNet, currency = "USDT", rangeL
   return (
     <div style={wrap}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
-        <span style={{ fontSize: 13, fontWeight: 700, color: "var(--text)" }}>Évolution Players Net P&L</span>
+        <span style={{ fontSize: 13, fontWeight: 700, color: "var(--text)" }}>{title}</span>
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
           <div style={{ display: "flex", gap: 4, background: "var(--bg-surface)", borderRadius: 8, padding: 2 }}>
             <button onClick={() => setMode("cumul")} style={tabBtn(mode === "cumul")}>Cumulé</button>
