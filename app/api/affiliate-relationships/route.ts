@@ -87,7 +87,17 @@ export async function POST(req: NextRequest) {
       exclude_agency_extras: body.exclude_agency_extras ?? 1,
       notes: body.notes ?? null,
     });
-    return NextResponse.json({ ok: true, id: Number(r.lastInsertRowid) }, { status: 201 });
+    // Going-forward: tag the referred player's Telegram group "{nom} x LeCercle [{agent}]".
+    // Single rename, never blocks relationship creation (already committed above).
+    let group_rename: unknown = undefined;
+    try {
+      const { renameAffiliatedGroupForRelationship } = await import("@/lib/affiliate-group-rename");
+      group_rename = await renameAffiliatedGroupForRelationship(referred_player_id, affiliate_player_id);
+    } catch (re: any) {
+      console.warn("[AFFILIATE] group rename after create failed:", re?.message ?? String(re));
+      group_rename = { status: "failed", error: re?.message ?? String(re) };
+    }
+    return NextResponse.json({ ok: true, id: Number(r.lastInsertRowid), group_rename }, { status: 201 });
   } catch (e: any) {
     if (e.message?.includes("UNIQUE constraint failed"))
       return NextResponse.json({ error: "Ce joueur a déjà un affiliate assigné" }, { status: 409 });

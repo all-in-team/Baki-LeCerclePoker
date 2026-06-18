@@ -529,6 +529,35 @@ export async function getChatMembers(chatId: string): Promise<Array<{
   }
 }
 
+// ── renamePlayerGroup ──────────────────────────────────
+// Renames an existing supergroup via channels.EditTitle. Robust: returns a status object,
+// never throws. FLOOD_WAIT is reported (flood_wait seconds) and NOT auto-retried — the caller
+// decides (anti-burst: never hammer Telegram). CHAT_NOT_MODIFIED (same title) is treated as ok.
+export async function renamePlayerGroup(
+  chatId: string,
+  newTitle: string,
+): Promise<{ ok: boolean; error: string | null; flood_wait: number | null; not_modified: boolean }> {
+  const client = await getClient();
+  if (!client) return { ok: false, error: "userbot session unavailable", flood_wait: null, not_modified: false };
+
+  try {
+    const numericId = parseInt(String(chatId).replace(/^-100/, ""), 10);
+    if (!Number.isFinite(numericId)) return { ok: false, error: `bad chat_id: ${chatId}`, flood_wait: null, not_modified: false };
+    const channelPeer = await client.getInputEntity(
+      new Api.PeerChannel({ channelId: BigInt(numericId) as any })
+    ) as unknown as Api.InputChannel;
+
+    await client.invoke(new Api.channels.EditTitle({ channel: channelPeer, title: newTitle }));
+    return { ok: true, error: null, flood_wait: null, not_modified: false };
+  } catch (e: any) {
+    const msg = errMsg(e);
+    if (/CHAT_NOT_MODIFIED/i.test(msg)) return { ok: true, error: null, flood_wait: null, not_modified: true };
+    const flood = parseFloodWait(e);
+    console.warn(`[USERBOT] renamePlayerGroup(${chatId}) failed: ${msg}`);
+    return { ok: false, error: msg, flood_wait: flood, not_modified: false };
+  }
+}
+
 // ── getMe (expose bot user id) ─────────────────────────
 
 export async function getUserbotId(): Promise<number | null> {

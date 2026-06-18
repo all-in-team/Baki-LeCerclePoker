@@ -41,6 +41,12 @@ export async function handleNewMembers(members: any[], chatTitle: string, chatId
           `INSERT INTO affiliate_relationships (affiliate_player_id, referred_player_id, origin_game_id, start_date) VALUES (?, ?, NULL, date('now'))`
         ).run(affiliateLead.affiliate_player_id, newPlayerId);
         console.log(`[AFFILIATE] Relationship created: affiliate=${affiliateLead.affiliate_player_id} referred=${newPlayerId} origin=NULL`);
+        // Tag the player's group "{nom} x LeCercle [{agent}]" (single rename, non-blocking).
+        try {
+          const { renameAffiliatedGroupForRelationship } = await import("@/lib/affiliate-group-rename");
+          const rr = await renameAffiliatedGroupForRelationship(newPlayerId, affiliateLead.affiliate_player_id);
+          console.log(`[AFFILIATE] group rename: ${JSON.stringify(rr)}`);
+        } catch (re: any) { console.warn(`[AFFILIATE] group rename failed: ${re?.message ?? String(re)}`); }
       }
 
       db.prepare(`INSERT INTO crm_notes (player_id, content, type) VALUES (?, ?, 'note')`)
@@ -142,6 +148,12 @@ export async function handleNewMembers(members: any[], chatTitle: string, chatId
             `INSERT INTO affiliate_relationships (affiliate_player_id, referred_player_id, origin_game_id, start_date) VALUES (?, ?, NULL, date('now'))`
           ).run(lead.affiliate_player_id, playerId);
           console.log(`[AFFILIATE] Lead ${lead.id} converted + relationship created: affiliate=${lead.affiliate_player_id} → player ${playerId}`);
+          // Tag the player's group "{nom} x LeCercle [{agent}]" (single rename, non-blocking).
+          try {
+            const { renameAffiliatedGroupForRelationship } = await import("@/lib/affiliate-group-rename");
+            const rr = await renameAffiliatedGroupForRelationship(playerId, lead.affiliate_player_id);
+            console.log(`[AFFILIATE] group rename: ${JSON.stringify(rr)}`);
+          } catch (re: any) { console.warn(`[AFFILIATE] group rename failed: ${re?.message ?? String(re)}`); }
         } else {
           console.log(`[AFFILIATE] Lead ${lead.id} converted (relationship already existed) → player ${playerId}`);
         }
