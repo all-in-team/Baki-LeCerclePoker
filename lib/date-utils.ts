@@ -110,6 +110,17 @@ export function getCurrentMonthKey(): string {
   return monthKey(c.year, c.month);
 }
 
+// Add n calendar months to a Paris-anchored Y/M/D, clamping the day to the target
+// month's length (e.g. start on the 31st → Feb 28/29, Apr 30). 1-based month in & out.
+// Used by the QQPK per-player rolling staking cycle (anchored on the onboarding date).
+export function addMonthsParis(year: number, month: number, day: number, n: number): { year: number; month: number; day: number } {
+  const total = year * 12 + (month - 1) + n;
+  const ty = Math.floor(total / 12);
+  const tm = (total % 12) + 1; // 1-based
+  const lastDay = new Date(Date.UTC(ty, tm, 0)).getUTCDate();
+  return { year: ty, month: tm, day: Math.min(day, lastDay) };
+}
+
 // ── Formatting ───────────────────────────────────────────
 
 const p2 = (n: number) => String(n).padStart(2, "0");

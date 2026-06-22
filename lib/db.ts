@@ -1527,7 +1527,7 @@ function initSchema(db: Database.Database) {
         CREATE TABLE IF NOT EXISTS qqpk_staking_blocks (
           id INTEGER PRIMARY KEY AUTOINCREMENT,
           player_id INTEGER NOT NULL REFERENCES players(id),
-          block_month TEXT NOT NULL,                 -- 'YYYY-MM' (Europe/Paris calendar month)
+          block_month TEXT NOT NULL,                 -- cycle id: per-player rolling cycle START date 'YYYY-MM-DD' (Phase 4.5; was 'YYYY-MM' calendar month in Phase 3/4)
           block_start TEXT NOT NULL,                 -- UTC ISO of month start (Paris-anchored)
           block_end TEXT NOT NULL,                   -- UTC ISO of month end (Paris-anchored)
           resultat_periode REAL NOT NULL DEFAULT 0,  -- on-chain net for the period (withdrawals − deposits, USDT)
