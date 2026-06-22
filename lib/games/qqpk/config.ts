@@ -5,9 +5,8 @@
 // wallet P&L queries surface the raw net without producing any action-based cut.
 export const QQPK_GAME_NAME = "QQPK";
 
-// Mini App launch link, revealed only AFTER deal acceptance in onboarding (Phase 2).
-// TODO(Phase 2): confirm the real QQPK Mini App startapp link.
-export const QQPK_GAME_LINK = "https://t.me/qqpoker/miniapp?startapp=PLACEHOLDER";
+// Affiliate / Mini App launch link, revealed only AFTER deal acceptance in onboarding (Phase 2).
+export const QQPK_GAME_LINK = "https://my.qqpk.game/?shareCode=MG371N";
 
 // Staking deal carries no action %, so the seeded deal uses 0. Kept here for the
 // shared onboarding/deal plumbing that expects a default.
