@@ -1702,7 +1702,12 @@ export function getActivePlayersCount(period: Period): number {
 //   kind 'wallet'  → wallet-based USDT P&L via getWalletSummaryByPlayer (action_pct on net)
 //   kind 'wepoker' → rakeback-based CNY P&L via getWepokerPnL (3-component, converted to USDT)
 // Keep getAgencyTotalPnL (net worth card) and getTopContributors in sync with this list.
-export type AgencyGameKind = "wallet" | "wepoker";
+//   kind 'staking' → QQPK staking model. Phase 1: contributes 0 to net worth (the real
+//     C/T-based agency P&L is wired in Phase 5). It is NOT summed in getAgencyTotalPnL
+//     (hardcoded list) and is excluded from getPlayerAgencyCutSeries (wallet-only filter);
+//     in getPlayerPnLAllGames it falls through the wallet branch, but the seeded deal has
+//     action_pct=0 so the agency cut is 0 — only the raw net is surfaced for display.
+export type AgencyGameKind = "wallet" | "wepoker" | "staking";
 export interface AgencyGameConfig {
   key: string;        // games.name, matched EXACTLY (case-sensitive in getWalletSummaryByPlayer)
   label: string;      // user-facing label
@@ -1715,6 +1720,7 @@ export const AGENCY_GAMES: AgencyGameConfig[] = [
   { key: "KKPOKER", label: "KKPOKER", kind: "wallet",  basePath: "/kkpoker" },
   { key: "A5POKER", label: "A5POKER", kind: "wallet",  basePath: "/a5poker" },
   { key: "AKS",     label: "AKS",     kind: "wallet",  basePath: "/aks" },
+  { key: "QQPK",    label: "QQPK",    kind: "staking", basePath: "/qqpk" },
   { key: "Wepoker", label: "WEPOKER", kind: "wepoker", basePath: "/wepoker" },
 ];
 

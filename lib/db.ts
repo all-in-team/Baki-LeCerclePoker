@@ -1497,6 +1497,21 @@ function initSchema(db: Database.Database) {
     console.error(`[MIGRATION:add_aks_game_v1] FAILED:`, err.message);
   }
 
+  // Seed QQPK game (wallet-based plumbing, mirror of AKS). STAKING model — the C/T
+  // settlement engine lands in Phase 3; Phase 1 only registers the game so wallets,
+  // TronGrid sync and net-brut P&L work. The games.name CHECK was dropped earlier
+  // (drop_games_name_check_v1), so a plain INSERT OR IGNORE suffices. default_action_pct=0
+  // because staking carries no action %. Wallet mère is configured later via Settings.
+  try {
+    const fixQqpk = db.prepare(`INSERT OR IGNORE INTO _applied_fixes (name) VALUES (?)`).run("add_qqpk_game_v1");
+    if (fixQqpk.changes > 0) {
+      db.prepare(`INSERT OR IGNORE INTO games (name, status, default_action_pct, currency) VALUES ('QQPK', 'active', 0, 'USDT')`).run();
+      console.log("[MIGRATION] add_qqpk_game_v1 applied");
+    }
+  } catch (err: any) {
+    console.error(`[MIGRATION:add_qqpk_game_v1] FAILED:`, err.message);
+  }
+
   // Deal acceptance trace — append-only audit log of explicit deal acceptances.
   // Written when a player clicks "✅ J'accepte" in any onboarding flow, BEFORE the
   // game link is revealed (anti-bypass). Proof of which deal/% was accepted, when.
