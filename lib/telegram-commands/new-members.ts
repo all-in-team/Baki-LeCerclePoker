@@ -337,3 +337,41 @@ export async function sendAksPitch(
     [{ text: "❓ J'ai une question", callback_data: "aks_choice_question" }],
   ], tid);
 }
+
+// QQPK staking pitch — FIXED 70/30 deal, no action % to pick. Anti-bypass: NO Mini App
+// link here; it's revealed only after an explicit "J'accepte" (handleQqpkCallback →
+// qqpk_accept). The deal row + acceptance are created on accept (acceptance = cycle anchor),
+// NOT here, so a player only appears in /qqpk/pnl once onboarded.
+export async function sendQqpkPitch(
+  chatId: number,
+  playerId: number,
+  player: { name: string; telegram_id: number | null; telegram_handle: string | null },
+  onboardingTopicId?: number,
+) {
+  setSession(chatId, "qqpk_pitch_sent" as Step, playerId, player.telegram_id);
+  if (player.telegram_id) trackOnboardingStep(player.telegram_id, "pitch_sent");
+
+  const tid = onboardingTopicId;
+  const tag = mentionOf(player);
+  await sendMsg(chatId,
+    `${tag}\n\n🃏 <b>${player.name}</b> — deal STAKING QQPK !`,
+    tid
+  );
+  await sleep(2000);
+  await sendMsg(chatId,
+    `💰 Tu joues avec ton bankroll. Le Cercle porte <b>70% de tes pertes</b>, tu portes 30%.\n\n` +
+    `📈 Sur les gains : tu gardes <b>70%</b>, le Cercle prend 30%.\n\n` +
+    `🔄 <b>Règlement mensuel</b> (ton cycle démarre aujourd'hui), avec makeup : tes pertes avancées sont remboursées par tes gains avant tout partage.\n\n` +
+    `🎯 <b>Condition : minimum 30 000 mains</b> sur le mois. En dessous, tes pertes ne sont PAS couvertes (mais le partage des gains s'applique quand même).\n\n` +
+    `⚖️ Le partage 70/30 se calcule sur ton <b>net cumulé du mois</b>, pas semaine par semaine.\n\n` +
+    `🔚 <b>Fin de mois</b> : on settle, tu fais un full cash out, et on repart à zéro pour le mois suivant.`,
+    tid
+  );
+  await sleep(3000);
+  // Anti-bypass: le lien Mini App n'est PAS dans le pitch. Il n'arrive qu'après
+  // un clic explicite sur "J'accepte" (handleQqpkCallback → qqpk_accept).
+  await sendMsgKeyboard(chatId, `Tu valides le deal ?`, [
+    [{ text: "✅ J'accepte le deal", callback_data: "qqpk_accept" }],
+    [{ text: "❓ J'ai une question", callback_data: "qqpk_choice_question" }],
+  ], tid);
+}

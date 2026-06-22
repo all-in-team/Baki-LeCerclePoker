@@ -255,7 +255,9 @@ export function deletePlayerGameDeal(id: number) {
 }
 
 // Append-only trace of explicit deal acceptances (anti-bypass gate proof).
-// Audit only — never read by any P&L computation.
+// Audit log of explicit deal acceptances. NOTE (Phase 2): for QQPK this is ALSO the source of
+// truth for the rolling-cycle anchor — getQqpkPlayerStartDate reads MIN(accepted_at). For other
+// games it remains audit-only and is not read by any P&L computation.
 export function recordDealAcceptance(playerId: number, gameId: number, actionPct: number | null) {
   return getDb().prepare(
     `INSERT INTO deal_acceptances (player_id, game_id, action_pct) VALUES (?, ?, ?)`
