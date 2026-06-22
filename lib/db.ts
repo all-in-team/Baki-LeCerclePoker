@@ -1512,6 +1512,44 @@ function initSchema(db: Database.Database) {
     console.error(`[MIGRATION:add_qqpk_game_v1] FAILED:`, err.message);
   }
 
+  // QQPK staking blocks — persistent C/T state per player per calendar-month block.
+  // Phase 3: table only. The pure calc engine lives in lib/qqpk-staking-engine.ts; the
+  // saisie-mains UI / "Régler le mois" button (Phase 4) and dashboard rollup (Phase 5)
+  // come later. Money math NEVER lives here — this is storage only.
+  //   c_prec/t_prec : state carried from the previous period (0 at block open after reset)
+  //   c/t           : recomputed state (C = c_prec + resultat_periode; T per 70/30 rule)
+  //   reglement     : T − t_prec (>0 Cercle pays player, <0 player pays Cercle)
+  //   condition_30k_applied : 1 iff the <30k-hands no-coverage rule suppressed a loss coverage
+  try {
+    const fixStaking = db.prepare(`INSERT OR IGNORE INTO _applied_fixes (name) VALUES (?)`).run("add_qqpk_staking_v1");
+    if (fixStaking.changes > 0) {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS qqpk_staking_blocks (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          player_id INTEGER NOT NULL REFERENCES players(id),
+          block_month TEXT NOT NULL,                 -- 'YYYY-MM' (Europe/Paris calendar month)
+          block_start TEXT NOT NULL,                 -- UTC ISO of month start (Paris-anchored)
+          block_end TEXT NOT NULL,                   -- UTC ISO of month end (Paris-anchored)
+          resultat_periode REAL NOT NULL DEFAULT 0,  -- on-chain net for the period (withdrawals − deposits, USDT)
+          mains INTEGER NOT NULL DEFAULT 0,          -- hands played (manual entry)
+          c_prec REAL NOT NULL DEFAULT 0,
+          c REAL NOT NULL DEFAULT 0,
+          t_prec REAL NOT NULL DEFAULT 0,
+          t REAL NOT NULL DEFAULT 0,
+          reglement REAL NOT NULL DEFAULT 0,
+          condition_30k_applied INTEGER NOT NULL DEFAULT 0,
+          status TEXT NOT NULL DEFAULT 'open' CHECK(status IN ('open','computed','settled')),
+          created_at TEXT NOT NULL DEFAULT (datetime('now')),
+          updated_at TEXT,
+          UNIQUE(player_id, block_month)
+        )
+      `);
+      console.log("[MIGRATION] add_qqpk_staking_v1 applied");
+    }
+  } catch (err: any) {
+    console.error(`[MIGRATION:add_qqpk_staking_v1] FAILED:`, err.message);
+  }
+
   // Deal acceptance trace — append-only audit log of explicit deal acceptances.
   // Written when a player clicks "✅ J'accepte" in any onboarding flow, BEFORE the
   // game link is revealed (anti-bypass). Proof of which deal/% was accepted, when.

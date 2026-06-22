@@ -72,6 +72,44 @@ export function getWeekBounds(offsetWeeks: number): { start: Date; end: Date } {
   return { start: startUTC, end: endUTC };
 }
 
+// ── Month bounds (France-anchored, DST-aware) ────────────
+// A QQPK staking block = 1 calendar month Europe/Paris: 1st 00:00:00 → last day 23:59:59,
+// returned as UTC Date objects. Mirrors getWeekBounds. `month` is 1-based (1=January).
+
+export function getMonthBounds(year: number, month: number): { start: Date; end: Date } {
+  const start = parisLocalToUTC(year, month, 1, 0, 0, 0, 0);
+  // Date.UTC(year, month, 0) → day 0 of the (0-based) next month = last day of `month`.
+  const lastDay = new Date(Date.UTC(year, month, 0)).getUTCDate();
+  const end = parisLocalToUTC(year, month, lastDay, 23, 59, 59, 0);
+  return { start, end };
+}
+
+// Month key "YYYY-MM" used as the staking block identifier (qqpk_staking_blocks.block_month).
+export function monthKey(year: number, month: number): string {
+  return `${year}-${p2(month)}`;
+}
+
+export function parseMonthKey(key: string): { year: number; month: number } | null {
+  const m = key.match(/^(\d{4})-(\d{2})$/);
+  if (!m) return null;
+  const year = parseInt(m[1]);
+  const month = parseInt(m[2]);
+  if (month < 1 || month > 12) return null;
+  return { year, month };
+}
+
+export function getMonthBoundsByKey(key: string): { start: Date; end: Date } | null {
+  const parsed = parseMonthKey(key);
+  if (!parsed) return null;
+  return getMonthBounds(parsed.year, parsed.month);
+}
+
+// Current calendar month key in Europe/Paris (the block a new result lands in).
+export function getCurrentMonthKey(): string {
+  const c = getParisComponents(new Date());
+  return monthKey(c.year, c.month);
+}
+
 // ── Formatting ───────────────────────────────────────────
 
 const p2 = (n: number) => String(n).padStart(2, "0");
