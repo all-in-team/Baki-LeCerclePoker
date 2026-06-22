@@ -1,5 +1,6 @@
 import { getDb } from "./db";
-import { toParisDate } from "./date-utils";
+import { toParisDate, getMonthBoundsByKey, getCurrentMonthKey, toUTCISO } from "./date-utils";
+import { computeStakingBlock, operatorPnlFromReglement } from "./qqpk-staking-engine";
 
 // ── Players ──────────────────────────────────────────────
 export function getPlayers() {
@@ -2215,4 +2216,240 @@ export function getGrinderDefaultGames(): Record<number, number> {
     )
   `).all() as { player_id: number; game_id: number }[];
   return Object.fromEntries(rows.map(r => [r.player_id, r.game_id]));
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// QQPK STAKING (Phase 4) — orchestration around the pure engine.
+//
+// INVARIANT #2: all money math for QQPK staking lives HERE (or in the pure engine
+// lib/qqpk-staking-engine.ts). Server actions / pages stay thin. NOT wired into the
+// dashboard / net worth yet (Phase 5).
+//
+// Net (resultat_periode) is read with the SAME canonical math as every other game —
+// getWalletSummaryByPlayer (withdrawals − deposits, source != 'unknown') — but bounded
+// to ONE calendar month via getMonthBoundsByKey (Europe/Paris). This guarantees the
+// staking net == the wallet net the rest of the app shows.
+//
+// CARRY / RESET rule (the makeup mechanism — money-critical):
+//   The "block" is the makeup run. Each month carries C/T forward FROM the previous
+//   settled month, UNTIL a settlement lands at C ≥ 0 (makeup cleared / profit settled),
+//   after which the next month RESETS to c_prec=0 / t_prec=0. Concretely, carry-in for a
+//   month = the latest prior *settled* block's (c, t) IF that block's C < 0 (makeup still
+//   running); otherwise 0/0. This is what makes the spec example tie out (S1 C=−1000 →
+//   S2 carries −1000 → C=+2000 → reset). Reset is computed lazily here (no stale rows).
+// ═══════════════════════════════════════════════════════════════════════════
+
+export interface QqpkStakingRow {
+  player_id: number;
+  player_name: string;
+  block_month: string;
+  resultat_periode: number;   // on-chain net for the month (withdrawals − deposits, USDT)
+  mains: number;              // manually entered hands
+  c_prec: number;
+  t_prec: number;
+  c: number;                  // cumulative net
+  t: number;                  // settled position (makeup = t when t > 0)
+  reglement: number;          // T − t_prec (>0 Cercle pays player, <0 player pays Cercle)
+  condition_30k_applied: boolean;
+  operator_pnl: number;       // −reglement (frozen sign convention)
+  settled: boolean;           // true → stored immutable values; false → live projection "if settled now"
+}
+
+function getQqpkStoredMains(playerId: number, blockMonth: string): number {
+  const row = getDb().prepare(
+    `SELECT mains FROM qqpk_staking_blocks WHERE player_id = ? AND block_month = ?`
+  ).get(playerId, blockMonth) as { mains: number } | undefined;
+  return row?.mains ?? 0;
+}
+
+function getQqpkBlockRow(playerId: number, blockMonth: string) {
+  return getDb().prepare(
+    `SELECT * FROM qqpk_staking_blocks WHERE player_id = ? AND block_month = ?`
+  ).get(playerId, blockMonth) as any | undefined;
+}
+
+// On-chain net for a player over a calendar-month block. Reuses the canonical wallet
+// summary (same net math as every game page) bounded to the month window.
+export function getQqpkMonthlyNet(playerId: number, blockMonth: string): number {
+  const bounds = getMonthBoundsByKey(blockMonth);
+  if (!bounds) return 0;
+  const rows = getWalletSummaryByPlayer({
+    game_name: "QQPK",
+    since_date: toUTCISO(bounds.start),
+    end_date: toUTCISO(bounds.end),
+  }) as any[];
+  const r = rows.find((x) => x.player_id === playerId);
+  return r?.net ?? 0;
+}
+
+// Carry-in (c_prec, t_prec) for a block, per the makeup/reset rule documented above.
+export function getQqpkCarryIn(playerId: number, blockMonth: string): { c_prec: number; t_prec: number } {
+  const prev = getDb().prepare(
+    `SELECT c, t FROM qqpk_staking_blocks
+     WHERE player_id = ? AND block_month < ? AND status = 'settled'
+     ORDER BY block_month DESC LIMIT 1`
+  ).get(playerId, blockMonth) as { c: number; t: number } | undefined;
+  // Makeup still running (prev cumulative loss) → carry forward; else reset to 0/0.
+  if (prev && prev.c < 0) return { c_prec: prev.c, t_prec: prev.t };
+  return { c_prec: 0, t_prec: 0 };
+}
+
+// Pure projection for one player+month: reads net + stored mains + carry, runs the
+// engine. is_final_settlement=true so the projection reflects exactly what settling now
+// would produce (incl. the 30k condition). The settle path uses the SAME call → UI == engine.
+function computeQqpkProjection(playerId: number, blockMonth: string): {
+  resultat_periode: number; mains: number; c_prec: number; t_prec: number;
+  c: number; t: number; reglement: number; condition_30k_applied: boolean; operator_pnl: number;
+} {
+  const resultat_periode = getQqpkMonthlyNet(playerId, blockMonth);
+  const mains = getQqpkStoredMains(playerId, blockMonth);
+  const { c_prec, t_prec } = getQqpkCarryIn(playerId, blockMonth);
+  const res = computeStakingBlock({ c_prec, t_prec, resultat_periode, mains, is_final_settlement: true });
+  return {
+    resultat_periode, mains, c_prec, t_prec,
+    c: res.c, t: res.t, reglement: res.reglement,
+    condition_30k_applied: res.condition_30k_applied,
+    operator_pnl: operatorPnlFromReglement(res.reglement),
+  };
+}
+
+// View model for the QQPK staking board for a given month. Settled blocks show their
+// stored immutable values; open blocks show the live "if settled now" projection.
+export function getQqpkStakingOverview(blockMonth?: string): { month: string; rows: QqpkStakingRow[] } {
+  const month = blockMonth ?? getCurrentMonthKey();
+  const players = getDb().prepare(
+    `SELECT p.id AS player_id, p.name AS player_name
+     FROM players p
+     JOIN player_game_deals pgd ON pgd.player_id = p.id
+     JOIN games g ON g.id = pgd.game_id AND g.name = 'QQPK'
+     ORDER BY p.name COLLATE NOCASE`
+  ).all() as { player_id: number; player_name: string }[];
+
+  const rows: QqpkStakingRow[] = players.map((p) => {
+    const existing = getQqpkBlockRow(p.player_id, month);
+    if (existing && existing.status === "settled") {
+      return {
+        player_id: p.player_id, player_name: p.player_name, block_month: month,
+        resultat_periode: existing.resultat_periode, mains: existing.mains,
+        c_prec: existing.c_prec, t_prec: existing.t_prec,
+        c: existing.c, t: existing.t, reglement: existing.reglement,
+        condition_30k_applied: !!existing.condition_30k_applied,
+        operator_pnl: operatorPnlFromReglement(existing.reglement),
+        settled: true,
+      };
+    }
+    const proj = computeQqpkProjection(p.player_id, month);
+    return {
+      player_id: p.player_id, player_name: p.player_name, block_month: month,
+      ...proj, settled: false,
+    };
+  });
+
+  return { month, rows };
+}
+
+// History: all settled blocks (past months), newest first.
+export function getQqpkBlockHistory(): (QqpkStakingRow & { settled_at: string | null })[] {
+  const rows = getDb().prepare(
+    `SELECT b.*, p.name AS player_name
+     FROM qqpk_staking_blocks b
+     JOIN players p ON p.id = b.player_id
+     WHERE b.status = 'settled'
+     ORDER BY b.block_month DESC, p.name COLLATE NOCASE`
+  ).all() as any[];
+  return rows.map((b) => ({
+    player_id: b.player_id, player_name: b.player_name, block_month: b.block_month,
+    resultat_periode: b.resultat_periode, mains: b.mains,
+    c_prec: b.c_prec, t_prec: b.t_prec, c: b.c, t: b.t, reglement: b.reglement,
+    condition_30k_applied: !!b.condition_30k_applied,
+    operator_pnl: operatorPnlFromReglement(b.reglement),
+    settled: true, settled_at: b.updated_at ?? b.created_at ?? null,
+  }));
+}
+
+// Recap for the confirmation dialog — read-only, no write. Mirrors what settle will do.
+export function previewQqpkSettlement(playerId: number, blockMonth: string): {
+  ok: boolean; error?: string;
+  player_id: number; block_month: string;
+  resultat_periode: number; mains: number; c_prec: number; t_prec: number;
+  c: number; t: number; reglement: number; condition_30k_applied: boolean; operator_pnl: number;
+  already_settled: boolean;
+} {
+  const existing = getQqpkBlockRow(playerId, blockMonth);
+  const already_settled = !!existing && existing.status === "settled";
+  const proj = computeQqpkProjection(playerId, blockMonth);
+  return {
+    ok: !already_settled,
+    error: already_settled ? "Bloc déjà réglé (immutable)." : undefined,
+    player_id: playerId, block_month: blockMonth, already_settled, ...proj,
+  };
+}
+
+// Persist the manually-entered hands for a block. Integer ≥ 0. Refuses if settled.
+export function setQqpkMains(playerId: number, blockMonth: string, mains: number): { ok: boolean; error?: string } {
+  if (!Number.isInteger(mains) || mains < 0) return { ok: false, error: "Mains: entier ≥ 0 requis." };
+  const bounds = getMonthBoundsByKey(blockMonth);
+  if (!bounds) return { ok: false, error: "Mois invalide." };
+  const existing = getQqpkBlockRow(playerId, blockMonth);
+  if (existing && existing.status === "settled") return { ok: false, error: "Bloc déjà réglé (immutable)." };
+  getDb().prepare(
+    `INSERT INTO qqpk_staking_blocks (player_id, block_month, block_start, block_end, mains, status, updated_at)
+     VALUES (@player_id, @block_month, @block_start, @block_end, @mains, 'open', datetime('now'))
+     ON CONFLICT(player_id, block_month) DO UPDATE SET mains = excluded.mains, updated_at = datetime('now')`
+  ).run({
+    player_id: playerId, block_month: blockMonth,
+    block_start: toUTCISO(bounds.start), block_end: toUTCISO(bounds.end), mains,
+  });
+  return { ok: true };
+}
+
+// THE settlement: read net + mains + carry, run the engine (is_final_settlement=true),
+// persist as 'settled'. Refuses to overwrite an already-settled block (immutability,
+// mirror invariant #11). The next block's reset/carry is derived lazily by getQqpkCarryIn.
+export function settleQqpkMonth(playerId: number, blockMonth: string): {
+  ok: boolean; error?: string; result?: QqpkStakingRow;
+} {
+  const bounds = getMonthBoundsByKey(blockMonth);
+  if (!bounds) return { ok: false, error: "Mois invalide." };
+  const existing = getQqpkBlockRow(playerId, blockMonth);
+  if (existing && existing.status === "settled") return { ok: false, error: "Bloc déjà réglé (immutable)." };
+
+  const resultat_periode = getQqpkMonthlyNet(playerId, blockMonth);
+  const mains = getQqpkStoredMains(playerId, blockMonth);
+  const { c_prec, t_prec } = getQqpkCarryIn(playerId, blockMonth);
+  const res = computeStakingBlock({ c_prec, t_prec, resultat_periode, mains, is_final_settlement: true });
+
+  getDb().prepare(
+    `INSERT INTO qqpk_staking_blocks
+       (player_id, block_month, block_start, block_end, resultat_periode, mains,
+        c_prec, c, t_prec, t, reglement, condition_30k_applied, status, updated_at)
+     VALUES
+       (@player_id, @block_month, @block_start, @block_end, @resultat_periode, @mains,
+        @c_prec, @c, @t_prec, @t, @reglement, @cond, 'settled', datetime('now'))
+     ON CONFLICT(player_id, block_month) DO UPDATE SET
+        block_start = excluded.block_start, block_end = excluded.block_end,
+        resultat_periode = excluded.resultat_periode, mains = excluded.mains,
+        c_prec = excluded.c_prec, c = excluded.c, t_prec = excluded.t_prec, t = excluded.t,
+        reglement = excluded.reglement, condition_30k_applied = excluded.condition_30k_applied,
+        status = 'settled', updated_at = datetime('now')`
+  ).run({
+    player_id: playerId, block_month: blockMonth,
+    block_start: toUTCISO(bounds.start), block_end: toUTCISO(bounds.end),
+    resultat_periode, mains,
+    c_prec, c: res.c, t_prec, t: res.t, reglement: res.reglement,
+    cond: res.condition_30k_applied ? 1 : 0, // better-sqlite3 does NOT coerce booleans
+  });
+
+  const playerName = (getDb().prepare(`SELECT name FROM players WHERE id = ?`).get(playerId) as { name: string } | undefined)?.name ?? `#${playerId}`;
+  return {
+    ok: true,
+    result: {
+      player_id: playerId, player_name: playerName, block_month: blockMonth,
+      resultat_periode, mains, c_prec, t_prec,
+      c: res.c, t: res.t, reglement: res.reglement,
+      condition_30k_applied: res.condition_30k_applied,
+      operator_pnl: operatorPnlFromReglement(res.reglement),
+      settled: true,
+    },
+  };
 }
