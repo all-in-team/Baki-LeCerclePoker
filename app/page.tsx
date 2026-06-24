@@ -1,7 +1,7 @@
 export const dynamic = "force-dynamic";
 import {
   getAgencyTotalPnL, getActivePlayersCount, getTopContributors, getPnLOverTime,
-  getOpsFeed, getDashboardStatus,
+  getOpsFeed, getDashboardStatus, getVolumeByGame, type GameVolume,
 } from "@/lib/queries";
 import { getDb } from "@/lib/db";
 import Link from "next/link";
@@ -13,6 +13,31 @@ import OpsFeedTerminal from "./OpsFeedTerminal";
 import PlatformTickers, { type PlatformTicker } from "./PlatformTickers";
 import { WarRoomPnLChart } from "./WarRoomCharts";
 import DashboardActions from "./DashboardActions";
+import VolumePie, { type VolumeSlice } from "./VolumePie";
+
+// Internal game name → dashboard display label + ticker color (mirrors PlatformTickers colors).
+const VOLUME_GAME_META: Record<string, { label: string; color: string }> = {
+  TELE: { label: "AKPOKER", color: "#F5C518" },
+  KKPOKER: { label: "KKPOKER", color: "#3B82F6" },
+  A5POKER: { label: "A5POKER", color: "#F59E0B" },
+  AKS: { label: "AKS", color: "#EC4899" },
+  WEPOKER: { label: "WEPOKER", color: "#10B981" },
+  QQPK: { label: "QQPK", color: "#06B6D4" },
+};
+const VOLUME_FALLBACK_COLORS = ["#A855F7", "#F43F5E", "#8B5CF6", "#22D3EE", "#84CC16"];
+
+function toVolumeSlices(vols: GameVolume[]): VolumeSlice[] {
+  return vols.map((v, i) => {
+    const meta = VOLUME_GAME_META[v.game_name];
+    return {
+      name: meta?.label ?? v.game_name,
+      color: meta?.color ?? VOLUME_FALLBACK_COLORS[i % VOLUME_FALLBACK_COLORS.length],
+      value: Math.round(v.volume_usdt),
+      missingRate: v.missing_rate,
+    };
+  });
+}
+const volTotal = (vols: GameVolume[]) => vols.reduce((s, v) => s + v.volume_usdt, 0);
 
 function daysAgo(n: number): string {
   const d = new Date(); d.setDate(d.getDate() - n);
@@ -48,6 +73,13 @@ export default function DashboardPage() {
   const events = getOpsFeed(20);
   const top5 = getTopContributors({ from: d7, to: today }, 5);
   const timeline = getPnLOverTime({});
+
+  // Volume par game (déposits + retraits, USDT) — current vs previous period for evolution %.
+  const range = (from: string, to: string) => ({ since_date: from + "T00:00:00Z", end_date: to + "T23:59:59Z" });
+  const vol7d = getVolumeByGame(range(d7, today));
+  const vol7dPrev = getVolumeByGame(range(d14, d7));
+  const vol30d = getVolumeByGame(range(d30, today));
+  const vol30dPrev = getVolumeByGame(range(d60, d30));
 
   // Hero sparkline: cumulative total over the last 30 days
   let cum = 0;
@@ -150,6 +182,16 @@ export default function DashboardPage() {
       </div>
 
       <DashboardActions />
+
+      {/* Volume par game — pie + évolution globale */}
+      <div className="mb-4" style={{ marginTop: 16 }}>
+        <VolumePie
+          d7={{ slices: toVolumeSlices(vol7d), total: volTotal(vol7d) }}
+          d7Prev={volTotal(vol7dPrev)}
+          d30={{ slices: toVolumeSlices(vol30d), total: volTotal(vol30d) }}
+          d30Prev={volTotal(vol30dPrev)}
+        />
+      </div>
 
       {/* Bottom row: Top contributors + Actions en attente */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">

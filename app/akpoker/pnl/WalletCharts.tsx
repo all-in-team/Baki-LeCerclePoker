@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import {
   AreaChart, Area, BarChart, Bar, XAxis, YAxis, CartesianGrid,
   Tooltip, ResponsiveContainer, Cell, ReferenceLine, Legend,
@@ -45,18 +46,38 @@ function buildCumulative(txs: WalletTx[]) {
   return points;
 }
 
-function buildMonthly(txs: WalletTx[]) {
-  const map: Record<string, { deposited: number; withdrawn: number }> = {};
+// Monday (UTC) of the ISO week containing the given YYYY-MM-DD date.
+function isoWeekMonday(dateStr: string): Date {
+  const [y, m, d] = dateStr.slice(0, 10).split("-").map(Number);
+  const dt = new Date(Date.UTC(y, m - 1, d));
+  const dow = dt.getUTCDay() || 7; // Mon=1..Sun=7
+  dt.setUTCDate(dt.getUTCDate() - (dow - 1));
+  return dt;
+}
+
+// Aggregate deposits/withdrawals by period. granularity "month" → YYYY-MM buckets,
+// "week" → ISO week (Monday-anchored) buckets. Same shape either way, so the chart is unchanged.
+function buildActivity(txs: WalletTx[], granularity: "month" | "week") {
+  const map: Record<string, { deposited: number; withdrawn: number; label: string }> = {};
   for (const tx of txs) {
-    const month = tx.tx_datetime.slice(0, 7);
-    if (!map[month]) map[month] = { deposited: 0, withdrawn: 0 };
-    if (tx.type === "deposit") map[month].deposited += tx.amount;
-    else map[month].withdrawn += tx.amount;
+    let key: string;
+    let label: string;
+    if (granularity === "month") {
+      key = tx.tx_datetime.slice(0, 7);
+      label = new Date(key + "-01").toLocaleDateString("fr-FR", { month: "short", year: "2-digit" });
+    } else {
+      const monday = isoWeekMonday(tx.tx_datetime);
+      key = monday.toISOString().slice(0, 10);
+      label = monday.toLocaleDateString("fr-FR", { day: "2-digit", month: "short" });
+    }
+    if (!map[key]) map[key] = { deposited: 0, withdrawn: 0, label };
+    if (tx.type === "deposit") map[key].deposited += tx.amount;
+    else map[key].withdrawn += tx.amount;
   }
   return Object.entries(map)
     .sort(([a], [b]) => a.localeCompare(b))
-    .map(([month, v]) => ({
-      month: new Date(month + "-01").toLocaleDateString("fr-FR", { month: "short", year: "2-digit" }),
+    .map(([, v]) => ({
+      period: v.label,
       deposited: v.deposited,
       withdrawn: v.withdrawn,
       net: v.withdrawn - v.deposited,
@@ -85,8 +106,9 @@ export default function WalletCharts({
   data: PlayerSummary[];
   transactions: WalletTx[];
 }) {
+  const [activityGranularity, setActivityGranularity] = useState<"month" | "week">("month");
   const cumData = buildCumulative(transactions);
-  const monthlyData = buildMonthly(transactions);
+  const activityData = buildActivity(transactions, activityGranularity);
   const perPlayer = data.map(d => ({ name: d.name, net: d.net, my_pnl: d.my_pnl }));
 
   const isEmpty = transactions.length === 0;
@@ -151,15 +173,32 @@ export default function WalletCharts({
         </ResponsiveContainer>
       </div>
 
-      {/* Monthly breakdown */}
+      {/* Activity breakdown — toggle week / month */}
       <div style={{ background: "var(--bg-raised)", border: "1px solid var(--border)", borderRadius: 10, padding: 20 }}>
-        <div style={{ fontSize: 12, fontWeight: 600, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 16 }}>
-          Activité Mensuelle
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+          <div style={{ fontSize: 12, fontWeight: 600, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.08em" }}>
+            {activityGranularity === "week" ? "Activité Hebdomadaire" : "Activité Mensuelle"}
+          </div>
+          <div style={{ display: "flex", border: "1px solid var(--border)", borderRadius: 8, overflow: "hidden" }}>
+            {(["week", "month"] as const).map(g => (
+              <button
+                key={g}
+                onClick={() => setActivityGranularity(g)}
+                style={{
+                  padding: "4px 12px", fontSize: 11, fontWeight: 600, cursor: "pointer", border: "none",
+                  background: activityGranularity === g ? "rgba(34,197,94,0.12)" : "transparent",
+                  color: activityGranularity === g ? "var(--green)" : "var(--text-dim)",
+                }}
+              >
+                {g === "week" ? "Semaine" : "Mois"}
+              </button>
+            ))}
+          </div>
         </div>
         <ResponsiveContainer width="100%" height={200}>
-          <BarChart data={monthlyData} margin={{ left: 4, right: 4, top: 4, bottom: 4 }}>
+          <BarChart data={activityData} margin={{ left: 4, right: 4, top: 4, bottom: 4 }}>
             <CartesianGrid {...GRID} />
-            <XAxis dataKey="month" {...AXIS} />
+            <XAxis dataKey="period" {...AXIS} />
             <YAxis {...AXIS} tickFormatter={v => v.toFixed(0)} />
             <Tooltip
               {...TOOLTIP}

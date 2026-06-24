@@ -443,6 +443,46 @@ export function getWalletKPIs(filters?: { game_name?: string; since_date?: strin
   `).get(params) as { total_deposited: number; total_withdrawn: number; total_net: number; my_total_pnl: number };
 }
 
+// Volume = total money moved (deposits + withdrawals, absolute) per game over a period, in USDT.
+// Display-only metric for the dashboard volume pie — NOT P&L, NOT net. Source-guarded like every
+// other wallet aggregate. Each (game, currency) bucket is converted to USDT via toUsdt() so we never
+// sum raw amounts across currencies (invariant #3). missing_rate flags a game whose currency has no
+// configured exchange rate (its USDT contribution is dropped to 0 but the flag surfaces in the UI).
+// NOTE: unlike getWalletKPIs / getWalletSummaryByPlayer (which scope to the player_game_deals
+// window), this counts ALL wallet movement per game regardless of deal start/end. It's a raw
+// "how much money flowed" lens, so for games with non-null deal dates the pie may exceed the
+// deposits+withdrawals shown on the P&L card. In practice most deals have start_date = NULL.
+export interface GameVolume { game_name: string; volume_usdt: number; missing_rate: boolean }
+export function getVolumeByGame(filters?: { since_date?: string; end_date?: string }): GameVolume[] {
+  const db = getDb();
+  const params: Record<string, unknown> = {};
+  let dateCond = "";
+  if (filters?.since_date) { dateCond += ` AND wt.tx_datetime >= @since_date`; params.since_date = filters.since_date; }
+  if (filters?.end_date)   { dateCond += ` AND wt.tx_datetime <= @end_date`;   params.end_date = filters.end_date; }
+  const rows = db.prepare(`
+    SELECT COALESCE(g.name, pa.name, 'Unknown') AS game_name,
+           wt.currency AS currency,
+           COALESCE(SUM(ABS(wt.amount)), 0) AS raw_volume
+    FROM wallet_transactions wt
+    LEFT JOIN games g ON g.id = wt.game_id
+    LEFT JOIN poker_apps pa ON pa.id = wt.app_id
+    WHERE (wt.source IS NULL OR wt.source != 'unknown') ${dateCond}
+    GROUP BY game_name, wt.currency
+  `).all(params) as { game_name: string; currency: string; raw_volume: number }[];
+
+  const acc: Record<string, { volume_usdt: number; missing_rate: boolean }> = {};
+  for (const r of rows) {
+    if (!acc[r.game_name]) acc[r.game_name] = { volume_usdt: 0, missing_rate: false };
+    const rate = getExchangeRate(r.currency);
+    if (rate === 0 && r.raw_volume > 0) acc[r.game_name].missing_rate = true;
+    acc[r.game_name].volume_usdt += toUsdt(r.raw_volume, r.currency);
+  }
+  return Object.entries(acc)
+    .map(([game_name, v]) => ({ game_name, volume_usdt: v.volume_usdt, missing_rate: v.missing_rate }))
+    .filter(r => r.volume_usdt > 0 || r.missing_rate)
+    .sort((a, b) => b.volume_usdt - a.volume_usdt);
+}
+
 // Cumulative Players Net P&L time series over the active period — day-grouped version of the
 // EXACT getWalletKPIs net (Σ withdrawal − deposit, joined to the deal window, source-guarded,
 // game-currency raw). The last cumulative point == getWalletKPIs.total_net for the same filters
