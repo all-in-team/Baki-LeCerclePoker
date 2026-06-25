@@ -2,9 +2,11 @@ export const dynamic = "force-dynamic";
 import { getDb } from "@/lib/db";
 import { getLockAwareSummaryByPlayer, getLockAwareKPIsWithExtras, getWalletTransactions, getPlayers, getGames, getPlayerCashouts, getPlayerGameWallets, getWalletMeresForGame, getNetPnlSeries } from "@/lib/queries";
 import { getWeekBounds, getLast12Weeks, toUTCISO, toParisDate, formatRangeLabel, isoWeekToOffset, parisLocalToUTC } from "@/lib/date-utils";
+import { getAvailableTransactions, getManualSettlementHistory } from "@/lib/manual-settlement-engine";
 import PageHeader from "@/components/PageHeader";
 import TELEClient from "@/app/akpoker/pnl/TELEClient";
 import AgencyExtras from "@/components/AgencyExtras";
+import A5ManualSettlement from "./A5ManualSettlement";
 
 function computeFilter(filter: string | undefined) {
   const f = filter ?? "current";
@@ -98,6 +100,18 @@ export default async function A5POKERPage({ searchParams }: { searchParams: Prom
 
   const filterPlayerName = playerFilter ? (players.find((p: any) => p.id === playerFilter)?.name ?? `#${playerFilter}`) : null;
 
+  // Manual settlement panel — period-INDEPENDENT (operates on ALL unsettled tx, not the page filter).
+  // Deal players for A5POKER + their currently-available (settled=0) txs + the settlement history.
+  const a5DealPlayers = a5GameId ? (getDb().prepare(`
+    SELECT p.id AS player_id, p.name AS player_name, pgd.action_pct
+    FROM player_game_deals pgd JOIN players p ON p.id = pgd.player_id
+    WHERE pgd.game_id = ? ORDER BY p.name
+  `).all(a5GameId) as { player_id: number; player_name: string; action_pct: number }[]) : [];
+  const settlementPlayers = a5GameId
+    ? a5DealPlayers.map(p => ({ ...p, available: getAvailableTransactions(a5GameId, p.player_id) }))
+    : [];
+  const settlementHistory = a5GameId ? getManualSettlementHistory(a5GameId) : [];
+
   return (
     <>
       <PageHeader
@@ -131,6 +145,7 @@ export default async function A5POKERPage({ searchParams }: { searchParams: Prom
         netSeries={netSeries}
       />
       <AgencyExtras gameKey="a5poker" />
+      <A5ManualSettlement players={settlementPlayers} history={settlementHistory} />
     </>
   );
 }
