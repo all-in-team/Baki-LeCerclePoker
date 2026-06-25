@@ -1586,4 +1586,56 @@ function initSchema(db: Database.Database) {
   } catch (err: any) {
     console.error(`[MIGRATION:add_affiliate_lead_telegram_id_v1] FAILED:`, err.message);
   }
+
+  // ── Manual settlement (action games: A5POKER / KKPOKER / AKS) — Phase 1 schema only ──
+  // Replaces the weekly auto-settlement (kept read-only) with a per-game, per-player manual
+  // tx-selection model. Phase 1 is structure only — no selection/lock/compute logic yet.
+  // Does NOT touch weekly_settlements (legacy history) or QQPK (qqpk_staking_blocks).
+  //
+  // 1) Light per-transaction settled flag + nullable back-link to the settlement that consumed it.
+  //    `settled` (0=available, 1=consumed by a manual settlement). `settlement_id` is a light link
+  //    (no settlement_lines child table for now) so a settlement's txs can be regrouped / un-locked.
+  try {
+    const fix = db.prepare(`INSERT OR IGNORE INTO _applied_fixes (name) VALUES (?)`).run("add_settlement_flag_v1");
+    if (fix.changes > 0) {
+      try { db.exec(`ALTER TABLE wallet_transactions ADD COLUMN settled INTEGER NOT NULL DEFAULT 0`); } catch {}
+      try { db.exec(`ALTER TABLE wallet_transactions ADD COLUMN settlement_id INTEGER`); } catch {}
+      // Fast lookup of unsettled tx scoped per game+player (the selection list).
+      db.exec(`CREATE INDEX IF NOT EXISTS idx_wallet_tx_unsettled ON wallet_transactions(game_id, player_id, settled);`);
+      // Fast "which txs belong to settlement N" (regroup / unlock).
+      db.exec(`CREATE INDEX IF NOT EXISTS idx_wallet_tx_settlement ON wallet_transactions(settlement_id) WHERE settlement_id IS NOT NULL;`);
+      console.log("[MIGRATION] add_settlement_flag_v1 applied");
+    }
+  } catch (err: any) {
+    console.error(`[MIGRATION:add_settlement_flag_v1] FAILED:`, err.message);
+  }
+
+  // 2) Manual settlements ledger — one row per locked/paid manual settlement (per game, per player).
+  //    On lock: insert a 'locked' row + flag the selected wallet_transactions (settled=1, settlement_id=id).
+  //    On payment: status='paid' + paid_at + tx_hash. Light back-link only (no settlement_lines table).
+  try {
+    const fix = db.prepare(`INSERT OR IGNORE INTO _applied_fixes (name) VALUES (?)`).run("add_manual_settlements_v1");
+    if (fix.changes > 0) {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS manual_settlements (
+          id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+          game_id             INTEGER NOT NULL REFERENCES games(id) ON DELETE CASCADE,
+          player_id           INTEGER NOT NULL REFERENCES players(id) ON DELETE CASCADE,
+          net_selected_usdt   REAL NOT NULL DEFAULT 0,   -- Σ withdrawals − Σ deposits of the selected txs (USDT)
+          action_pct_applied  REAL NOT NULL DEFAULT 0,   -- deal action_pct snapshot at lock time
+          amount_due_usdt     REAL NOT NULL DEFAULT 0,   -- net_selected_usdt × action_pct_applied / 100
+          status              TEXT NOT NULL DEFAULT 'locked' CHECK(status IN ('locked','paid')),
+          tx_hash             TEXT,                       -- on-chain ref of the payment, set when paid
+          notes               TEXT,
+          locked_at           TEXT NOT NULL DEFAULT (datetime('now')),
+          paid_at             TEXT,
+          created_at          TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+        CREATE INDEX IF NOT EXISTS idx_manual_settlements_scope ON manual_settlements(game_id, player_id, status);
+      `);
+      console.log("[MIGRATION] add_manual_settlements_v1 applied");
+    }
+  } catch (err: any) {
+    console.error(`[MIGRATION:add_manual_settlements_v1] FAILED:`, err.message);
+  }
 }
