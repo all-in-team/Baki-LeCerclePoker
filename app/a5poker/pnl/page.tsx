@@ -6,7 +6,7 @@ import { getAvailableTransactions, getManualSettlementHistory } from "@/lib/manu
 import PageHeader from "@/components/PageHeader";
 import TELEClient from "@/app/akpoker/pnl/TELEClient";
 import AgencyExtras from "@/components/AgencyExtras";
-import A5ManualSettlement from "./A5ManualSettlement";
+import { previewAction, lockAction, markPaidAction, unlockAction } from "./actions";
 
 function computeFilter(filter: string | undefined) {
   const f = filter ?? "current";
@@ -107,10 +107,12 @@ export default async function A5POKERPage({ searchParams }: { searchParams: Prom
     FROM player_game_deals pgd JOIN players p ON p.id = pgd.player_id
     WHERE pgd.game_id = ? ORDER BY p.name
   `).all(a5GameId) as { player_id: number; player_name: string; action_pct: number }[]) : [];
-  const settlementPlayers = a5GameId
-    ? a5DealPlayers.map(p => ({ ...p, available: getAvailableTransactions(a5GameId, p.player_id) }))
-    : [];
   const settlementHistory = a5GameId ? getManualSettlementHistory(a5GameId) : [];
+  // Maps consumed by TELEClient's in-row settlement block (prop-gated).
+  const availableByPlayer: Record<number, any[]> = {};
+  if (a5GameId) for (const p of a5DealPlayers) availableByPlayer[p.player_id] = getAvailableTransactions(a5GameId, p.player_id);
+  const settlementByPlayer: Record<number, any[]> = {};
+  for (const s of settlementHistory as any[]) (settlementByPlayer[s.player_id] = settlementByPlayer[s.player_id] || []).push(s);
 
   return (
     <>
@@ -143,9 +145,16 @@ export default async function A5POKERPage({ searchParams }: { searchParams: Prom
         useLegacyWalletFallback={false}
         gameId={a5GameId ?? 6}
         netSeries={netSeries}
+        settlement={{
+          availableByPlayer,
+          byPlayer: settlementByPlayer,
+          preview: previewAction,
+          lock: lockAction,
+          markPaid: markPaidAction,
+          unlock: unlockAction,
+        }}
       />
       <AgencyExtras gameKey="a5poker" />
-      <A5ManualSettlement players={settlementPlayers} history={settlementHistory} />
     </>
   );
 }
