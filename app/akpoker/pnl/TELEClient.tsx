@@ -2,7 +2,7 @@
 
 import { Fragment, useState } from "react";
 import { useRouter } from "next/navigation";
-import { ArrowDownLeft, ArrowUpRight, Plus, Trash2, Wallet, TrendingUp, RefreshCw, Settings2, ExternalLink, Save, X, Pencil, ChevronDown, ChevronRight, Calendar, Clock, Scale, Lock, Unlock, BadgeCheck, AlertTriangle } from "lucide-react";
+import { ArrowDownLeft, ArrowUpRight, Plus, Trash2, Wallet, TrendingUp, RefreshCw, Settings2, ExternalLink, Save, X, Pencil, ChevronDown, ChevronRight, Calendar, Clock } from "lucide-react";
 import StatCard from "@/components/StatCard";
 import Btn from "@/components/Btn";
 import Modal from "@/components/Modal";
@@ -31,32 +31,7 @@ interface KPIs { total_deposited: number; total_withdrawn: number; total_net: nu
 interface WalletMere { id: number; address: string; label: string | null; }
 interface WeekOpt { isoWeek: string; label: string }
 
-// ── Manual settlement (optional, prop-gated — only games that pass `settlement`) ──
-interface AvailableTx { id: number; tx_datetime: string; tx_date: string; type: "deposit" | "withdrawal"; amount: number; currency: string; source: string | null; }
-interface SettlementRow { id: number; player_id: number; player_name: string; net_selected_usdt: number; action_pct_applied: number; amount_due_usdt: number; status: "locked" | "paid"; tx_hash: string | null; notes: string | null; locked_at: string; paid_at: string | null; created_at: string; tx_count: number; }
-interface SettlementPreview { ok: boolean; error?: string; tx_count: number; period_start: string | null; period_end: string | null; total_deposited_usdt: number; total_withdrawn_usdt: number; net_selected_usdt: number; action_pct: number; amount_due_usdt: number; }
-interface SettlementBundle {
-  availableByPlayer: Record<number, AvailableTx[]>;
-  byPlayer: Record<number, SettlementRow[]>;
-  preview: (playerId: number, txIds: number[]) => Promise<SettlementPreview>;
-  lock: (playerId: number, txIds: number[]) => Promise<{ ok: boolean; error?: string }>;
-  markPaid: (settlementId: number, txHash?: string) => Promise<{ ok: boolean; error?: string }>;
-  unlock: (settlementId: number) => Promise<{ ok: boolean; error?: string }>;
-}
-
 const TRONSCAN = "https://tronscan.org/#/address/";
-const TRONSCAN_TX = "https://tronscan.org/#/transaction/";
-
-// Display-only helpers for the settlement block (no money math — invariant #2).
-function dueLabel(due: number): { text: string; color: string } {
-  if (Math.abs(due) < 0.005) return { text: "Rien à verser", color: "var(--text-dim)" };
-  if (due > 0) return { text: `Cercle verse ${Math.abs(due).toLocaleString("fr-FR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} USDT`, color: "#EF4444" };
-  return { text: `Joueur verse ${Math.abs(due).toLocaleString("fr-FR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} USDT`, color: "#10B981" };
-}
-function fmtDay(s: string | null): string {
-  if (!s) return "—";
-  return new Date(s).toLocaleDateString("fr-FR", { day: "2-digit", month: "short", year: "2-digit", timeZone: "UTC" });
-}
 
 function fmt(n: number) {
   const abs = Math.abs(n).toLocaleString("fr-FR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -78,7 +53,6 @@ export default function TELEClient({
   useLegacyWalletFallback = true,
   gameId,
   netSeries = [],
-  settlement,
 }: {
   initialSummary: PlayerGameRow[];
   kpis: KPIs;
@@ -97,7 +71,6 @@ export default function TELEClient({
   gameLabel?: string;
   useLegacyWalletFallback?: boolean;
   gameId: number;
-  settlement?: SettlementBundle;
 }) {
   const router = useRouter();
   const [syncing, setSyncing] = useState(false);
@@ -132,12 +105,6 @@ export default function TELEClient({
   const [customStartTime, setCustomStartTime] = useState("00:00");
   const [customEnd, setCustomEnd] = useState("");
   const [customEndTime, setCustomEndTime] = useState("23:59");
-  // Manual settlement state (only used when `settlement` prop is provided)
-  const [settleSel, setSettleSel] = useState<Record<number, Set<number>>>({});
-  const [recap, setRecap] = useState<{ playerId: number; playerName: string; ids: number[]; preview: SettlementPreview | null } | null>(null);
-  const [settleBusy, setSettleBusy] = useState(false);
-  const [payHash, setPayHash] = useState<Record<number, string>>({});
-  const [rowBusy, setRowBusy] = useState<number | null>(null);
 
   function navigate(filter: string) {
     setWeekOpen(false);
@@ -288,59 +255,6 @@ export default function TELEClient({
       await fetch("/api/games/deals", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ player_id: playerId, game_id: teleGame.id, action_pct: action, rakeback_pct: rb, start_date: newPlayer.start_date || null }) });
       window.location.reload();
     } finally { setAddPlayerBusy(false); }
-  }
-
-  // ── Manual settlement handlers (no-ops if `settlement` absent) ──
-  function toggleSettleTx(playerId: number, txId: number) {
-    setSettleSel(prev => {
-      const set = new Set(prev[playerId] ?? []);
-      if (set.has(txId)) set.delete(txId); else set.add(txId);
-      return { ...prev, [playerId]: set };
-    });
-  }
-  function setAllSettleTx(playerId: number, ids: number[]) {
-    setSettleSel(prev => ({ ...prev, [playerId]: new Set(ids) }));
-  }
-  async function openRecap(playerId: number, playerName: string) {
-    if (!settlement) return;
-    const ids = [...(settleSel[playerId] ?? [])];
-    if (ids.length === 0) { alert("Sélectionne au moins une transaction."); return; }
-    setSettleBusy(true);
-    setRecap({ playerId, playerName, ids, preview: null });
-    try {
-      const preview = await settlement.preview(playerId, ids);
-      setRecap({ playerId, playerName, ids, preview });
-    } finally { setSettleBusy(false); }
-  }
-  async function confirmLock() {
-    if (!settlement || !recap?.preview?.ok) return;
-    setSettleBusy(true);
-    try {
-      const res = await settlement.lock(recap.playerId, recap.ids);
-      if (!res.ok) alert(res.error ?? "Erreur lock");
-      setSettleSel(prev => ({ ...prev, [recap.playerId]: new Set() }));
-      setRecap(null);
-      router.refresh();
-    } finally { setSettleBusy(false); }
-  }
-  async function paySettlement(settlementId: number) {
-    if (!settlement) return;
-    setRowBusy(settlementId);
-    try {
-      const res = await settlement.markPaid(settlementId, payHash[settlementId]?.trim() || undefined);
-      if (!res.ok) { alert(res.error ?? "Erreur paiement"); return; }
-      router.refresh();
-    } finally { setRowBusy(null); }
-  }
-  async function unlockSettlement(settlementId: number) {
-    if (!settlement) return;
-    if (!confirm("Délock ce règlement ? Les transactions redeviennent sélectionnables.")) return;
-    setRowBusy(settlementId);
-    try {
-      const res = await settlement.unlock(settlementId);
-      if (!res.ok) { alert(res.error ?? "Erreur délock"); return; }
-      router.refresh();
-    } finally { setRowBusy(null); }
   }
 
   const myPnlAccent: "gold" | "red" = kpis.my_total_pnl >= 0 ? "gold" : "red";
@@ -529,10 +443,6 @@ export default function TELEClient({
                 const player = players.find(p => p.id === row.player_id);
                 const walletGame = useLegacyWalletFallback ? (player?.tron_address ?? null) : null;
                 const playerTxs = scopedTransactions.filter(t => t.player_id === row.player_id);
-                const availTx = settlement?.availableByPlayer[row.player_id] ?? [];
-                const playerSettlements = settlement?.byPlayer[row.player_id] ?? [];
-                const lockedCount = playerSettlements.filter(s => s.status === "locked").length;
-                const sel = settleSel[row.player_id] ?? new Set<number>();
                 const rowOpen = isExpanded || isTxOpen;
                 return (
                   <Fragment key={row.player_id}>
@@ -542,12 +452,6 @@ export default function TELEClient({
                         {isTxOpen ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
                         {row.player_name}
                       </button>
-                      {settlement && availTx.length > 0 && (
-                        <span title="Transactions à régler" style={{ marginLeft: 8, fontSize: 10, fontWeight: 700, color: "#F5C518", background: "rgba(245,197,24,0.12)", border: "1px solid rgba(245,197,24,0.3)", padding: "2px 7px", borderRadius: 10, whiteSpace: "nowrap" }}>{availTx.length} à régler</span>
-                      )}
-                      {settlement && lockedCount > 0 && (
-                        <span title="Règlements en attente de paiement" style={{ marginLeft: 6, fontSize: 10, fontWeight: 700, color: "#10B981", background: "rgba(16,185,129,0.12)", border: "1px solid rgba(16,185,129,0.3)", padding: "2px 7px", borderRadius: 10, whiteSpace: "nowrap" }}>{lockedCount} à payer</span>
-                      )}
                     </td>
                     <td style={{ padding: "12px 16px", fontSize: 13, fontWeight: 600, color: netC }}>{row.net === 0 ? "—" : fmt(row.net)}</td>
                     <td style={{ padding: "12px 16px", fontSize: 14, fontWeight: 700, color: myC }}>{row.my_pnl === 0 ? "—" : fmt(row.my_pnl)}</td>
@@ -710,69 +614,6 @@ export default function TELEClient({
                           <button onClick={() => addManualTx(row.player_id, row.game_id)} disabled={!manualTx.amount || Number(manualTx.amount) <= 0} style={{ display: "flex", alignItems: "center", gap: 5, padding: "6px 12px", borderRadius: 6, fontSize: 12, fontWeight: 600, background: "rgba(34,197,94,0.12)", color: "var(--green)", border: "1px solid rgba(34,197,94,0.3)", cursor: "pointer", whiteSpace: "nowrap", opacity: !manualTx.amount || Number(manualTx.amount) <= 0 ? 0.4 : 1 }}><Plus size={12} /> Ajouter</button>
                         </div>
                         )}
-                        {settlement && (
-                          <div style={{ marginTop: 14, paddingTop: 14, borderTop: "2px solid var(--border)" }}>
-                            <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
-                              <Scale size={14} color="#F5C518" />
-                              <span style={{ fontSize: 12, fontWeight: 700, color: "var(--text)", textTransform: "uppercase", letterSpacing: "0.06em" }}>Règlement manuel</span>
-                            </div>
-                            {availTx.length === 0 ? (
-                              <div style={{ fontSize: 12, color: "var(--text-dim)", padding: "2px 0 8px" }}>Aucune transaction à régler (tout est settled).</div>
-                            ) : (
-                              <div style={{ marginBottom: 12 }}>
-                                <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
-                                  <button onClick={() => setAllSettleTx(row.player_id, availTx.map(t => t.id))} style={ghostMini}>Tout cocher</button>
-                                  <button onClick={() => setSettleSel(prev => ({ ...prev, [row.player_id]: new Set() }))} style={ghostMini}>Tout décocher</button>
-                                  <div style={{ flex: 1 }} />
-                                  <button onClick={() => openRecap(row.player_id, row.player_name)} disabled={settleBusy || sel.size === 0} style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "7px 14px", borderRadius: 7, fontSize: 12, fontWeight: 700, background: sel.size > 0 ? "rgba(245,197,24,0.15)" : "var(--bg-elevated)", color: sel.size > 0 ? "#F5C518" : "var(--text-dim)", border: `1px solid ${sel.size > 0 ? "rgba(245,197,24,0.4)" : "var(--border)"}`, cursor: sel.size > 0 ? "pointer" : "not-allowed", whiteSpace: "nowrap" }}>
-                                    <Scale size={13} /> Régler la sélection ({sel.size})
-                                  </button>
-                                </div>
-                                {availTx.map(tx => {
-                                  const isDep = tx.type === "deposit";
-                                  const checked = sel.has(tx.id);
-                                  return (
-                                    <div key={tx.id} onClick={() => toggleSettleTx(row.player_id, tx.id)} style={{ display: "grid", gridTemplateColumns: "28px 100px 120px 1fr 36px", gap: 10, alignItems: "center", padding: "7px 8px", borderRadius: 6, cursor: "pointer", background: checked ? "rgba(34,197,94,0.08)" : "transparent", borderBottom: "1px solid var(--border)" }}>
-                                      <input type="checkbox" checked={checked} onChange={() => toggleSettleTx(row.player_id, tx.id)} onClick={e => e.stopPropagation()} style={{ cursor: "pointer", accentColor: "#10B981" }} />
-                                      <span style={{ fontSize: 12, color: "var(--text-muted)" }}>{(tx.tx_datetime ?? tx.tx_date).slice(0, 10)}</span>
-                                      <span style={{ display: "inline-flex", alignItems: "center", gap: 5, color: isDep ? "#f87171" : "var(--green)", fontWeight: 600, fontSize: 12 }}>{isDep ? <ArrowDownLeft size={13} /> : <ArrowUpRight size={13} />}{isDep ? "Dépôt" : "Retrait"}</span>
-                                      <span style={{ fontSize: 13, fontWeight: 700, color: isDep ? "#f87171" : "var(--green)" }}>{isDep ? "−" : "+"}{tx.amount.toLocaleString("fr-FR", { minimumFractionDigits: 2 })} {tx.currency}</span>
-                                      <span style={{ textAlign: "center", fontSize: 13 }} title={tx.source ?? "?"}>{tx.source === "sync" ? "🔗" : tx.source === "manual" ? "✍️" : "⚠️"}</span>
-                                    </div>
-                                  );
-                                })}
-                              </div>
-                            )}
-                            {playerSettlements.length > 0 && (
-                              <div style={{ marginTop: 6 }}>
-                                <div style={{ fontSize: 10, fontWeight: 700, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 6 }}>Règlements du joueur</div>
-                                {playerSettlements.map(s => {
-                                  const reg = dueLabel(s.amount_due_usdt);
-                                  const isLocked = s.status === "locked";
-                                  return (
-                                    <div key={s.id} style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", padding: "8px 10px", borderRadius: 6, marginBottom: 6, background: "var(--bg-base)", border: `1px solid ${isLocked ? "rgba(245,197,24,0.25)" : "var(--border)"}` }}>
-                                      <span style={{ display: "inline-flex", alignItems: "center", gap: 5, fontSize: 11, fontWeight: 700, color: isLocked ? "#F5C518" : "#10B981" }}>
-                                        {isLocked ? <Lock size={12} /> : <BadgeCheck size={12} />}{isLocked ? "Locked" : "Payé"}
-                                      </span>
-                                      <span style={{ fontSize: 11, color: "var(--text-muted)" }}>{s.tx_count} tx · {fmtDay(isLocked ? s.locked_at : s.paid_at)}</span>
-                                      <span style={{ fontSize: 12, fontWeight: 600, color: reg.color }}>{reg.text}</span>
-                                      <div style={{ flex: 1 }} />
-                                      {isLocked ? (
-                                        <>
-                                          <input value={payHash[s.id] ?? ""} onChange={e => setPayHash(h => ({ ...h, [s.id]: e.target.value }))} placeholder="tx_hash (option.)" spellCheck={false} style={{ width: 130, padding: "5px 8px", borderRadius: 6, fontSize: 11, fontFamily: "monospace", background: "var(--bg-elevated)", color: "var(--text)", border: "1px solid var(--border)", outline: "none" }} />
-                                          <button onClick={() => paySettlement(s.id)} disabled={rowBusy === s.id} style={{ display: "inline-flex", alignItems: "center", gap: 5, padding: "6px 10px", borderRadius: 6, fontSize: 11, fontWeight: 600, background: "rgba(34,197,94,0.12)", color: "var(--green)", border: "1px solid rgba(34,197,94,0.3)", cursor: "pointer" }}><BadgeCheck size={12} /> Payé</button>
-                                          <button onClick={() => unlockSettlement(s.id)} disabled={rowBusy === s.id} title="Délock" style={{ display: "inline-flex", alignItems: "center", padding: "6px 8px", borderRadius: 6, background: "var(--bg-elevated)", color: "var(--text-muted)", border: "1px solid var(--border)", cursor: "pointer" }}><Unlock size={12} /></button>
-                                        </>
-                                      ) : (
-                                        s.tx_hash ? <a href={TRONSCAN_TX + s.tx_hash} target="_blank" rel="noreferrer" style={{ display: "inline-flex", alignItems: "center", gap: 3, color: "#38bdf8", textDecoration: "none", fontSize: 11, fontFamily: "monospace" }}>{s.tx_hash.slice(0, 8)}…<ExternalLink size={10} /></a> : <span style={{ fontSize: 11, color: "var(--text-dim)" }}>—</span>
-                                      )}
-                                    </div>
-                                  );
-                                })}
-                              </div>
-                            )}
-                          </div>
-                        )}
                       </td>
                     </tr>
                   )}
@@ -894,64 +735,7 @@ export default function TELEClient({
           })}
         </div>
       </Modal>
-
-      {/* Manual settlement recap modal */}
-      {settlement && (
-        <Modal open={!!recap} onClose={() => setRecap(null)} title="Régler la sélection — récapitulatif">
-          {recap && (
-            <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-              {!recap.preview ? (
-                <div style={{ padding: 14, color: "var(--text-muted)", fontSize: 13 }}>Calcul…</div>
-              ) : !recap.preview.ok ? (
-                <div style={{ padding: 14, borderRadius: 8, background: "rgba(239,68,68,0.1)", color: "#EF4444", fontSize: 13, display: "flex", gap: 8, alignItems: "center" }}>
-                  <AlertTriangle size={16} /> {recap.preview.error ?? "Impossible de régler cette sélection."}
-                </div>
-              ) : (
-                <>
-                  <div style={{ fontSize: 13, color: "var(--text)" }}>
-                    <b>{recap.playerName}</b> · {recap.preview.tx_count} transaction{recap.preview.tx_count > 1 ? "s" : ""}
-                    <span style={{ color: "var(--text-dim)" }}> · {fmtDay(recap.preview.period_start)} → {fmtDay(recap.preview.period_end)}</span>
-                  </div>
-                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, fontSize: 12 }}>
-                    <RecapLine label="Total dépôts" value={`${Math.abs(recap.preview.total_deposited_usdt).toLocaleString("fr-FR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} USDT`} />
-                    <RecapLine label="Total retraits" value={`${Math.abs(recap.preview.total_withdrawn_usdt).toLocaleString("fr-FR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} USDT`} />
-                    <RecapLine label="Net (retraits − dépôts)" value={fmt(recap.preview.net_selected_usdt) + " USDT"} />
-                    <RecapLine label="Action %" value={`${recap.preview.action_pct}%`} />
-                  </div>
-                  <div style={{ padding: 14, borderRadius: 8, background: "var(--bg-base)", border: "1px solid var(--border)" }}>
-                    <div style={{ fontSize: 11, color: "var(--text-muted)", marginBottom: 4 }}>Montant dû (net × action%)</div>
-                    <div style={{ fontSize: 18, fontWeight: 700, color: dueLabel(recap.preview.amount_due_usdt).color }}>
-                      {dueLabel(recap.preview.amount_due_usdt).text}
-                    </div>
-                    <div style={{ fontSize: 11, color: "var(--text-dim)", marginTop: 4 }}>{fmt(recap.preview.amount_due_usdt)} USDT</div>
-                  </div>
-                  <div style={{ fontSize: 11, color: "var(--text-dim)" }}>
-                    Après lock, ces {recap.preview.tx_count} transactions sont figées (settled) et ne pourront plus entrer dans un autre règlement.
-                  </div>
-                </>
-              )}
-              <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 4 }}>
-                <Btn variant="secondary" onClick={() => setRecap(null)}>Annuler</Btn>
-                {recap.preview?.ok && (
-                  <Btn variant="primary" onClick={confirmLock} disabled={settleBusy}><Lock size={14} /> {settleBusy ? "…" : "Lock"}</Btn>
-                )}
-              </div>
-            </div>
-          )}
-        </Modal>
-      )}
     </>
-  );
-}
-
-const ghostMini: React.CSSProperties = { padding: "4px 9px", borderRadius: 6, fontSize: 11, fontWeight: 600, background: "var(--bg-elevated)", color: "var(--text-muted)", border: "1px solid var(--border)", cursor: "pointer" };
-
-function RecapLine({ label, value }: { label: string; value: string }) {
-  return (
-    <div style={{ display: "flex", justifyContent: "space-between", padding: "6px 0", borderBottom: "1px solid var(--border)" }}>
-      <span style={{ color: "var(--text-muted)" }}>{label}</span>
-      <span style={{ color: "var(--text)", fontWeight: 600, fontVariantNumeric: "tabular-nums" }}>{value}</span>
-    </div>
   );
 }
 

@@ -1,158 +1,73 @@
 export const dynamic = "force-dynamic";
 import { getDb } from "@/lib/db";
-import { getLockAwareSummaryByPlayer, getLockAwareKPIsWithExtras, getWalletTransactions, getPlayers, getGames, getPlayerCashouts, getPlayerGameWallets, getWalletMeresForGame, getNetPnlSeries } from "@/lib/queries";
-import { getWeekBounds, getLast12Weeks, toUTCISO, toParisDate, formatRangeLabel, isoWeekToOffset, parisLocalToUTC } from "@/lib/date-utils";
+import {
+  getWalletSummaryByPlayer, getWalletKPIs, getNetPnlSeries,
+  getPlayerCashouts, getPlayerGameWallets, getWalletMeresForGame,
+} from "@/lib/queries";
 import { getAvailableTransactions, getManualSettlementHistory } from "@/lib/manual-settlement-engine";
 import PageHeader from "@/components/PageHeader";
-import TELEClient from "@/app/akpoker/pnl/TELEClient";
 import AgencyExtras from "@/components/AgencyExtras";
-import { previewAction, lockAction, markPaidAction, unlockAction } from "./actions";
+import A5SettlementClient from "./A5SettlementClient";
 
-function computeFilter(filter: string | undefined) {
-  const f = filter ?? "current";
-  if (f === "lifetime") return { key: "lifetime", startDate: undefined, endDate: undefined, rangeLabel: "Toutes les transactions" };
-  if (f === "30d") {
-    const end = new Date();
-    const start = new Date(end.getTime() - 30 * 86400000);
-    return { key: "30d", startDate: toUTCISO(start), endDate: toUTCISO(end), rangeLabel: formatRangeLabel(start, end) };
-  }
-  if (f === "last") {
-    const { start, end } = getWeekBounds(-1);
-    return { key: "last", startDate: toUTCISO(start), endDate: toUTCISO(end), rangeLabel: formatRangeLabel(start, end) };
-  }
-  if (/^\d{4}-W\d{2}$/.test(f)) {
-    const offset = isoWeekToOffset(f);
-    if (offset !== null && offset < 0) {
-      const { start, end } = getWeekBounds(offset);
-      return { key: f, startDate: toUTCISO(start), endDate: toUTCISO(end), rangeLabel: formatRangeLabel(start, end) };
-    }
-  }
-  if (f.startsWith("custom:")) {
-    const parts = f.slice(7).split("~");
-    if (parts.length === 2) {
-      const [sd, ed] = parts;
-      const sm = sd.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})$/);
-      const em = ed.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})$/);
-      if (sm && em) {
-        const start = parisLocalToUTC(+sm[1], +sm[2], +sm[3], +sm[4], +sm[5], 0, 0);
-        const end = parisLocalToUTC(+em[1], +em[2], +em[3], +em[4], +em[5], 59, 0);
-        if (end >= start) {
-          return { key: f, startDate: toUTCISO(start), endDate: toUTCISO(end), rangeLabel: `${sd.replace("T", " ")} → ${ed.replace("T", " ")} (Paris)` };
-        }
-      }
-    }
-  }
-  if (/^\d{4}-\d{2}-\d{2}$/.test(f)) {
-    const target = new Date(f + "T00:00:00Z");
-    const { start: currentWeekStart } = getWeekBounds(0);
-    const currentMonday = new Date(toParisDate(toUTCISO(currentWeekStart)) + "T00:00:00Z");
-    let offset = Math.round((target.getTime() - currentMonday.getTime()) / (7 * 86400000));
-    let bounds = getWeekBounds(offset);
-    if (toParisDate(toUTCISO(bounds.start)) !== f) {
-      offset += toParisDate(toUTCISO(bounds.start)) < f ? 1 : -1;
-      bounds = getWeekBounds(offset);
-    }
-    return { key: f, startDate: toUTCISO(bounds.start), endDate: toUTCISO(bounds.end), rangeLabel: formatRangeLabel(bounds.start, bounds.end) };
-  }
-  const { start, end } = getWeekBounds(0);
-  const now = new Date();
-  return { key: "current", startDate: toUTCISO(start), endDate: toUTCISO(now < end ? now : end), rangeLabel: formatRangeLabel(start, end) };
-}
-
-export default async function A5POKERPage({ searchParams }: { searchParams: Promise<{ filter?: string; player?: string }> }) {
-  const params = await searchParams;
-  const playerFilter = params.player ? parseInt(params.player) : undefined;
-  const { key, startDate, endDate, rangeLabel } = computeFilter(params.filter);
-  const weeks = getLast12Weeks();
-
-  const filters = { game_name: "A5POKER" as const, since_date: startDate, end_date: endDate };
-  let summary = getLockAwareSummaryByPlayer(filters) as any[];
-  // my_total_pnl includes agency extras (game-level wins/losses outside deals)
-  let kpis = getLockAwareKPIsWithExtras(filters, "a5poker");
-  let transactions = getWalletTransactions({ ...filters, limit: 500 }) as any[];
-
-  if (playerFilter) {
-    summary = summary.filter((r: any) => r.player_id === playerFilter);
-    transactions = transactions.filter((t: any) => t.player_id === playerFilter);
-    // per-player view: extras are agency-level (no player_id) → excluded here
-    kpis = {
-      total_deposited: summary.reduce((s: number, r: any) => s + (r.total_deposited ?? 0), 0),
-      total_withdrawn: summary.reduce((s: number, r: any) => s + (r.total_withdrawn ?? 0), 0),
-      total_net: summary.reduce((s: number, r: any) => s + (r.net ?? 0), 0),
-      my_total_pnl: summary.reduce((s: number, r: any) => s + (r.my_pnl ?? 0), 0),
-      extras_net: 0,
-    };
-  }
-
-  const netSeries = getNetPnlSeries({ ...filters, player_id: playerFilter }) as { day: string; cumulative_net: number }[];
-
-  const players = getPlayers() as any[];
-  const games = (getGames() as any[]).filter((g) => g.name === "A5POKER");
+export default async function A5POKERPage() {
   const a5GameId = (getDb().prepare(`SELECT id FROM games WHERE name = 'A5POKER'`).get() as { id: number } | undefined)?.id;
-  const walletMeres = a5GameId ? getWalletMeresForGame(a5GameId) : [];
-
-  const cashoutsByPlayer: Record<number, { id: number; address: string; label: string | null }[]> = {};
-  const gameWalletsByPlayer: Record<number, { id: number; address: string; label: string | null }[]> = {};
-  for (const p of players) {
-    cashoutsByPlayer[p.id] = a5GameId ? getPlayerCashouts(p.id, a5GameId) : [];
-    gameWalletsByPlayer[p.id] = a5GameId ? getPlayerGameWallets(p.id, a5GameId) : [];
+  if (!a5GameId) {
+    return <PageHeader title="A5POKER — P&L" subtitle="Game A5POKER introuvable en base." />;
   }
 
-  const filterPlayerName = playerFilter ? (players.find((p: any) => p.id === playerFilter)?.name ?? `#${playerFilter}`) : null;
+  // Lifetime data (the QQPK-style client is period-independent; settlement operates on all unsettled tx).
+  const summary = getWalletSummaryByPlayer({ game_name: "A5POKER" }) as any[];
+  const kpis = getWalletKPIs({ game_name: "A5POKER" });
+  const netSeries = getNetPnlSeries({ game_name: "A5POKER" }) as { day: string; cumulative_net: number }[];
 
-  // Manual settlement panel — period-INDEPENDENT (operates on ALL unsettled tx, not the page filter).
-  // Deal players for A5POKER + their currently-available (settled=0) txs + the settlement history.
-  const a5DealPlayers = a5GameId ? (getDb().prepare(`
-    SELECT p.id AS player_id, p.name AS player_name, pgd.action_pct
+  // Deal players (incl. those with no tx yet) — the table rows.
+  const dealPlayers = getDb().prepare(`
+    SELECT p.id AS player_id, p.name AS player_name, pgd.action_pct, pgd.start_date
     FROM player_game_deals pgd JOIN players p ON p.id = pgd.player_id
     WHERE pgd.game_id = ? ORDER BY p.name
-  `).all(a5GameId) as { player_id: number; player_name: string; action_pct: number }[]) : [];
-  const settlementHistory = a5GameId ? getManualSettlementHistory(a5GameId) : [];
-  // Maps consumed by TELEClient's in-row settlement block (prop-gated).
+  `).all(a5GameId) as { player_id: number; player_name: string; action_pct: number; start_date: string | null }[];
+
+  const summaryByPid = new Map(summary.map((s) => [s.player_id, s]));
+  const rows = dealPlayers.map((p) => {
+    const s = summaryByPid.get(p.player_id);
+    return {
+      player_id: p.player_id, player_name: p.player_name,
+      action_pct: p.action_pct, start_date: p.start_date,
+      deposited: s?.total_deposited ?? 0, withdrawn: s?.total_withdrawn ?? 0,
+      net: s?.net ?? 0, my_pnl: s?.my_pnl ?? 0,
+    };
+  });
+
+  const walletMeres = getWalletMeresForGame(a5GameId);
+  const cashoutsByPlayer: Record<number, any[]> = {};
+  const gameWalletsByPlayer: Record<number, any[]> = {};
   const availableByPlayer: Record<number, any[]> = {};
-  if (a5GameId) for (const p of a5DealPlayers) availableByPlayer[p.player_id] = getAvailableTransactions(a5GameId, p.player_id);
-  const settlementByPlayer: Record<number, any[]> = {};
-  for (const s of settlementHistory as any[]) (settlementByPlayer[s.player_id] = settlementByPlayer[s.player_id] || []).push(s);
+  for (const p of dealPlayers) {
+    cashoutsByPlayer[p.player_id] = getPlayerCashouts(p.player_id, a5GameId);
+    gameWalletsByPlayer[p.player_id] = getPlayerGameWallets(p.player_id, a5GameId);
+    availableByPlayer[p.player_id] = getAvailableTransactions(a5GameId, p.player_id);
+  }
+
+  const history = getManualSettlementHistory(a5GameId);
+  const settlementsByPlayer: Record<number, any[]> = {};
+  for (const s of history as any[]) (settlementsByPlayer[s.player_id] = settlementsByPlayer[s.player_id] || []).push(s);
 
   return (
     <>
       <PageHeader
-        title="A5POKER — P&L"
-        subtitle="Dépôts & retraits par joueur — P&L calculé selon le deal de chaque joueur"
+        title="A5POKER — P&L & Règlements"
+        subtitle="Wallets, transactions et règlements manuels par joueur — déplie un joueur pour tout gérer"
       />
-      {filterPlayerName && (
-        <div style={{ padding: "0 28px 12px", display: "flex", alignItems: "center", gap: 8 }}>
-          <span style={{ background: "rgba(212,175,55,0.15)", color: "#D4AF37", padding: "4px 12px", borderRadius: 6, fontSize: 12, fontWeight: 600 }}>
-            Filtré : {filterPlayerName}
-          </span>
-          <a href="/a5poker/pnl" style={{ fontSize: 11, color: "var(--text-muted)", textDecoration: "none" }}>✕ Retirer le filtre</a>
-        </div>
-      )}
-      <TELEClient
-        initialSummary={summary}
+      <A5SettlementClient
+        rows={rows}
         kpis={kpis}
-        initialTransactions={transactions}
-        players={players}
-        games={games}
+        netSeries={netSeries}
+        availableByPlayer={availableByPlayer}
+        settlementsByPlayer={settlementsByPlayer}
         cashoutsByPlayer={cashoutsByPlayer}
         gameWalletsByPlayer={gameWalletsByPlayer}
         walletMeres={walletMeres}
-        activeFilter={key}
-        rangeLabel={rangeLabel}
-        weeks={weeks.map(w => ({ isoWeek: w.isoWeek, label: w.label }))}
-        basePath="/a5poker/pnl"
-        gameLabel="A5POKER"
-        useLegacyWalletFallback={false}
-        gameId={a5GameId ?? 6}
-        netSeries={netSeries}
-        settlement={{
-          availableByPlayer,
-          byPlayer: settlementByPlayer,
-          preview: previewAction,
-          lock: lockAction,
-          markPaid: markPaidAction,
-          unlock: unlockAction,
-        }}
+        gameId={a5GameId}
       />
       <AgencyExtras gameKey="a5poker" />
     </>
