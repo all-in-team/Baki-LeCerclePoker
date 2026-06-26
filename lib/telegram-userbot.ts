@@ -1106,3 +1106,114 @@ export async function syncGroupStructure(chatId: number): Promise<SyncGroupResul
     return result;
   }
 }
+
+// ── Topic restructure (Phase B/C: delete Deals/Clubs, close Alertes/Dépôt/Liveplay) ──
+
+const RESTRUCTURE_DELETE = ["Deals", "Clubs"];          // hard delete (irreversible)
+const RESTRUCTURE_CLOSE = ["Alertes", "Dépôt", "Liveplay"]; // read-only for members
+
+// Read-only snapshot of a group's forum topics (for the dry-run + idempotency checks).
+export async function getGroupTopicsState(chatId: number): Promise<{
+  ok: boolean; topics: { title: string; id: number; closed: boolean }[]; error: string | null;
+}> {
+  const client = await getClient();
+  if (!client) return { ok: false, topics: [], error: "Userbot not connected" };
+  try {
+    const channelId = -(chatId + 1000000000000);
+    const channelPeer = await client.getInputEntity(
+      new Api.PeerChannel({ channelId: BigInt(channelId) as any })
+    ) as unknown as Api.InputChannel;
+    const r = await client.invoke(new Api.channels.GetForumTopics({
+      channel: channelPeer, offsetDate: 0, offsetId: 0, offsetTopic: 0, limit: 100,
+    }));
+    const topics = (((r as any).topics ?? []) as any[])
+      .filter(t => t.title)
+      .map(t => ({ title: t.title as string, id: toNum(t.id), closed: !!t.closed }));
+    return { ok: true, topics, error: null };
+  } catch (e: any) {
+    return { ok: false, topics: [], error: errMsg(e) };
+  }
+}
+
+export interface RestructureResult {
+  chat_id: number;
+  ok: boolean;
+  botInvited: boolean;
+  botPromoted: boolean;
+  deleted: string[];   // titles actually deleted
+  closed: string[];    // titles actually closed
+  skipped: string[];   // already absent / already closed
+  errors: string[];
+}
+
+// Restructure ONE existing group: ensure bot admin → delete Deals/Clubs → close Alertes/Dépôt/Liveplay.
+// Idempotent (absent → skip, already-closed → skip). Bot admin is ensured BEFORE closing so the
+// closed topics don't cut the bot's own alerts; if the bot can't be promoted, we abort without closing.
+export async function restructureGroupTopics(chatId: number): Promise<RestructureResult> {
+  const res: RestructureResult = { chat_id: chatId, ok: false, botInvited: false, botPromoted: false, deleted: [], closed: [], skipped: [], errors: [] };
+  const client = await getClient();
+  if (!client) { res.errors.push("Userbot not connected"); return res; }
+
+  // 0) Ensure bot admin BEFORE closing (closed topics block non-admins; the bot must stay able to post).
+  const bot = await inviteAndPromoteBot(chatId);
+  res.botInvited = bot.invited;
+  res.botPromoted = bot.promoted;
+  if (!bot.promoted) {
+    res.errors.push(`bot not admin (${bot.error ?? "promote failed"}) — aborting before close to not cut alerts`);
+    return res;
+  }
+  await sleep(500);
+
+  try {
+    const channelId = -(chatId + 1000000000000);
+    const channelPeer = await client.getInputEntity(
+      new Api.PeerChannel({ channelId: BigInt(channelId) as any })
+    ) as unknown as Api.InputChannel;
+
+    const snap = await getGroupTopicsState(chatId);
+    if (!snap.ok) { res.errors.push(`list topics: ${snap.error}`); return res; }
+    const byTitle = new Map<string, { id: number; closed: boolean }>();
+    for (const t of snap.topics) byTitle.set(t.title.toLowerCase(), { id: t.id, closed: t.closed });
+
+    // Delete Deals/Clubs (drain history until the topic is gone).
+    for (const title of RESTRUCTURE_DELETE) {
+      const t = byTitle.get(title.toLowerCase());
+      if (!t) { res.skipped.push(`${title} (absent)`); continue; }
+      try {
+        for (let i = 0; i < 20; i++) {
+          const aff = await client.invoke(new Api.channels.DeleteTopicHistory({ channel: channelPeer, topMsgId: t.id } as any)) as any;
+          if (!aff || (aff.offset ?? 0) === 0) break;
+          await sleep(300);
+        }
+        res.deleted.push(title);
+        console.log(`[RESTRUCTURE] deleted "${title}" (${t.id}) in ${chatId}`);
+      } catch (e: any) {
+        res.errors.push(`delete ${title}: ${errMsg(e)}`);
+      }
+      await sleep(400);
+    }
+
+    // Close Alertes/Dépôt/Liveplay (skip if already closed).
+    for (const title of RESTRUCTURE_CLOSE) {
+      const t = byTitle.get(title.toLowerCase());
+      if (!t) { res.skipped.push(`${title} (absent)`); continue; }
+      if (t.closed) { res.skipped.push(`${title} (déjà fermé)`); continue; }
+      try {
+        await retry(async () => {
+          await client.invoke(new Api.channels.EditForumTopic({ channel: channelPeer, topicId: t.id, closed: true } as any));
+        }, `close:${title}`, 2, [1000]);
+        res.closed.push(title);
+        console.log(`[RESTRUCTURE] closed "${title}" (${t.id}) in ${chatId}`);
+      } catch (e: any) {
+        res.errors.push(`close ${title}: ${errMsg(e)}`);
+      }
+      await sleep(400);
+    }
+
+    res.ok = res.errors.length === 0;
+    return res;
+  } catch (e: any) {
+    res.errors.push(errMsg(e));
+    return res;
+  }
+}
