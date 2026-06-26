@@ -88,14 +88,15 @@ export interface GroupResult {
   botPromoted: boolean;
 }
 
+// `closed: true` → topic created read-only for members (only admins/bot post). The bot is
+// promoted admin BEFORE topics are created, so closing does not block its alerts.
+// Deals & Clubs intentionally removed (Phase A restructure). DB columns kept (append-only).
 const TOPIC_DEFS = [
-  { key: "accounting", title: "Accounting", iconColor: 0x6FB9F0, emojis: ["📊", "📈", "💹", "📉"] },
-  { key: "deals", title: "Deals", iconColor: 0xFFD67E, emojis: ["🤝", "📋", "📝", "✍️"] },
-  { key: "clubs", title: "Clubs", iconColor: 0x8EEE98, emojis: ["🏠", "🎰", "🃏", "♠️"] },
-  { key: "depot", title: "Dépôt", iconColor: 0xFF93B2, emojis: ["💰", "💳", "🏦", "💵"] },
-  { key: "liveplay", title: "Liveplay", iconColor: 0xFB6F5F, emojis: ["🔴", "🎥", "📺", "▶️"] },
-  { key: "onboarding", title: "Onboarding", iconColor: 0xCB86DB, emojis: ["🚀", "✅", "📌", "⚡"] },
-  { key: "alertes", title: "Alertes", iconColor: 0xFFD67E, emojis: ["📢", "🔔", "⚡", "📣"] },
+  { key: "accounting", title: "Accounting", iconColor: 0x6FB9F0, emojis: ["📊", "📈", "💹", "📉"], closed: false },
+  { key: "depot", title: "Dépôt", iconColor: 0xFF93B2, emojis: ["💰", "💳", "🏦", "💵"], closed: true },
+  { key: "liveplay", title: "Liveplay", iconColor: 0xFB6F5F, emojis: ["🔴", "🎥", "📺", "▶️"], closed: true },
+  { key: "onboarding", title: "Onboarding", iconColor: 0xCB86DB, emojis: ["🚀", "✅", "📌", "⚡"], closed: false },
+  { key: "alertes", title: "Alertes", iconColor: 0xFFD67E, emojis: ["📢", "🔔", "⚡", "📣"], closed: true },
 ];
 
 // ── Retry helper ─────────────────────────────────────────
@@ -233,6 +234,7 @@ async function createTopicsOnChannel(
   channelPeer: Api.InputChannel,
   failedSteps: string[],
   errors: string[],
+  botPromoted: boolean,
 ): Promise<Record<string, number>> {
   const topicIds: Record<string, number> = {};
   const iconMap = await fetchTopicIcons(client);
@@ -242,6 +244,27 @@ async function createTopicsOnChannel(
       const { topicId, usedFallback } = await createSingleTopic(client, channelPeer, def, iconMap);
       topicIds[def.key] = topicId;
       if (usedFallback) console.log(`[USERBOT] topic "${def.title}" created with fallback icon`);
+
+      // Close (read-only for members) the topics flagged `closed`. Only if the bot is admin —
+      // otherwise closing would block the bot's own alerts. Bot-less groups stay open (a later
+      // promote-bot + Phase C handle them).
+      if (def.closed) {
+        if (botPromoted) {
+          try {
+            await retry(async () => {
+              await client.invoke(
+                new Api.channels.EditForumTopic({ channel: channelPeer, topicId, closed: true } as any)
+              );
+            }, `close:${def.title}`, 2, [1000]);
+            console.log(`[USERBOT] topic "${def.title}" set read-only (closed)`);
+          } catch (e: any) {
+            console.warn(`[USERBOT] could not close "${def.title}": ${errMsg(e)}`);
+            errors.push(`close ${def.title}: ${errMsg(e)}`);
+          }
+        } else {
+          console.warn(`[USERBOT] bot not admin → leaving "${def.title}" OPEN (would block bot alerts if closed)`);
+        }
+      }
     } catch (e: any) {
       const msg = errMsg(e);
       console.error(`[USERBOT] topic "${def.title}" failed after retries: ${msg}`);
@@ -440,7 +463,7 @@ export async function createPlayerGroup(
     let topicIds: Record<string, number> = {};
     if (forumEnabled) {
       await sleep(800);
-      topicIds = await createTopicsOnChannel(client, channelPeer, failedSteps, errors);
+      topicIds = await createTopicsOnChannel(client, channelPeer, failedSteps, errors, botPromoted);
     }
 
     // ── Step 7: Generate invite link ──

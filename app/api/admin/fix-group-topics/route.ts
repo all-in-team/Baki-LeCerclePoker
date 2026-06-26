@@ -9,9 +9,10 @@ import { repairGroupTopics } from "@/lib/group-repair";
 // apply / confirm / player_ids are accepted in the BODY *or* as query params (robust to either).
 // Token-gated (x-admin-token === ADMIN_RECONCILE_TOKEN), like the other admin repair routes.
 
+// Deals/Clubs removed (Phase A — no longer created), so not counted as "missing" anymore.
 const TOPIC_COLS = [
   "alertes_topic_id", "onboarding_topic_id", "liveplay_topic_id",
-  "accounting_topic_id", "deals_topic_id", "clubs_topic_id", "depot_topic_id",
+  "accounting_topic_id", "depot_topic_id",
 ];
 
 const truthy = (v: unknown) => v === 1 || v === "1" || v === true || v === "true";

@@ -30,23 +30,6 @@ export const TOPIC_MESSAGES: Record<string, string> = {
     `<code>/solde</code> — ton solde actuel\n` +
     `<code>/historique</code> — tes transactions`,
 
-  deals:
-    `📋 <b>Deals</b>\n\n` +
-    `Ici tu trouveras tous les deals actifs :\n\n` +
-    `• % d'action\n` +
-    `• Stacking\n` +
-    `• Conditions spécifiques\n\n` +
-    `👉 Chaque game = règles différentes\n` +
-    `👉 Toujours vérifier avant de jouer`,
-
-  clubs:
-    `🏠 <b>Clubs</b>\n\n` +
-    `Tous les clubs disponibles sont listés ici.\n\n` +
-    `Tu y trouveras :\n` +
-    `• Les apps\n` +
-    `• Les ID clubs\n` +
-    `• Les formats (NLH, PLO, Short Deck…)`,
-
   depot:
     `💳 <b>Dépôt</b>\n\n` +
     `⚠️ Toujours demander confirmation AVANT d'envoyer\n\n` +
@@ -236,7 +219,7 @@ export async function handleOnboardingDirect(
             (username ? `📱 @${username}\n` : "") +
             `🆔 <code>${from.id}</code>\n` +
             `📦 Chat ID: <code>${result.chatId}</code>\n\n` +
-            `✅ Groupe créé — ${topicCount}/6 topics — ${botStatus}\n` +
+            `✅ Groupe créé — ${topicCount}/5 topics — ${botStatus}\n` +
             `❌ ${result.failedSteps.join(", ")}\n` +
             `💬 ${result.errors.join(" | ")}\n\n` +
             `<i>→ /api/admin/promote-bot + /api/admin/recreate-topics</i>`

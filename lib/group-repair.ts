@@ -11,11 +11,10 @@
 import { getDb } from "./db";
 import { checkUserbotHealth, syncGroupStructure } from "./telegram-userbot";
 
-// key (forum topic) → players column. Same mapping linkgroup/sync use.
+// key (forum topic) → players column. Deals/Clubs removed (Phase A — no longer created),
+// so they're not expected/repaired anymore. DB columns kept (append-only) but unused.
 const TOPIC_COLUMN_MAP: Record<string, string> = {
   accounting: "accounting_topic_id",
-  deals: "deals_topic_id",
-  clubs: "clubs_topic_id",
   depot: "depot_topic_id",
   liveplay: "liveplay_topic_id",
   onboarding: "onboarding_topic_id",
