@@ -23,6 +23,7 @@ import {
   handleStartAffi,
   handleStartAapkmy,
   handleLinkGroup,
+  handleFixGroup,
   sendMsg, answerCbQuery, getSession, handleRawMessage, registerCommandHandlers,
   OWNER_IDS, AGENT_CHAT_ID,
 } from "@/lib/telegram-commands";
@@ -150,6 +151,12 @@ export async function POST(req: NextRequest) {
   // /startaffi — activate player as affiliate (group only)
   if (msg?.text?.match(/^\/startaffi(\s|$|@)/)) {
     await handleStartAffi(chatId, msg.from?.id, msg.chat?.type ?? "private", threadId);
+    return NextResponse.json({ ok: true });
+  }
+
+  // /fixgroup — robust repair of the current group (session check + find-or-create all topics)
+  if (msg?.text?.match(/^\/fixgroup(\s|$|@)/)) {
+    await handleFixGroup(chatId, msg.from?.id, msg.chat?.type ?? "private", msg.chat?.title ?? "");
     return NextResponse.json({ ok: true });
   }
 

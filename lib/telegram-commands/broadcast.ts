@@ -41,9 +41,12 @@ type Recipient = {
   telegram_handle: string | null;
   telegram_id: number | null;
   telegram_group_id: string;
-  topic_id: number;
+  topic_id: number | null;
 };
 
+// NOTE: we DO NOT filter out players whose topic_id is NULL anymore. A missing topic
+// must NOT silently drop the player from alerts — instead the send falls back to the
+// group root (General). Only a group link is required.
 function getRecipients(channel: Channel, gameId?: number): Recipient[] {
   const col = TOPIC_COLUMN[channel];
   const gameFilter = gameId
@@ -54,7 +57,6 @@ function getRecipients(channel: Channel, gameId?: number): Recipient[] {
     FROM players
     WHERE status = 'active'
       AND telegram_group_id IS NOT NULL
-      AND ${col} IS NOT NULL
       ${gameFilter}
   `).all() as Recipient[];
 }
@@ -152,7 +154,7 @@ export async function handleBroadcastCallback(callbackId: string, data: string, 
     if (recipients.length === 0) {
       const label = gameFilter === "all" ? "TOUS" : getActiveGames().find(g => g.id === gameId)?.name ?? gameFilter;
       await editMessage(chatId, msgId,
-        `❌ Aucun joueur trouvé pour <b>${label}</b> avec un topic ${CHANNEL_LABELS[channel]} configuré.`
+        `❌ Aucun joueur actif avec un groupe pour <b>${label}</b>.`
       );
       return;
     }
@@ -160,6 +162,7 @@ export async function handleBroadcastCallback(callbackId: string, data: string, 
     const gameLabel = gameFilter === "all" ? "TOUS" : getActiveGames().find(g => g.id === gameId)?.name ?? gameFilter;
     const msgType = detectMessageType(original);
     const names = recipients.slice(0, 5).map(r => r.name).join(", ") + (recipients.length > 5 ? ` +${recipients.length - 5}` : "");
+    const fallbackCount = recipients.filter(r => !r.topic_id).length;
 
     await editMessageKeyboard(chatId, msgId,
       `📢 <b>Broadcast preview</b>\n\n` +
@@ -167,6 +170,7 @@ export async function handleBroadcastCallback(callbackId: string, data: string, 
       `Channel : <b>${CHANNEL_LABELS[channel]}</b>\n` +
       `Cible : <b>${gameLabel}</b>\n` +
       `Destinataires : <b>${recipients.length} joueurs</b>\n` +
+      (fallbackCount > 0 ? `⚠️ ${fallbackCount} sans topic ${CHANNEL_LABELS[channel]} → envoi en General\n` : "") +
       `<i>${names}</i>`,
       [[
         { text: "✅ Confirmer", callback_data: `bc_go:${gameFilter}:${channel}:${originalMsgId}` },
@@ -207,13 +211,19 @@ export async function handleBroadcastCallback(callbackId: string, data: string, 
     const token = process.env.TELEGRAM_BOT_TOKEN;
 
     let sent = 0;
+    let fallback = 0;
     const errors: string[] = [];
 
     for (const player of recipients) {
       try {
         const mention = mentionOf(player);
-        const topicId = player.topic_id;
+        // topic_id NULL → post to the group root (General) instead of dropping the player.
+        const topicId = player.topic_id ?? undefined;
         const groupId = player.telegram_group_id;
+        if (!topicId) {
+          fallback++;
+          console.warn(`[BROADCAST] ${player.name} (#${player.id}) has no ${channel} topic → fallback General (group ${groupId})`);
+        }
 
         if (msgType === "text") {
           await sendMsg(groupId, `${mention} 👇\n\n${escapeHtml(original.text)}`, topicId);
@@ -230,7 +240,7 @@ export async function handleBroadcastCallback(callbackId: string, data: string, 
               chat_id: groupId,
               from_chat_id: chatId,
               message_id: originalMsgId,
-              message_thread_id: topicId,
+              ...(topicId ? { message_thread_id: topicId } : {}),
               caption,
               parse_mode: "HTML",
             }),
@@ -252,6 +262,7 @@ export async function handleBroadcastCallback(callbackId: string, data: string, 
     }
 
     let report = `✅ Diffusé à ${sent}/${recipients.length} joueurs (${CHANNEL_LABELS[channel]} · ${gameLabel})`;
+    if (fallback > 0) report += `\nℹ️ ${fallback} en General (topic manquant — lance /fixgroup dans leur groupe)`;
     if (errors.length > 0) {
       report += `\n\n❌ Échec (${errors.length}) :\n` + errors.map(e => `• ${e}`).join("\n");
     }

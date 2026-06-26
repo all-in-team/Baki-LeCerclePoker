@@ -1,20 +1,8 @@
 import { getDb } from "@/lib/db";
 import { sendMsg, OWNER_IDS } from "./helpers";
-import { syncGroupStructure } from "@/lib/telegram-userbot";
+import { repairGroupTopics } from "@/lib/group-repair";
 
 interface PlayerRow { id: number; name: string; telegram_handle: string | null; telegram_group_id: string | null }
-
-// Same mapping the sync-group-structure admin route uses — backfilled via COALESCE
-// so onboarding flows post in the Onboarding topic instead of General.
-const TOPIC_COLUMN_MAP: Record<string, string> = {
-  accounting: "accounting_topic_id",
-  deals: "deals_topic_id",
-  clubs: "clubs_topic_id",
-  depot: "depot_topic_id",
-  liveplay: "liveplay_topic_id",
-  onboarding: "onboarding_topic_id",
-  alertes: "alertes_topic_id",
-};
 
 function extractBaseName(title: string): string {
   return title
@@ -28,39 +16,25 @@ async function linkPlayer(chatId: number, player: PlayerRow): Promise<string> {
   const db = getDb();
   const old = player.telegram_group_id;
   db.prepare(`UPDATE players SET telegram_group_id = ? WHERE id = ?`).run(String(chatId), player.id);
-  let msg = `✅ Groupe lié à <b>${player.name}</b> (id=${player.id}).`;
-  if (old && old !== String(chatId)) msg += `\n<i>(remplace l'ancien groupe ${old})</i>`;
+  const oldNote = old && old !== String(chatId) ? `\n<i>(remplace l'ancien groupe ${old})</i>` : "";
 
-  // Best-effort: detect/create the forum topics and backfill *_topic_id columns.
-  // Without this, onboarding_topic_id stays NULL and onboarding flows (pitch, %
-  // keyboard, wallet steps) fall back to the General topic.
-  try {
-    const sync = await syncGroupStructure(chatId);
-    const sets: string[] = [];
-    const values: any[] = [];
-    for (const [key, col] of Object.entries(TOPIC_COLUMN_MAP)) {
-      if (sync.topic_ids[key] != null) {
-        sets.push(`${col} = COALESCE(${col}, ?)`);
-        values.push(sync.topic_ids[key]);
-      }
-    }
-    if (sets.length > 0) {
-      values.push(player.id);
-      db.prepare(`UPDATE players SET ${sets.join(", ")} WHERE id = ?`).run(...values);
-    }
-    const onbId = sync.topic_ids.onboarding;
-    if (onbId != null) {
-      msg += `\n🧵 Topics synchronisés — Onboarding détecté (id=${onbId}).`;
-    } else {
-      msg += `\n⚠️ Aucun topic <b>Onboarding</b> détecté (groupe non-forum ?). Les flows posteront dans General.`;
-    }
-  } catch (e: any) {
-    console.warn(`[LINKGROUP] topic backfill failed for chat ${chatId}: ${e?.message ?? e}`);
-    msg += `\n⚠️ Sync des topics échouée (userbot indispo ?). onboarding_topic_id non renseigné — relance plus tard.`;
+  // Repair topics (session-checked, find-or-create, authoritative write). The headline
+  // reflects the REAL outcome — no "✅" unless topics actually synced (fixes the false-success bug).
+  const r = await repairGroupTopics(chatId, player.id);
+
+  if (!r.sessionOk) {
+    return `⚠️ Groupe lié à <b>${player.name}</b> (id=${player.id}).${oldNote}\n` +
+      `❌ Topics NON synchronisés — <b>userbot déconnecté</b>. Relance <code>/fixgroup</code> ici quand il est revenu.`;
   }
-
-  msg += `\nTu peux maintenant taper /startaffi.`;
-  return msg;
+  if (r.ok) {
+    return `✅ Groupe lié + réparé — <b>${player.name}</b> (id=${player.id}).${oldNote}\n` +
+      `🧵 7/7 topics OK · Bot ${r.botPromoted ? "admin ✅" : "⚠️ non promu"}.\n` +
+      `Tu peux taper /startaffi.`;
+  }
+  return `⚠️ Groupe lié à <b>${player.name}</b> (id=${player.id}).${oldNote}\n` +
+    `🧵 Topics partiels — manquants : <b>${r.topicsMissing.join(", ") || "—"}</b> · Bot ${r.botPromoted ? "admin ✅" : "⚠️ non promu"}.\n` +
+    (r.errors.length ? `<i>${r.errors.slice(0, 2).join(" | ")}</i>\n` : "") +
+    `Relance <code>/fixgroup</code> (idempotent).`;
 }
 
 export async function handleLinkGroup(chatId: number, fromId: number, chatType: string, args: string, chatTitle: string) {

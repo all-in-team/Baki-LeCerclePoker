@@ -34,6 +34,7 @@ export { handleAffiliation, handleAffiliationRawMessage } from "./affiliation";
 export { handleMyAffi } from "./myaffi";
 export { handleStartAffi } from "./startaffi";
 export { handleLinkGroup } from "./linkgroup";
+export { handleFixGroup } from "./fixgroup";
 
 // Re-export helpers needed by route.ts
 export {
