@@ -1,7 +1,7 @@
 import { getDb } from "@/lib/db";
 import { sendMsg, setSession, type Step } from "./helpers";
 
-// Shared free-text action-% entry for the action games (A5POKER, KKPOKER, AKS, AAPKMY).
+// Shared free-text action-% entry for the action games (A5POKER, KKPOKER, AKS, NUTSPK, AAPKMY).
 // QQPK (staking 70/30 fixe) is deliberately NOT here. The owner types the exact % at
 // onboarding; it is stored per-player+game in player_game_deals.action_pct and then
 // drives the agency cut (my_pnl = net * action_pct/100) for the wallet games. AAPK is
@@ -73,6 +73,11 @@ export async function handleActionPctRawMessage(
     case "AKS": {
       const { sendAksPitch } = await import("./new-members");
       await sendAksPitch(chatId, player.id, player, pct, tid);
+      return true;
+    }
+    case "NUTSPK": {
+      const { sendNutspkPitch } = await import("./new-members");
+      await sendNutspkPitch(chatId, player.id, player, pct, tid);
       return true;
     }
     case "AAPKMY": {

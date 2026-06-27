@@ -26,6 +26,8 @@ export { handleA5pokerCallback } from "@/lib/games/a5poker/onboarding";
 export { handleStartA5poker } from "./starta5poker";
 export { handleAksCallback } from "@/lib/games/aks/onboarding";
 export { handleStartAks } from "./startaks";
+export { handleNutspkCallback } from "@/lib/games/nutspk/onboarding";
+export { handleStartNutspk } from "./startnutspk";
 export { handleQqpkCallback } from "@/lib/games/qqpk/onboarding";
 export { handleStartQqpk } from "./startqqpk";
 export { handleStartAapkmy } from "./startaapkmy";

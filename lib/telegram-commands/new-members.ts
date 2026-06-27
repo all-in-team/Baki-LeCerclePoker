@@ -349,6 +349,55 @@ export async function sendAksPitch(
   ], tid);
 }
 
+// NUTSPK pitch — action % is MODULABLE, chosen by the owner at /startnutspk launch and
+// passed in here (shared free-text prompt). The deal is upserted (re-running with a new
+// % updates it). Anti-bypass: NO game link here — revealed only after "J'accepte".
+export async function sendNutspkPitch(
+  chatId: number,
+  playerId: number,
+  player: { name: string; telegram_id: number | null; telegram_handle: string | null },
+  actionPct: number,
+  onboardingTopicId?: number,
+) {
+  const db = getDb();
+  const nutspkGameId = (db.prepare(`SELECT id FROM games WHERE name = 'NUTSPK'`).get() as { id: number } | undefined)?.id;
+  if (nutspkGameId) {
+    db.prepare(
+      `INSERT INTO player_game_deals (player_id, game_id, action_pct, rakeback_pct) VALUES (?, ?, ?, 0)
+       ON CONFLICT(player_id, game_id) DO UPDATE SET action_pct = excluded.action_pct`
+    ).run(playerId, nutspkGameId, actionPct);
+  }
+
+  const playerPct = 100 - actionPct;
+
+  setSession(chatId, "nutspk_pitch_sent" as Step, playerId, player.telegram_id);
+  if (player.telegram_id) trackOnboardingStep(player.telegram_id, "pitch_sent");
+
+  const tid = onboardingTopicId;
+  const tag = mentionOf(player);
+  await sendMsg(chatId,
+    `${tag}\n\n🃏 <b>${player.name}</b> — on te propose NUTSPK !\n\n` +
+    `On t'explique comment ça marche et on te setup en quelques minutes.`,
+    tid
+  );
+  await sleep(2000);
+  await sendMsg(chatId,
+    `Voilà le deal qu'on propose NUTSPK :\n\n` +
+    `🎯 <b>Action ${playerPct}/${actionPct}</b> — Tu joues ${playerPct}% de ton action, on prend ${actionPct}%. ` +
+    `C'est symétrique : win/win, lose/lose. L'avantage : tu peux jouer plus cher sans te pénaliser.\n\n` +
+    `🛡️ <b>1000 USDT de liquidité garantie</b> — On couvre ton float jusqu'à 1K (bug site / ban / dispute), tant que tu joues fair.\n\n` +
+    `⚡ <b>Règle d'or</b> : max 1K sur le compte. Tout l'extra → cash out direct chez toi. Au-dessus de 1K, c'est ton risque, donc sécurise.`,
+    tid
+  );
+  await sleep(3000);
+  // Anti-bypass: le lien n'est PAS dans le pitch. Il n'arrive qu'après un clic explicite
+  // sur "J'accepte" (handleNutspkCallback → nutspk_accept).
+  await sendMsgKeyboard(chatId, `Tu valides le deal ?`, [
+    [{ text: "✅ J'accepte le deal", callback_data: "nutspk_accept" }],
+    [{ text: "❓ J'ai une question", callback_data: "nutspk_choice_question" }],
+  ], tid);
+}
+
 // QQPK staking pitch — FIXED 70/30 deal, no action % to pick. Anti-bypass: NO Mini App
 // link here; it's revealed only after an explicit "J'accepte" (handleQqpkCallback →
 // qqpk_accept). The deal row + acceptance are created on accept (acceptance = cycle anchor),
