@@ -2,6 +2,7 @@ import { getDb } from "@/lib/db";
 import { sendMsg, AGENT_CHAT_ID } from "./helpers";
 import { getPlayerGameWallets, getPlayerCashouts } from "@/lib/queries";
 import { askActionPct } from "./action-pct-prompt";
+import { getOnboardingThreadId } from "./onboarding-topic";
 import { AKS_GAME_LINK } from "@/lib/games/aks/config";
 
 export async function handleStartAks(chatId: number) {
@@ -33,14 +34,10 @@ export async function handleStartAks(chatId: number) {
     `🎮 <b>/startaks</b> triggered for <b>${player.name}</b> (id=${player.id}) in group <code>${chatId}</code>`
   );
 
-  // Hold the player on the session so the % callbacks know who we're configuring.
-  // tid anchors the flow to the Onboarding topic; subsequent callbacks/raw messages
-  // inherit it via message_thread_id. NULL → falls back to General (player not set up
-  // via the forum-aware path, e.g. linked through an older /linkgroup).
-  const tid = player.onboarding_topic_id ?? undefined;
-  if (tid === undefined) {
-    console.warn(`[AKS] player ${player.id} (${player.name}) has NULL onboarding_topic_id — /startaks flow will post in General. Run /linkgroup again or sync-group-structure to backfill topics.`);
-  }
+  // Resolve (and repair-if-missing) the Onboarding topic so the flow never posts in General.
+  // tid anchors the flow to the Onboarding topic; subsequent callbacks/raw messages inherit
+  // it via message_thread_id.
+  const tid = await getOnboardingThreadId(chatId, player.id, "AKS");
 
   // Owner types the action % for THIS player (free text) before the pitch is sent.
   await askActionPct(chatId, player.id, player, "AKS", tid);

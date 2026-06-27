@@ -2,6 +2,7 @@ import { getDb } from "@/lib/db";
 import { sendMsg, AGENT_CHAT_ID } from "./helpers";
 import { AAPKMY_GAME_NAME, AAPKMY_CLUB_ID } from "@/lib/games/aapkmy/config";
 import { askActionPct } from "./action-pct-prompt";
+import { getOnboardingThreadId } from "./onboarding-topic";
 
 export async function handleStartAapkmy(chatId: number, threadId?: number) {
   const db = getDb();
@@ -36,7 +37,11 @@ export async function handleStartAapkmy(chatId: number, threadId?: number) {
     `🎮 <b>/startaapkmy</b> triggered for <b>${player.name}</b> (id=${player.id}) in group <code>${chatId}</code>`
   );
 
+  // Resolve (and repair-if-missing) the Onboarding topic so the flow never posts in General.
+  // Falls back to the topic the command was typed in (threadId) only if repair can't resolve it.
+  const flowTid = (await getOnboardingThreadId(chatId, player.id, "AAPK")) ?? threadId;
+
   // Owner types the action % for THIS player (free text); the pitch fires after
   // a valid % via sendAapkmyPitch (handleActionPctRawMessage dispatch).
-  await askActionPct(chatId, player.id, player, "AAPKMY", tid);
+  await askActionPct(chatId, player.id, player, "AAPKMY", flowTid);
 }

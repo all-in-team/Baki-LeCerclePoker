@@ -185,9 +185,10 @@ export async function handleNewMembers(members: any[], chatTitle: string, chatId
 
     // KKPOKER / A5POKER: owner picks the action % (free text) before the pitch fires.
     if (gameName === "KKPOKER" || gameName === "A5POKER") {
-      const topicRow = db.prepare(`SELECT onboarding_topic_id FROM players WHERE id = ?`).get(playerId) as { onboarding_topic_id: number | null } | undefined;
       const { askActionPct } = await import("./action-pct-prompt");
-      await askActionPct(chatId, playerId, { name, telegram_id: member.id }, gameName, topicRow?.onboarding_topic_id ?? undefined);
+      const { getOnboardingThreadId } = await import("./onboarding-topic");
+      const tid = await getOnboardingThreadId(chatId, playerId, gameName);
+      await askActionPct(chatId, playerId, { name, telegram_id: member.id }, gameName, tid);
       continue;
     }
 
