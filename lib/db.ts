@@ -1512,6 +1512,20 @@ function initSchema(db: Database.Database) {
     console.error(`[MIGRATION:add_qqpk_game_v1] FAILED:`, err.message);
   }
 
+  // Seed NUTSPK game (wallet-based action game, mirror of AKS). The games.name CHECK was
+  // dropped in drop_games_name_check_v1, so a plain INSERT OR IGNORE suffices. default_action_pct=30
+  // is only a prompt hint — the real % is chosen per-player at onboarding (free text). Wallet mère
+  // is configured later via Settings → Config Wallets — not seeded here.
+  try {
+    const fixNutspk = db.prepare(`INSERT OR IGNORE INTO _applied_fixes (name) VALUES (?)`).run("add_nutspk_game_v1");
+    if (fixNutspk.changes > 0) {
+      db.prepare(`INSERT OR IGNORE INTO games (name, status, default_action_pct, currency) VALUES ('NUTSPK', 'active', 30, 'USDT')`).run();
+      console.log("[MIGRATION] add_nutspk_game_v1 applied");
+    }
+  } catch (err: any) {
+    console.error(`[MIGRATION:add_nutspk_game_v1] FAILED:`, err.message);
+  }
+
   // QQPK staking blocks — persistent C/T state per player per calendar-month block.
   // Phase 3: table only. The pure calc engine lives in lib/qqpk-staking-engine.ts; the
   // saisie-mains UI / "Régler le mois" button (Phase 4) and dashboard rollup (Phase 5)

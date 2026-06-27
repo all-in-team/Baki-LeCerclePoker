@@ -17,7 +17,7 @@ function fmtAmt(n: number, currency = "USDT"): string {
 }
 
 const GAME_COLOR: Record<string, string> = {
-  AKPOKER: "#D4AF37", KKPOKER: "#3B82F6", A5POKER: "#8B5CF6", AKS: "#F59E0B", WEPOKER: "#10B981",
+  AKPOKER: "#D4AF37", KKPOKER: "#3B82F6", A5POKER: "#8B5CF6", AKS: "#F59E0B", NUTSPK: "#14B8A6", WEPOKER: "#10B981",
 };
 
 export default async function CrmPlayerPage({ params, searchParams }: { params: Promise<{ id: string }>; searchParams: Promise<{ range?: string }> }) {

@@ -34,6 +34,10 @@ const GROUPS: NavGroup[] = [
     { href: "/aks/pnl", label: "P&L", icon: Wallet },
     { href: "/aks/settlements", label: "Settlements", icon: Scale },
   ]},
+  { label: "NUTSPK", items: [
+    { href: "/nutspk/pnl", label: "P&L", icon: Wallet },
+    { href: "/nutspk/settlements", label: "Settlements", icon: Scale },
+  ]},
   { label: "QQPK", items: [
     { href: "/qqpk/pnl", label: "P&L", icon: Wallet },
   ]},

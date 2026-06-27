@@ -1338,6 +1338,27 @@ export function getAksPnL(playerId?: number, period?: Period): AkpokerPnLRow[] {
   }));
 }
 
+// B5) NUTSPK P&L (wallet-based, USDT) — same pattern as AKS
+export function getNutspkPnL(playerId?: number, period?: Period): AkpokerPnLRow[] {
+  const { since, until } = periodToDateRange(period);
+  const rows = getWalletSummaryByPlayer({
+    game_name: "NUTSPK",
+    since_date: since,
+    end_date: until,
+  }) as any[];
+  let filtered = rows;
+  if (playerId) filtered = rows.filter((r: any) => r.player_id === playerId);
+  return filtered.map((r: any) => ({
+    player_id: r.player_id,
+    player_name: r.player_name,
+    action_pct: r.action_pct ?? 0,
+    deposited: r.total_deposited ?? 0,
+    withdrawn: r.total_withdrawn ?? 0,
+    net_usdt: r.net ?? 0,
+    agency_cut_usdt: r.my_pnl ?? 0,
+  }));
+}
+
 // C) WEPOKER P&L (rakeback-based, CNY, 3-component)
 export interface WepokerPnLRow {
   player_id: number; player_name: string;
@@ -1635,6 +1656,8 @@ export interface AgencyTotalPnL {
   a5poker_extras_usdt: number;
   aks_usdt: number;
   aks_extras_usdt: number;
+  nutspk_usdt: number;
+  nutspk_extras_usdt: number;
   wepoker_cny: number;
   wepoker_extras_cny: number;
   wepoker_usdt: number;
@@ -1646,23 +1669,26 @@ export function getAgencyTotalPnL(period?: Period): AgencyTotalPnL {
   const kk = getKkpokerPnL(undefined, period);
   const a5 = getA5pokerPnL(undefined, period);
   const aks = getAksPnL(undefined, period);
+  const nutspk = getNutspkPnL(undefined, period);
   const wp = getWepokerPnL(undefined, period);
   const akTotal = ak.reduce((s, r) => s + r.agency_cut_usdt, 0);
   const kkTotal = kk.reduce((s, r) => s + r.agency_cut_usdt, 0);
   const a5Total = a5.reduce((s, r) => s + r.agency_cut_usdt, 0);
   const aksTotal = aks.reduce((s, r) => s + r.agency_cut_usdt, 0);
+  const nutspkTotal = nutspk.reduce((s, r) => s + r.agency_cut_usdt, 0);
   const wpTotalCny = wp.reduce((s, r) => s + r.total_agency_cny, 0);
   const wpTotalUsdt = wp.reduce((s, r) => s + r.total_agency_usdt, 0);
   const akExtras = getAgencyExtrasNet("akpoker", period);
   const kkExtras = getAgencyExtrasNet("kkpoker", period);
   const a5Extras = getAgencyExtrasNet("a5poker", period);
   const aksExtras = getAgencyExtrasNet("aks", period);
+  const nutspkExtras = getAgencyExtrasNet("nutspk", period);
   const wpExtrasCny = getAgencyExtrasNet("wepoker", period);
   const rate = getCnyRate();
   const wpExtrasUsdt = convertCnyToUsdt(wpExtrasCny, rate);
   const grindhouse = getGrindhouseAgencyNet(period);
-  const gamesUsdt = akTotal + kkTotal + a5Total + aksTotal + wpTotalUsdt;
-  const extrasUsdt = akExtras + kkExtras + a5Extras + aksExtras + wpExtrasUsdt;
+  const gamesUsdt = akTotal + kkTotal + a5Total + aksTotal + nutspkTotal + wpTotalUsdt;
+  const extrasUsdt = akExtras + kkExtras + a5Extras + aksExtras + nutspkExtras + wpExtrasUsdt;
   return {
     total_usdt: gamesUsdt + extrasUsdt + grindhouse,
     games_usdt: gamesUsdt,
@@ -1676,6 +1702,8 @@ export function getAgencyTotalPnL(period?: Period): AgencyTotalPnL {
     a5poker_extras_usdt: a5Extras,
     aks_usdt: aksTotal + aksExtras,
     aks_extras_usdt: aksExtras,
+    nutspk_usdt: nutspkTotal + nutspkExtras,
+    nutspk_extras_usdt: nutspkExtras,
     wepoker_cny: wpTotalCny + wpExtrasCny,
     wepoker_extras_cny: wpExtrasCny,
     wepoker_usdt: wpTotalUsdt + wpExtrasUsdt,
@@ -1763,6 +1791,7 @@ export const AGENCY_GAMES: AgencyGameConfig[] = [
   { key: "KKPOKER", label: "KKPOKER", kind: "wallet",  basePath: "/kkpoker" },
   { key: "A5POKER", label: "A5POKER", kind: "wallet",  basePath: "/a5poker" },
   { key: "AKS",     label: "AKS",     kind: "wallet",  basePath: "/aks" },
+  { key: "NUTSPK",  label: "NUTSPK",  kind: "wallet",  basePath: "/nutspk" },
   { key: "QQPK",    label: "QQPK",    kind: "staking", basePath: "/qqpk" },
   { key: "Wepoker", label: "WEPOKER", kind: "wepoker", basePath: "/wepoker" },
 ];
@@ -1955,7 +1984,7 @@ export function getPlayerAgencyCutSeries(playerId: number, period?: Period): { d
 // == their getPlayerPnLAllGames total for the same period (5 poker games + per-grinder grind share).
 export interface ContributorRow {
   player_id: number; player_name: string; agency_usdt: number;
-  akpoker_usdt: number; kkpoker_usdt: number; a5poker_usdt: number; aks_usdt: number; wepoker_usdt: number;
+  akpoker_usdt: number; kkpoker_usdt: number; a5poker_usdt: number; aks_usdt: number; nutspk_usdt: number; wepoker_usdt: number;
   grindhouse_usdt: number;
 }
 export function getTopContributors(period: Period, limit = 5): ContributorRow[] {
@@ -1963,11 +1992,12 @@ export function getTopContributors(period: Period, limit = 5): ContributorRow[] 
   const kk = getKkpokerPnL(undefined, period);
   const a5 = getA5pokerPnL(undefined, period);
   const aks = getAksPnL(undefined, period);
+  const nutspk = getNutspkPnL(undefined, period);
   const wp = getWepokerPnL(undefined, period);
 
   const byPlayer = new Map<number, ContributorRow>();
   const get = (r: { player_id: number; player_name: string }) =>
-    byPlayer.get(r.player_id) ?? { player_id: r.player_id, player_name: r.player_name, agency_usdt: 0, akpoker_usdt: 0, kkpoker_usdt: 0, a5poker_usdt: 0, aks_usdt: 0, wepoker_usdt: 0, grindhouse_usdt: 0 };
+    byPlayer.get(r.player_id) ?? { player_id: r.player_id, player_name: r.player_name, agency_usdt: 0, akpoker_usdt: 0, kkpoker_usdt: 0, a5poker_usdt: 0, aks_usdt: 0, nutspk_usdt: 0, wepoker_usdt: 0, grindhouse_usdt: 0 };
   for (const r of ak) {
     const e = get(r); e.akpoker_usdt += r.agency_cut_usdt; e.agency_usdt += r.agency_cut_usdt; byPlayer.set(r.player_id, e);
   }
@@ -1979,6 +2009,9 @@ export function getTopContributors(period: Period, limit = 5): ContributorRow[] 
   }
   for (const r of aks) {
     const e = get(r); e.aks_usdt += r.agency_cut_usdt; e.agency_usdt += r.agency_cut_usdt; byPlayer.set(r.player_id, e);
+  }
+  for (const r of nutspk) {
+    const e = get(r); e.nutspk_usdt += r.agency_cut_usdt; e.agency_usdt += r.agency_cut_usdt; byPlayer.set(r.player_id, e);
   }
   for (const r of wp) {
     const e = get(r); e.wepoker_usdt += r.total_agency_usdt; e.agency_usdt += r.total_agency_usdt; byPlayer.set(r.player_id, e);
@@ -2001,7 +2034,7 @@ export function getTopContributors(period: Period, limit = 5): ContributorRow[] 
 
 // G) P&L time series for charts
 export interface PnLTimePoint {
-  date: string; akpoker_usdt: number; kkpoker_usdt: number; a5poker_usdt: number; aks_usdt: number; wepoker_usdt: number; grindhouse_usdt: number; total_usdt: number;
+  date: string; akpoker_usdt: number; kkpoker_usdt: number; a5poker_usdt: number; aks_usdt: number; nutspk_usdt: number; wepoker_usdt: number; grindhouse_usdt: number; total_usdt: number;
 }
 export function getPnLOverTime(period: Period): PnLTimePoint[] {
   const db = getDb();
@@ -2025,6 +2058,7 @@ export function getPnLOverTime(period: Period): PnLTimePoint[] {
   const kkDaily = walletDailyByGame("KKPOKER");
   const a5Daily = walletDailyByGame("A5POKER");
   const aksDaily = walletDailyByGame("AKS");
+  const nutspkDaily = walletDailyByGame("NUTSPK");
 
   const rate = getCnyRate();
   const wpDaily = db.prepare(`
@@ -2043,7 +2077,7 @@ export function getPnLOverTime(period: Period): PnLTimePoint[] {
   `).all(...[period?.from, period?.to].filter(Boolean)) as any[];
 
   const dayMap = new Map<string, PnLTimePoint>();
-  const getDay = (day: string) => dayMap.get(day) ?? { date: day, akpoker_usdt: 0, kkpoker_usdt: 0, a5poker_usdt: 0, aks_usdt: 0, wepoker_usdt: 0, grindhouse_usdt: 0, total_usdt: 0 };
+  const getDay = (day: string) => dayMap.get(day) ?? { date: day, akpoker_usdt: 0, kkpoker_usdt: 0, a5poker_usdt: 0, aks_usdt: 0, nutspk_usdt: 0, wepoker_usdt: 0, grindhouse_usdt: 0, total_usdt: 0 };
   for (const r of akDaily) {
     const e = getDay(r.day); e.akpoker_usdt += r.agency; e.total_usdt += r.agency; dayMap.set(r.day, e);
   }
@@ -2056,13 +2090,16 @@ export function getPnLOverTime(period: Period): PnLTimePoint[] {
   for (const r of aksDaily) {
     const e = getDay(r.day); e.aks_usdt += r.agency; e.total_usdt += r.agency; dayMap.set(r.day, e);
   }
+  for (const r of nutspkDaily) {
+    const e = getDay(r.day); e.nutspk_usdt += r.agency; e.total_usdt += r.agency; dayMap.set(r.day, e);
+  }
   for (const r of wpDaily) {
     const wpUsdt = convertCnyToUsdt(r.wl_agency + r.rb_agency + r.ins_agency, rate);
     const e = getDay(r.day); e.wepoker_usdt += wpUsdt; e.total_usdt += wpUsdt; dayMap.set(r.day, e);
   }
 
   // Add agency extras to the time series
-  for (const gk of ["akpoker", "kkpoker", "a5poker", "aks", "wepoker"] as const) {
+  for (const gk of ["akpoker", "kkpoker", "a5poker", "aks", "nutspk", "wepoker"] as const) {
     const extras = getAgencyExtras(gk, period);
     const isCny = gk === "wepoker";
     for (const ex of extras) {
@@ -2074,6 +2111,7 @@ export function getPnLOverTime(period: Period): PnLTimePoint[] {
       else if (gk === "kkpoker") e.kkpoker_usdt += val;
       else if (gk === "a5poker") e.a5poker_usdt += val;
       else if (gk === "aks") e.aks_usdt += val;
+      else if (gk === "nutspk") e.nutspk_usdt += val;
       else e.wepoker_usdt += val;
       e.total_usdt += val;
       dayMap.set(day, e);
