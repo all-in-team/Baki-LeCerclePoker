@@ -1,7 +1,7 @@
 import { getDb } from "@/lib/db";
 import { sendMsg, AGENT_CHAT_ID } from "./helpers";
 import { getPlayerGameWallets, getPlayerCashouts } from "@/lib/queries";
-import { sendA5pokerPitch } from "./new-members";
+import { askActionPct } from "./action-pct-prompt";
 import { A5POKER_GAME_LINK } from "@/lib/games/a5poker/config";
 
 export async function handleStartA5poker(chatId: number) {
@@ -33,5 +33,5 @@ export async function handleStartA5poker(chatId: number) {
     `🎮 <b>/starta5poker</b> triggered for <b>${player.name}</b> (id=${player.id}) in group <code>${chatId}</code>`
   );
 
-  await sendA5pokerPitch(chatId, player.id, player, player.onboarding_topic_id ?? undefined);
+  await askActionPct(chatId, player.id, player, "A5POKER", player.onboarding_topic_id ?? undefined);
 }

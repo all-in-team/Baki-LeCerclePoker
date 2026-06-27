@@ -1,7 +1,8 @@
 import { getDb } from "@/lib/db";
-import { sendMsg, sendMsgKeyboard, setSession, AGENT_CHAT_ID, type Step } from "./helpers";
+import { sendMsg, AGENT_CHAT_ID } from "./helpers";
 import { getPlayerGameWallets, getPlayerCashouts } from "@/lib/queries";
-import { AKS_GAME_LINK, AKS_ACTION_PRESETS } from "@/lib/games/aks/config";
+import { askActionPct } from "./action-pct-prompt";
+import { AKS_GAME_LINK } from "@/lib/games/aks/config";
 
 export async function handleStartAks(chatId: number) {
   const db = getDb();
@@ -40,16 +41,7 @@ export async function handleStartAks(chatId: number) {
   if (tid === undefined) {
     console.warn(`[AKS] player ${player.id} (${player.name}) has NULL onboarding_topic_id — /startaks flow will post in General. Run /linkgroup again or sync-group-structure to backfill topics.`);
   }
-  setSession(chatId, "aks_awaiting_pct" as Step, player.id, player.telegram_id);
 
-  // Owner picks the action % for THIS player before the pitch is sent.
-  const presetRow = AKS_ACTION_PRESETS.map(p => ({ text: `${p}%`, callback_data: `aks_action_${p}` }));
-  await sendMsgKeyboard(chatId,
-    `🎯 <b>${player.name}</b> — choisis le % d'action AKS à proposer :`,
-    [
-      presetRow,
-      [{ text: "✏️ Custom", callback_data: "aks_action_custom" }],
-    ],
-    tid
-  );
+  // Owner types the action % for THIS player (free text) before the pitch is sent.
+  await askActionPct(chatId, player.id, player, "AKS", tid);
 }

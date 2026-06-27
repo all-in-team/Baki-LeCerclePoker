@@ -183,17 +183,11 @@ export async function handleNewMembers(members: any[], chatTitle: string, chatId
         .run(playerId, `A rejoint "${chatTitle}"`);
     }
 
-    // KKPOKER: insert deal + send KKPOKER-specific pitch
-    if (gameName === "KKPOKER") {
+    // KKPOKER / A5POKER: owner picks the action % (free text) before the pitch fires.
+    if (gameName === "KKPOKER" || gameName === "A5POKER") {
       const topicRow = db.prepare(`SELECT onboarding_topic_id FROM players WHERE id = ?`).get(playerId) as { onboarding_topic_id: number | null } | undefined;
-      await sendKkpokerPitch(chatId, playerId, { name, telegram_id: member.id, telegram_handle: member.username ?? null }, topicRow?.onboarding_topic_id ?? undefined);
-      continue;
-    }
-
-    // A5POKER: insert deal + send A5POKER-specific pitch
-    if (gameName === "A5POKER") {
-      const topicRow = db.prepare(`SELECT onboarding_topic_id FROM players WHERE id = ?`).get(playerId) as { onboarding_topic_id: number | null } | undefined;
-      await sendA5pokerPitch(chatId, playerId, { name, telegram_id: member.id, telegram_handle: member.username ?? null }, topicRow?.onboarding_topic_id ?? undefined);
+      const { askActionPct } = await import("./action-pct-prompt");
+      await askActionPct(chatId, playerId, { name, telegram_id: member.id }, gameName, topicRow?.onboarding_topic_id ?? undefined);
       continue;
     }
 
@@ -214,17 +208,26 @@ export async function handleNewMembers(members: any[], chatTitle: string, chatId
   }
 }
 
+// KKPOKER pitch — action % is MODULABLE, chosen by the owner via the shared free-text
+// prompt (askActionPct) and passed in here. The deal is upserted (re-running with a new
+// % updates it), and the pitch copy is built dynamically from the chosen %.
 export async function sendKkpokerPitch(
   chatId: number,
   playerId: number,
   player: { name: string; telegram_id: number | null; telegram_handle: string | null },
+  actionPct: number,
   onboardingTopicId?: number,
 ) {
   const db = getDb();
   const kkGameId = (db.prepare(`SELECT id FROM games WHERE name = 'KKPOKER'`).get() as { id: number } | undefined)?.id;
   if (kkGameId) {
-    db.prepare(`INSERT OR IGNORE INTO player_game_deals (player_id, game_id, action_pct, rakeback_pct) VALUES (?, ?, 40, 0)`).run(playerId, kkGameId);
+    db.prepare(
+      `INSERT INTO player_game_deals (player_id, game_id, action_pct, rakeback_pct) VALUES (?, ?, ?, 0)
+       ON CONFLICT(player_id, game_id) DO UPDATE SET action_pct = excluded.action_pct`
+    ).run(playerId, kkGameId, actionPct);
   }
+
+  const playerPct = 100 - actionPct;
 
   setSession(chatId, "kkpoker_pitch_sent" as Step, playerId, player.telegram_id);
   if (player.telegram_id) trackOnboardingStep(player.telegram_id, "pitch_sent");
@@ -239,8 +242,8 @@ export async function sendKkpokerPitch(
   await sleep(2000);
   await sendMsg(chatId,
     `Voilà le deal qu'on propose :\n\n` +
-    `🤝 Tu joues <b>60%</b> de ton action.\n` +
-    `On prend les 40% restants.\n\n` +
+    `🤝 Tu joues <b>${playerPct}%</b> de ton action.\n` +
+    `On prend les ${actionPct}% restants.\n\n` +
     `C'est de l'action symétrique : <b>win/win, lose/lose</b>.\n` +
     `L'avantage : tu peux simplement jouer plus cher. Ça ne te pénalise pas, ça te protège.`,
     tid
@@ -252,17 +255,25 @@ export async function sendKkpokerPitch(
   ], tid);
 }
 
+// A5POKER pitch — action % is MODULABLE, chosen by the owner via the shared free-text
+// prompt (askActionPct) and passed in here. Deal upserted, pitch copy built from the %.
 export async function sendA5pokerPitch(
   chatId: number,
   playerId: number,
   player: { name: string; telegram_id: number | null; telegram_handle: string | null },
+  actionPct: number,
   onboardingTopicId?: number,
 ) {
   const db = getDb();
   const a5GameId = (db.prepare(`SELECT id FROM games WHERE name = 'A5POKER'`).get() as { id: number } | undefined)?.id;
   if (a5GameId) {
-    db.prepare(`INSERT OR IGNORE INTO player_game_deals (player_id, game_id, action_pct, rakeback_pct) VALUES (?, ?, 20, 0)`).run(playerId, a5GameId);
+    db.prepare(
+      `INSERT INTO player_game_deals (player_id, game_id, action_pct, rakeback_pct) VALUES (?, ?, ?, 0)
+       ON CONFLICT(player_id, game_id) DO UPDATE SET action_pct = excluded.action_pct`
+    ).run(playerId, a5GameId, actionPct);
   }
+
+  const playerPct = 100 - actionPct;
 
   setSession(chatId, "a5poker_pitch_sent" as Step, playerId, player.telegram_id);
   if (player.telegram_id) trackOnboardingStep(player.telegram_id, "pitch_sent");
@@ -277,7 +288,7 @@ export async function sendA5pokerPitch(
   await sleep(2000);
   await sendMsg(chatId,
     `Voilà le deal qu'on propose A5POKER :\n\n` +
-    `🎯 <b>Action 80/20</b> — Tu joues 80% de ton action, on prend 20%. C'est symétrique : win/win, lose/lose.\n\n` +
+    `🎯 <b>Action ${playerPct}/${actionPct}</b> — Tu joues ${playerPct}% de ton action, on prend ${actionPct}%. C'est symétrique : win/win, lose/lose.\n\n` +
     `🛡️ <b>1000 USDT de liquidité garantie</b> — On couvre ton float jusqu'à 1K. Tu joues, on gère le risque.\n\n` +
     `⚡ <b>Règle d'or</b> : max 1K sur le compte. Tout l'extra → cash out direct chez toi. ` +
     `Pourquoi ? On couvre 1K en cas de bug site / ban / dispute. Au-dessus, c'est ton risque, donc sécurise.`,

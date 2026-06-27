@@ -1,7 +1,7 @@
 import { getDb } from "@/lib/db";
-import { sendMsg, sendMsgKeyboard, setSession, AGENT_CHAT_ID } from "./helpers";
+import { sendMsg, AGENT_CHAT_ID } from "./helpers";
 import { AAPKMY_GAME_NAME, AAPKMY_CLUB_ID } from "@/lib/games/aapkmy/config";
-import type { Step } from "./helpers";
+import { askActionPct } from "./action-pct-prompt";
 
 export async function handleStartAapkmy(chatId: number, threadId?: number) {
   const db = getDb();
@@ -36,19 +36,7 @@ export async function handleStartAapkmy(chatId: number, threadId?: number) {
     `🎮 <b>/startaapkmy</b> triggered for <b>${player.name}</b> (id=${player.id}) in group <code>${chatId}</code>`
   );
 
-  setSession(chatId, "aapkmy_pitch_sent" as Step, player.id, player.telegram_id);
-
-  // Anti-bypass: download link + club ID are NOT shown here. They are revealed only
-  // after the player clicks "J'accepte" (handleAapkmyCallback → aapk_accept).
-  await sendMsgKeyboard(chatId,
-    `🎰 <b>Welcome AAPK</b>\n\n` +
-    `💼 Deal: 20% action pour LeCercle\n` +
-    `💱 Taux: 1$ = 6.6 chips\n\n` +
-    `Tu valides le deal ?`,
-    [
-      [{ text: "✅ J'accepte le deal", callback_data: "aapk_accept" }],
-      [{ text: "❓ J'ai une question", callback_data: "aapk_question" }],
-    ],
-    tid
-  );
+  // Owner types the action % for THIS player (free text); the pitch fires after
+  // a valid % via sendAapkmyPitch (handleActionPctRawMessage dispatch).
+  await askActionPct(chatId, player.id, player, "AAPKMY", tid);
 }

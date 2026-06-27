@@ -5,7 +5,6 @@ import {
   type Step,
 } from "@/lib/telegram-commands/helpers";
 import { addPlayerCashout, addPlayerGameWallet, recordDealAcceptance } from "@/lib/queries";
-import { sendAksPitch } from "@/lib/telegram-commands/new-members";
 import { AKS_GAME_NAME, AKS_GAME_LINK } from "./config";
 
 const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
@@ -46,25 +45,6 @@ export async function handleAksCallback(
   const playerName = player?.name ?? from?.first_name ?? "Joueur";
 
   const tid = messageThreadId;
-
-  // ── % action choisi (preset) → lance le pitch avec ce % ──
-  const presetMatch = data.match(/^aks_action_(\d+(?:\.\d+)?)$/);
-  if (presetMatch) {
-    if (!player) return;
-    if (messageId) await editMessageReplyMarkup(chatId, messageId).catch(() => {});
-    const pct = parseFloat(presetMatch[1]);
-    await sendAksPitch(chatId, player.id, player, pct, tid);
-    return;
-  }
-
-  // ── Custom % → demande la saisie ──
-  if (data === "aks_action_custom") {
-    if (!player) return;
-    if (messageId) await editMessageReplyMarkup(chatId, messageId).catch(() => {});
-    setSession(chatId, "waiting_aks_pct" as Step, session.player_id, session.expected_tg_id);
-    await sendMsg(chatId, `✏️ Tape le % d'action AKS pour <b>${playerName}</b> (nombre 1-100, ex : <b>33</b>)`, tid);
-    return;
-  }
 
   // ── Question ──
   if (data === "aks_choice_question") {
@@ -165,21 +145,6 @@ export async function handleAksRawMessage(
   messageThreadId?: number,
 ): Promise<boolean> {
   const reply = (msg: string) => sendMsg(chatId, msg, messageThreadId);
-
-  // ── Custom action % entry (owner types a number) ──
-  if (session.step === ("waiting_aks_pct" as Step)) {
-    const m = text.match(/(\d+(?:\.\d+)?)/);
-    const pct = m ? parseFloat(m[1]) : NaN;
-    if (isNaN(pct) || pct <= 0 || pct > 100) {
-      await reply(`❌ Envoie un nombre entre 1 et 100, ex : <b>33</b>`);
-      return true;
-    }
-    const db = getDb();
-    const player = db.prepare(`SELECT id, name, telegram_id, telegram_handle FROM players WHERE id = ?`).get(session.player_id) as { id: number; name: string; telegram_id: number | null; telegram_handle: string | null } | undefined;
-    if (!player) { await reply(`❌ Joueur introuvable. Contacte @baki77777`); return true; }
-    await sendAksPitch(chatId, player.id, player, pct, messageThreadId);
-    return true;
-  }
 
   // ── Cashout wallet (step 1 of 2) ──
   if (session.step === ("awaiting_aks_cashout_wallet" as Step)) {

@@ -1,7 +1,7 @@
 import { getDb } from "@/lib/db";
 import { sendMsg, AGENT_CHAT_ID } from "./helpers";
 import { getPlayerGameWallets, getPlayerCashouts } from "@/lib/queries";
-import { sendKkpokerPitch } from "./new-members";
+import { askActionPct } from "./action-pct-prompt";
 import { KKPOKER_GAME_LINK } from "@/lib/games/kkpoker/config";
 
 export async function handleStartKkpoker(chatId: number) {
@@ -33,5 +33,5 @@ export async function handleStartKkpoker(chatId: number) {
     `🎮 <b>/startkkpoker</b> triggered for <b>${player.name}</b> (id=${player.id}) in group <code>${chatId}</code>`
   );
 
-  await sendKkpokerPitch(chatId, player.id, player, player.onboarding_topic_id ?? undefined);
+  await askActionPct(chatId, player.id, player, "KKPOKER", player.onboarding_topic_id ?? undefined);
 }
