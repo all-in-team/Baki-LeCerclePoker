@@ -1,18 +1,12 @@
 import { getDb } from "@/lib/db";
 import { sendMsg, setSession, type Step } from "./helpers";
 
-// Shared free-text action-% entry for the action games. QQPK (staking 70/30 fixe)
-// is deliberately NOT here. The owner types the exact % at onboarding; it is stored
-// per-player+game in player_game_deals.action_pct and then drives the agency cut
-// (my_pnl = net * action_pct/100) for the wallet games. AAPK is included for flow
-// consistency even though it is identity-only (its % is cosmetic until AAPK joins
-// AGENCY_GAMES).
-const ACTION_GAMES: Record<string, { label: string }> = {
-  A5POKER: { label: "A5POKER" },
-  KKPOKER: { label: "KKPOKER" },
-  AKS: { label: "AKS" },
-  AAPKMY: { label: "AAPK" },
-};
+// Shared free-text action-% entry for the action games (A5POKER, KKPOKER, AKS, AAPKMY).
+// QQPK (staking 70/30 fixe) is deliberately NOT here. The owner types the exact % at
+// onboarding; it is stored per-player+game in player_game_deals.action_pct and then
+// drives the agency cut (my_pnl = net * action_pct/100) for the wallet games. AAPK is
+// included for flow consistency even though it is identity-only (its % is cosmetic until
+// AAPK joins AGENCY_GAMES). gameKey is passed straight through to the pitch dispatch below.
 
 type StartPlayer = { name: string; telegram_id: number | null };
 
@@ -26,17 +20,9 @@ export async function askActionPct(
   gameKey: string,
   tid?: number,
 ) {
-  const cfg = ACTION_GAMES[gameKey];
-  const label = cfg?.label ?? gameKey;
-  const hintRow = getDb()
-    .prepare(`SELECT default_action_pct FROM games WHERE name = ?`)
-    .get(gameKey) as { default_action_pct: number | null } | undefined;
-  const hint = hintRow?.default_action_pct ?? 30;
-
   setSession(chatId, "waiting_game_action_pct" as Step, playerId, player.telegram_id, gameKey);
   await sendMsg(chatId,
-    `✏️ <b>${player.name}</b> — quel % d'action <b>${label}</b> pour ce joueur ?\n` +
-    `Tape le nombre exact (0 à 100, décimales OK — ex : <b>${hint}</b>).`,
+    `<b>${player.name}</b>\n% Action ?`,
     tid
   );
 }
