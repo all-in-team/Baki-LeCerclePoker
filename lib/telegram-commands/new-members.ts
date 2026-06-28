@@ -422,6 +422,7 @@ export async function sendQqpkPitch(
   await sendMsg(chatId,
     `💰 Tu joues avec ton bankroll. Le Cercle porte <b>70% de tes pertes</b>, tu portes 30%.\n\n` +
     `📈 Sur les gains : tu gardes <b>70%</b>, le Cercle prend 30%.\n\n` +
+    `📊 <b>Ton rakeback compte dans tes gains</b> — tout ce que tu reçois (rakeback, cochon dans l'app QQPK) fait partie de ton total. Le partage 70/30 s'applique sur l'ensemble : gains, pertes ET rakeback inclus.\n\n` +
     `🔄 <b>Règlement mensuel</b> (ton cycle démarre aujourd'hui), avec makeup : tes pertes avancées sont remboursées par tes gains avant tout partage.\n\n` +
     `🎯 <b>Condition : minimum 30 000 mains</b> sur le mois. En dessous, tes pertes ne sont PAS couvertes (mais le partage des gains s'applique quand même).\n\n` +
     `⚖️ Le partage 70/30 se calcule sur ton <b>net cumulé du mois</b>, pas semaine par semaine.\n\n` +
