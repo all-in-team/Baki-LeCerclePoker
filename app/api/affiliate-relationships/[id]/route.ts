@@ -64,6 +64,23 @@ export async function PATCH(req: NextRequest, { params }: Ctx) {
 
 export async function DELETE(_: NextRequest, { params }: Ctx) {
   const { id } = await params;
-  getDb().prepare(`UPDATE affiliate_relationships SET status = 'terminated' WHERE id = ?`).run(Number(id));
-  return NextResponse.json({ ok: true });
+  const db = getDb();
+  const rel = db.prepare(`SELECT referred_player_id FROM affiliate_relationships WHERE id = ?`).get(Number(id)) as
+    | { referred_player_id: number }
+    | undefined;
+  db.prepare(`UPDATE affiliate_relationships SET status = 'terminated' WHERE id = ?`).run(Number(id));
+
+  // After terminate: strip the [agent] tag from the filleul's Telegram group (or re-tag with the
+  // remaining active agent, if any). Single rename, never blocks the termination above.
+  let group_rename: unknown = undefined;
+  if (rel) {
+    try {
+      const { retagAffiliatedGroupForReferred } = await import("@/lib/affiliate-group-rename");
+      group_rename = await retagAffiliatedGroupForReferred(rel.referred_player_id);
+    } catch (re: any) {
+      console.warn("[AFFILIATE] group retag after terminate failed:", re?.message ?? String(re));
+      group_rename = { status: "failed", error: re?.message ?? String(re) };
+    }
+  }
+  return NextResponse.json({ ok: true, group_rename });
 }
