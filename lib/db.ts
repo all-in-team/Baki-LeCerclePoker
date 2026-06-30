@@ -1184,6 +1184,51 @@ function initSchema(db: Database.Database) {
     console.error(`[MIGRATION:aff_rel_nullable_origin_v1] FAILED:`, err.message);
   }
 
+  // Replace the table-level UNIQUE(referred_player_id) — which let a *terminated* relation occupy
+  // the slot and block re-affiliation — with a PARTIAL unique index scoped to active rows only.
+  // Business rule: "at most 1 ACTIVE agent per filleul"; terminated history coexists freely.
+  // Append-only rebuild (no DELETE), atomic transaction, ids preserved → FK refs from
+  // affiliate_payments / affiliate_relationship_games stay intact.
+  try {
+    const fix = db.prepare(`INSERT OR IGNORE INTO _applied_fixes (name) VALUES (?)`).run("aff_rel_unique_active_only_v1");
+    if (fix.changes > 0) {
+      const before = (db.prepare(`SELECT COUNT(*) AS n FROM affiliate_relationships`).get() as { n: number }).n;
+      db.pragma("foreign_keys = OFF");
+      const tx = db.transaction(() => {
+        db.exec(`
+          CREATE TABLE affiliate_relationships_new (
+            id                      INTEGER PRIMARY KEY AUTOINCREMENT,
+            affiliate_player_id     INTEGER NOT NULL REFERENCES players(id) ON DELETE CASCADE,
+            referred_player_id      INTEGER NOT NULL REFERENCES players(id) ON DELETE CASCADE,
+            origin_game_id          INTEGER REFERENCES games(id),
+            start_date              TEXT NOT NULL DEFAULT (date('now')),
+            status                  TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active', 'paused', 'terminated')),
+            disclosed_action_pct    REAL,
+            disclosed_rakeback_pct  REAL,
+            disclosed_insurance_pct REAL,
+            exclude_agency_extras   INTEGER NOT NULL DEFAULT 1,
+            notes                   TEXT,
+            created_at              TEXT NOT NULL DEFAULT (datetime('now'))
+          );
+          INSERT INTO affiliate_relationships_new SELECT * FROM affiliate_relationships;
+          DROP TABLE affiliate_relationships;
+          ALTER TABLE affiliate_relationships_new RENAME TO affiliate_relationships;
+          CREATE INDEX idx_aff_rel_affiliate ON affiliate_relationships(affiliate_player_id);
+          CREATE INDEX idx_aff_rel_referred ON affiliate_relationships(referred_player_id);
+          CREATE UNIQUE INDEX idx_aff_rel_referred_active ON affiliate_relationships(referred_player_id) WHERE status = 'active';
+        `);
+      });
+      tx();
+      db.pragma("foreign_keys = ON");
+      const after = (db.prepare(`SELECT COUNT(*) AS n FROM affiliate_relationships`).get() as { n: number }).n;
+      console.log(`[MIGRATION] aff_rel_unique_active_only_v1 applied (rows before=${before} after=${after})`);
+    }
+  } catch (err: any) {
+    db.pragma("foreign_keys = ON");
+    console.error(`[MIGRATION:aff_rel_unique_active_only_v1] FAILED:`, err.message);
+    console.error(err.stack);
+  }
+
   try {
     const fix = db.prepare(`INSERT OR IGNORE INTO _applied_fixes (name) VALUES (?)`).run("add_affiliate_profiles_v1");
     if (fix.changes > 0) {
