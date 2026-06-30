@@ -256,7 +256,7 @@ export default function AffiliatesClient({ agents, players, activeGames, existin
   }
 
   async function handleCreate() {
-    if (!form.affiliate_player_id || !form.referred_player_id || !form.origin_game_id) return;
+    if (!form.affiliate_player_id || !form.referred_player_id) return;
     setSaving(true);
     try {
       const res = await fetch("/api/affiliate-relationships", {
@@ -264,7 +264,7 @@ export default function AffiliatesClient({ agents, players, activeGames, existin
         body: JSON.stringify({
           affiliate_player_id: form.affiliate_player_id,
           referred_player_id: form.referred_player_id,
-          origin_game_id: form.origin_game_id,
+          origin_game_id: form.origin_game_id || null,
           start_date: form.start_date,
           notes: form.notes || null,
         }),
@@ -378,10 +378,10 @@ export default function AffiliatesClient({ agents, players, activeGames, existin
         {renderPlayerPicker("Referred", form.referred_player_id, id => setForm({ ...form, referred_player_id: id }), searchRef, setSearchRef, filteredRef, isEdit)}
         <div style={{ display: "flex", gap: 12 }}>
           <div style={{ flex: 1 }}>
-            <label style={{ fontSize: 11, fontWeight: 700, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.07em", display: "block", marginBottom: 6 }}>Origin Game</label>
+            <label style={{ fontSize: 11, fontWeight: 700, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.07em", display: "block", marginBottom: 6 }}>Origin Game <span style={{ fontWeight: 400, textTransform: "none", letterSpacing: 0 }}>(optionnel)</span></label>
             <select value={form.origin_game_id} onChange={e => setForm({ ...form, origin_game_id: Number(e.target.value) })}
               style={{ width: "100%", padding: "9px 12px", borderRadius: 7, fontSize: 13, background: "var(--bg-surface)", color: "var(--text)", border: "1px solid var(--border)", outline: "none" }}>
-              <option value={0}>Choisir...</option>
+              <option value={0}>Aucune (optionnel)</option>
               {activeGames.map(g => <option key={g.id} value={g.id}>{g.name}</option>)}
             </select>
           </div>
@@ -672,7 +672,7 @@ export default function AffiliatesClient({ agents, players, activeGames, existin
         {renderFormFields(false)}
         <div style={{ display: "flex", justifyContent: "flex-end", gap: 10, marginTop: 16 }}>
           <button onClick={() => setCreateOpen(false)} style={{ padding: "8px 18px", borderRadius: 7, fontSize: 13, cursor: "pointer", background: "none", border: "1px solid var(--border)", color: "var(--text-muted)" }}>Annuler</button>
-          <button onClick={handleCreate} disabled={saving || !form.affiliate_player_id || !form.referred_player_id || !form.origin_game_id} style={{ padding: "8px 18px", borderRadius: 7, fontSize: 13, fontWeight: 600, cursor: saving ? "wait" : "pointer", background: "rgba(34,197,94,0.15)", border: "1px solid rgba(34,197,94,0.3)", color: "#22C55E", opacity: saving || !form.affiliate_player_id || !form.referred_player_id || !form.origin_game_id ? 0.5 : 1 }}>
+          <button onClick={handleCreate} disabled={saving || !form.affiliate_player_id || !form.referred_player_id} style={{ padding: "8px 18px", borderRadius: 7, fontSize: 13, fontWeight: 600, cursor: saving ? "wait" : "pointer", background: "rgba(34,197,94,0.15)", border: "1px solid rgba(34,197,94,0.3)", color: "#22C55E", opacity: saving || !form.affiliate_player_id || !form.referred_player_id ? 0.5 : 1 }}>
             {saving ? "..." : "Creer"}
           </button>
         </div>
