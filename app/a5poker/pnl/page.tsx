@@ -5,26 +5,16 @@ import {
   getPlayerCashouts, getPlayerGameWallets, getWalletMeresForGame,
 } from "@/lib/queries";
 import { getAvailableTransactions, getManualSettlementHistory } from "@/lib/manual-settlement-engine";
+import { computePeriodFilter } from "@/lib/period-filter";
+import { getLast12Weeks } from "@/lib/date-utils";
 import PageHeader from "@/components/PageHeader";
 import AgencyExtras from "@/components/AgencyExtras";
 import A5SettlementClient from "./A5SettlementClient";
 
-function computePeriod(filter: string | undefined): { key: string; since?: string; end?: string; label: string } {
-  const now = new Date();
-  if (filter === "7d") {
-    const s = new Date(now.getTime() - 7 * 86400000);
-    return { key: "7d", since: s.toISOString(), end: now.toISOString(), label: "7 derniers jours" };
-  }
-  if (filter === "30d") {
-    const s = new Date(now.getTime() - 30 * 86400000);
-    return { key: "30d", since: s.toISOString(), end: now.toISOString(), label: "30 derniers jours" };
-  }
-  return { key: "lifetime", since: undefined, end: undefined, label: "Lifetime" };
-}
-
 export default async function A5POKERPage({ searchParams }: { searchParams: Promise<{ filter?: string }> }) {
   const { filter } = await searchParams;
-  const period = computePeriod(filter);
+  const period = computePeriodFilter(filter);
+  const weeks = getLast12Weeks();
   const a5GameId = (getDb().prepare(`SELECT id FROM games WHERE name = 'A5POKER'`).get() as { id: number } | undefined)?.id;
   if (!a5GameId) {
     return <PageHeader title="A5POKER — P&L" subtitle="Game A5POKER introuvable en base." />;
@@ -32,7 +22,7 @@ export default async function A5POKERPage({ searchParams }: { searchParams: Prom
 
   // P&L view (KPIs / rows / curve) honors the period filter. The settlement flow below is
   // period-INDEPENDENT (operates on ALL unsettled tx) — availableByPlayer stays lifetime.
-  const pFilter = { game_name: "A5POKER" as const, since_date: period.since, end_date: period.end };
+  const pFilter = { game_name: "A5POKER" as const, since_date: period.startDate, end_date: period.endDate };
   const summary = getWalletSummaryByPlayer(pFilter) as any[];
   const kpis = getWalletKPIs(pFilter);
   const netSeries = getNetPnlSeries(pFilter) as { day: string; cumulative_net: number }[];
@@ -86,7 +76,8 @@ export default async function A5POKERPage({ searchParams }: { searchParams: Prom
         walletMeres={walletMeres}
         gameId={a5GameId}
         activeFilter={period.key}
-        rangeLabel={period.label}
+        rangeLabel={period.rangeLabel}
+        weeks={weeks.map(w => ({ isoWeek: w.isoWeek, label: w.label }))}
         basePath="/a5poker/pnl"
       />
       <AgencyExtras gameKey="a5poker" />

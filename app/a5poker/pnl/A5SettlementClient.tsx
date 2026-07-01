@@ -4,11 +4,12 @@ import { Fragment, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
   Wallet, RefreshCw, Settings2, ExternalLink, Plus, X, Save, Scale, Lock, Unlock,
-  BadgeCheck, AlertTriangle, ArrowDownLeft, ArrowUpRight, TrendingUp, CalendarDays,
+  BadgeCheck, AlertTriangle, ArrowDownLeft, ArrowUpRight, TrendingUp,
 } from "lucide-react";
 import StatCard from "@/components/StatCard";
 import Btn from "@/components/Btn";
 import Modal from "@/components/Modal";
+import PeriodFilterBar from "@/components/PeriodFilterBar";
 import NetPnlChart from "../../akpoker/pnl/NetPnlChart";
 import { previewAction, lockAction, markPaidAction, unlockAction } from "./actions";
 
@@ -61,17 +62,11 @@ function weekInfo(ts: string): { key: string; label: string } {
   return { key: monday.toISOString().slice(0, 10), label: `W${weekNum} · ${fmtDM(monday)}–${fmtDM(sunday)}` };
 }
 
-const PERIODS = [
-  { key: "7d", label: "7 jours" },
-  { key: "30d", label: "30 jours" },
-  { key: "lifetime", label: "Lifetime" },
-] as const;
-
 export default function A5SettlementClient({
   rows, kpis, netSeries = [],
   availableByPlayer = {}, settlementsByPlayer = {},
   cashoutsByPlayer = {}, gameWalletsByPlayer = {}, walletMeres = [], gameId,
-  activeFilter = "lifetime", rangeLabel = "Lifetime", basePath = "/a5poker/pnl",
+  activeFilter = "current", rangeLabel = "Cette semaine", weeks = [], basePath = "/a5poker/pnl",
 }: {
   rows: Row[]; kpis: KPIs; netSeries?: { day: string; cumulative_net: number }[];
   availableByPlayer?: Record<number, AvailableTx[]>;
@@ -79,7 +74,7 @@ export default function A5SettlementClient({
   cashoutsByPlayer?: Record<number, Addr[]>;
   gameWalletsByPlayer?: Record<number, Addr[]>;
   walletMeres?: WalletMere[]; gameId: number;
-  activeFilter?: string; rangeLabel?: string; basePath?: string;
+  activeFilter?: string; rangeLabel?: string; weeks?: { isoWeek: string; label: string }[]; basePath?: string;
 }) {
   const router = useRouter();
   const [syncing, setSyncing] = useState(false);
@@ -97,8 +92,6 @@ export default function A5SettlementClient({
 
   const netAccent: "green" | "red" | "neutral" = kpis.total_net > 0 ? "green" : kpis.total_net < 0 ? "red" : "neutral";
   const myAccent: "gold" | "red" = kpis.my_total_pnl >= 0 ? "gold" : "red";
-
-  function navigate(filter: string) { router.push(filter === "lifetime" ? basePath : `${basePath}?filter=${filter}`); }
 
   async function syncWallets() {
     setSyncing(true); setSyncResult(null);
@@ -190,18 +183,13 @@ export default function A5SettlementClient({
     <div style={{ padding: "8px 28px 40px" }}>
       <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
 
-      {/* Period filter + wallet action bar */}
-      <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", margin: "10px 0 16px" }}>
-        <div style={{ display: "flex", border: "1px solid var(--border)", borderRadius: 8, overflow: "hidden" }}>
-          {PERIODS.map(p => (
-            <button key={p.key} onClick={() => navigate(p.key)} style={{
-              padding: "6px 14px", fontSize: 12, fontWeight: 600, cursor: "pointer", border: "none",
-              background: activeFilter === p.key ? "rgba(34,197,94,0.14)" : "transparent",
-              color: activeFilter === p.key ? "var(--green)" : "var(--text-muted)",
-            }}>{p.label}</button>
-          ))}
-        </div>
-        <div style={{ width: 1, height: 20, background: "var(--border)" }} />
+      {/* Period filter (shared across all P&L pages) */}
+      <div style={{ marginTop: 10 }}>
+        <PeriodFilterBar activeFilter={activeFilter} rangeLabel={rangeLabel} weeks={weeks} basePath={basePath} />
+      </div>
+
+      {/* Wallet action bar */}
+      <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", margin: "0 0 16px" }}>
         <Btn variant="secondary" onClick={syncWallets} disabled={syncing}>
           <RefreshCw size={14} style={{ animation: syncing ? "spin 1s linear infinite" : "none" }} />
           {syncing ? "Sync en cours…" : "Sync Wallets"}
@@ -212,7 +200,6 @@ export default function A5SettlementClient({
             {syncResult.imported > 0 ? `+${syncResult.imported} importés` : "Déjà à jour"}
           </span>
         )}
-        <span style={{ marginLeft: "auto", fontSize: 11, color: "var(--text-dim)", display: "inline-flex", alignItems: "center", gap: 6 }}><CalendarDays size={12} /> {rangeLabel}</span>
       </div>
 
       {/* Wallet mère banner */}
