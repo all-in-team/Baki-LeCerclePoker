@@ -37,7 +37,7 @@ export default function LedgerShell({
       {walletMeresBanner}
 
       {kpiCards.length > 0 && (
-        <div style={{ display: "grid", gridTemplateColumns: `repeat(${kpiCards.length}, 1fr)`, gap: 16, marginBottom: 20 }}>
+        <div style={{ display: "grid", gridTemplateColumns: kpiCards.map(c => (c.emphasis ? "1.3fr" : "1fr")).join(" "), gap: 16, marginBottom: 20 }}>
           {kpiCards.map((c, i) => (
             <StatCard key={i} label={c.label} value={c.value} sub={c.sub} accent={c.accent} icon={c.icon} />
           ))}

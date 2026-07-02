@@ -23,6 +23,8 @@ export interface LedgerKpiCard {
   sub?: string;
   accent?: "green" | "gold" | "neutral" | "red";
   icon?: ReactNode;
+  /** Slightly wider column in the KPI grid (visual priority — e.g. Mon Total P&L). */
+  emphasis?: boolean;
 }
 
 /**

@@ -1,11 +1,11 @@
 "use client";
 
-import { Fragment, useState } from "react";
+import { Fragment, useMemo, useState } from "react";
 import { fmtSignedAmount } from "@/components/ledger/format";
 import PlayerWalletsPanel, { WalletBadgeButton, type WalletAddr } from "@/components/ledger/extras/PlayerWalletsPanel";
-import SettlementFlow, { type AvailableTx, type SettlementRow, type SettlementPreview } from "@/components/ledger/extras/SettlementFlow";
+import SettlementFlow, { dueLabel, type AvailableTx, type SettlementRow, type SettlementPreview } from "@/components/ledger/extras/SettlementFlow";
 import Btn from "@/components/Btn";
-import { Scale } from "lucide-react";
+import { Scale, Search, ChevronDown, ChevronUp } from "lucide-react";
 import type { KkLedgerRow } from "@/lib/games/kkpoker/ledger";
 
 /**
@@ -13,10 +13,16 @@ import type { KkLedgerRow } from "@/lib/games/kkpoker/ledger";
  * the two ledger extras plugged in A5-style: 💼 wallet badge next to the name
  * (opens PlayerWalletsPanel read-only) and a "Régler" button per row (opens
  * SettlementFlow with preview only — no lock/pay/unlock actions wired).
+ *
+ * Search + sort are display-only (filter/reorder the server-computed rows);
+ * the estimated due badge shows the loader's previewSettlement result — no
+ * client-side money math.
  */
 
+type SortKey = "name" | "net" | "my_pnl" | "due";
+
 export default function ShadowTable({
-  rows, gameId, cashoutsByPlayer, gameWalletsByPlayer, availableByPlayer, settlementsByPlayer, previewAction,
+  rows, gameId, cashoutsByPlayer, gameWalletsByPlayer, availableByPlayer, settlementsByPlayer, estimatedDueByPlayer, previewAction,
 }: {
   rows: KkLedgerRow[];
   gameId: number;
@@ -24,38 +30,90 @@ export default function ShadowTable({
   gameWalletsByPlayer: Record<number, WalletAddr[]>;
   availableByPlayer: Record<number, AvailableTx[]>;
   settlementsByPlayer: Record<number, SettlementRow[]>;
+  estimatedDueByPlayer: Record<number, number>;
   previewAction: (playerId: number, txIds: number[]) => Promise<SettlementPreview>;
 }) {
   const [walletOpen, setWalletOpen] = useState<number | null>(null);
   const [settleOpen, setSettleOpen] = useState<number | null>(null);
+  const [search, setSearch] = useState("");
+  const [sortKey, setSortKey] = useState<SortKey>("my_pnl");
+  const [sortDir, setSortDir] = useState<1 | -1>(-1); // -1 = desc (default, matches prod my_pnl desc)
+
+  function toggleSort(key: SortKey) {
+    if (sortKey === key) { setSortDir(d => (d === 1 ? -1 : 1)); }
+    else { setSortKey(key); setSortDir(key === "name" ? 1 : -1); }
+  }
+
+  const displayed = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    const filtered = q ? rows.filter(r => r.player_name.toLowerCase().includes(q)) : rows;
+    const val = (r: KkLedgerRow): number | string => {
+      if (sortKey === "name") return r.player_name.toLowerCase();
+      if (sortKey === "net") return r.net;
+      if (sortKey === "due") return estimatedDueByPlayer[r.player_id] ?? 0;
+      return r.my_pnl;
+    };
+    return [...filtered].sort((a, b) => {
+      const va = val(a), vb = val(b);
+      const cmp = typeof va === "string" ? va.localeCompare(vb as string) : (va as number) - (vb as number);
+      return cmp * sortDir;
+    });
+  }, [rows, search, sortKey, sortDir, estimatedDueByPlayer]);
 
   const COLS = 7;
   const nbToSettle = rows.filter(r => (availableByPlayer[r.player_id]?.length ?? 0) > 0).length;
   const nbLocked = Object.values(settlementsByPlayer).flat().filter(s => s.status === "locked").length;
 
+  const sortIndicator = (key: SortKey) => sortKey === key
+    ? (sortDir === -1 ? <ChevronDown size={11} style={{ verticalAlign: "-2px" }} /> : <ChevronUp size={11} style={{ verticalAlign: "-2px" }} />)
+    : null;
+  const sortableTh = (label: string, key: SortKey, align: "left" | "center" = "left") => (
+    <th style={{ padding: 0, textAlign: align }}>
+      <button onClick={() => toggleSort(key)} style={{ width: "100%", padding: "10px 16px", textAlign: align, fontSize: 11, fontWeight: 600, color: sortKey === key ? "var(--text)" : "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.08em", whiteSpace: "nowrap", background: "transparent", border: "none", cursor: "pointer" }}>
+        {label} {sortIndicator(key)}
+      </button>
+    </th>
+  );
+
   return (
     <div style={{ background: "var(--bg-raised)", border: "1px solid var(--border)", borderRadius: 10, marginBottom: 28 }}>
-      <div style={{ padding: "14px 20px", borderBottom: "1px solid var(--border)", display: "flex", alignItems: "center", gap: 12 }}>
+      <div style={{ padding: "14px 20px", borderBottom: "1px solid var(--border)", display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
         <span style={{ fontSize: 13, fontWeight: 700, color: "var(--text)" }}>Joueurs KKPOKER</span>
         <span style={{ fontSize: 11, color: "var(--text-dim)" }}>shadow — settlement en preview seul</span>
         {nbToSettle > 0 && <span style={{ fontSize: 11, fontWeight: 700, color: "#F5C518", background: "rgba(245,197,24,0.12)", border: "1px solid rgba(245,197,24,0.3)", padding: "2px 8px", borderRadius: 10 }}>{nbToSettle} à régler</span>}
         {nbLocked > 0 && <span style={{ fontSize: 11, fontWeight: 700, color: "#10B981", background: "rgba(16,185,129,0.12)", border: "1px solid rgba(16,185,129,0.3)", padding: "2px 8px", borderRadius: 10 }}>{nbLocked} à payer</span>}
+        <div style={{ flex: 1 }} />
+        <span style={{ display: "inline-flex", alignItems: "center", gap: 6, background: "var(--bg-surface)", border: "1px solid var(--border)", borderRadius: 7, padding: "5px 10px" }}>
+          <Search size={12} color="var(--text-dim)" />
+          <input
+            value={search}
+            onChange={e => setSearch(e.target.value)}
+            placeholder="Chercher un joueur…"
+            spellCheck={false}
+            style={{ background: "transparent", border: "none", outline: "none", fontSize: 12, color: "var(--text)", width: 160 }}
+          />
+          {search && <button onClick={() => setSearch("")} style={{ background: "none", border: "none", cursor: "pointer", color: "var(--text-dim)", fontSize: 11, padding: 0 }}>✕</button>}
+        </span>
       </div>
       <div style={{ overflowX: "auto" }}>
         <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 820 }}>
           <thead>
             <tr style={{ borderBottom: "1px solid var(--border)" }}>
-              {["Joueur", "Net P&L", "Agency P&L", "Action %", "RB %", "Début", "Règlement"].map((h, i) => (
-                <th key={i} style={{ padding: "10px 16px", textAlign: i === 6 ? "center" : "left", fontSize: 11, fontWeight: 600, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.08em", whiteSpace: "nowrap" }}>{h}</th>
+              {sortableTh("Joueur", "name")}
+              {sortableTh("Net P&L", "net")}
+              {sortableTh("Agency P&L", "my_pnl")}
+              {["Action %", "RB %", "Début"].map((h, i) => (
+                <th key={i} style={{ padding: "10px 16px", textAlign: "left", fontSize: 11, fontWeight: 600, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.08em", whiteSpace: "nowrap" }}>{h}</th>
               ))}
+              {sortableTh("Règlement", "due", "center")}
             </tr>
           </thead>
           <tbody>
-            {rows.length === 0 ? (
+            {displayed.length === 0 ? (
               <tr><td colSpan={COLS} style={{ padding: 32, textAlign: "center", color: "var(--text-dim)", fontSize: 13 }}>
-                Aucun joueur KKPOKER — ajoute un deal à un joueur depuis son profil
+                {search ? `Aucun joueur ne correspond à « ${search} »` : "Aucun joueur KKPOKER — ajoute un deal à un joueur depuis son profil"}
               </td></tr>
-            ) : rows.map(row => {
+            ) : displayed.map(row => {
               const netC = row.net > 0 ? "var(--green)" : row.net < 0 ? "#f87171" : "rgba(255,255,255,0.15)";
               const myC = row.my_pnl > 0 ? "var(--green)" : row.my_pnl < 0 ? "#f87171" : "rgba(255,255,255,0.15)";
               const gw = gameWalletsByPlayer[row.player_id] ?? [];
@@ -75,6 +133,15 @@ export default function ShadowTable({
                         <WalletBadgeButton count={walletCount} isOpen={isWalletOpen} onClick={() => { setSettleOpen(null); setWalletOpen(isWalletOpen ? null : row.player_id); }} />
                         <span>{row.player_name}</span>
                         {avail.length > 0 && <span style={{ fontSize: 10, fontWeight: 700, color: "#F5C518", background: "rgba(245,197,24,0.12)", border: "1px solid rgba(245,197,24,0.3)", padding: "1px 7px", borderRadius: 10 }}>{avail.length} à régler</span>}
+                        {estimatedDueByPlayer[row.player_id] !== undefined && (
+                          // Estimated due over ALL unsettled tx — value straight from
+                          // previewSettlement (loader), same number as the Régler recap.
+                          <span
+                            title="Estimation sur TOUTES les tx non réglées (le flow Régler ne pré-coche que la dernière semaine — « Tout cocher » pour retrouver ce montant)"
+                            style={{ fontSize: 10, fontWeight: 700, color: dueLabel(estimatedDueByPlayer[row.player_id]).color, whiteSpace: "nowrap", cursor: "help" }}>
+                            ≈ {dueLabel(estimatedDueByPlayer[row.player_id]).text}
+                          </span>
+                        )}
                         {lockedN > 0 && <span style={{ fontSize: 10, fontWeight: 700, color: "#10B981", background: "rgba(16,185,129,0.12)", border: "1px solid rgba(16,185,129,0.3)", padding: "1px 7px", borderRadius: 10 }}>{lockedN} à payer</span>}
                       </span>
                     </td>

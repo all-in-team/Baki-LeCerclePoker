@@ -94,11 +94,12 @@ export function loadNutspkLedger(
   const myPnlAccent: "gold" | "red" = kpis.my_total_pnl >= 0 ? "gold" : "red";
   const netAccent: "green" | "red" | "neutral" = kpis.total_net > 0 ? "green" : kpis.total_net < 0 ? "red" : "neutral";
 
+  // Order = visual priority: Baki's two key numbers first (emphasis), raw totals after.
   const kpiCards: LedgerKpiCard[] = [
+    { label: "Mon Total P&L", value: (kpis.my_total_pnl >= 0 ? "+" : "−") + fmtKpiAmount(Math.abs(kpis.my_total_pnl)) + " USDT", sub: "Ma part selon chaque deal", accent: myPnlAccent, icon: <Wallet size={18} />, emphasis: true },
+    { label: "Players Net P&L", value: (kpis.total_net >= 0 ? "+" : "−") + fmtKpiAmount(Math.abs(kpis.total_net)) + " USDT", sub: "Retraits − Dépôts", accent: netAccent, icon: <TrendingUp size={18} />, emphasis: true },
     { label: "Total Deposited", value: fmtKpiAmount(kpis.total_deposited) + " USDT", sub: "Tous joueurs", accent: "neutral", icon: <ArrowDownLeft size={18} /> },
     { label: "Total Withdrawn", value: fmtKpiAmount(kpis.total_withdrawn) + " USDT", sub: "Tous joueurs", accent: "neutral", icon: <ArrowUpRight size={18} /> },
-    { label: "Players Net P&L", value: (kpis.total_net >= 0 ? "+" : "−") + fmtKpiAmount(Math.abs(kpis.total_net)) + " USDT", sub: "Retraits − Dépôts", accent: netAccent, icon: <TrendingUp size={18} /> },
-    { label: "Mon Total P&L", value: (kpis.my_total_pnl >= 0 ? "+" : "−") + fmtKpiAmount(Math.abs(kpis.my_total_pnl)) + " USDT", sub: "Ma part selon chaque deal", accent: myPnlAccent, icon: <Wallet size={18} /> },
   ];
 
   return {

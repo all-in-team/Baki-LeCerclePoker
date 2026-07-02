@@ -43,7 +43,7 @@ function fmt(n: number): string { return Math.abs(n).toLocaleString("fr-FR", { m
 function signed(n: number): string { return (n >= 0 ? "+" : "−") + fmt(n); }
 function fmtDate(s: string | null): string { if (!s) return "—"; return new Date(s).toLocaleDateString("fr-FR", { day: "2-digit", month: "short", year: "2-digit", timeZone: "UTC" }); }
 function fmtDM(d: Date): string { return d.toLocaleDateString("fr-FR", { day: "numeric", month: "short", timeZone: "UTC" }); }
-function dueLabel(due: number): { text: string; color: string } {
+export function dueLabel(due: number): { text: string; color: string } {
   if (Math.abs(due) < 0.005) return { text: "Rien à verser", color: "var(--text-dim)" };
   if (due > 0) return { text: `Cercle verse ${fmt(due)} USDT`, color: "#EF4444" };
   return { text: `Joueur verse ${fmt(due)} USDT`, color: "#10B981" };
@@ -99,7 +99,12 @@ export default function SettlementFlow({
   const weeks = [...weekMap.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([key, label]) => ({ key, label }));
 
   const [curWeek, setCurWeek] = useState<string | undefined>(weeks.length > 0 ? weeks[weeks.length - 1].key : undefined);
-  const [sel, setSel] = useState<Set<number>>(new Set());
+  // The most recent week's tx come pre-checked (weekly settle = 1 click less);
+  // the recap/preview before Lock stays the safety gate on what's selected.
+  const [sel, setSel] = useState<Set<number>>(() => {
+    const def = weeks.length > 0 ? weeks[weeks.length - 1].key : undefined;
+    return def ? new Set(avail.filter(t => weekInfo(t.tx_datetime ?? t.tx_date).key === def).map(t => t.id)) : new Set();
+  });
   const [recap, setRecap] = useState<{ ids: number[]; preview: SettlementPreview | null } | null>(null);
   const [settleBusy, setSettleBusy] = useState(false);
   const [payHash, setPayHash] = useState<Record<number, string>>({});

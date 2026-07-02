@@ -1,8 +1,8 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { Calendar, Clock, ChevronDown } from "lucide-react";
+import { Calendar, Clock, ChevronDown, Loader2 } from "lucide-react";
 
 export interface WeekOpt { isoWeek: string; label: string }
 
@@ -31,15 +31,23 @@ export default function PeriodFilterBar({
   const [customStartTime, setCustomStartTime] = useState("00:00");
   const [customEnd, setCustomEnd] = useState("");
   const [customEndTime, setCustomEndTime] = useState("23:59");
+  // Pending feedback: the clicked filter highlights instantly and the bar dims
+  // while the server re-renders — without this the click feels dead for 1-2s.
+  const [isPending, startTransition] = useTransition();
+  const [pendingFilter, setPendingFilter] = useState<string | null>(null);
+  const effectiveFilter = isPending && pendingFilter !== null ? pendingFilter : activeFilter;
 
   function navigate(filter: string) {
     setWeekOpen(false);
-    router.push(filter === "current" ? basePath : `${basePath}?filter=${filter}`);
+    setPendingFilter(filter);
+    startTransition(() => {
+      router.push(filter === "current" ? basePath : `${basePath}?filter=${filter}`);
+    });
   }
 
-  const isWeekPick = /^\d{4}-W\d{2}$/.test(activeFilter);
-  const activeWeekLabel = isWeekPick ? weeks.find(w => w.isoWeek === activeFilter)?.label : null;
-  const isCustom = activeFilter.startsWith("custom:");
+  const isWeekPick = /^\d{4}-W\d{2}$/.test(effectiveFilter);
+  const activeWeekLabel = isWeekPick ? weeks.find(w => w.isoWeek === effectiveFilter)?.label : null;
+  const isCustom = effectiveFilter.startsWith("custom:");
 
   function applyCustomRange() {
     if (!customStart || !customEnd) return;
@@ -48,7 +56,8 @@ export default function PeriodFilterBar({
   }
 
   return (
-    <div style={{ background: "var(--bg-raised)", border: "1px solid var(--border)", borderRadius: 10, padding: "12px 20px", marginBottom: 20 }}>
+    <div style={{ background: "var(--bg-raised)", border: "1px solid var(--border)", borderRadius: 10, padding: "12px 20px", marginBottom: 20, opacity: isPending ? 0.65 : 1, transition: "opacity 150ms ease" }}>
+      <style>{`@keyframes pfb-spin { to { transform: rotate(360deg); } }`}</style>
       <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
         {([
           { key: "current", label: "Cette semaine" },
@@ -56,9 +65,9 @@ export default function PeriodFilterBar({
         ] as const).map(f => (
           <button key={f.key} onClick={() => navigate(f.key)} style={{
             padding: "6px 14px", borderRadius: 7, fontSize: 12, fontWeight: 600, cursor: "pointer",
-            border: activeFilter === f.key ? "1px solid var(--green)" : "1px solid var(--border)",
-            background: activeFilter === f.key ? "rgba(34,197,94,0.12)" : "var(--bg-surface)",
-            color: activeFilter === f.key ? "var(--green)" : "var(--text-muted)",
+            border: effectiveFilter === f.key ? "1px solid var(--green)" : "1px solid var(--border)",
+            background: effectiveFilter === f.key ? "rgba(34,197,94,0.12)" : "var(--bg-surface)",
+            color: effectiveFilter === f.key ? "var(--green)" : "var(--text-muted)",
           }}>
             {f.label}
           </button>
@@ -78,7 +87,7 @@ export default function PeriodFilterBar({
           {weekOpen && (
             <div style={{ position: "absolute", top: "100%", left: 0, marginTop: 4, zIndex: 100, background: "var(--bg-raised)", border: "1px solid var(--border)", borderRadius: 8, boxShadow: "0 8px 24px rgba(0,0,0,0.25)", minWidth: 260, maxHeight: 320, overflowY: "auto" }}>
               {weeks.map(w => (
-                <button key={w.isoWeek} onClick={() => navigate(w.isoWeek)} style={{ display: "block", width: "100%", textAlign: "left", padding: "9px 14px", fontSize: 12, cursor: "pointer", border: "none", background: activeFilter === w.isoWeek ? "rgba(34,197,94,0.10)" : "transparent", color: activeFilter === w.isoWeek ? "var(--green)" : "var(--text-muted)", fontWeight: activeFilter === w.isoWeek ? 700 : 400, borderBottom: "1px solid var(--border)" }}>
+                <button key={w.isoWeek} onClick={() => navigate(w.isoWeek)} style={{ display: "block", width: "100%", textAlign: "left", padding: "9px 14px", fontSize: 12, cursor: "pointer", border: "none", background: effectiveFilter === w.isoWeek ? "rgba(34,197,94,0.10)" : "transparent", color: effectiveFilter === w.isoWeek ? "var(--green)" : "var(--text-muted)", fontWeight: effectiveFilter === w.isoWeek ? 700 : 400, borderBottom: "1px solid var(--border)" }}>
                   Sem. du {w.label}
                 </button>
               ))}
@@ -92,9 +101,9 @@ export default function PeriodFilterBar({
         ] as const).map(f => (
           <button key={f.key} onClick={() => navigate(f.key)} style={{
             padding: "6px 14px", borderRadius: 7, fontSize: 12, fontWeight: 600, cursor: "pointer",
-            border: activeFilter === f.key ? "1px solid var(--green)" : "1px solid var(--border)",
-            background: activeFilter === f.key ? "rgba(34,197,94,0.12)" : "var(--bg-surface)",
-            color: activeFilter === f.key ? "var(--green)" : "var(--text-muted)",
+            border: effectiveFilter === f.key ? "1px solid var(--green)" : "1px solid var(--border)",
+            background: effectiveFilter === f.key ? "rgba(34,197,94,0.12)" : "var(--bg-surface)",
+            color: effectiveFilter === f.key ? "var(--green)" : "var(--text-muted)",
           }}>
             {f.label}
           </button>
@@ -127,7 +136,11 @@ export default function PeriodFilterBar({
       )}
       <div style={{ marginTop: 10, fontSize: 12, color: "var(--text-dim)", display: "flex", alignItems: "center", gap: 6 }}>
         <Calendar size={12} />
-        {rangeLabel}
+        {isPending ? (
+          <span style={{ display: "inline-flex", alignItems: "center", gap: 6, color: "var(--green)" }}>
+            <Loader2 size={12} style={{ animation: "pfb-spin 0.8s linear infinite" }} /> Chargement de la période…
+          </span>
+        ) : rangeLabel}
       </div>
     </div>
   );

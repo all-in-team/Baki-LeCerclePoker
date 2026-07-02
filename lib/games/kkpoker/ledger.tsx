@@ -10,7 +10,7 @@ import {
   getPlayerGameWallets,
   type WalletMere,
 } from "@/lib/queries";
-import { getAvailableTransactions, getManualSettlementHistory } from "@/lib/manual-settlement-engine";
+import { getAvailableTransactions, getManualSettlementHistory, previewSettlement } from "@/lib/manual-settlement-engine";
 import { computePeriodFilter } from "@/lib/period-filter";
 import { getLast12Weeks } from "@/lib/date-utils";
 import { fmtKpiAmount } from "@/components/ledger/format";
@@ -56,6 +56,8 @@ export interface KkLedgerData {
   gameWalletsByPlayer: Record<number, WalletAddr[]>;
   availableByPlayer: Record<number, AvailableTx[]>;
   settlementsByPlayer: Record<number, SettlementRow[]>;
+  /** amount_due_usdt from previewSettlement over ALL unsettled tx (absent if none or preview !ok). */
+  estimatedDueByPlayer: Record<number, number>;
 }
 
 export function loadKkpokerLedger(
@@ -112,14 +114,28 @@ export function loadKkpokerLedger(
   const settlementsByPlayer: Record<number, SettlementRow[]> = {};
   for (const s of history as SettlementRow[]) (settlementsByPlayer[s.player_id] = settlementsByPlayer[s.player_id] || []).push(s);
 
+  // Estimated due per player, shown on the row without opening the flow.
+  // MUST match the Régler recap to the cent → same engine path (previewSettlement)
+  // with ALL unsettled tx selected. No math here (invariant #2); skipped when
+  // preview reports ok:false (e.g. missing deal).
+  const estimatedDueByPlayer: Record<number, number> = {};
+  for (const r of summaryByPlayer) {
+    const avail = availableByPlayer[r.player_id];
+    if (kkGameId && avail.length > 0) {
+      const p = previewSettlement(kkGameId, r.player_id, avail.map(t => t.id));
+      if (p.ok) estimatedDueByPlayer[r.player_id] = p.amount_due_usdt;
+    }
+  }
+
   const myPnlAccent: "gold" | "red" = kpis.my_total_pnl >= 0 ? "gold" : "red";
   const netAccent: "green" | "red" | "neutral" = kpis.total_net > 0 ? "green" : kpis.total_net < 0 ? "red" : "neutral";
 
+  // Order = visual priority: Baki's two key numbers first (emphasis), raw totals after.
   const kpiCards: LedgerKpiCard[] = [
+    { label: "Mon Total P&L", value: (kpis.my_total_pnl >= 0 ? "+" : "−") + fmtKpiAmount(Math.abs(kpis.my_total_pnl)) + " USDT", sub: "Ma part selon chaque deal", accent: myPnlAccent, icon: <Wallet size={18} />, emphasis: true },
+    { label: "Players Net P&L", value: (kpis.total_net >= 0 ? "+" : "−") + fmtKpiAmount(Math.abs(kpis.total_net)) + " USDT", sub: "Retraits − Dépôts", accent: netAccent, icon: <TrendingUp size={18} />, emphasis: true },
     { label: "Total Deposited", value: fmtKpiAmount(kpis.total_deposited) + " USDT", sub: "Tous joueurs", accent: "neutral", icon: <ArrowDownLeft size={18} /> },
     { label: "Total Withdrawn", value: fmtKpiAmount(kpis.total_withdrawn) + " USDT", sub: "Tous joueurs", accent: "neutral", icon: <ArrowUpRight size={18} /> },
-    { label: "Players Net P&L", value: (kpis.total_net >= 0 ? "+" : "−") + fmtKpiAmount(Math.abs(kpis.total_net)) + " USDT", sub: "Retraits − Dépôts", accent: netAccent, icon: <TrendingUp size={18} /> },
-    { label: "Mon Total P&L", value: (kpis.my_total_pnl >= 0 ? "+" : "−") + fmtKpiAmount(Math.abs(kpis.my_total_pnl)) + " USDT", sub: "Ma part selon chaque deal", accent: myPnlAccent, icon: <Wallet size={18} /> },
   ];
 
   return {
@@ -151,5 +167,6 @@ export function loadKkpokerLedger(
     gameWalletsByPlayer,
     availableByPlayer,
     settlementsByPlayer,
+    estimatedDueByPlayer,
   };
 }
