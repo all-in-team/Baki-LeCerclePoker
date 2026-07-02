@@ -45,14 +45,15 @@ function fmtDate(s: string | null): string { if (!s) return "—"; return new Da
 function fmtDM(d: Date): string { return d.toLocaleDateString("fr-FR", { day: "numeric", month: "short", timeZone: "UTC" }); }
 /**
  * Due display: signed amount + color only (green = en ta faveur, rouge = tu
- * dois) — no "Cercle/Joueur verse" sentence (Baki: crée du flou). The payment
- * direction stays available in `hint` (tooltip) and as a discreet arrow in the
- * recap. Sign convention unchanged: positive = le Cercle verse au joueur.
+ * dois) — the word "verse" is banned from ALL renderings including tooltips
+ * (Baki: crée du flou; tooltips resurfaced it on hover). The payment direction
+ * stays in `hint` (tooltip) and as a discreet arrow in the recap.
+ * Sign convention unchanged: positive = sortie, le Cercle paie le joueur.
  */
 export function dueLabel(due: number): { text: string; color: string; hint: string } {
-  if (Math.abs(due) < 0.005) return { text: "Rien à verser", color: "var(--text-dim)", hint: "Solde nul — personne ne verse" };
-  if (due > 0) return { text: `${signed(due)} USDT`, color: "#EF4444", hint: "Le Cercle verse au joueur" };
-  return { text: `${signed(due)} USDT`, color: "#10B981", hint: "Le joueur verse au Cercle" };
+  if (Math.abs(due) < 0.005) return { text: "0,00 USDT", color: "var(--text-dim)", hint: "Solde nul — rien à payer" };
+  if (due > 0) return { text: `${signed(due)} USDT`, color: "#EF4444", hint: "Sortie — le Cercle paie le joueur" };
+  return { text: `${signed(due)} USDT`, color: "#10B981", hint: "Entrée — le joueur paie le Cercle" };
 }
 
 // ISO week (Monday-anchored, UTC) info for a YYYY-MM-DD(...) timestamp. Display-only grouping.
