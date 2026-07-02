@@ -74,6 +74,7 @@ export default async function KkpokerShadowPage({ searchParams }: { searchParams
           settlementsByPlayer={data.settlementsByPlayer}
           estimatedDueByPlayer={data.estimatedDueByPlayer}
           previewAction={previewShadowAction}
+          showSettlementPreview={false}
         />
       </LedgerShell>
     </>

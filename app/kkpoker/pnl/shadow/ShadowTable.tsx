@@ -23,6 +23,7 @@ type SortKey = "name" | "net" | "my_pnl" | "due";
 
 export default function ShadowTable({
   rows, gameId, cashoutsByPlayer, gameWalletsByPlayer, availableByPlayer, settlementsByPlayer, estimatedDueByPlayer, previewAction,
+  showSettlementPreview = true,
 }: {
   rows: KkLedgerRow[];
   gameId: number;
@@ -32,6 +33,14 @@ export default function ShadowTable({
   settlementsByPlayer: Record<number, SettlementRow[]>;
   estimatedDueByPlayer: Record<number, number>;
   previewAction: (playerId: number, txIds: number[]) => Promise<SettlementPreview>;
+  /**
+   * Settlement preview IN THE TABLE ("N à régler" pills + "≈ due" per row).
+   * false → hidden (KK: wallet-based continuous flow, a permanent estimated
+   * due is noise); the amounts still show inside the SettlementFlow panel
+   * (the real settlement moment). true (default) → current behavior, for
+   * games where settlement is a real cycle (QQPK monthly, A5).
+   */
+  showSettlementPreview?: boolean;
 }) {
   const [walletOpen, setWalletOpen] = useState<number | null>(null);
   const [settleOpen, setSettleOpen] = useState<number | null>(null);
@@ -80,7 +89,7 @@ export default function ShadowTable({
       <div style={{ padding: "14px 20px", borderBottom: "1px solid var(--border)", display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
         <span style={{ fontSize: 13, fontWeight: 700, color: "var(--text)" }}>Joueurs KKPOKER</span>
         <span style={{ fontSize: 11, color: "var(--text-dim)" }}>shadow — settlement en preview seul</span>
-        {nbToSettle > 0 && <span style={{ fontSize: 11, fontWeight: 700, color: "#F5C518", background: "rgba(245,197,24,0.12)", border: "1px solid rgba(245,197,24,0.3)", padding: "2px 8px", borderRadius: 10 }}>{nbToSettle} à régler</span>}
+        {showSettlementPreview && nbToSettle > 0 && <span style={{ fontSize: 11, fontWeight: 700, color: "#F5C518", background: "rgba(245,197,24,0.12)", border: "1px solid rgba(245,197,24,0.3)", padding: "2px 8px", borderRadius: 10 }}>{nbToSettle} à régler</span>}
         {nbLocked > 0 && <span style={{ fontSize: 11, fontWeight: 700, color: "#10B981", background: "rgba(16,185,129,0.12)", border: "1px solid rgba(16,185,129,0.3)", padding: "2px 8px", borderRadius: 10 }}>{nbLocked} à payer</span>}
         <div style={{ flex: 1 }} />
         <span style={{ display: "inline-flex", alignItems: "center", gap: 6, background: "var(--bg-surface)", border: "1px solid var(--border)", borderRadius: 7, padding: "5px 10px" }}>
@@ -132,8 +141,8 @@ export default function ShadowTable({
                       <span style={{ display: "inline-flex", alignItems: "center", gap: 7 }}>
                         <WalletBadgeButton count={walletCount} isOpen={isWalletOpen} onClick={() => { setSettleOpen(null); setWalletOpen(isWalletOpen ? null : row.player_id); }} />
                         <span>{row.player_name}</span>
-                        {avail.length > 0 && <span style={{ fontSize: 10, fontWeight: 700, color: "#F5C518", background: "rgba(245,197,24,0.12)", border: "1px solid rgba(245,197,24,0.3)", padding: "1px 7px", borderRadius: 10 }}>{avail.length} à régler</span>}
-                        {estimatedDueByPlayer[row.player_id] !== undefined && (
+                        {showSettlementPreview && avail.length > 0 && <span style={{ fontSize: 10, fontWeight: 700, color: "#F5C518", background: "rgba(245,197,24,0.12)", border: "1px solid rgba(245,197,24,0.3)", padding: "1px 7px", borderRadius: 10 }}>{avail.length} à régler</span>}
+                        {showSettlementPreview && estimatedDueByPlayer[row.player_id] !== undefined && (
                           // Estimated due over ALL unsettled tx — value straight from
                           // previewSettlement (loader), same number as the Régler recap.
                           <span
