@@ -43,10 +43,16 @@ function fmt(n: number): string { return Math.abs(n).toLocaleString("fr-FR", { m
 function signed(n: number): string { return (n >= 0 ? "+" : "−") + fmt(n); }
 function fmtDate(s: string | null): string { if (!s) return "—"; return new Date(s).toLocaleDateString("fr-FR", { day: "2-digit", month: "short", year: "2-digit", timeZone: "UTC" }); }
 function fmtDM(d: Date): string { return d.toLocaleDateString("fr-FR", { day: "numeric", month: "short", timeZone: "UTC" }); }
-export function dueLabel(due: number): { text: string; color: string } {
-  if (Math.abs(due) < 0.005) return { text: "Rien à verser", color: "var(--text-dim)" };
-  if (due > 0) return { text: `Cercle verse ${fmt(due)} USDT`, color: "#EF4444" };
-  return { text: `Joueur verse ${fmt(due)} USDT`, color: "#10B981" };
+/**
+ * Due display: signed amount + color only (green = en ta faveur, rouge = tu
+ * dois) — no "Cercle/Joueur verse" sentence (Baki: crée du flou). The payment
+ * direction stays available in `hint` (tooltip) and as a discreet arrow in the
+ * recap. Sign convention unchanged: positive = le Cercle verse au joueur.
+ */
+export function dueLabel(due: number): { text: string; color: string; hint: string } {
+  if (Math.abs(due) < 0.005) return { text: "Rien à verser", color: "var(--text-dim)", hint: "Solde nul — personne ne verse" };
+  if (due > 0) return { text: `${signed(due)} USDT`, color: "#EF4444", hint: "Le Cercle verse au joueur" };
+  return { text: `${signed(due)} USDT`, color: "#10B981", hint: "Le joueur verse au Cercle" };
 }
 
 // ISO week (Monday-anchored, UTC) info for a YYYY-MM-DD(...) timestamp. Display-only grouping.
@@ -226,7 +232,7 @@ export default function SettlementFlow({
               <div key={s.id} style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", padding: "8px 10px", borderRadius: 6, marginBottom: 6, background: "var(--bg-base)", border: `1px solid ${isLocked ? "rgba(245,197,24,0.25)" : "var(--border)"}` }}>
                 <span style={{ display: "inline-flex", alignItems: "center", gap: 5, fontSize: 11, fontWeight: 700, color: isLocked ? "#F5C518" : "#10B981" }}>{isLocked ? <Lock size={12} /> : <BadgeCheck size={12} />}{isLocked ? "Locked" : "Réglé"}</span>
                 <span style={{ fontSize: 11, color: "var(--text-muted)" }}>{s.tx_count} tx · {fmtDate(isLocked ? s.locked_at : s.paid_at)}</span>
-                <span style={{ fontSize: 12, fontWeight: 600, color: reg.color }}>{reg.text}</span>
+                <span title={reg.hint} style={{ fontSize: 12, fontWeight: 600, color: reg.color, cursor: "help" }}>{reg.text}</span>
                 <div style={{ flex: 1 }} />
                 {isLocked ? (
                   <>
@@ -267,8 +273,19 @@ export default function SettlementFlow({
                 </div>
                 <div style={{ padding: 14, borderRadius: 8, background: "var(--bg-base)", border: "1px solid var(--border)" }}>
                   <div style={{ fontSize: 11, color: "var(--text-muted)", marginBottom: 4 }}>Montant dû (net × action%)</div>
-                  <div style={{ fontSize: 18, fontWeight: 700, color: dueLabel(recap.preview.amount_due_usdt).color }}>{dueLabel(recap.preview.amount_due_usdt).text}</div>
-                  <div style={{ fontSize: 11, color: "var(--text-dim)", marginTop: 4 }}>{signed(recap.preview.amount_due_usdt)} USDT</div>
+                  {(() => {
+                    const due = recap.preview.amount_due_usdt;
+                    const reg = dueLabel(due);
+                    return (
+                      // Money-critical: the payment direction must stay readable before
+                      // Lock without the sentence — discreet arrow (↗ = sortie du Cercle,
+                      // ↘ = entrée) + tooltip carry it alongside the color.
+                      <div title={reg.hint} style={{ fontSize: 18, fontWeight: 700, color: reg.color, display: "inline-flex", alignItems: "center", gap: 6, cursor: "help" }}>
+                        {Math.abs(due) >= 0.005 && (due > 0 ? <ArrowUpRight size={15} /> : <ArrowDownLeft size={15} />)}
+                        {reg.text}
+                      </div>
+                    );
+                  })()}
                 </div>
                 <div style={{ fontSize: 11, color: "var(--text-dim)" }}>Après lock, ces {recap.preview.tx_count} transactions sont figées (settled) et ne pourront plus entrer dans un autre règlement.</div>
                 {readOnly && (

@@ -137,7 +137,7 @@ export default function ShadowTable({
                           // Estimated due over ALL unsettled tx — value straight from
                           // previewSettlement (loader), same number as the Régler recap.
                           <span
-                            title="Estimation sur TOUTES les tx non réglées (le flow Régler ne pré-coche que la dernière semaine — « Tout cocher » pour retrouver ce montant)"
+                            title={`${dueLabel(estimatedDueByPlayer[row.player_id]).hint} — estimation sur TOUTES les tx non réglées (le flow Régler ne pré-coche que la dernière semaine, « Tout cocher » pour retrouver ce montant)`}
                             style={{ fontSize: 10, fontWeight: 700, color: dueLabel(estimatedDueByPlayer[row.player_id]).color, whiteSpace: "nowrap", cursor: "help" }}>
                             ≈ {dueLabel(estimatedDueByPlayer[row.player_id]).text}
                           </span>
