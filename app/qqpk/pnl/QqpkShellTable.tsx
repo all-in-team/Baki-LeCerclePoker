@@ -14,14 +14,22 @@ import { saveMainsAction, previewSettlementAction, settleCycleAction } from "./a
  * settle recap, carried over from QqpkStakingClient (retired by this swap).
  *
  * ZERO money math here: every number (résultat, C, T, règlement, Part Cercle)
- * comes from the staking engine via the server loader. "Part Cercle" IS the
- * engine's operator_pnl (= −règlement, frozen sign convention) — this file
- * only formats it. Search/sort are display-only. The règlement direction uses
- * the shared dueLabel (signed amount + color + tooltip — no "verse" wording),
- * same convention: >0 = le Cercle paie le joueur.
+ * comes from the staking engine via the server loader. "Part Cercle" affichée
+ * sur le cycle courant IS the engine's operator_pnl_projected (prévisionnel
+ * as-if-covered, pertes <30k incluses — projectStakingBlock, = −règlement
+ * prévisionnel) ; le panneau Régler affiche le RÉEL du moteur (gate 30k, ce que
+ * le lock écrit). This file only formats. Search/sort are display-only. The
+ * règlement direction uses the shared dueLabel (signed amount + color +
+ * tooltip — no "verse" wording), same convention: >0 = le Cercle paie le joueur.
  */
 
-const PART_CERCLE_TOOLTIP =
+const PART_CERCLE_PROJ_TOOLTIP =
+  "Part Cercle prévisionnelle (30% win / 70% perte) — conditionnelle si <30k mains : sous 30 000 mains en fin de cycle, " +
+  "la couverture des pertes est annulée (réglable 0). Calculée sur le net on-chain du cycle (retraits − dépôts, tx manuelles " +
+  "comprises) — le rakeback est inclus dans ce total ; l'ajustement RB se fait à la main (transaction manuelle). " +
+  "Positif = ça rapporte au Cercle, négatif = ça lui coûte.";
+
+const PART_CERCLE_SETTLED_TOOLTIP =
   "Part Cercle = −règlement du cycle : le Cercle couvre 70% des pertes / prend 30% des gains (condition 30 000 mains). " +
   "Calculée sur le net on-chain du cycle (retraits − dépôts, tx manuelles comprises) — le rakeback est inclus dans ce total ; " +
   "l'ajustement RB se fait à la main (transaction manuelle). Positif = ça rapporte au Cercle, négatif = ça lui coûte.";
@@ -42,6 +50,8 @@ interface Row {
   reglement: number;
   condition_30k_applied: boolean;
   operator_pnl: number;
+  reglement_projected: number;
+  operator_pnl_projected: number;
   settled_at?: string | null;
 }
 
@@ -54,6 +64,7 @@ interface Preview {
   ok: boolean; error?: string; player_id: number; cycle?: Cycle;
   resultat_periode?: number; mains?: number; c?: number; t?: number;
   reglement?: number; condition_30k_applied?: boolean; operator_pnl?: number;
+  reglement_projected?: number; operator_pnl_projected?: number;
 }
 
 function fmt(n: number): string {
@@ -140,7 +151,7 @@ export default function QqpkShellTable({
     const val = (r: Row): number | string => {
       if (sortKey === "name") return r.player_name.toLowerCase();
       if (sortKey === "resultat") return r.resultat_periode;
-      return r.operator_pnl;
+      return r.operator_pnl_projected;
     };
     return [...filtered].sort((a, b) => {
       const va = val(a), vb = val(b);
@@ -185,6 +196,8 @@ export default function QqpkShellTable({
   const th: React.CSSProperties = { textAlign: "right", padding: "8px 10px", color: "var(--text-muted)", fontWeight: 600, fontSize: 11, whiteSpace: "nowrap" };
   const td: React.CSSProperties = { padding: "10px 10px", textAlign: "right", fontVariantNumeric: "tabular-nums", fontSize: 12 };
   const COLS = isCurrent ? 12 : 10;
+  // Cycle courant → prévisionnel ; vues passées → cycles réglés (projected == réel côté loader).
+  const partTooltip = isCurrent ? PART_CERCLE_PROJ_TOOLTIP : PART_CERCLE_SETTLED_TOOLTIP;
 
   const sortIndicator = (key: SortKey) => sortKey === key
     ? (sortDir === -1 ? <ChevronDown size={11} style={{ verticalAlign: "-2px" }} /> : <ChevronUp size={11} style={{ verticalAlign: "-2px" }} />)
@@ -240,7 +253,7 @@ export default function QqpkShellTable({
                   <th style={th}>Mains</th>
                   <th style={th}>C</th>
                   <th style={th}>T</th>
-                  {sortableTh("Part Cercle", "part", "right", PART_CERCLE_TOOLTIP)}
+                  {sortableTh(isCurrent ? "Part Cercle (prév.)" : "Part Cercle", "part", "right", partTooltip)}
                   <th style={{ ...th, textAlign: "left", paddingLeft: 16 }}>Règlement</th>
                   <th style={{ ...th, textAlign: "center" }}>30k</th>
                   {isCurrent && <th style={{ ...th, textAlign: "center" }}>Action</th>}
@@ -298,10 +311,10 @@ export default function QqpkShellTable({
                         </td>
                         <td style={{ ...td, color: r.c >= 0 ? "var(--text)" : "#EF4444" }}>{signed(r.c)}</td>
                         <td style={{ ...td, color: r.t > 0 ? "#F5C518" : "var(--text-muted)" }}>{signed(r.t)}</td>
-                        <td title={PART_CERCLE_TOOLTIP} style={{ ...td, fontWeight: 700, fontSize: 13, color: partCercleColor(r.operator_pnl), cursor: "help" }}>
-                          {signed(r.operator_pnl)}
+                        <td title={partTooltip} style={{ ...td, fontWeight: 700, fontSize: 13, color: partCercleColor(r.operator_pnl_projected), cursor: "help" }}>
+                          {signed(r.operator_pnl_projected)}
                         </td>
-                        <td style={{ padding: "10px 10px 10px 16px", textAlign: "left" }}><ReglementCell reglement={r.reglement} /></td>
+                        <td style={{ padding: "10px 10px 10px 16px", textAlign: "left" }}><ReglementCell reglement={r.reglement_projected} /></td>
                         <td style={{ ...td, textAlign: "center" }}><ConditionBadge row={r} /></td>
                         {isCurrent && (
                           <td style={{ ...td, textAlign: "center" }}>
@@ -348,7 +361,7 @@ export default function QqpkShellTable({
                   <th style={th}>Mains</th>
                   <th style={th}>C final</th>
                   <th style={th}>T final</th>
-                  <th title={PART_CERCLE_TOOLTIP} style={th}>Part Cercle</th>
+                  <th title={PART_CERCLE_SETTLED_TOOLTIP} style={th}>Part Cercle</th>
                   <th style={{ ...th, textAlign: "left", paddingLeft: 16 }}>Règlement</th>
                   <th style={{ ...th, textAlign: "center" }}>30k</th>
                 </tr>
@@ -362,7 +375,7 @@ export default function QqpkShellTable({
                     <td style={td}>{h.mains.toLocaleString("fr-FR")}</td>
                     <td style={td}>{signed(h.c)}</td>
                     <td style={td}>{signed(h.t)}</td>
-                    <td title={PART_CERCLE_TOOLTIP} style={{ ...td, fontWeight: 700, color: partCercleColor(h.operator_pnl), cursor: "help" }}>{signed(h.operator_pnl)}</td>
+                    <td title={PART_CERCLE_SETTLED_TOOLTIP} style={{ ...td, fontWeight: 700, color: partCercleColor(h.operator_pnl), cursor: "help" }}>{signed(h.operator_pnl)}</td>
                     <td style={{ padding: "10px 10px 10px 16px", textAlign: "left" }}><ReglementCell reglement={h.reglement} /></td>
                     <td style={{ ...td, textAlign: "center" }}><ConditionBadge row={h} /></td>
                   </tr>
@@ -394,7 +407,7 @@ export default function QqpkShellTable({
                   <RecapLine label="T (position)" value={signed(recap.preview.t ?? 0)} />
                 </div>
                 <div style={{ padding: 14, borderRadius: 8, background: "var(--bg-base)", border: "1px solid var(--border)" }}>
-                  <div style={{ fontSize: 11, color: "var(--text-muted)", marginBottom: 4 }}>Règlement du cycle</div>
+                  <div style={{ fontSize: 11, color: "var(--text-muted)", marginBottom: 4 }}>Règlement du cycle (réel — ce que le lock écrit)</div>
                   {(() => {
                     const reglement = recap.preview.reglement ?? 0;
                     const reg = dueLabel(reglement);
@@ -407,8 +420,16 @@ export default function QqpkShellTable({
                       </div>
                     );
                   })()}
-                  <div title={PART_CERCLE_TOOLTIP} style={{ fontSize: 11, color: partCercleColor(recap.preview.operator_pnl ?? 0), marginTop: 6, fontWeight: 600, cursor: "help" }}>
-                    Part Cercle : {signed(recap.preview.operator_pnl ?? 0)} USDT
+                  {/* Divergence prévisionnel/réel : la gate 30k a annulé la couverture. */}
+                  {recap.preview.condition_30k_applied && (
+                    <div style={{ marginTop: 8, padding: "8px 10px", borderRadius: 6, background: "rgba(239,68,68,0.08)", border: "1px solid rgba(239,68,68,0.25)", fontSize: 11, color: "#EF4444", fontWeight: 600 }}>
+                      ⚠️ Non couvert à ce jour : 0,00 réglable (mains &lt;30k). Le prévisionnel affiché sur le tableau
+                      ({signed(recap.preview.operator_pnl_projected ?? 0)} USDT) est conditionnel — il ne s&apos;applique
+                      que si le joueur atteint 30 000 mains avant la fin du cycle.
+                    </div>
+                  )}
+                  <div title={PART_CERCLE_SETTLED_TOOLTIP} style={{ fontSize: 11, color: partCercleColor(recap.preview.operator_pnl ?? 0), marginTop: 6, fontWeight: 600, cursor: "help" }}>
+                    Part Cercle (réelle au lock) : {signed(recap.preview.operator_pnl ?? 0)} USDT
                   </div>
                   <div style={{ marginTop: 8 }}>
                     <span style={{ fontSize: 11, color: "var(--text-muted)", marginRight: 6 }}>Condition 30k :</span>

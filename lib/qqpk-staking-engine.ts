@@ -83,3 +83,31 @@ export function computeStakingBlock(input: StakingBlockInput): StakingBlockResul
 export function operatorPnlFromReglement(reglement: number): number {
   return -reglement;
 }
+
+// ── PROJECTION (décision Baki, jul 2026) ─────────────────────────────────────
+// Prévisionnel du cycle en cours: the as-if-covered 70/30 split, INCLUDING losses
+// under 30k hands. The 30k gate stays a settlement-time rule (computeStakingBlock,
+// is_final_settlement=true, unchanged above) — the projection deliberately ignores
+// it so the board shows the real exposure of the cycle, and flags the projection
+// as CONDITIONAL instead (below 30k at cycle end → coverage cancelled, réglable 0).
+//
+// Implementation reuses the EXISTING split branch: a non-final step of the engine
+// is exactly the as-if-covered computation (the gate only fires at final settlement).
+// No math is duplicated here.
+
+export interface StakingProjection {
+  c: number;                    // cumulative net (same as the real computation)
+  t_projected: number;          // as-if-covered position (70% loss / −30% profit)
+  reglement_projected: number;  // t_projected − t_prec (same sign convention as reglement)
+  conditional_30k: boolean;     // c<0 AND mains<30k → this coverage is conditional (0 réglable today)
+}
+
+export function projectStakingBlock(input: Omit<StakingBlockInput, "is_final_settlement">): StakingProjection {
+  const res = computeStakingBlock({ ...input, is_final_settlement: false });
+  return {
+    c: res.c,
+    t_projected: res.t,
+    reglement_projected: res.reglement,
+    conditional_30k: res.c < 0 && input.mains < QQPK_HANDS_THRESHOLD,
+  };
+}

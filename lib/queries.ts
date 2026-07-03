@@ -1,6 +1,6 @@
 import { getDb } from "./db";
 import { toParisDate, toUTCISO, parisLocalToUTC, addMonthsParis } from "./date-utils";
-import { computeStakingBlock, operatorPnlFromReglement } from "./qqpk-staking-engine";
+import { computeStakingBlock, projectStakingBlock, operatorPnlFromReglement } from "./qqpk-staking-engine";
 
 // ── Players ──────────────────────────────────────────────
 export function getPlayers() {
@@ -2370,6 +2370,10 @@ export interface QqpkStakingRow {
   reglement: number;         // >0 Cercle pays player, <0 player pays Cercle
   condition_30k_applied: boolean;
   operator_pnl: number;      // −reglement (frozen sign convention)
+  // PRÉVISIONNEL (engine projectStakingBlock — as-if-covered, 30k gate ignored).
+  // On a settled cycle the projection is moot: fields carry the settled reality.
+  reglement_projected: number;
+  operator_pnl_projected: number; // −reglement_projected (Part Cercle prévisionnelle)
 }
 
 const pad2 = (n: number) => String(n).padStart(2, "0");
@@ -2473,19 +2477,27 @@ function getQqpkCycleNet(playerId: number, startIso: string, endIso: string): nu
 }
 
 // Pure projection of the active cycle for one player: net + stored mains + RESET-SEC carry
-// (always 0/0) → engine. is_final_settlement=true so the projection == what settling produces.
+// (always 0/0) → engine. Two views of the same inputs:
+//   • RÉEL (computeStakingBlock, is_final_settlement=true) == what settling now produces
+//     (30k gate applied) — this is what the Régler panel shows and what lock writes.
+//   • PRÉVISIONNEL (projectStakingBlock) == as-if-covered 70/30, pertes <30k incluses —
+//     this is what the board and the KPI show (decision Baki: expose real exposure).
 function computeQqpkProjection(playerId: number, cycle: QqpkCycle): {
   resultat_periode: number; mains: number; c: number; t: number;
   reglement: number; condition_30k_applied: boolean; operator_pnl: number;
+  reglement_projected: number; operator_pnl_projected: number;
 } {
   const resultat_periode = getQqpkCycleNet(playerId, cycle.start_iso, cycle.end_iso);
   const mains = getQqpkStoredMains(playerId, cycle.cycle_start);
   // RESET SEC: no carry between cycles — every cycle starts at 0/0.
   const res = computeStakingBlock({ c_prec: 0, t_prec: 0, resultat_periode, mains, is_final_settlement: true });
+  const proj = projectStakingBlock({ c_prec: 0, t_prec: 0, resultat_periode, mains });
   return {
     resultat_periode, mains, c: res.c, t: res.t, reglement: res.reglement,
     condition_30k_applied: res.condition_30k_applied,
     operator_pnl: operatorPnlFromReglement(res.reglement),
+    reglement_projected: proj.reglement_projected,
+    operator_pnl_projected: operatorPnlFromReglement(proj.reglement_projected),
   };
 }
 
@@ -2532,16 +2544,22 @@ export function getQqpkBlockHistory(): (QqpkStakingRow & { settled_at: string | 
     c: b.c, t: b.t, reglement: b.reglement,
     condition_30k_applied: !!b.condition_30k_applied,
     operator_pnl: operatorPnlFromReglement(b.reglement),
+    // Settled cycle: no projection anymore — the settled reality IS the number.
+    reglement_projected: b.reglement,
+    operator_pnl_projected: operatorPnlFromReglement(b.reglement),
     settled_at: b.updated_at ?? b.created_at ?? null,
   }));
 }
 
-// Recap for the confirmation dialog — read-only, no write.
+// Recap for the confirmation dialog — read-only, no write. Carries BOTH the real
+// (réglable, 30k gate applied — what lock will write) and the projected fields so
+// the panel can state the divergence when <30k ("non couvert à ce jour: 0 réglable").
 export function previewQqpkSettlement(playerId: number): {
   ok: boolean; error?: string;
   player_id: number; cycle?: QqpkCycle;
   resultat_periode?: number; mains?: number; c?: number; t?: number;
   reglement?: number; condition_30k_applied?: boolean; operator_pnl?: number;
+  reglement_projected?: number; operator_pnl_projected?: number;
 } {
   const cycle = getQqpkActiveCycle(playerId);
   if (!cycle) return { ok: false, error: "Pas de cycle QQPK (deal/onboarding manquant).", player_id: playerId };
@@ -2607,6 +2625,9 @@ export function settleQqpkCycle(playerId: number): { ok: boolean; error?: string
       resultat_periode, mains, c: res.c, t: res.t, reglement: res.reglement,
       condition_30k_applied: res.condition_30k_applied,
       operator_pnl: operatorPnlFromReglement(res.reglement),
+      // Just settled → the settled reality is the number (projection is moot).
+      reglement_projected: res.reglement,
+      operator_pnl_projected: operatorPnlFromReglement(res.reglement),
     },
   };
 }

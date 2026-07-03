@@ -6,6 +6,7 @@
 
 import {
   computeStakingBlock,
+  projectStakingBlock,
   operatorPnlFromReglement,
   QQPK_HANDS_THRESHOLD,
 } from "../lib/qqpk-staking-engine";
@@ -121,6 +122,74 @@ console.log("Block reset — next block starts fresh after a settled block:");
   eq("next.c (no carry of 2000)", next.c, -500);
   eq("next.t (fresh 70% coverage)", next.t, 350);
   eq("next.reglement (+350)", next.reglement, 350);
+}
+
+// ═══ PROJECTION (projectStakingBlock) — prévisionnel as-if-covered ═══════════
+
+// ── Projection: WIN → 30% au Cercle, identique au réel ────────────────────────
+console.log("Projection — gain: −30% (identique au réel, ex. +382.46 → Cercle +114.74):");
+{
+  const p = projectStakingBlock({ c_prec: 0, t_prec: 0, resultat_periode: 382.46, mains: 40000 });
+  eq("c", p.c, 382.46);
+  eq("t_projected (=−30%)", p.t_projected, -114.738);
+  eq("reglement_projected", p.reglement_projected, -114.738);
+  isTrue("conditional_30k (false on gain)", p.conditional_30k, false);
+  // projected == real settlement for a gain (gate never bites on profit)
+  const real = computeStakingBlock({ c_prec: 0, t_prec: 0, resultat_periode: 382.46, mains: 40000, is_final_settlement: true });
+  eq("projected == real (gain)", p.reglement_projected, real.reglement);
+}
+
+// ── Projection: perte COUVERTE (≥30k) → 70%, identique au réel ────────────────
+console.log("Projection — perte ≥30k: 70% couverture (identique au réel):");
+{
+  const p = projectStakingBlock({ c_prec: 0, t_prec: 0, resultat_periode: -1000, mains: 35000 });
+  eq("t_projected (=70% de 1000)", p.t_projected, 700);
+  eq("reglement_projected (+700)", p.reglement_projected, 700);
+  isTrue("conditional_30k (≥30k → false)", p.conditional_30k, false);
+  const real = computeStakingBlock({ c_prec: 0, t_prec: 0, resultat_periode: -1000, mains: 35000, is_final_settlement: true });
+  eq("projected == real (perte couverte)", p.reglement_projected, real.reglement);
+}
+
+// ── Projection: perte <30k → 70% QUAND MÊME (conditionnel), réel reste 0 ──────
+console.log("Projection — perte <30k: prévisionnel −70% (conditionnel), réel (lock) = 0:");
+{
+  // Cas Xabi: perte 3000, <30k → exposition prévisionnelle 2100 (Cercle), Part Cercle −2100.
+  const p = projectStakingBlock({ c_prec: 0, t_prec: 0, resultat_periode: -3000, mains: 10000 });
+  eq("c", p.c, -3000);
+  eq("t_projected (=70% de 3000)", p.t_projected, 2100);
+  eq("reglement_projected (+2100 au joueur)", p.reglement_projected, 2100);
+  eq("Part Cercle prévisionnelle (=−règlement)", operatorPnlFromReglement(p.reglement_projected), -2100);
+  isTrue("conditional_30k (perte + <30k → true)", p.conditional_30k, true);
+  // LA RÈGLE DE SETTLEMENT NE CHANGE PAS: le réel (lock) reste 0 réglable.
+  const real = computeStakingBlock({ c_prec: 0, t_prec: 0, resultat_periode: -3000, mains: 10000, is_final_settlement: true });
+  eq("réel au lock: t=0", real.t, 0);
+  eq("réel au lock: reglement=0", real.reglement, 0);
+  isTrue("réel au lock: condition_30k_applied", real.condition_30k_applied, true);
+}
+
+// ── Projection: résultat 0 → 0 partout ────────────────────────────────────────
+console.log("Projection — résultat 0: tout à 0 (pas de −0):");
+{
+  const p = projectStakingBlock({ c_prec: 0, t_prec: 0, resultat_periode: 0, mains: 0 });
+  eq("c", p.c, 0);
+  eq("t_projected", p.t_projected, 0);
+  eq("reglement_projected", p.reglement_projected, 0);
+  isTrue("pas de -0 (Object.is)", Object.is(p.t_projected, -0), false);
+  isTrue("conditional_30k (c=0 n'est pas une perte)", p.conditional_30k, false);
+}
+
+// ── Projection: mix avec carry (c_prec/t_prec) → même branche que l'interim ───
+console.log("Projection — mix avec carry: réutilise exactement la branche interim:");
+{
+  // carry perte −1000 déjà couverte 700, période +3000 → C=+2000 → T=−600, règlement −1300.
+  const p = projectStakingBlock({ c_prec: -1000, t_prec: 700, resultat_periode: 3000, mains: 20000 });
+  eq("c", p.c, 2000);
+  eq("t_projected", p.t_projected, -600);
+  eq("reglement_projected (joueur verse 1300)", p.reglement_projected, -1300);
+  isTrue("conditional_30k (profit cumulé → false)", p.conditional_30k, false);
+  const interim = computeStakingBlock({ c_prec: -1000, t_prec: 700, resultat_periode: 3000, mains: 20000, is_final_settlement: false });
+  eq("projection ≡ branche interim (t)", p.t_projected, interim.t);
+  eq("projection ≡ branche interim (règlement)", p.reglement_projected, interim.reglement);
 }
 
 console.log(`\n${failed === 0 ? "✅ ALL PASS" : "❌ FAILURES"} — ${passed} passed, ${failed} failed`);

@@ -75,17 +75,21 @@ export function loadQqpkLedger(params: { cycle?: string }): QqpkLedgerData {
         .filter((r): r is QqpkHistoryRow => r !== undefined)
         .sort((a, b) => a.player_name.localeCompare(b.player_name, "fr", { sensitivity: "base" }));
 
-  // KPI sums — trivial Σ of engine outputs (operator_pnl / t / due flags).
-  const partCercleTotal = rows.reduce((s, r) => s + r.operator_pnl, 0);
+  // KPI sums — trivial Σ of engine outputs (operator_pnl_projected / t / due flags).
+  // Part Cercle KPI = Σ PRÉVISIONNELS (as-if-covered, pertes <30k incluses) — decision
+  // Baki: the header must show real exposure. On past views projected == settled real.
+  const partCercleTotal = rows.reduce((s, r) => s + r.operator_pnl_projected, 0);
   const nbDue = currentRows.filter((r) => r.due).length;
   const makeupEnCours = currentRows.filter((r) => r.t > 0).reduce((s, r) => s + r.t, 0);
 
   const partAccent: "gold" | "red" = partCercleTotal >= 0 ? "gold" : "red";
   const kpiCards: LedgerKpiCard[] = [
     {
-      label: cycleView === 0 ? "Part Cercle (cycle courant)" : `Part Cercle (cycle −${cycleView})`,
+      label: cycleView === 0 ? "Part Cercle prévisionnelle (cycle courant)" : `Part Cercle (cycle −${cycleView})`,
       value: (partCercleTotal >= 0 ? "+" : "−") + fmtKpiAmount(Math.abs(partCercleTotal)) + " USDT",
-      sub: "−Σ règlements · 70/30, RB inclus dans le net",
+      sub: cycleView === 0
+        ? "Σ prévisionnels · 30% win / −70% perte, <30k inclus (conditionnel)"
+        : "−Σ règlements · 70/30, RB inclus dans le net",
       accent: partAccent,
       icon: <HandCoins size={18} />,
       emphasis: true,
