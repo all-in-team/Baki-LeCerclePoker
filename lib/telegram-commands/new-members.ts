@@ -427,7 +427,7 @@ export async function sendQqpkPitch(
     `🎯 <b>Condition : minimum 30 000 mains</b> sur le mois. En dessous, tes pertes ne sont PAS couvertes (mais le partage des gains s'applique quand même).\n\n` +
     `⚖️ Le partage 70/30 se calcule sur ton <b>net cumulé du mois</b>, pas semaine par semaine.\n\n` +
     `🔚 <b>Fin de mois</b> : on settle, tu fais un full cash out, et on repart à zéro pour le mois suivant.\n\n` +
-    `🎥 <b>Explication en vidéo (2 min)</b> : https://www.loom.com/share/79388c40b375467fbe1c5869d67ddc17`,
+    `🎥 <b>Explication en vidéo (5 min)</b> : https://www.loom.com/share/79388c40b375467fbe1c5869d67ddc17`,
     tid
   );
   await sleep(3000);

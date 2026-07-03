@@ -216,7 +216,7 @@ export async function handleQqpkRawMessage(
       `- Cycle : démarré aujourd'hui, règlement mensuel\n` +
       `- Condition : 30 000 mains / mois pour la couverture des pertes\n` +
       `- Wallets : configurés\n\n` +
-      `🎥 <b>Explication en vidéo (2 min)</b> : https://www.loom.com/share/79388c40b375467fbe1c5869d67ddc17\n\n` +
+      `🎥 <b>Explication en vidéo (5 min)</b> : https://www.loom.com/share/79388c40b375467fbe1c5869d67ddc17\n\n` +
       `Tu peux jouer 🎰\n\n` +
       `Rappel : à la fin de ton cycle, on settle et tu fais un full cash out.\n\n` +
       `Support 24/7 ici.`
