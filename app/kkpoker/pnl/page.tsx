@@ -1,136 +1,61 @@
 export const dynamic = "force-dynamic";
-import { getDb } from "@/lib/db";
-import { getLockAwareSummaryByPlayer, getLockAwareKPIsWithExtras, getWalletTransactions, getPlayers, getGames, getPlayerCashouts, getPlayerGameWallets, getWalletMeresForGame, getNetPnlSeries } from "@/lib/queries";
-import { getWeekBounds, getLast12Weeks, toUTCISO, toParisDate, formatRangeLabel, isoWeekToOffset, parisLocalToUTC } from "@/lib/date-utils";
-import PageHeader from "@/components/PageHeader";
-import TELEClient from "@/app/akpoker/pnl/TELEClient";
+import LedgerShell from "@/components/ledger/LedgerShell";
+import LedgerTable from "@/components/ledger/LedgerTable";
+import WalletMeresBanner from "@/components/ledger/WalletMeresBanner";
+import SyncWalletsButton from "@/components/ledger/extras/SyncWalletsButton";
 import AgencyExtras from "@/components/AgencyExtras";
+import { loadWalletLedger } from "@/lib/games/wallet-ledger";
+import { previewAction, lockAction, markPaidAction, unlockAction } from "./actions";
 
-function computeFilter(filter: string | undefined) {
-  const f = filter ?? "current";
-  if (f === "lifetime") return { key: "lifetime", startDate: undefined, endDate: undefined, rangeLabel: "Toutes les transactions" };
-  if (f === "30d") {
-    const end = new Date();
-    const start = new Date(end.getTime() - 30 * 86400000);
-    return { key: "30d", startDate: toUTCISO(start), endDate: toUTCISO(end), rangeLabel: formatRangeLabel(start, end) };
-  }
-  if (f === "last") {
-    const { start, end } = getWeekBounds(-1);
-    return { key: "last", startDate: toUTCISO(start), endDate: toUTCISO(end), rangeLabel: formatRangeLabel(start, end) };
-  }
-  if (/^\d{4}-W\d{2}$/.test(f)) {
-    const offset = isoWeekToOffset(f);
-    if (offset !== null && offset < 0) {
-      const { start, end } = getWeekBounds(offset);
-      return { key: f, startDate: toUTCISO(start), endDate: toUTCISO(end), rangeLabel: formatRangeLabel(start, end) };
-    }
-  }
-  if (f.startsWith("custom:")) {
-    const parts = f.slice(7).split("~");
-    if (parts.length === 2) {
-      const [sd, ed] = parts;
-      const sm = sd.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})$/);
-      const em = ed.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})$/);
-      if (sm && em) {
-        const start = parisLocalToUTC(+sm[1], +sm[2], +sm[3], +sm[4], +sm[5], 0, 0);
-        const end = parisLocalToUTC(+em[1], +em[2], +em[3], +em[4], +em[5], 59, 0);
-        if (end >= start) {
-          return { key: f, startDate: toUTCISO(start), endDate: toUTCISO(end), rangeLabel: `${sd.replace("T", " ")} → ${ed.replace("T", " ")} (Paris)` };
-        }
-      }
-    }
-  }
-  if (/^\d{4}-\d{2}-\d{2}$/.test(f)) {
-    const target = new Date(f + "T00:00:00Z");
-    const { start: currentWeekStart } = getWeekBounds(0);
-    const currentMonday = new Date(toParisDate(toUTCISO(currentWeekStart)) + "T00:00:00Z");
-    let offset = Math.round((target.getTime() - currentMonday.getTime()) / (7 * 86400000));
-    let bounds = getWeekBounds(offset);
-    if (toParisDate(toUTCISO(bounds.start)) !== f) {
-      offset += toParisDate(toUTCISO(bounds.start)) < f ? 1 : -1;
-      bounds = getWeekBounds(offset);
-    }
-    return { key: f, startDate: toUTCISO(bounds.start), endDate: toUTCISO(bounds.end), rangeLabel: formatRangeLabel(bounds.start, bounds.end) };
-  }
-  const { start, end } = getWeekBounds(0);
-  const now = new Date();
-  return { key: "current", startDate: toUTCISO(start), endDate: toUTCISO(now < end ? now : end), rangeLabel: formatRangeLabel(start, end) };
-}
-
+/**
+ * KKPOKER P&L — first real page on the generic LedgerShell (shadow-validated).
+ * showSettlementPreview=false (Baki: no settlement numbers outside the Régler
+ * panel — KK is a continuous wallet flow, a permanent estimated due is noise).
+ * The shadow route (/kkpoker/pnl/shadow) stays in place until cleanup.
+ */
 export default async function KKPOKERPage({ searchParams }: { searchParams: Promise<{ filter?: string; player?: string }> }) {
   const params = await searchParams;
-  const playerFilter = params.player ? parseInt(params.player) : undefined;
-  const { key, startDate, endDate, rangeLabel } = computeFilter(params.filter);
-  const weeks = getLast12Weeks();
-
-  const filters = { game_name: "KKPOKER" as const, since_date: startDate, end_date: endDate };
-  let summary = getLockAwareSummaryByPlayer(filters) as any[];
-  // my_total_pnl includes agency extras (game-level wins/losses outside deals)
-  let kpis = getLockAwareKPIsWithExtras(filters, "kkpoker");
-  let transactions = getWalletTransactions({ ...filters, limit: 500 }) as any[];
-
-  if (playerFilter) {
-    summary = summary.filter((r: any) => r.player_id === playerFilter);
-    transactions = transactions.filter((t: any) => t.player_id === playerFilter);
-    // per-player view: extras are agency-level (no player_id) → excluded here
-    kpis = {
-      total_deposited: summary.reduce((s: number, r: any) => s + (r.total_deposited ?? 0), 0),
-      total_withdrawn: summary.reduce((s: number, r: any) => s + (r.total_withdrawn ?? 0), 0),
-      total_net: summary.reduce((s: number, r: any) => s + (r.net ?? 0), 0),
-      my_total_pnl: summary.reduce((s: number, r: any) => s + (r.my_pnl ?? 0), 0),
-      extras_net: 0,
-    };
-  }
-
-  // Cumulative Players Net P&L series — same filters/period as the cards (player-scoped when filtered)
-  const netSeries = getNetPnlSeries({ ...filters, player_id: playerFilter }) as { day: string; cumulative_net: number }[];
-
-  const players = getPlayers() as any[];
-  const games = (getGames() as any[]).filter((g) => g.name === "KKPOKER");
-  const kkGameId = (getDb().prepare(`SELECT id FROM games WHERE name = 'KKPOKER'`).get() as { id: number } | undefined)?.id;
-  const walletMeres = kkGameId ? getWalletMeresForGame(kkGameId) : [];
-
-  const cashoutsByPlayer: Record<number, { id: number; address: string; label: string | null }[]> = {};
-  const gameWalletsByPlayer: Record<number, { id: number; address: string; label: string | null }[]> = {};
-  for (const p of players) {
-    cashoutsByPlayer[p.id] = kkGameId ? getPlayerCashouts(p.id, kkGameId) : [];
-    gameWalletsByPlayer[p.id] = kkGameId ? getPlayerGameWallets(p.id, kkGameId) : [];
-  }
-
-  const filterPlayerName = playerFilter ? (players.find((p: any) => p.id === playerFilter)?.name ?? `#${playerFilter}`) : null;
+  const data = loadWalletLedger(params, {
+    gameName: "KKPOKER",
+    extrasKey: "kkpoker",
+    title: "KKPOKER — P&L",
+    basePath: "/kkpoker/pnl",
+  });
 
   return (
     <>
-      <PageHeader
-        title="KKPOKER — P&L"
-        subtitle="Dépôts & retraits par joueur — P&L calculé selon le deal de chaque joueur"
-      />
-      {filterPlayerName && (
-        <div style={{ padding: "0 28px 12px", display: "flex", alignItems: "center", gap: 8 }}>
-          <span style={{ background: "rgba(212,175,55,0.15)", color: "#D4AF37", padding: "4px 12px", borderRadius: 6, fontSize: 12, fontWeight: 600 }}>
-            Filtré : {filterPlayerName}
+      <LedgerShell
+        config={data.config}
+        kpiCards={data.kpiCards}
+        period={data.period}
+        chart={data.chart}
+        headerAction={data.filterPlayerName ? (
+          <span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
+            <span style={{ background: "rgba(212,175,55,0.15)", color: "#D4AF37", padding: "4px 12px", borderRadius: 6, fontSize: 12, fontWeight: 600 }}>
+              Filtré : {data.filterPlayerName}
+            </span>
+            <a href="/kkpoker/pnl" style={{ fontSize: 11, color: "var(--text-muted)", textDecoration: "none" }}>✕ Retirer le filtre</a>
           </span>
-          <a href="/kkpoker/pnl" style={{ fontSize: 11, color: "var(--text-muted)", textDecoration: "none" }}>✕ Retirer le filtre</a>
-        </div>
-      )}
-      <TELEClient
-        initialSummary={summary}
-        kpis={kpis}
-        initialTransactions={transactions}
-        players={players}
-        games={games}
-        cashoutsByPlayer={cashoutsByPlayer}
-        gameWalletsByPlayer={gameWalletsByPlayer}
-        walletMeres={walletMeres}
-        activeFilter={key}
-        rangeLabel={rangeLabel}
-        weeks={weeks.map(w => ({ isoWeek: w.isoWeek, label: w.label }))}
-        basePath="/kkpoker/pnl"
-        gameLabel="KKPOKER"
-        useLegacyWalletFallback={false}
-        gameId={kkGameId ?? 5}
-        netSeries={netSeries}
-      />
+        ) : undefined}
+        actions={<SyncWalletsButton gameName="KKPOKER" />}
+        walletMeresBanner={<WalletMeresBanner walletMeres={data.walletMeres} />}
+      >
+        <LedgerTable
+          rows={data.summaryByPlayer}
+          gameLabel="KKPOKER"
+          gameId={data.gameId}
+          cashoutsByPlayer={data.cashoutsByPlayer}
+          gameWalletsByPlayer={data.gameWalletsByPlayer}
+          availableByPlayer={data.availableByPlayer}
+          settlementsByPlayer={data.settlementsByPlayer}
+          estimatedDueByPlayer={data.estimatedDueByPlayer}
+          previewAction={previewAction}
+          lockAction={lockAction}
+          markPaidAction={markPaidAction}
+          unlockAction={unlockAction}
+          showSettlementPreview={false}
+        />
+      </LedgerShell>
       <AgencyExtras gameKey="kkpoker" />
     </>
   );
