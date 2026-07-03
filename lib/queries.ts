@@ -371,11 +371,28 @@ export function getWalletTransactions(filters?: { player_id?: number; game_id?: 
   return db.prepare(q).all(params);
 }
 
-export function getWalletSummaryByPlayer(filters?: { game_name?: string; since_date?: string; end_date?: string }) {
+// game_names: multi-game union (A5NUTS = A5POKER + NUTSPK merged view). Each deal row still
+// joins ONLY its own game's transactions (wt.game_id = pgd.game_id), so the union is a strict
+// per-(player,game) sum — no cross-game double counting. Takes precedence over game_name.
+function pushGameCondition(
+  conditions: string[],
+  params: Record<string, unknown>,
+  filters?: { game_name?: string; game_names?: string[] },
+) {
+  if (filters?.game_names?.length) {
+    conditions.push(`g.name IN (${filters.game_names.map((_, i) => `@gn${i}`).join(", ")})`);
+    filters.game_names.forEach((n, i) => { params[`gn${i}`] = n; });
+  } else if (filters?.game_name) {
+    conditions.push(`g.name = @game_name`);
+    params.game_name = filters.game_name;
+  }
+}
+
+export function getWalletSummaryByPlayer(filters?: { game_name?: string; game_names?: string[]; since_date?: string; end_date?: string }) {
   const db = getDb();
   const conditions: string[] = [];
   const params: Record<string, unknown> = {};
-  if (filters?.game_name) { conditions.push(`g.name = @game_name`); params.game_name = filters.game_name; }
+  pushGameCondition(conditions, params, filters);
   const srcFilter = `AND (wt.source IS NULL OR wt.source != 'unknown')`;
   const startDateCond = `AND (pgd.start_date IS NULL OR wt.tx_datetime >= pgd.start_date)`;
   const dealEndCond = `AND (pgd.end_date IS NULL OR wt.tx_datetime <= pgd.end_date)`;
@@ -405,11 +422,11 @@ export function getWalletSummaryByPlayer(filters?: { game_name?: string; since_d
   return db.prepare(q).all(params);
 }
 
-export function getWalletKPIs(filters?: { game_name?: string; since_date?: string; end_date?: string }) {
+export function getWalletKPIs(filters?: { game_name?: string; game_names?: string[]; since_date?: string; end_date?: string }) {
   const db = getDb();
   const conditions: string[] = [];
   const params: Record<string, unknown> = {};
-  if (filters?.game_name) { conditions.push(`g.name = @game_name`); params.game_name = filters.game_name; }
+  pushGameCondition(conditions, params, filters);
   const srcF = `AND (wt.source IS NULL OR wt.source != 'unknown')`;
   const sdCond = `AND (pgd.start_date IS NULL OR wt.tx_datetime >= pgd.start_date)`;
   const deCond = `AND (pgd.end_date IS NULL OR wt.tx_datetime <= pgd.end_date)`;
@@ -487,11 +504,11 @@ export function getVolumeByGame(filters?: { since_date?: string; end_date?: stri
 // EXACT getWalletKPIs net (Σ withdrawal − deposit, joined to the deal window, source-guarded,
 // game-currency raw). The last cumulative point == getWalletKPIs.total_net for the same filters
 // (non-locked periods). Game currency, no toUsdt (matches the card, which sums raw too).
-export function getNetPnlSeries(filters?: { game_name?: string; since_date?: string; end_date?: string; player_id?: number }) {
+export function getNetPnlSeries(filters?: { game_name?: string; game_names?: string[]; since_date?: string; end_date?: string; player_id?: number }) {
   const db = getDb();
   const conditions: string[] = [];
   const params: Record<string, unknown> = {};
-  if (filters?.game_name) { conditions.push(`g.name = @game_name`); params.game_name = filters.game_name; }
+  pushGameCondition(conditions, params, filters);
   if (filters?.player_id) { conditions.push(`p.id = @player_id`); params.player_id = filters.player_id; }
   const srcF = `AND (wt.source IS NULL OR wt.source != 'unknown')`;
   const sdCond = `AND (pgd.start_date IS NULL OR wt.tx_datetime >= pgd.start_date)`;
@@ -1154,8 +1171,9 @@ function getWeekStartFromDates(sinceDate: string, endDate: string): string | nul
   return null;
 }
 
-export function getLockedSummaryByPlayer(weekStart: string, gameName?: string) {
-  const gn = gameName ?? "TELE";
+export function getLockedSummaryByPlayer(weekStart: string, gameName?: string, gameNames?: string[]) {
+  const names = gameNames?.length ? gameNames : [gameName ?? "TELE"];
+  const placeholders = names.map(() => "?").join(", ");
   return getDb().prepare(`
     SELECT
       ws.player_id, p.name AS player_name,
@@ -1168,10 +1186,10 @@ export function getLockedSummaryByPlayer(weekStart: string, gameName?: string) {
     FROM weekly_settlements ws
     JOIN players p ON p.id = ws.player_id
     JOIN player_game_deals pgd ON pgd.player_id = ws.player_id
-    JOIN games g ON g.id = pgd.game_id AND g.name = ?
+    JOIN games g ON g.id = pgd.game_id AND g.name IN (${placeholders})
     WHERE ws.week_start = ?
     ORDER BY ws.pnl_operator DESC
-  `).all(gn, weekStart);
+  `).all(...names, weekStart);
 }
 
 export function getLockedKPIs(weekStart: string) {
@@ -1186,17 +1204,17 @@ export function getLockedKPIs(weekStart: string) {
   return row;
 }
 
-export function getLockAwareSummaryByPlayer(filters?: { game_name?: string; since_date?: string; end_date?: string }) {
+export function getLockAwareSummaryByPlayer(filters?: { game_name?: string; game_names?: string[]; since_date?: string; end_date?: string }) {
   if (filters?.since_date && filters?.end_date) {
     const weekStart = getWeekStartFromDates(filters.since_date, filters.end_date);
     if (weekStart && isWeekLocked(weekStart)) {
-      return getLockedSummaryByPlayer(weekStart, filters?.game_name);
+      return getLockedSummaryByPlayer(weekStart, filters?.game_name, filters?.game_names);
     }
   }
   return getWalletSummaryByPlayer(filters);
 }
 
-export function getLockAwareKPIs(filters?: { game_name?: string; since_date?: string; end_date?: string }) {
+export function getLockAwareKPIs(filters?: { game_name?: string; game_names?: string[]; since_date?: string; end_date?: string }) {
   if (filters?.since_date && filters?.end_date) {
     const weekStart = getWeekStartFromDates(filters.since_date, filters.end_date);
     if (weekStart && isWeekLocked(weekStart)) {
@@ -1210,14 +1228,15 @@ export function getLockAwareKPIs(filters?: { game_name?: string; since_date?: st
 // into my_total_pnl — same composition as the war room (getAgencyTotalPnL = cuts + extras).
 // Extras carry no player_id, so the per-player filtered view must NOT use this.
 export function getLockAwareKPIsWithExtras(
-  filters: { game_name?: string; since_date?: string; end_date?: string },
-  gameKey: string,
+  filters: { game_name?: string; game_names?: string[]; since_date?: string; end_date?: string },
+  gameKey: string | string[],
 ) {
   const kpis = getLockAwareKPIs(filters) ?? { total_deposited: 0, total_withdrawn: 0, total_net: 0, my_total_pnl: 0 };
-  const extras = getAgencyExtrasNet(gameKey, {
+  const keys = Array.isArray(gameKey) ? gameKey : [gameKey];
+  const extras = keys.reduce((sum, k) => sum + getAgencyExtrasNet(k, {
     from: filters.since_date?.slice(0, 10),
     to: filters.end_date?.slice(0, 10),
-  });
+  }), 0);
   return { ...kpis, my_total_pnl: kpis.my_total_pnl + extras, extras_net: extras };
 }
 

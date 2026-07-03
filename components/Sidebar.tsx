@@ -26,17 +26,14 @@ const GROUPS: NavGroup[] = [
     { href: "/kkpoker/pnl", label: "P&L", icon: Wallet },
     { href: "/kkpoker/settlements", label: "Settlements", icon: Scale },
   ]},
-  { label: "A5POKER", items: [
-    { href: "/a5poker/pnl", label: "P&L", icon: Wallet },
-    { href: "/a5poker/settlements", label: "Settlements", icon: Scale },
+  // A5NUTS = merged A5POKER + NUTSPK dashboard (same owner, same wallets).
+  // Old weekly /a5poker/settlements and /nutspk/settlements stay reachable by direct URL.
+  { label: "A5NUTS", items: [
+    { href: "/a5nuts/pnl", label: "P&L", icon: Wallet },
   ]},
   { label: "AKS", items: [
     { href: "/aks/pnl", label: "P&L", icon: Wallet },
     { href: "/aks/settlements", label: "Settlements", icon: Scale },
-  ]},
-  { label: "NUTSPK", items: [
-    { href: "/nutspk/pnl", label: "P&L", icon: Wallet },
-    { href: "/nutspk/settlements", label: "Settlements", icon: Scale },
   ]},
   { label: "QQPK", items: [
     { href: "/qqpk/pnl", label: "P&L", icon: Wallet },

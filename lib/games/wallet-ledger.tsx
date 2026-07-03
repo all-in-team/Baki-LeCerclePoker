@@ -64,10 +64,15 @@ export interface WalletLedgerData {
 }
 
 export interface WalletLedgerGame {
-  /** DB name in `games` (SELECT id FROM games WHERE name = ?). */
+  /** DB name in `games` (SELECT id FROM games WHERE name = ?). CANONICAL game for merged views. */
   gameName: string;
-  /** Key for getLockAwareKPIsWithExtras / AgencyExtras (e.g. "kkpoker"). */
-  extrasKey: string;
+  /**
+   * Merged view (A5NUTS): ALL game names whose deals+txs feed the P&L, canonical first.
+   * Omitted = single-game page ([gameName]). New settlements are always written under gameName.
+   */
+  gameNames?: string[];
+  /** Key(s) for getLockAwareKPIsWithExtras / AgencyExtras (e.g. "kkpoker"). Array = summed. */
+  extrasKey: string | string[];
   /** Page title, e.g. "KKPOKER — P&L". */
   title: string;
   basePath: string;
@@ -78,11 +83,14 @@ export function loadWalletLedger(
   game: WalletLedgerGame,
 ): WalletLedgerData {
   const { gameName, extrasKey, title, basePath } = game;
+  const gameNames = game.gameNames?.length ? game.gameNames : [gameName];
   const playerFilter = params.player ? parseInt(params.player) : undefined;
   const { key, startDate, endDate, rangeLabel } = computePeriodFilter(params.filter);
   const weeks = getLast12Weeks();
 
-  const filters = { game_name: gameName, since_date: startDate, end_date: endDate };
+  const filters = gameNames.length > 1
+    ? { game_names: gameNames, since_date: startDate, end_date: endDate }
+    : { game_name: gameName, since_date: startDate, end_date: endDate };
   let summary = getLockAwareSummaryByPlayer(filters) as WalletLedgerRow[];
   let kpis = getLockAwareKPIsWithExtras(filters, extrasKey);
 
@@ -100,8 +108,14 @@ export function loadWalletLedger(
 
   const netSeries = getNetPnlSeries({ ...filters, player_id: playerFilter }) as { day: string; cumulative_net: number }[];
 
-  const gameId = (getDb().prepare(`SELECT id FROM games WHERE name = ?`).get(gameName) as { id: number } | undefined)?.id ?? 0;
-  const walletMeres = gameId ? getWalletMeresForGame(gameId) : [];
+  // gameId = CANONICAL game (first name) — manual tx entry + new settlements are stamped with it.
+  // gameIds = full scope for reads (available txs, settlement history, wallets, mères).
+  const db = getDb();
+  const gameIds = gameNames
+    .map((n) => (db.prepare(`SELECT id FROM games WHERE name = ?`).get(n) as { id: number } | undefined)?.id)
+    .filter((id): id is number => id !== undefined);
+  const gameId = gameIds[0] ?? 0;
+  const walletMeres = gameIds.flatMap((id) => getWalletMeresForGame(id));
 
   const players = getPlayers() as { id: number; name: string }[];
   const filterPlayerName = playerFilter ? (players.find((p) => p.id === playerFilter)?.name ?? `#${playerFilter}`) : null;
@@ -116,15 +130,21 @@ export function loadWalletLedger(
   ).sort((a, b) => b.my_pnl - a.my_pnl);
 
   // Extras data — per listed player, same calls as app/a5poker/pnl/page.tsx.
+  // Merged scope: wallet lists span all games, deduped by address (same owner → same wallets
+  // registered under both games must show once).
+  const dedupeByAddress = (addrs: WalletAddr[]): WalletAddr[] => {
+    const seen = new Set<string>();
+    return addrs.filter((a) => (seen.has(a.address) ? false : (seen.add(a.address), true)));
+  };
   const cashoutsByPlayer: Record<number, WalletAddr[]> = {};
   const gameWalletsByPlayer: Record<number, WalletAddr[]> = {};
   const availableByPlayer: Record<number, AvailableTx[]> = {};
   for (const r of summaryByPlayer) {
-    cashoutsByPlayer[r.player_id] = gameId ? getPlayerCashouts(r.player_id, gameId) as WalletAddr[] : [];
-    gameWalletsByPlayer[r.player_id] = gameId ? getPlayerGameWallets(r.player_id, gameId) as WalletAddr[] : [];
-    availableByPlayer[r.player_id] = gameId ? getAvailableTransactions(gameId, r.player_id) : [];
+    cashoutsByPlayer[r.player_id] = dedupeByAddress(gameIds.flatMap((id) => getPlayerCashouts(r.player_id, id) as WalletAddr[]));
+    gameWalletsByPlayer[r.player_id] = dedupeByAddress(gameIds.flatMap((id) => getPlayerGameWallets(r.player_id, id) as WalletAddr[]));
+    availableByPlayer[r.player_id] = gameIds.length ? getAvailableTransactions(gameIds, r.player_id) : [];
   }
-  const history = gameId ? getManualSettlementHistory(gameId) : [];
+  const history = gameIds.length ? getManualSettlementHistory(gameIds) : [];
   const settlementsByPlayer: Record<number, SettlementRow[]> = {};
   for (const s of history as SettlementRow[]) (settlementsByPlayer[s.player_id] = settlementsByPlayer[s.player_id] || []).push(s);
 
@@ -135,8 +155,8 @@ export function loadWalletLedger(
   const estimatedDueByPlayer: Record<number, number> = {};
   for (const r of summaryByPlayer) {
     const avail = availableByPlayer[r.player_id];
-    if (gameId && avail.length > 0) {
-      const p = previewSettlement(gameId, r.player_id, avail.map(t => t.id));
+    if (gameIds.length && avail.length > 0) {
+      const p = previewSettlement(gameIds, r.player_id, avail.map(t => t.id));
       if (p.ok) estimatedDueByPlayer[r.player_id] = p.amount_due_usdt;
     }
   }

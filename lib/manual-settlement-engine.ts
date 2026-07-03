@@ -82,20 +82,34 @@ interface TxRecord {
   tx_date: string;
 }
 
-// ── 1) getAvailableTransactions ──────────────────────────
-// Player's still-unsettled txs for a game (settled=0), real sources only, oldest→newest.
+// ── Game scope ───────────────────────────────────────────
+// Every entry point accepts a single game_id OR an ordered list of game_ids for merged views
+// (A5NUTS = [A5POKER, NUTSPK] — same owner, same wallets, winnings indissociables par game).
+// The FIRST id is the CANONICAL game: new manual_settlements rows are written under it.
+// Reads (available/preview/history) span the whole scope so no tx or past settlement escapes.
 
-export function getAvailableTransactions(gameId: number, playerId: number): AvailableTx[] {
+export type GameScope = number | number[];
+
+function scopeIds(scope: GameScope): number[] {
+  return Array.isArray(scope) ? scope : [scope];
+}
+
+// ── 1) getAvailableTransactions ──────────────────────────
+// Player's still-unsettled txs for a game scope (settled=0), real sources only, oldest→newest.
+
+export function getAvailableTransactions(gameId: GameScope, playerId: number): AvailableTx[] {
   const db = getDb();
+  const ids = scopeIds(gameId);
+  const placeholders = ids.map(() => "?").join(", ");
   return db.prepare(`
     SELECT id, tx_datetime, tx_date, type, amount, currency, source
     FROM wallet_transactions
-    WHERE game_id = @game_id
-      AND player_id = @player_id
+    WHERE game_id IN (${placeholders})
+      AND player_id = ?
       AND settled = 0
       AND source IN ('sync', 'manual')
     ORDER BY COALESCE(tx_datetime, tx_date) ASC, id ASC
-  `).all({ game_id: gameId, player_id: playerId }) as AvailableTx[];
+  `).all(...ids, playerId) as AvailableTx[];
 }
 
 // ── Shared selection loader + validator ──────────────────
@@ -104,7 +118,7 @@ export function getAvailableTransactions(gameId: number, playerId: number): Avai
 
 function loadSelection(
   db: ReturnType<typeof getDb>,
-  gameId: number,
+  gameIds: number[],
   playerId: number,
   txIds: number[],
 ): { rows?: TxRecord[]; error?: string } {
@@ -124,7 +138,7 @@ function loadSelection(
     return { error: `Transaction(s) introuvable(s): ${missing.join(", ")}` };
   }
   for (const r of rows) {
-    if (r.player_id !== playerId || r.game_id !== gameId) {
+    if (r.player_id !== playerId || r.game_id === null || !gameIds.includes(r.game_id)) {
       return { error: `Transaction ${r.id} n'appartient pas à ce joueur/game` };
     }
     if (r.source !== "sync" && r.source !== "manual") {
@@ -137,11 +151,23 @@ function loadSelection(
   return { rows };
 }
 
-function getDealActionPct(db: ReturnType<typeof getDb>, gameId: number, playerId: number): number | null {
-  const row = db.prepare(`
-    SELECT action_pct FROM player_game_deals WHERE player_id = ? AND game_id = ?
-  `).get(playerId, gameId) as { action_pct: number } | undefined;
-  return row ? row.action_pct : null;
+// Uniform action_pct over the scope: on a merged view (A5NUTS) a player may hold a deal on one
+// or both games — net × pct only makes sense with ONE pct, so DIVERGENT deals block the flow
+// (gate G1 aligned them in DB; this guard keeps it that way).
+function getDealActionPct(
+  db: ReturnType<typeof getDb>,
+  gameIds: number[],
+  playerId: number,
+): { pct: number } | { error: string } {
+  const placeholders = gameIds.map(() => "?").join(", ");
+  const rows = db.prepare(`
+    SELECT DISTINCT action_pct FROM player_game_deals WHERE player_id = ? AND game_id IN (${placeholders})
+  `).all(playerId, ...gameIds) as { action_pct: number }[];
+  if (rows.length === 0) return { error: "Aucun deal (action_pct) pour ce joueur sur ce game" };
+  if (rows.length > 1) {
+    return { error: `Deals divergents (${rows.map(r => r.action_pct + "%").join(" vs ")}) — alignez les deals avant de régler` };
+  }
+  return { pct: rows[0].action_pct };
 }
 
 // Compute net (symmetric) + due from validated rows. No rounding (invariant #9 — round at display).
@@ -166,16 +192,18 @@ function computeTotals(rows: TxRecord[], actionPct: number) {
 // ── 2) previewSettlement ─────────────────────────────────
 // Pure read — computes the recap for confirmation. Writes nothing.
 
-export function previewSettlement(gameId: number, playerId: number, txIds: number[]): SettlementPreview {
+export function previewSettlement(gameId: GameScope, playerId: number, txIds: number[]): SettlementPreview {
   const db = getDb();
+  const ids = scopeIds(gameId);
+  const canonicalGameId = ids[0];
   const base: SettlementPreview = {
-    ok: false, game_id: gameId, player_id: playerId, tx_count: 0,
+    ok: false, game_id: canonicalGameId, player_id: playerId, tx_count: 0,
     period_start: null, period_end: null,
     total_deposited_usdt: 0, total_withdrawn_usdt: 0,
     net_selected_usdt: 0, action_pct: 0, amount_due_usdt: 0,
   };
 
-  const sel = loadSelection(db, gameId, playerId, txIds);
+  const sel = loadSelection(db, ids, playerId, txIds);
   if (sel.error || !sel.rows) return { ...base, error: sel.error };
 
   // Preview surfaces already-settled txs as an error so the user can't build a stale recap.
@@ -184,13 +212,13 @@ export function previewSettlement(gameId: number, playerId: number, txIds: numbe
     return { ...base, error: `Transaction(s) déjà réglée(s): ${alreadySettled.join(", ")}` };
   }
 
-  const actionPct = getDealActionPct(db, gameId, playerId);
-  if (actionPct === null) return { ...base, error: "Aucun deal (action_pct) pour ce joueur sur ce game" };
+  const deal = getDealActionPct(db, ids, playerId);
+  if ("error" in deal) return { ...base, error: deal.error };
 
-  const t = computeTotals(sel.rows, actionPct);
+  const t = computeTotals(sel.rows, deal.pct);
   return {
     ok: true,
-    game_id: gameId,
+    game_id: canonicalGameId,
     player_id: playerId,
     tx_count: sel.rows.length,
     period_start: t.periodStart,
@@ -198,7 +226,7 @@ export function previewSettlement(gameId: number, playerId: number, txIds: numbe
     total_deposited_usdt: t.deposited,
     total_withdrawn_usdt: t.withdrawn,
     net_selected_usdt: t.net,
-    action_pct: actionPct,
+    action_pct: deal.pct,
     amount_due_usdt: t.due,
   };
 }
@@ -208,14 +236,17 @@ export function previewSettlement(gameId: number, playerId: number, txIds: numbe
 // selected tx is flagged, or nothing changes.
 
 export function lockSettlement(
-  gameId: number,
+  gameId: GameScope,
   playerId: number,
   txIds: number[],
   notes?: string,
 ): { ok: boolean; error?: string; settlement_id?: number; amount_due_usdt?: number; net_selected_usdt?: number; action_pct?: number } {
   const db = getDb();
+  const gids = scopeIds(gameId);
+  // Merged scope (A5NUTS): the ledger row is written under the CANONICAL game (first id).
+  const canonicalGameId = gids[0];
 
-  const sel = loadSelection(db, gameId, playerId, txIds);
+  const sel = loadSelection(db, gids, playerId, txIds);
   if (sel.error || !sel.rows) return { ok: false, error: sel.error };
 
   // Anti-double-count: refuse if ANY selected tx is already settled.
@@ -224,8 +255,9 @@ export function lockSettlement(
     return { ok: false, error: `Refusé — transaction(s) déjà réglée(s): ${already.join(", ")}` };
   }
 
-  const actionPct = getDealActionPct(db, gameId, playerId);
-  if (actionPct === null) return { ok: false, error: "Aucun deal (action_pct) pour ce joueur sur ce game" };
+  const deal = getDealActionPct(db, gids, playerId);
+  if ("error" in deal) return { ok: false, error: deal.error };
+  const actionPct = deal.pct;
 
   const ids = [...new Set(txIds)];
   const t = computeTotals(sel.rows, actionPct);
@@ -236,7 +268,7 @@ export function lockSettlement(
         INSERT INTO manual_settlements
           (game_id, player_id, net_selected_usdt, action_pct_applied, amount_due_usdt, status, notes, locked_at)
         VALUES (@game_id, @player_id, @net, @action_pct, @due, 'locked', @notes, datetime('now'))
-      `).run({ game_id: gameId, player_id: playerId, net: t.net, action_pct: actionPct, due: t.due, notes: notes ?? null });
+      `).run({ game_id: canonicalGameId, player_id: playerId, net: t.net, action_pct: actionPct, due: t.due, notes: notes ?? null });
       const settlementId = Number(ins.lastInsertRowid);
 
       // Flag ONLY rows still unsettled — settled=0 in the WHERE is a second-line race guard.
@@ -306,10 +338,13 @@ export function unlockSettlement(settlementId: number): { ok: boolean; error?: s
 }
 
 // ── 6) getManualSettlementHistory ────────────────────────
-// All settlements (locked + paid) for a game, newest first, with their tx count.
+// All settlements (locked + paid) for a game scope, newest first, with their tx count.
+// Merged views pass both game_ids so past settlements of EITHER game count in the history/dû.
 
-export function getManualSettlementHistory(gameId: number): ManualSettlementRow[] {
+export function getManualSettlementHistory(gameId: GameScope): ManualSettlementRow[] {
   const db = getDb();
+  const ids = scopeIds(gameId);
+  const placeholders = ids.map(() => "?").join(", ");
   return db.prepare(`
     SELECT ms.id, ms.game_id, ms.player_id, p.name AS player_name,
            ms.net_selected_usdt, ms.action_pct_applied, ms.amount_due_usdt,
@@ -317,7 +352,7 @@ export function getManualSettlementHistory(gameId: number): ManualSettlementRow[
            (SELECT COUNT(*) FROM wallet_transactions wt WHERE wt.settlement_id = ms.id) AS tx_count
     FROM manual_settlements ms
     JOIN players p ON p.id = ms.player_id
-    WHERE ms.game_id = ?
+    WHERE ms.game_id IN (${placeholders})
     ORDER BY ms.created_at DESC, ms.id DESC
-  `).all(gameId) as ManualSettlementRow[];
+  `).all(...ids) as ManualSettlementRow[];
 }
