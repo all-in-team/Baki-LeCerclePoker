@@ -69,6 +69,13 @@ export interface LedgerShellProps {
   config: LedgerGameConfig;
   kpiCards: LedgerKpiCard[];
   period: LedgerPeriod;
+  /**
+   * Custom replacement for the period bar (e.g. QQPK's cycle selector — the
+   * rolling monthly cycle has no day granularity, so PeriodFilterBar doesn't
+   * apply). When provided it renders INSTEAD of PeriodFilterBar / the
+   * "Non applicable" placeholder. Display-only slot, no math.
+   */
+  periodContent?: ReactNode;
   chart?: LedgerChart;
   /** Header right-slot (e.g. player-filter chip / global actions). */
   headerAction?: ReactNode;

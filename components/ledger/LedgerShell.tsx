@@ -22,7 +22,7 @@ import type { LedgerShellProps } from "./types";
  * game is migrated onto this shell one at a time.
  */
 export default function LedgerShell({
-  config, kpiCards, period, chart, headerAction, actions, walletMeresBanner, children,
+  config, kpiCards, period, periodContent, chart, headerAction, actions, walletMeresBanner, children,
 }: LedgerShellProps) {
   return (
     <div style={{ padding: "8px 28px 40px" }}>
@@ -44,7 +44,9 @@ export default function LedgerShell({
         </div>
       )}
 
-      {period.supported ? (
+      {periodContent ? (
+        periodContent
+      ) : period.supported ? (
         <PeriodFilterBar
           activeFilter={period.activeFilter ?? "current"}
           rangeLabel={period.rangeLabel ?? ""}
