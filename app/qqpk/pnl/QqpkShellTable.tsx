@@ -7,7 +7,7 @@ import Modal from "@/components/Modal";
 import Btn from "@/components/Btn";
 import PlayerWalletsPanel, { WalletBadgeButton, type WalletAddr } from "@/components/ledger/extras/PlayerWalletsPanel";
 import { dueLabel } from "@/components/ledger/extras/SettlementFlow";
-import { saveMainsAction, previewSettlementAction, settleCycleAction } from "./actions";
+import { saveMainsAction, saveCycleRakebackAction, previewSettlementAction, settleCycleAction } from "./actions";
 
 /**
  * QQPK staking table on LedgerShell — the per-player cycle rows + history +
@@ -28,6 +28,11 @@ const PART_CERCLE_PROJ_TOOLTIP =
   "la couverture des pertes est annulée (réglable 0). Calculée sur le net on-chain du cycle (retraits − dépôts, tx manuelles " +
   "comprises) — le rakeback est inclus dans ce total ; l'ajustement RB se fait à la main (transaction manuelle). " +
   "Positif = ça rapporte au Cercle, négatif = ça lui coûte.";
+
+const RB_MANUEL_TOOLTIP =
+  "Rakeback perçu par le Cercle sur ce joueur — hors deal, invisible joueur, saisie manuelle. " +
+  "Revenu Cercle pur : n'entre JAMAIS dans le 70/30, le règlement ni le lock. Lié au cycle courant " +
+  "(nouveau cycle = case vide, l'historique garde sa valeur).";
 
 const PART_CERCLE_SETTLED_TOOLTIP =
   "Part Cercle = −règlement du cycle : le Cercle couvre 70% des pertes / prend 30% des gains (condition 30 000 mains). " +
@@ -52,6 +57,8 @@ interface Row {
   operator_pnl: number;
   reglement_projected: number;
   operator_pnl_projected: number;
+  /** RB manuel du cycle (owner-only, hors deal) — affichage + saisie, jamais dans le lock. */
+  rb_manual?: number;
   settled_at?: string | null;
 }
 
@@ -116,6 +123,11 @@ function ReglementCell({ reglement }: { reglement: number }) {
   );
 }
 
+function RbValue({ amount }: { amount: number }) {
+  if (amount > 0.005) return <span style={{ fontWeight: 600, color: "#F5C518" }}>+{fmt(amount)}</span>;
+  return <span style={{ color: "var(--text-dim)" }}>—</span>;
+}
+
 type SortKey = "name" | "resultat" | "part";
 
 export default function QqpkShellTable({
@@ -132,6 +144,8 @@ export default function QqpkShellTable({
   const router = useRouter();
   const isCurrent = cycleView === 0;
   const [mainsEdits, setMainsEdits] = useState<Record<number, string>>({});
+  const [rbEditing, setRbEditing] = useState<number | null>(null);
+  const [rbDraft, setRbDraft] = useState("");
   const [busy, setBusy] = useState<number | null>(null);
   const [recap, setRecap] = useState<{ player: Row; preview: Preview } | null>(null);
   const [confirming, setConfirming] = useState(false);
@@ -174,6 +188,20 @@ export default function QqpkShellTable({
     } finally { setBusy(null); }
   }
 
+  // RB manuel — inline edit (clic → input, Enter = save, Esc = cancel). Affichage/saisie
+  // uniquement : le montant part dans qqpk_cycle_rakeback via l'action, jamais dans le lock.
+  async function saveRb(pid: number) {
+    const n = Number(rbDraft.trim().replace(",", "."));
+    if (!Number.isFinite(n) || n < 0) { alert("RB manuel : nombre ≥ 0 requis."); return; }
+    setBusy(pid);
+    try {
+      const res = await saveCycleRakebackAction(pid, n);
+      if (!res.ok) { alert(res.error ?? "Erreur"); return; }
+      setRbEditing(null);
+      router.refresh();
+    } finally { setBusy(null); }
+  }
+
   async function openRecap(player: Row) {
     setBusy(player.player_id);
     try {
@@ -195,7 +223,7 @@ export default function QqpkShellTable({
 
   const th: React.CSSProperties = { textAlign: "right", padding: "8px 10px", color: "var(--text-muted)", fontWeight: 600, fontSize: 11, whiteSpace: "nowrap" };
   const td: React.CSSProperties = { padding: "10px 10px", textAlign: "right", fontVariantNumeric: "tabular-nums", fontSize: 12 };
-  const COLS = isCurrent ? 12 : 10;
+  const COLS = isCurrent ? 13 : 11;
   // Cycle courant → prévisionnel ; vues passées → cycles réglés (projected == réel côté loader).
   const partTooltip = isCurrent ? PART_CERCLE_PROJ_TOOLTIP : PART_CERCLE_SETTLED_TOOLTIP;
 
@@ -236,7 +264,7 @@ export default function QqpkShellTable({
           </div>
         ) : (
           <div style={{ overflowX: "auto" }}>
-            <table style={{ width: "100%", borderCollapse: "collapse", minWidth: isCurrent ? 1120 : 900 }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", minWidth: isCurrent ? 1220 : 980 }}>
               <thead>
                 <tr style={{ borderBottom: "1px solid var(--border)" }}>
                   {sortableTh("Joueur", "name", "left")}
@@ -254,6 +282,7 @@ export default function QqpkShellTable({
                   <th style={th}>C</th>
                   <th style={th}>T</th>
                   {sortableTh(isCurrent ? "Part Cercle (prév.)" : "Part Cercle", "part", "right", partTooltip)}
+                  <th title={RB_MANUEL_TOOLTIP} style={{ ...th, cursor: "help" }}>RB (manuel)</th>
                   <th style={{ ...th, textAlign: "left", paddingLeft: 16 }}>Règlement</th>
                   <th style={{ ...th, textAlign: "center" }}>30k</th>
                   {isCurrent && <th style={{ ...th, textAlign: "center" }}>Action</th>}
@@ -314,6 +343,37 @@ export default function QqpkShellTable({
                         <td title={partTooltip} style={{ ...td, fontWeight: 700, fontSize: 13, color: partCercleColor(r.operator_pnl_projected), cursor: "help" }}>
                           {signed(r.operator_pnl_projected)}
                         </td>
+                        <td style={td}>
+                          {isCurrent ? (
+                            rbEditing === r.player_id ? (
+                              <input
+                                autoFocus
+                                type="text"
+                                inputMode="decimal"
+                                value={rbDraft}
+                                onChange={(e) => setRbDraft(e.target.value)}
+                                onKeyDown={(e) => {
+                                  if (e.key === "Enter") saveRb(r.player_id);
+                                  if (e.key === "Escape") setRbEditing(null);
+                                }}
+                                onBlur={() => setRbEditing(null)}
+                                disabled={busy === r.player_id}
+                                placeholder="0"
+                                style={{ width: 80, padding: "5px 8px", borderRadius: 6, fontSize: 12, textAlign: "right", background: "var(--bg-base)", color: "var(--text)", border: "1px solid #F5C518", outline: "none", fontVariantNumeric: "tabular-nums" }}
+                              />
+                            ) : (
+                              <button
+                                title={RB_MANUEL_TOOLTIP}
+                                onClick={() => { setRbEditing(r.player_id); setRbDraft((r.rb_manual ?? 0) > 0 ? String(r.rb_manual) : ""); }}
+                                style={{ background: "transparent", border: "1px dashed var(--border)", borderRadius: 6, cursor: "pointer", padding: "4px 10px", fontSize: 12, fontVariantNumeric: "tabular-nums" }}
+                              >
+                                <RbValue amount={r.rb_manual ?? 0} />
+                              </button>
+                            )
+                          ) : (
+                            <span title={RB_MANUEL_TOOLTIP} style={{ cursor: "help" }}><RbValue amount={r.rb_manual ?? 0} /></span>
+                          )}
+                        </td>
                         <td style={{ padding: "10px 10px 10px 16px", textAlign: "left" }}><ReglementCell reglement={r.reglement_projected} /></td>
                         <td style={{ ...td, textAlign: "center" }}><ConditionBadge row={r} /></td>
                         {isCurrent && (
@@ -352,7 +412,7 @@ export default function QqpkShellTable({
         <div style={{ marginTop: 28 }}>
           <h3 style={{ fontSize: 14, fontWeight: 700, color: "var(--text)", marginBottom: 12 }}>Historique des cycles réglés</h3>
           <div style={{ background: "var(--bg-surface)", border: "1px solid var(--border)", borderRadius: 12, overflowX: "auto" }}>
-            <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 900 }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 980 }}>
               <thead>
                 <tr style={{ borderBottom: "1px solid var(--border)" }}>
                   <th style={{ ...th, textAlign: "left" }}>Joueur</th>
@@ -362,6 +422,7 @@ export default function QqpkShellTable({
                   <th style={th}>C final</th>
                   <th style={th}>T final</th>
                   <th title={PART_CERCLE_SETTLED_TOOLTIP} style={th}>Part Cercle</th>
+                  <th title={RB_MANUEL_TOOLTIP} style={{ ...th, cursor: "help" }}>RB (manuel)</th>
                   <th style={{ ...th, textAlign: "left", paddingLeft: 16 }}>Règlement</th>
                   <th style={{ ...th, textAlign: "center" }}>30k</th>
                 </tr>
@@ -376,6 +437,7 @@ export default function QqpkShellTable({
                     <td style={td}>{signed(h.c)}</td>
                     <td style={td}>{signed(h.t)}</td>
                     <td title={PART_CERCLE_SETTLED_TOOLTIP} style={{ ...td, fontWeight: 700, color: partCercleColor(h.operator_pnl), cursor: "help" }}>{signed(h.operator_pnl)}</td>
+                    <td title={RB_MANUEL_TOOLTIP} style={{ ...td, cursor: "help" }}><RbValue amount={h.rb_manual ?? 0} /></td>
                     <td style={{ padding: "10px 10px 10px 16px", textAlign: "left" }}><ReglementCell reglement={h.reglement} /></td>
                     <td style={{ ...td, textAlign: "center" }}><ConditionBadge row={h} /></td>
                   </tr>

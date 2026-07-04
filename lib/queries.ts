@@ -2374,6 +2374,10 @@ export interface QqpkStakingRow {
   // On a settled cycle the projection is moot: fields carry the settled reality.
   reglement_projected: number;
   operator_pnl_projected: number; // −reglement_projected (Part Cercle prévisionnelle)
+  // RB MANUEL (qqpk_cycle_rakeback) — owner-only revenue from the room, invisible player,
+  // NEVER in the engine/settlement/lock. Optional so the settle/preview paths (which don't
+  // carry it) stay byte-identical. Display-only additive line.
+  rb_manual?: number;
 }
 
 const pad2 = (n: number) => String(n).padStart(2, "0");
@@ -2501,6 +2505,37 @@ function computeQqpkProjection(playerId: number, cycle: QqpkCycle): {
   };
 }
 
+// ── QQPK manual rakeback (owner-only, hors deal) ─────────────────────────────
+// Revenue the Cercle earns from the room on a player, entered by hand per rolling
+// cycle. INVISIBLE to the player: never enters computeStakingBlock, settleQqpkCycle,
+// the réglable amount, or any Telegram message. Keyed on (player_id, cycle_start)
+// where cycle_start == qqpk_staking_blocks.block_month — new cycle → empty again,
+// past cycles keep their entered value (no destructive reset).
+
+// All entries as a map "player_id|cycle_start" → amount (one query for board + history).
+function getQqpkCycleRakebackMap(): Map<string, number> {
+  const rows = getDb().prepare(
+    `SELECT player_id, cycle_start, amount FROM qqpk_cycle_rakeback`
+  ).all() as { player_id: number; cycle_start: string; amount: number }[];
+  return new Map(rows.map((r) => [`${r.player_id}|${r.cycle_start}`, r.amount]));
+}
+
+export function setQqpkCycleRakeback(playerId: number, amount: number): { ok: boolean; error?: string } {
+  if (!Number.isFinite(amount) || amount < 0) return { ok: false, error: "RB manuel : nombre ≥ 0 requis." };
+  const cycle = getQqpkActiveCycle(playerId);
+  if (!cycle) return { ok: false, error: "Pas de cycle QQPK actif." };
+  // Défense en profondeur (miroir setQqpkMains) : l'actif n'est jamais settled par
+  // construction, mais on refuse explicitement au cas où un futur appelant contourne l'UI.
+  const existing = getQqpkBlockRow(playerId, cycle.cycle_start);
+  if (existing && existing.status === "settled") return { ok: false, error: "Cycle déjà réglé (immutable)." };
+  getDb().prepare(
+    `INSERT INTO qqpk_cycle_rakeback (player_id, cycle_start, amount, updated_at)
+     VALUES (@player_id, @cycle_start, @amount, datetime('now'))
+     ON CONFLICT(player_id, cycle_start) DO UPDATE SET amount = excluded.amount, updated_at = datetime('now')`
+  ).run({ player_id: playerId, cycle_start: cycle.cycle_start, amount });
+  return { ok: true };
+}
+
 // Board view: one row per QQPK player = their active cycle + live "if settled now" projection.
 export function getQqpkStakingOverview(): { rows: QqpkStakingRow[] } {
   const players = getDb().prepare(
@@ -2511,6 +2546,7 @@ export function getQqpkStakingOverview(): { rows: QqpkStakingRow[] } {
      ORDER BY p.name COLLATE NOCASE`
   ).all() as { player_id: number; player_name: string }[];
 
+  const rbMap = getQqpkCycleRakebackMap();
   const rows: QqpkStakingRow[] = [];
   for (const p of players) {
     const cycle = getQqpkActiveCycle(p.player_id);
@@ -2521,6 +2557,7 @@ export function getQqpkStakingOverview(): { rows: QqpkStakingRow[] } {
       start_date: cycle.player_start_date, cycle_start: cycle.cycle_start,
       cycle_end_incl: cycle.cycle_end_incl, settle_date: cycle.settle_date,
       due: cycle.due, days_overdue: cycle.days_overdue, ...proj,
+      rb_manual: rbMap.get(`${p.player_id}|${cycle.cycle_start}`) ?? 0,
     });
   }
   return { rows };
@@ -2535,6 +2572,7 @@ export function getQqpkBlockHistory(): (QqpkStakingRow & { settled_at: string | 
      WHERE b.status = 'settled'
      ORDER BY b.block_month DESC, p.name COLLATE NOCASE`
   ).all() as any[];
+  const rbMap = getQqpkCycleRakebackMap();
   return rows.map((b) => ({
     player_id: b.player_id, player_name: b.player_name,
     start_date: "", cycle_start: b.block_month,
@@ -2547,6 +2585,8 @@ export function getQqpkBlockHistory(): (QqpkStakingRow & { settled_at: string | 
     // Settled cycle: no projection anymore — the settled reality IS the number.
     reglement_projected: b.reglement,
     operator_pnl_projected: operatorPnlFromReglement(b.reglement),
+    // Past cycles keep the RB entered while they were active (no destructive reset).
+    rb_manual: rbMap.get(`${b.player_id}|${b.block_month}`) ?? 0,
     settled_at: b.updated_at ?? b.created_at ?? null,
   }));
 }

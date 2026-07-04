@@ -1,4 +1,4 @@
-import { HandCoins, Scale, Users, PiggyBank } from "lucide-react";
+import { HandCoins, Scale, Users, PiggyBank, Coins } from "lucide-react";
 import { getDb } from "@/lib/db";
 import {
   getQqpkStakingOverview,
@@ -79,10 +79,16 @@ export function loadQqpkLedger(params: { cycle?: string }): QqpkLedgerData {
   // Part Cercle KPI = Σ PRÉVISIONNELS (as-if-covered, pertes <30k incluses) — decision
   // Baki: the header must show real exposure. On past views projected == settled real.
   const partCercleTotal = rows.reduce((s, r) => s + r.operator_pnl_projected, 0);
+  // RB manuel = Σ qqpk_cycle_rakeback of the displayed view — owner-only room revenue,
+  // hors deal, NEVER in the engine/settlement. Shown as its own card + a combined total
+  // so Baki never double-counts: three figures, three explicit labels.
+  const rbManuelTotal = rows.reduce((s, r) => s + (r.rb_manual ?? 0), 0);
+  const totalCercle = partCercleTotal + rbManuelTotal;
   const nbDue = currentRows.filter((r) => r.due).length;
   const makeupEnCours = currentRows.filter((r) => r.t > 0).reduce((s, r) => s + r.t, 0);
 
   const partAccent: "gold" | "red" = partCercleTotal >= 0 ? "gold" : "red";
+  const cycleTag = cycleView === 0 ? "cycle courant" : `cycle −${cycleView}`;
   const kpiCards: LedgerKpiCard[] = [
     {
       label: cycleView === 0 ? "Part Cercle prévisionnelle (cycle courant)" : `Part Cercle (cycle −${cycleView})`,
@@ -91,6 +97,21 @@ export function loadQqpkLedger(params: { cycle?: string }): QqpkLedgerData {
         ? "Σ prévisionnels · 30% win / −70% perte, <30k inclus (conditionnel)"
         : "−Σ règlements · 70/30, RB inclus dans le net",
       accent: partAccent,
+      icon: <HandCoins size={18} />,
+      emphasis: true,
+    },
+    {
+      label: `RB manuel (${cycleTag})`,
+      value: "+" + fmtKpiAmount(rbManuelTotal) + " USDT",
+      sub: "Σ rakeback room saisi à la main — hors deal, invisible joueur",
+      accent: "neutral",
+      icon: <Coins size={18} />,
+    },
+    {
+      label: `Total Cercle (prév. + RB) — ${cycleTag}`,
+      value: (totalCercle >= 0 ? "+" : "−") + fmtKpiAmount(Math.abs(totalCercle)) + " USDT",
+      sub: "Part Cercle + RB manuel — les deux cartes de gauche, rien d'autre",
+      accent: totalCercle >= 0 ? "gold" : "red",
       icon: <HandCoins size={18} />,
       emphasis: true,
     },

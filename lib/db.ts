@@ -1697,4 +1697,29 @@ function initSchema(db: Database.Database) {
   } catch (err: any) {
     console.error(`[MIGRATION:add_manual_settlements_v1] FAILED:`, err.message);
   }
+
+  // 3) QQPK manual rakeback — owner-only revenue the Cercle earns from the room per player,
+  //    per rolling cycle. INVISIBLE to the player: NOT in the 70/30 deal, NOT in the staking
+  //    engine, NOT in settlements/lock, NOT in any Telegram message. Display-only additive
+  //    line so Baki sees his true total (Part Cercle prévisionnelle + RB manuel).
+  //    Key: cycle_start = same per-player rolling-cycle start date as qqpk_staking_blocks.block_month.
+  try {
+    const fix = db.prepare(`INSERT OR IGNORE INTO _applied_fixes (name) VALUES (?)`).run("add_qqpk_cycle_rakeback_v1");
+    if (fix.changes > 0) {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS qqpk_cycle_rakeback (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          player_id INTEGER NOT NULL REFERENCES players(id),
+          cycle_start TEXT NOT NULL,                -- 'YYYY-MM-DD', = qqpk_staking_blocks.block_month of that cycle
+          amount REAL NOT NULL DEFAULT 0,           -- USDT, manual entry, ≥ 0
+          created_at TEXT NOT NULL DEFAULT (datetime('now')),
+          updated_at TEXT,
+          UNIQUE(player_id, cycle_start)
+        )
+      `);
+      console.log("[MIGRATION] add_qqpk_cycle_rakeback_v1 applied");
+    }
+  } catch (err: any) {
+    console.error(`[MIGRATION:add_qqpk_cycle_rakeback_v1] FAILED:`, err.message);
+  }
 }
