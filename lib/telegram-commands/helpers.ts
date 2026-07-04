@@ -12,6 +12,17 @@ export const WALLET_GAME_PHOTO_URL = "https://lecerclepoker-production.up.railwa
 const BASE_URL = "https://lecerclepoker-production.up.railway.app";
 
 // ── Telegram API ──────────────────────────────────────────
+// Strip HTML tags + unescape entities so a message can be re-sent as plain text
+// when Telegram rejects malformed HTML (otherwise the message is silently dropped).
+export function stripTelegramHtml(text: string): string {
+  return text
+    .replace(/<[^>]+>/g, "")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&amp;/g, "&")
+    .replace(/&quot;/g, '"');
+}
+
 export async function sendMsg(chatId: number | string, text: string, messageThreadId?: number) {
   const token = process.env.TELEGRAM_BOT_TOKEN;
   if (!token) return;
@@ -22,7 +33,19 @@ export async function sendMsg(chatId: number | string, text: string, messageThre
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
   });
-  if (!res.ok) console.error("[TG sendMsg]", chatId, res.status, await res.text());
+  if (!res.ok) {
+    console.error("[TG sendMsg]", chatId, res.status, await res.text());
+    // Fallback: malformed HTML (400) would otherwise drop the message entirely.
+    // Re-send as plain text so the operator always gets the content.
+    const plainBody: Record<string, any> = { chat_id: chatId, text: stripTelegramHtml(text) };
+    if (messageThreadId) plainBody.message_thread_id = messageThreadId;
+    const res2 = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(plainBody),
+    });
+    if (!res2.ok) console.error("[TG sendMsg plain-fallback]", chatId, res2.status, await res2.text());
+  }
 }
 
 export async function sendMsgKeyboard(chatId: number | string, text: string, keyboard: any[][], messageThreadId?: number) {

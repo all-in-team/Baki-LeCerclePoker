@@ -83,15 +83,21 @@ export function buildSnapshot(): string {
      JOIN player_game_deals pgd ON pgd.player_id = wt.player_id AND pgd.game_id = wt.game_id`
   ).get() as { my_pnl: number };
 
+  const activeGames = db.prepare(
+    `SELECT name FROM games WHERE status = 'active' ORDER BY name`
+  ).all() as Array<{ name: string }>;
+
   const cost = todayCost();
 
   const lines = [
     `📅 ${today}`,
     `💸 Aujourd'hui — dépôts: ${dep ? dep.amt.toFixed(0) : 0} USDT (${dep ? dep.n : 0} tx) · retraits: ${wd ? wd.amt.toFixed(0) : 0} USDT (${wd ? wd.n : 0} tx)`,
     `👥 Joueurs: ${playersActive}/${playersTotal} actifs`,
+    `🎮 Jeux actifs: ${activeGames.length ? activeGames.map(g => g.name).join(", ") : "aucun"}`,
     `📊 Mon P&L cumulé (all-time): ${myPnl.my_pnl >= 0 ? "+" : ""}${myPnl.my_pnl.toFixed(0)} USDT`,
     `📥 Inbox agent: ${inboxN} message${inboxN !== 1 ? "s" : ""} en attente`,
     `🔄 Dernière sync wallet: ${lastSync.ts ? lastSync.ts.replace("T", " ").slice(0, 16) : "jamais"}`,
+    `🧰 Outils DB disponibles: ${TOOLS.length}`,
     `🤖 Crédit Claude aujourd'hui: $${cost.cost_usd.toFixed(3)} (${cost.calls} appel${cost.calls !== 1 ? "s" : ""})`,
   ];
   return lines.join("\n");

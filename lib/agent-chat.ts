@@ -3,7 +3,11 @@ import { getDb } from "./db";
 import { TOOLS, executeTool, buildSnapshot } from "./agent-tools";
 import { logUsage } from "./agent-cost";
 
-const MODEL = "claude-opus-4-7";
+const MODEL = "claude-fable-5";
+// Fable 5 runs safety classifiers that may decline a request (HTTP 200,
+// stop_reason "refusal"). We transparently re-issue on Opus 4.8 so the operator
+// still gets an answer instead of a dead turn.
+const FALLBACK_MODEL = "claude-opus-4-8";
 
 const BOT_USERNAME = "LeCercle_Lebot";
 const MENTION_RE = new RegExp(`@${BOT_USERNAME}\\b`, "i");
@@ -12,7 +16,7 @@ const SYSTEM_PROMPT = `Tu es l'agent business partner de LeCerclePoker, une app 
 
 Tu parles français, ton direct et concret comme un dev senior. Tu connais le projet par cœur. Tu es ici pour challenger, pas pour valider.
 
-Tu as accès à 17 outils pour interroger la base de données en temps réel : P&L par période, profils joueurs, transactions, inbox, apps, cashout status, settlement hebdo, funnel onboarding, top winners/losers, santé du bot, groupes orphelins. Utilise-les quand l'opérateur pose une question sur un chiffre, un joueur, ou un état du système. Ne devine jamais — appelle l'outil.
+Tu as accès à un jeu d'outils pour interroger la base de données en temps réel : P&L par période, profils joueurs, transactions, inbox, apps, cashout status, settlement hebdo, funnel onboarding, top winners/losers, santé du bot, groupes orphelins, breakdown revenue. Le nombre exact d'outils dispo est dans le snapshot d'état. Utilise-les DÈS que l'opérateur pose une question sur un chiffre, un joueur, une app, un jeu, ou un état du système. Ne devine JAMAIS un chiffre — appelle l'outil. Si aucun outil ne couvre la question, dis-le franchement au lieu d'inventer.
 
 Comportement :
 - Réponses courtes (3-6 lignes max sauf si on te demande un détail technique ou une analyse profonde)
@@ -20,7 +24,7 @@ Comportement :
 - Quand l'opérateur évoque un truc important ("le /players vs /crm m'agace"), prends-le en note pour l'agent planifié du lendemain — dis-le clairement ("noté, j'y pense d'ici demain matin")
 - Si on te demande une action lourde (ouvrir un PR, faire un audit complet), confirme et dis que ça partira au prochain run planifié — pas en direct, tu n'as pas les mains pour ça
 - Pas de bullshit corporate, pas d'emojis sauf un seul si vraiment utile
-- Format Telegram HTML : <b>gras</b>, <i>italique</i>, <code>code</code>. PAS de markdown.
+- Format Telegram HTML STRICT : uniquement <b>gras</b>, <i>italique</i>, <code>code</code>. JAMAIS de markdown (pas de **, pas de #, pas de -). Toutes les balises doivent être fermées. N'utilise aucune autre balise HTML (pas de <br>, <p>, <ul>, <li>). Pour une liste, saute une ligne et commence par • .
 - Ne te répète pas, ne valide pas mécaniquement chaque message
 - Quand un outil te renvoie des chiffres, présente-les clairement avec USDT et signe (+/−). Pas besoin de tout recopier — résume si la liste est longue.
 - Fais TOUJOURS confiance aux chiffres des outils. Ne reformule jamais les nombres. N'ajoute jamais "environ" ou "~". Ne calcule jamais de valeur dérivée toi-même — si tu as besoin d'un calcul, appelle un outil. Si un outil renvoie NULL ou données manquantes, dis-le explicitement : ne fabrique rien.
@@ -52,13 +56,15 @@ const PROJECT_CONTEXT = `## Architecture LeCerclePoker
 **Ops bot** :
 - Notifications proactives vers AGENT_CHAT_ID : cashout confirmé/skip, 6h pending alert (dimanche), erreurs critiques
 - Daily summary à 9h Paris : hier (dépôts/retraits/P&L) + semaine en cours + cashout status
-- 17 outils pour interroger la DB en temps réel (cashout, settlement, funnel, health, top players...)
+- Outils DB temps réel (cashout, settlement, funnel, health, top players, revenue breakdown...) — le nombre exact et l'état courant (jeux actifs, date du jour, P&L) sont dans le snapshot injecté à chaque message
 - Cashout reminder automatique chaque dimanche avec dedup DB-backed
 
-**Connu / en cours (au 2026-05-11)** :
-- Geo et Paabzzz n'ont pas de row dans players (à onboarder manuellement)
-- Tracking automatique sync TELE wallets via Tron
-- Parser XLS Wepoker déterministe + fallback Vision Claude pour screenshots`;
+**Multi-jeux** :
+- Plusieurs jeux coexistent (AKPOKER/TELE archivé, KKPOKER + autres actifs). Ne suppose jamais la liste : lis "Jeux actifs" dans le snapshot ou appelle get_apps_overview.
+- Parser XLS Wepoker déterministe + fallback Vision Claude pour screenshots
+- Sync wallets via Tron (game wallets = dépôts, cashout depuis wallet_mère = retraits)
+
+Cet état est vivant : fie-toi TOUJOURS au snapshot et aux outils pour les chiffres et l'état courant, pas à ce texte figé.`;
 
 interface ChatMessage {
   role: "user" | "assistant";
@@ -133,8 +139,7 @@ export async function runChat({ chatId, userText }: RunChatArgs): Promise<string
   while (iterations < MAX_TOOL_ITERATIONS) {
     iterations++;
 
-    const response = await client.messages.create({
-      model: MODEL,
+    const response = await createMessage(client, {
       max_tokens: 8192,
       thinking: { type: "adaptive" },
       output_config: { effort: "high" },
@@ -146,8 +151,9 @@ export async function runChat({ chatId, userText }: RunChatArgs): Promise<string
       messages,
     });
 
-    // Log usage for cost tracking — every API call counts (including tool-loop iterations)
-    logUsage({ chatId: cid, model: MODEL, usage: response.usage });
+    // Log usage against the model that actually served the response — a fallback
+    // to Opus 4.8 bills at Opus rates, not Fable rates.
+    logUsage({ chatId: cid, model: response.model ?? MODEL, usage: response.usage });
 
     // If end_turn, extract text and return
     if (response.stop_reason === "end_turn" || response.stop_reason === "stop_sequence") {
@@ -156,7 +162,7 @@ export async function runChat({ chatId, userText }: RunChatArgs): Promise<string
         .map(b => b.text)
         .join("\n")
         .trim();
-      const reply = text || "(réponse vide)";
+      const reply = sanitizeAgentReply(text) || "(réponse vide)";
       saveTurn(cid, "assistant", reply);
       maybePushInbox(cid, cleaned);
       return reply;
@@ -187,7 +193,12 @@ export async function runChat({ chatId, userText }: RunChatArgs): Promise<string
       .map(b => b.text)
       .join("\n")
       .trim();
-    const reply = text || `(arrêt: ${response.stop_reason})`;
+    let reply = sanitizeAgentReply(text);
+    if (!reply) {
+      reply = (response.stop_reason as string) === "refusal"
+        ? "Je ne peux pas répondre à ça (filtre de sécurité). Reformule ou demande-moi autre chose."
+        : `(arrêt: ${response.stop_reason})`;
+    }
     saveTurn(cid, "assistant", reply);
     maybePushInbox(cid, cleaned);
     return reply;
@@ -203,4 +214,31 @@ function maybePushInbox(chatId: string, cleaned: string) {
   if (hintPattern.test(cleaned)) {
     pushInbox(chatId, cleaned);
   }
+}
+
+// Call Fable 5; on a safety-classifier refusal, transparently re-issue on Opus 4.8
+// so the operator gets a real answer instead of a dead turn. The refused attempt
+// returns empty content and is not billed.
+async function createMessage(
+  client: Anthropic,
+  params: Omit<Anthropic.MessageCreateParamsNonStreaming, "model">,
+): Promise<Anthropic.Message> {
+  const res = await client.messages.create({ ...params, model: MODEL });
+  if ((res.stop_reason as string) === "refusal") {
+    return client.messages.create({ ...params, model: FALLBACK_MODEL });
+  }
+  return res;
+}
+
+// Safety net for the "output pas clean" issue: the model is instructed to emit
+// Telegram HTML only, but may slip in Markdown. Convert the common cases so the
+// message renders instead of getting rejected. Anything still broken is caught by
+// sendMsg's plain-text fallback.
+export function sanitizeAgentReply(text: string): string {
+  return text
+    .replace(/\*\*([^*]+)\*\*/g, "<b>$1</b>")   // **bold** → <b>
+    .replace(/__([^_]+)__/g, "<b>$1</b>")        // __bold__ → <b>
+    .replace(/`([^`]+)`/g, "<code>$1</code>")    // `code`   → <code>
+    .replace(/^#{1,6}\s+/gm, "")                  // strip markdown headings
+    .trim();
 }
