@@ -1,8 +1,11 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { getDb } from "./db";
 
-// Per-million-token pricing (USD). Source: claude-api skill, current as of 2026-04.
+// Per-million-token pricing (USD). Source: claude-api skill, current as of 2026-07.
+// cacheWrite = 1.25x input (5-min TTL), cacheRead = 0.1x input.
 const RATES: Record<string, { input: number; output: number; cacheRead: number; cacheWrite: number }> = {
+  "claude-fable-5":    { input: 10.00, output: 50.00, cacheRead: 1.00, cacheWrite: 12.50 },
+  "claude-opus-4-8":   { input: 5.00, output: 25.00, cacheRead: 0.50, cacheWrite: 6.25 },
   "claude-opus-4-7":   { input: 5.00, output: 25.00, cacheRead: 0.50, cacheWrite: 6.25 },
   "claude-opus-4-6":   { input: 5.00, output: 25.00, cacheRead: 0.50, cacheWrite: 6.25 },
   "claude-sonnet-4-6": { input: 3.00, output: 15.00, cacheRead: 0.30, cacheWrite: 3.75 },
@@ -11,7 +14,7 @@ const RATES: Record<string, { input: number; output: number; cacheRead: number; 
 
 export function computeCost(model: string, usage: Anthropic.Usage | null | undefined): number {
   if (!usage) return 0;
-  const r = RATES[model] ?? RATES["claude-opus-4-7"];
+  const r = RATES[model] ?? RATES["claude-fable-5"];
   return (
     (usage.input_tokens || 0) * r.input / 1e6 +
     (usage.output_tokens || 0) * r.output / 1e6 +
