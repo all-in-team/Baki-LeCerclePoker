@@ -1722,4 +1722,36 @@ function initSchema(db: Database.Database) {
   } catch (err: any) {
     console.error(`[MIGRATION:add_qqpk_cycle_rakeback_v1] FAILED:`, err.message);
   }
+
+  // 4) QQPK entry journal — append-only log of dated saisies for the evolution graph.
+  //    DISPLAY-ONLY: never read by the engine, settlements, or lock — the graph consumes it.
+  //    kind 'mains'/'rb' logged by their write-paths (setQqpkMains/setQqpkCycleRakeback);
+  //    'result' events are NOT logged: the résultat is derived from wallet_transactions,
+  //    which are already fully dated (tx_datetime) — reserved in the CHECK for the future.
+  //    Seed: one dated point per existing rb/mains row (their real updated_at) so current
+  //    cycles don't start from an empty graph. History BEFORE the journal doesn't exist —
+  //    no retroactive fake curve for mains/rb.
+  try {
+    const fix = db.prepare(`INSERT OR IGNORE INTO _applied_fixes (name) VALUES (?)`).run("add_qqpk_entry_log_v1");
+    if (fix.changes > 0) {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS qqpk_entry_log (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          player_id INTEGER NOT NULL REFERENCES players(id),
+          cycle_start TEXT NOT NULL,                -- 'YYYY-MM-DD', = qqpk_staking_blocks.block_month
+          kind TEXT NOT NULL CHECK(kind IN ('result','mains','rb')),
+          value REAL NOT NULL,                      -- the SAVED value (absolute, not a delta)
+          created_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+        CREATE INDEX IF NOT EXISTS idx_qqpk_entry_log_scope ON qqpk_entry_log(player_id, cycle_start, kind, created_at);
+        INSERT INTO qqpk_entry_log (player_id, cycle_start, kind, value, created_at)
+          SELECT player_id, cycle_start, 'rb', amount, COALESCE(updated_at, created_at) FROM qqpk_cycle_rakeback;
+        INSERT INTO qqpk_entry_log (player_id, cycle_start, kind, value, created_at)
+          SELECT player_id, block_month, 'mains', mains, COALESCE(updated_at, created_at) FROM qqpk_staking_blocks WHERE mains > 0;
+      `);
+      console.log("[MIGRATION] add_qqpk_entry_log_v1 applied");
+    }
+  } catch (err: any) {
+    console.error(`[MIGRATION:add_qqpk_entry_log_v1] FAILED:`, err.message);
+  }
 }

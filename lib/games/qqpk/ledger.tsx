@@ -3,10 +3,12 @@ import { getDb } from "@/lib/db";
 import {
   getQqpkStakingOverview,
   getQqpkBlockHistory,
+  getQqpkGraphData,
   getWalletMeresForGame,
   getPlayerCashouts,
   getPlayerGameWallets,
   type QqpkStakingRow,
+  type QqpkGraphData,
   type WalletMere,
 } from "@/lib/queries";
 import { fmtKpiAmount } from "@/components/ledger/format";
@@ -48,6 +50,10 @@ export interface QqpkLedgerData {
   history: QqpkHistoryRow[];
   cashoutsByPlayer: Record<number, WalletAddr[]>;
   gameWalletsByPlayer: Record<number, WalletAddr[]>;
+  /** Séries datées du graph d'évolution (display-only, jamais lu par le lock). */
+  graph: QqpkGraphData;
+  /** Vérité du graph : dernier point vue cycle (tous joueurs) DOIT == ce KPI. */
+  totalCercleKpi: number;
 }
 
 export function loadQqpkLedger(params: { cycle?: string }): QqpkLedgerData {
@@ -154,5 +160,7 @@ export function loadQqpkLedger(params: { cycle?: string }): QqpkLedgerData {
     history,
     cashoutsByPlayer,
     gameWalletsByPlayer,
+    graph: getQqpkGraphData(cycleView),
+    totalCercleKpi: totalCercle,
   };
 }

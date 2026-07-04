@@ -5,6 +5,7 @@ import WalletMeresBanner from "@/components/ledger/WalletMeresBanner";
 import SyncWalletsButton from "@/components/ledger/extras/SyncWalletsButton";
 import { loadQqpkLedger } from "@/lib/games/qqpk/ledger";
 import QqpkShellTable from "./QqpkShellTable";
+import QqpkEvolutionChart from "./QqpkEvolutionChart";
 
 /**
  * QQPK P&L (staking) on the generic LedgerShell. All numbers come from the
@@ -75,6 +76,7 @@ export default async function QQPKPage({ searchParams }: { searchParams: Promise
         )
       }
     >
+      <QqpkEvolutionChart graph={data.graph} kpiTotal={data.totalCercleKpi} cycleView={data.cycleView} />
       <QqpkShellTable
         rows={data.rows}
         history={data.history}

@@ -2533,7 +2533,205 @@ export function setQqpkCycleRakeback(playerId: number, amount: number): { ok: bo
      VALUES (@player_id, @cycle_start, @amount, datetime('now'))
      ON CONFLICT(player_id, cycle_start) DO UPDATE SET amount = excluded.amount, updated_at = datetime('now')`
   ).run({ player_id: playerId, cycle_start: cycle.cycle_start, amount });
+  logQqpkEntry(playerId, cycle.cycle_start, "rb", amount); // journal graph — display-only, hors argent
   return { ok: true };
+}
+
+// Append-only journal for the evolution graph — a dated trace of every save.
+// DISPLAY-ONLY (invariant: never read by engine/settlement/lock). 'result' events are
+// not logged: the résultat is derived from wallet_transactions (already dated).
+// Never throws: the business write has already committed when this runs — a journal
+// failure must not flip a successful save into a caller-visible error (audit note).
+function logQqpkEntry(playerId: number, cycleStart: string, kind: "result" | "mains" | "rb", value: number): void {
+  try {
+    getDb().prepare(
+      `INSERT INTO qqpk_entry_log (player_id, cycle_start, kind, value) VALUES (?, ?, ?, ?)`
+    ).run(playerId, cycleStart, kind, value);
+  } catch (err: any) {
+    console.error(`[qqpk_entry_log] INSERT failed (${kind}, player ${playerId}):`, err.message);
+  }
+}
+
+// ── QQPK evolution graph (display-only, NEVER read by settlement/lock) ───────
+// Series builder for the /qqpk/pnl chart. Y = cumulative "Part Cercle prévisionnelle
+// + RB manuel" (decision Baki: RB spikes are wanted — each dated saisie = a visible
+// event). Sources of dated events:
+//   • 'result' — wallet_transactions (tx_datetime), SAME filters as getWalletSummaryByPlayer
+//     → full retroactive history, Σ deltas == getQqpkCycleNet by construction.
+//   • 'rb' / 'mains' — qqpk_entry_log (journal fed by the write-paths + seed). No history
+//     before the journal exists (no fake retroactive curve).
+// Every cumul is computed HERE (server) via the engine — the chart component only
+// picks precomputed fields (invariant #2: zero math in the client).
+
+export interface QqpkGraphEvent {
+  ts: number;            // epoch ms (X axis)
+  at: string;            // raw datetime for the tooltip
+  player_id: number;
+  player_name: string;
+  kind: "seed" | "result" | "rb" | "mains" | "settle";
+  delta: number;         // change of (projected + RB) caused by this event
+  note: string;          // tooltip context ("+500,00 on-chain", "RB = 120", "25 000 mains", …)
+  cumul_player: number;  // running projected+RB of THIS player after the event (view scope)
+  cumul_all: number;     // running Σ across all players after the event
+}
+
+export interface QqpkGraphData {
+  cycleEvents: QqpkGraphEvent[];   // vue CYCLE (scope = the page's cycleView)
+  globalEvents: QqpkGraphEvent[];  // vue GLOBALE (all cycles, continuous timeline)
+  players: { player_id: number; player_name: string }[];
+}
+
+// SQLite datetimes come as 'YYYY-MM-DD HH:MM:SS' (log) or UTC ISO (tx) — both are UTC.
+function qqpkEventTs(raw: string): number {
+  let iso = raw.includes("T") ? raw : raw.replace(" ", "T");
+  if (!iso.endsWith("Z") && !iso.includes("+")) iso += "Z";
+  const t = new Date(iso).getTime();
+  return Number.isFinite(t) ? t : 0;
+}
+
+// Part Cercle prévisionnelle for a cumulative net — engine only (mains is irrelevant to
+// the projected AMOUNT: the 30k gate is a settlement-time rule the projection ignores).
+function qqpkProjPart(net: number): number {
+  return operatorPnlFromReglement(projectStakingBlock({ c_prec: 0, t_prec: 0, resultat_periode: net, mains: 0 }).reglement_projected);
+}
+
+// Dated on-chain events of a player within a cycle window — mirrors the join/filters of
+// getWalletSummaryByPlayer (game scope via the deal, source guard, deal window) so the
+// running Σ of deltas equals getQqpkCycleNet for the same window.
+function getQqpkCycleTxEvents(playerId: number, startIso: string, endIso: string): { at: string; delta_net: number }[] {
+  return getDb().prepare(
+    `SELECT wt.tx_datetime AS at,
+            CASE WHEN wt.type = 'withdrawal' THEN wt.amount ELSE -wt.amount END AS delta_net
+     FROM wallet_transactions wt
+     JOIN player_game_deals pgd ON pgd.player_id = wt.player_id AND pgd.game_id = wt.game_id
+     JOIN games g ON g.id = pgd.game_id AND g.name = 'QQPK'
+     WHERE wt.player_id = @pid
+       AND (wt.source IS NULL OR wt.source != 'unknown')
+       AND wt.tx_datetime >= @start AND wt.tx_datetime <= @end
+       AND (pgd.start_date IS NULL OR wt.tx_datetime >= pgd.start_date)
+       AND (pgd.end_date IS NULL OR wt.tx_datetime <= pgd.end_date)
+     ORDER BY wt.tx_datetime, wt.id`
+  ).all({ pid: playerId, start: startIso, end: endIso }) as { at: string; delta_net: number }[];
+}
+
+function getQqpkLogEvents(playerId: number, cycleStart: string): { at: string; kind: string; value: number }[] {
+  return getDb().prepare(
+    `SELECT created_at AS at, kind, value FROM qqpk_entry_log
+     WHERE player_id = ? AND cycle_start = ? AND kind IN ('rb','mains')
+     ORDER BY created_at, id`
+  ).all(playerId, cycleStart) as { at: string; kind: string; value: number }[];
+}
+
+const fmtNote = (n: number) => (n >= 0 ? "+" : "−") + Math.abs(n).toLocaleString("fr-FR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+// Live walk of one player's cycle: dated tx + journal events → per-event deltas of
+// (projected + RB). For a SETTLED cycle a final 'settle' event snaps the curve to the
+// settled reality (operator_pnl réel + RB) — the 30k-gate drop becomes visible, and the
+// last point matches the table/KPI of past views. cumuls are filled later (finalize).
+function buildQqpkCycleWalk(
+  p: { player_id: number; player_name: string },
+  cycleStart: string, startIso: string, endIso: string,
+  settled: { reglement: number; settled_at: string } | null,
+  rbOfCycle: number,
+): Omit<QqpkGraphEvent, "cumul_player" | "cumul_all">[] {
+  const base = { player_id: p.player_id, player_name: p.player_name };
+  const raw: { ts: number; at: string; kind: "result" | "rb" | "mains"; v: number }[] = [
+    ...getQqpkCycleTxEvents(p.player_id, startIso, endIso).map((t) => ({ ts: qqpkEventTs(t.at), at: t.at, kind: "result" as const, v: t.delta_net })),
+    ...getQqpkLogEvents(p.player_id, cycleStart).map((l) => ({ ts: qqpkEventTs(l.at), at: l.at, kind: l.kind as "rb" | "mains", v: l.value })),
+  ].sort((a, b) => a.ts - b.ts);
+
+  const out: Omit<QqpkGraphEvent, "cumul_player" | "cumul_all">[] = [
+    { ...base, ts: qqpkEventTs(startIso), at: startIso, kind: "seed", delta: 0, note: "Début de cycle" },
+  ];
+  let net = 0, rb = 0, prevTotal = 0;
+  for (const e of raw) {
+    if (e.kind === "result") net += e.v;
+    else if (e.kind === "rb") rb = e.v;
+    const total = qqpkProjPart(net) + rb;
+    const note = e.kind === "result" ? `${fmtNote(e.v)} on-chain`
+      : e.kind === "rb" ? `RB manuel = ${fmtNote(e.v)}`
+      : `${e.v.toLocaleString("fr-FR")} mains saisies`;
+    out.push({ ...base, ts: e.ts, at: e.at, kind: e.kind, delta: total - prevTotal, note });
+    prevTotal = total;
+  }
+  if (settled) {
+    // Final RB of the cycle from the canonical table (journal may predate old cycles).
+    const finalVal = operatorPnlFromReglement(settled.reglement) + rbOfCycle;
+    out.push({
+      ...base, ts: qqpkEventTs(settled.settled_at), at: settled.settled_at, kind: "settle",
+      delta: finalVal - prevTotal, note: "Règlement du cycle (réel, gate 30k appliquée)",
+    });
+  }
+  return out;
+}
+
+// Fill running cumuls: per-player first (each player's own chronological deltas), then
+// the merged all-players timeline. Pure Σ of already-computed deltas — no new math.
+function finalizeQqpkEvents(events: Omit<QqpkGraphEvent, "cumul_player" | "cumul_all">[]): QqpkGraphEvent[] {
+  const sorted = events.map((e, i) => ({ e, i })).sort((a, b) => a.e.ts - b.e.ts || a.i - b.i).map((x) => x.e);
+  const perPlayer = new Map<number, number>();
+  let all = 0;
+  return sorted.map((e) => {
+    const cp = (perPlayer.get(e.player_id) ?? 0) + e.delta;
+    perPlayer.set(e.player_id, cp);
+    all += e.delta;
+    return { ...e, cumul_player: cp, cumul_all: all };
+  });
+}
+
+export function getQqpkGraphData(cycleView: number): QqpkGraphData {
+  const db = getDb();
+  const players = db.prepare(
+    `SELECT p.id AS player_id, p.name AS player_name
+     FROM players p
+     JOIN player_game_deals pgd ON pgd.player_id = p.id
+     JOIN games g ON g.id = pgd.game_id AND g.name = 'QQPK'
+     ORDER BY p.name COLLATE NOCASE`
+  ).all() as { player_id: number; player_name: string }[];
+
+  const rbMap = getQqpkCycleRakebackMap();
+  const blocks = db.prepare(
+    `SELECT player_id, block_month, block_start, block_end, reglement, updated_at, created_at
+     FROM qqpk_staking_blocks WHERE status = 'settled' ORDER BY player_id, block_month`
+  ).all() as { player_id: number; block_month: string; block_start: string; block_end: string; reglement: number; updated_at: string | null; created_at: string }[];
+  const settledByPlayer = new Map<number, typeof blocks>();
+  for (const b of blocks) {
+    const l = settledByPlayer.get(b.player_id) ?? [];
+    l.push(b);
+    settledByPlayer.set(b.player_id, l);
+  }
+
+  const cycleRaw: Omit<QqpkGraphEvent, "cumul_player" | "cumul_all">[] = [];
+  const globalRaw: Omit<QqpkGraphEvent, "cumul_player" | "cumul_all">[] = [];
+
+  for (const p of players) {
+    const settledDesc = (settledByPlayer.get(p.player_id) ?? []).slice().sort((a, b) => b.block_month.localeCompare(a.block_month));
+
+    // — vue CYCLE (same relative semantics as the table: 0 = actif, n = n-th settled) —
+    if (cycleView === 0) {
+      const cycle = getQqpkActiveCycle(p.player_id);
+      if (cycle) cycleRaw.push(...buildQqpkCycleWalk(p, cycle.cycle_start, cycle.start_iso, cycle.end_iso, null, rbMap.get(`${p.player_id}|${cycle.cycle_start}`) ?? 0));
+    } else {
+      const b = settledDesc[cycleView - 1];
+      if (b) cycleRaw.push(...buildQqpkCycleWalk(p, b.block_month, b.block_start, b.block_end, { reglement: b.reglement, settled_at: b.updated_at ?? b.created_at }, rbMap.get(`${p.player_id}|${b.block_month}`) ?? 0));
+    }
+
+    // — vue GLOBALE : cycles passés = valeur finale (réel réglé + RB), courant = courbe vive —
+    for (const b of settledByPlayer.get(p.player_id) ?? []) {
+      const rb = rbMap.get(`${p.player_id}|${b.block_month}`) ?? 0;
+      const at = b.updated_at ?? b.created_at;
+      globalRaw.push({
+        player_id: p.player_id, player_name: p.player_name,
+        ts: qqpkEventTs(at), at, kind: "settle",
+        delta: operatorPnlFromReglement(b.reglement) + rb,
+        note: `Cycle ${b.block_month} réglé (réel + RB du cycle)`,
+      });
+    }
+    const active = getQqpkActiveCycle(p.player_id);
+    if (active) globalRaw.push(...buildQqpkCycleWalk(p, active.cycle_start, active.start_iso, active.end_iso, null, rbMap.get(`${p.player_id}|${active.cycle_start}`) ?? 0));
+  }
+
+  return { cycleEvents: finalizeQqpkEvents(cycleRaw), globalEvents: finalizeQqpkEvents(globalRaw), players };
 }
 
 // Board view: one row per QQPK player = their active cycle + live "if settled now" projection.
@@ -2619,6 +2817,7 @@ export function setQqpkMains(playerId: number, mains: number): { ok: boolean; er
      VALUES (@player_id, @cycle, @start, @end, @mains, 'open', datetime('now'))
      ON CONFLICT(player_id, block_month) DO UPDATE SET mains = excluded.mains, updated_at = datetime('now')`
   ).run({ player_id: playerId, cycle: cycle.cycle_start, start: cycle.start_iso, end: cycle.end_iso, mains });
+  logQqpkEntry(playerId, cycle.cycle_start, "mains", mains); // journal graph — display-only, hors argent
   return { ok: true };
 }
 
