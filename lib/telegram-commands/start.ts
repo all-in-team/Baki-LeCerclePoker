@@ -61,6 +61,21 @@ export async function handleStart(chatId: number, fromId: number, fromName: stri
     return;
   }
 
+  // OKPOKER deep link — DM-only flow (chatId === fromId in a private chat), no group
+  // creation: pitch + wallets happen directly in the DM. The player never chooses his
+  // % (existing deal kept, otherwise the game default). Typed in a group, it falls
+  // through to the normal /start behavior below.
+  if (payload === "okpoker" && chatId === fromId) {
+    const { handleOkpokerDeepLink } = await import("@/lib/games/okpoker/onboarding");
+    await handleOkpokerDeepLink(chatId, {
+      id: fromId,
+      first_name: from?.first_name ?? fromName,
+      last_name: from?.last_name,
+      username: from?.username,
+    });
+    return;
+  }
+
   const linked = db.prepare(
     `SELECT id, name FROM players WHERE telegram_id = ?`
   ).get(fromId) as { id: number; name: string } | undefined;
