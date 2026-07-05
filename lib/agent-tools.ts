@@ -336,7 +336,10 @@ function fmtContributorParts(c: any): string {
   return parts.length ? parts.join(" · ") : "—";
 }
 
-const SQL_FORBIDDEN = /\b(attach|pragma|vacuum|reindex|insert|update|delete|drop|alter|create|replace|begin|commit|rollback)\b/i;
+const SQL_FORBIDDEN = /\b(attach|pragma|vacuum|reindex|insert|update|delete|drop|alter|create|replace|begin|commit|rollback|recursive)\b/i;
+// telegram_sessions holds GramJS credentials (full Telegram account access) —
+// never readable nor listable through the agent's SQL surface.
+const SQL_DENYLIST_TABLES = /\btelegram_sessions\b/i;
 
 function runReadonlyQuery(rawSql: string): string {
   const sql = String(rawSql ?? "").trim().replace(/;\s*$/, "");
@@ -344,6 +347,7 @@ function runReadonlyQuery(rawSql: string): string {
   if (!/^(select|with)\b/i.test(sql)) return "❌ Refusé : seules les requêtes SELECT (ou WITH ... SELECT) sont autorisées.";
   if (sql.includes(";")) return "❌ Refusé : une seule instruction SQL à la fois.";
   if (SQL_FORBIDDEN.test(sql)) return "❌ Refusé : mot-clé d'écriture ou d'administration détecté. Lecture seule.";
+  if (SQL_DENYLIST_TABLES.test(sql)) return "❌ Refusé : table sensible (credentials) inaccessible via cet outil.";
 
   const stmt = getReadonlyDb().prepare(sql);
   if (!stmt.reader) return "❌ Refusé : cette requête ne retourne pas de lignes (lecture seule).";
@@ -383,11 +387,13 @@ export async function executeTool(name: string, input: any): Promise<string> {
       const ro = getReadonlyDb();
       const table = input?.table ? String(input.table).trim() : null;
       if (table) {
+        if (SQL_DENYLIST_TABLES.test(table)) return `❌ Table sensible (credentials) inaccessible via cet outil.`;
         const row = ro.prepare(`SELECT sql FROM sqlite_master WHERE type IN ('table','view') AND name = ?`).get(table) as { sql: string } | undefined;
         if (!row?.sql) return `Table "${table}" introuvable.`;
         return row.sql;
       }
-      const tables = ro.prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name`).all() as { name: string }[];
+      const tables = (ro.prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name`).all() as { name: string }[])
+        .filter(t => !SQL_DENYLIST_TABLES.test(t.name));
       const lines = tables.map(t => {
         const cols = ro.pragma(`table_info("${t.name.replace(/"/g, '""')}")`) as Array<{ name: string }>;
         return `${t.name}(${cols.map(c => c.name).join(", ")})`;
