@@ -1,10 +1,10 @@
 import Anthropic from "@anthropic-ai/sdk";
-import { getDb } from "./db";
+import { getDb, getReadonlyDb } from "./db";
 import { todayCost, usageBetween } from "./agent-cost";
 import { dispatchFix, isWithinBudget, recentDoerSessions, looksMoneyFlow } from "./agent-doer";
 import { getCurrentWeekStart } from "./telegram-commands/cashout-reminder";
 import { getWeekBounds, toUTCISO, toParisDate } from "./date-utils";
-import { getLockAwareSummaryByPlayer, getLockAwareKPIs, getWalletSummaryByPlayer, getAkpokerPnL, getKkpokerPnL, getWepokerPnL, getAgencyTotalPnL, getTopContributors, getActivePlayersCount, type Period } from "./queries";
+import { getLockAwareSummaryByPlayer, getLockAwareKPIs, getWalletSummaryByPlayer, getAkpokerPnL, getKkpokerPnL, getA5pokerPnL, getAksPnL, getNutspkPnL, getWepokerPnL, getAgencyTotalPnL, getTopContributors, getActivePlayersCount, getPlayerPnLAllGames, type Period } from "./queries";
 import { checkUserbotHealth, listGroups } from "./telegram-userbot";
 
 // ────────────────────────────────────────────────────────────
@@ -74,14 +74,10 @@ export function buildSnapshot(): string {
     `SELECT MAX(created_at) AS ts FROM wallet_transactions WHERE tron_tx_hash IS NOT NULL`
   ).get() as { ts: string | null };
 
-  // Cumulative P&L (all-time, my share) — sum of (withdrawn - deposited) * action_pct/100
-  const myPnl = db.prepare(
-    `SELECT COALESCE(SUM(
-       CASE WHEN wt.type='withdrawal' THEN wt.amount ELSE -wt.amount END
-     ) * pgd.action_pct / 100.0, 0) AS my_pnl
-     FROM wallet_transactions wt
-     JOIN player_game_deals pgd ON pgd.player_id = wt.player_id AND pgd.game_id = wt.game_id`
-  ).get() as { my_pnl: number };
+  // Cumulative agency P&L (all-time) — canonical math from lib/queries.ts
+  // (all games + extras + grindhouse), not a local SQL approximation.
+  let myPnl = 0;
+  try { myPnl = getAgencyTotalPnL().total_usdt; } catch { /* fresh DB */ }
 
   const cost = todayCost();
 
@@ -89,7 +85,7 @@ export function buildSnapshot(): string {
     `📅 ${today}`,
     `💸 Aujourd'hui — dépôts: ${dep ? dep.amt.toFixed(0) : 0} USDT (${dep ? dep.n : 0} tx) · retraits: ${wd ? wd.amt.toFixed(0) : 0} USDT (${wd ? wd.n : 0} tx)`,
     `👥 Joueurs: ${playersActive}/${playersTotal} actifs`,
-    `📊 Mon P&L cumulé (all-time): ${myPnl.my_pnl >= 0 ? "+" : ""}${myPnl.my_pnl.toFixed(0)} USDT`,
+    `📊 Mon P&L cumulé (all-time): ${myPnl >= 0 ? "+" : ""}${myPnl.toFixed(0)} USDT`,
     `📥 Inbox agent: ${inboxN} message${inboxN !== 1 ? "s" : ""} en attente`,
     `🔄 Dernière sync wallet: ${lastSync.ts ? lastSync.ts.replace("T", " ").slice(0, 16) : "jamais"}`,
     `🤖 Crédit Claude aujourd'hui: $${cost.cost_usd.toFixed(3)} (${cost.calls} appel${cost.calls !== 1 ? "s" : ""})`,
@@ -110,6 +106,28 @@ export const TOOLS: Anthropic.Tool[] = [
     name: "cashout_status_this_week",
     description: "État des cashouts de la semaine : combien confirmé, pas joué, en attente de réponse, pas encore relancé.",
     input_schema: { type: "object", properties: {}, required: [] },
+  },
+  {
+    name: "db_schema",
+    description: "Schéma de la base SQLite : liste compacte des tables avec leurs colonnes. Optionnel : passer un nom de table pour voir son CREATE TABLE complet. À appeler avant query_db pour savoir ce qui existe.",
+    input_schema: {
+      type: "object",
+      properties: {
+        table: { type: "string", description: "Optionnel : nom exact d'une table pour le détail complet" },
+      },
+      required: [],
+    },
+  },
+  {
+    name: "query_db",
+    description: "Exécute une requête SQL SELECT en LECTURE SEULE sur la base de production. À utiliser en fallback quand aucun outil métier ne répond à la question (affiliés, leads, staking QQPK, extras, historique fin...). Pour les chiffres P&L/settlement, préfère TOUJOURS les outils métier (get_pnl, weekly_settlement_summary...) — ce sont eux qui portent la math canonique. Règles : une seule requête SELECT/WITH, max 200 lignes retournées. Rappels invariants : exclure wallet_transactions avec source='unknown' des agrégats ; ne jamais sommer des devises différentes ; le jeu 'TELE' = AKPOKER.",
+    input_schema: {
+      type: "object",
+      properties: {
+        sql: { type: "string", description: "Requête SQL SELECT (ou WITH ... SELECT). Une seule instruction, pas d'écriture." },
+      },
+      required: ["sql"],
+    },
   },
   {
     name: "find_orphan_groups",
@@ -305,10 +323,82 @@ function fmtAmount(n: number): string {
   return (n >= 0 ? "+" : "") + n.toFixed(2);
 }
 
+// One line per contributor, only the games where they actually have P&L.
+function fmtContributorParts(c: any): string {
+  const parts: string[] = [];
+  if (c.akpoker_usdt) parts.push(`AK: ${fmtAmount(c.akpoker_usdt)}`);
+  if (c.kkpoker_usdt) parts.push(`KK: ${fmtAmount(c.kkpoker_usdt)}`);
+  if (c.a5poker_usdt) parts.push(`A5: ${fmtAmount(c.a5poker_usdt)}`);
+  if (c.aks_usdt) parts.push(`AKS: ${fmtAmount(c.aks_usdt)}`);
+  if (c.nutspk_usdt) parts.push(`NUTSPK: ${fmtAmount(c.nutspk_usdt)}`);
+  if (c.wepoker_usdt) parts.push(`WP: ${fmtAmount(c.wepoker_usdt)}`);
+  if (c.grindhouse_usdt) parts.push(`GH: ${fmtAmount(c.grindhouse_usdt)}`);
+  return parts.length ? parts.join(" · ") : "—";
+}
+
+const SQL_FORBIDDEN = /\b(attach|pragma|vacuum|reindex|insert|update|delete|drop|alter|create|replace|begin|commit|rollback)\b/i;
+
+function runReadonlyQuery(rawSql: string): string {
+  const sql = String(rawSql ?? "").trim().replace(/;\s*$/, "");
+  if (!sql) return "❌ Requête vide.";
+  if (!/^(select|with)\b/i.test(sql)) return "❌ Refusé : seules les requêtes SELECT (ou WITH ... SELECT) sont autorisées.";
+  if (sql.includes(";")) return "❌ Refusé : une seule instruction SQL à la fois.";
+  if (SQL_FORBIDDEN.test(sql)) return "❌ Refusé : mot-clé d'écriture ou d'administration détecté. Lecture seule.";
+
+  const stmt = getReadonlyDb().prepare(sql);
+  if (!stmt.reader) return "❌ Refusé : cette requête ne retourne pas de lignes (lecture seule).";
+
+  const MAX_ROWS = 200;
+  const MAX_CHARS = 8000;
+  const rows: any[] = [];
+  let truncatedRows = false;
+  for (const row of stmt.iterate()) {
+    if (rows.length >= MAX_ROWS) { truncatedRows = true; break; }
+    rows.push(row);
+  }
+  if (rows.length === 0) return "(0 ligne)";
+
+  const cols = Object.keys(rows[0]);
+  const lines = [
+    cols.join(" | "),
+    ...rows.map(r => cols.map(c => {
+      const v = (r as any)[c];
+      if (v === null || v === undefined) return "NULL";
+      if (typeof v === "number" && !Number.isInteger(v)) return v.toFixed(2);
+      return String(v);
+    }).join(" | ")),
+  ];
+  let out = lines.join("\n");
+  if (out.length > MAX_CHARS) out = out.slice(0, MAX_CHARS) + "\n… (sortie tronquée à 8 Ko)";
+  if (truncatedRows) out += `\n… (résultat tronqué à ${MAX_ROWS} lignes — affine ta requête)`;
+  out += `\n(${rows.length}${truncatedRows ? "+" : ""} ligne${rows.length > 1 ? "s" : ""})`;
+  return out;
+}
+
 export async function executeTool(name: string, input: any): Promise<string> {
   const db = getDb();
 
   try {
+    if (name === "db_schema") {
+      const ro = getReadonlyDb();
+      const table = input?.table ? String(input.table).trim() : null;
+      if (table) {
+        const row = ro.prepare(`SELECT sql FROM sqlite_master WHERE type IN ('table','view') AND name = ?`).get(table) as { sql: string } | undefined;
+        if (!row?.sql) return `Table "${table}" introuvable.`;
+        return row.sql;
+      }
+      const tables = ro.prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name`).all() as { name: string }[];
+      const lines = tables.map(t => {
+        const cols = ro.pragma(`table_info("${t.name.replace(/"/g, '""')}")`) as Array<{ name: string }>;
+        return `${t.name}(${cols.map(c => c.name).join(", ")})`;
+      });
+      return lines.join("\n");
+    }
+
+    if (name === "query_db") {
+      return runReadonlyQuery(input?.sql);
+    }
+
     if (name === "get_apps_overview") {
       const apps = db.prepare(
         `SELECT a.id, a.name, a.deal_type, a.deal_value, a.currency, a.club_name,
@@ -362,30 +452,33 @@ export async function executeTool(name: string, input: any): Promise<string> {
       const playerId = playerFilter?.[0]?.id ?? undefined;
       const period: Period = { from: start, to: end };
       const total = getAgencyTotalPnL(period);
-      const ak = getAkpokerPnL(playerId, period);
-      const kk = getKkpokerPnL(playerId, period);
+      const walletGames: Array<{ label: string; rows: ReturnType<typeof getAkpokerPnL> }> = [
+        { label: "AKPOKER", rows: getAkpokerPnL(playerId, period) },
+        { label: "KKPOKER", rows: getKkpokerPnL(playerId, period) },
+        { label: "A5POKER", rows: getA5pokerPnL(playerId, period) },
+        { label: "AKS", rows: getAksPnL(playerId, period) },
+        { label: "NUTSPK", rows: getNutspkPnL(playerId, period) },
+      ];
       const wp = getWepokerPnL(playerId, period);
 
       const lines: string[] = [`P&L (${label}):`];
-      if (ak.length) {
-        lines.push(`\nAKPOKER:`);
-        ak.forEach(r => lines.push(`  ${r.player_name} [${r.action_pct}%] — dép:${r.deposited.toFixed(0)} ret:${r.withdrawn.toFixed(0)} net:${fmtAmount(r.net_usdt)} agency:${fmtAmount(r.agency_cut_usdt)} USDT`));
-      }
-      if (kk.length) {
-        lines.push(`\nKKPOKER:`);
-        kk.forEach(r => lines.push(`  ${r.player_name} [${r.action_pct}%] — dép:${r.deposited.toFixed(0)} ret:${r.withdrawn.toFixed(0)} net:${fmtAmount(r.net_usdt)} agency:${fmtAmount(r.agency_cut_usdt)} USDT`));
+      let anyData = wp.length > 0;
+      for (const g of walletGames) {
+        if (!g.rows.length) continue;
+        anyData = true;
+        lines.push(`\n${g.label}:`);
+        g.rows.forEach(r => lines.push(`  ${r.player_name} [${r.action_pct}%] — dép:${r.deposited.toFixed(0)} ret:${r.withdrawn.toFixed(0)} net:${fmtAmount(r.net_usdt)} agency:${fmtAmount(r.agency_cut_usdt)} USDT`));
       }
       if (wp.length) {
         lines.push(`\nWEPOKER:`);
         wp.forEach(r => lines.push(`  ${r.player_name} [${r.action_pct}%] — agency: winnings ${fmtAmount(r.agency_winnings_split_cny)} + RB ${fmtAmount(r.agency_rakeback_split_cny)} + ins ${fmtAmount(r.agency_insurance_split_cny)} = ${fmtAmount(r.total_agency_cny)} CNY (${fmtAmount(r.total_agency_usdt)} USDT)`));
       }
       if (!playerId) {
-        lines.push(`\nTotal agency: ${fmtAmount(total.total_usdt)} USDT (AK: ${fmtAmount(total.akpoker_usdt)}, KK: ${fmtAmount(total.kkpoker_usdt)}, WP: ${fmtAmount(total.wepoker_usdt)}, GH: ${fmtAmount(total.grindhouse_usdt)})`);
-        if (total.akpoker_extras_usdt) lines.push(`  dont extras AK: ${fmtAmount(total.akpoker_extras_usdt)} USDT`);
-        if (total.kkpoker_extras_usdt) lines.push(`  dont extras KK: ${fmtAmount(total.kkpoker_extras_usdt)} USDT`);
-        if (total.wepoker_extras_cny) lines.push(`  dont extras WP: ${fmtAmount(total.wepoker_extras_cny)} CNY`);
+        lines.push(`\nTotal agency: ${fmtAmount(total.total_usdt)} USDT`);
+        lines.push(`  AK: ${fmtAmount(total.akpoker_usdt)} · KK: ${fmtAmount(total.kkpoker_usdt)} · A5: ${fmtAmount(total.a5poker_usdt)} · AKS: ${fmtAmount(total.aks_usdt)} · NUTSPK: ${fmtAmount(total.nutspk_usdt)} · WP: ${fmtAmount(total.wepoker_usdt)} · GH: ${fmtAmount(total.grindhouse_usdt)}`);
+        if (total.extras_usdt) lines.push(`  dont extras (tous jeux): ${fmtAmount(total.extras_usdt)} USDT`);
       }
-      if (ak.length === 0 && kk.length === 0 && wp.length === 0) return `P&L (${label}): aucune donnée${playerId ? ` pour ${playerFilter![0].name}` : ""}.`;
+      if (!anyData) return `P&L (${label}): aucune donnée${playerId ? ` pour ${playerFilter![0].name}` : ""}.`;
       return lines.join("\n");
     }
 
@@ -428,9 +521,7 @@ export async function executeTool(name: string, input: any): Promise<string> {
          WHERE pgd.player_id = ?`
       ).all(pid) as any[];
 
-      const ak = getAkpokerPnL(pid);
-      const kk = getKkpokerPnL(pid);
-      const wp = getWepokerPnL(pid);
+      const allGames = getPlayerPnLAllGames(pid);
 
       const recentTx = db.prepare(
         `SELECT g.name AS game, wt.type, wt.amount, wt.tx_datetime
@@ -448,28 +539,28 @@ export async function executeTool(name: string, input: any): Promise<string> {
         deals.forEach(d => out.push(`  ${d.game}: ${d.action_pct}% action${d.rakeback_pct ? `, ${d.rakeback_pct}% RB` : ""}${d.insurance_pct ? `, ${d.insurance_pct}% ins` : ""}${d.start_date ? ` · depuis ${d.start_date}` : ""}`));
       }
 
-      if (ak.length) {
-        const a = ak[0];
-        out.push(`\nAKPOKER:`);
-        out.push(`  dép ${a.deposited.toFixed(0)} · ret ${a.withdrawn.toFixed(0)} · net ${fmtAmount(a.net_usdt)} · agency ${fmtAmount(a.agency_cut_usdt)} USDT`);
+      for (const g of allGames.games) {
+        if (g.kind === "wepoker" && g.wp) {
+          out.push(`\n${g.label}${g.archived ? " (archivé)" : ""}:`);
+          out.push(`  Player P&L: ${fmtAmount(g.player_pnl_all)} CNY`);
+          out.push(`  Agency: winnings ${fmtAmount(g.wp.agency_winnings_cny)} · RB ${fmtAmount(g.wp.agency_rakeback_cny)} · ins ${fmtAmount(g.wp.agency_insurance_cny)} CNY`);
+          out.push(`  Total agency: ${fmtAmount(g.wp.agency_cut_cny)} CNY = ${fmtAmount(g.wp.agency_cut_usdt)} USDT`);
+        } else if (g.kind === "staking") {
+          out.push(`\n${g.label} (staking):`);
+          out.push(`  Net joueur: ${fmtAmount(g.player_pnl_all)} ${g.currency} (part cercle via cycles staking, hors deal action)`);
+        } else {
+          out.push(`\n${g.label}${g.archived ? " (archivé)" : ""}:`);
+          out.push(`  dép ${g.deposited.toFixed(0)} · ret ${g.withdrawn.toFixed(0)} · net ${fmtAmount(g.player_pnl_all)} · agency ${fmtAmount(g.agency_cut_usdt_all)} USDT`);
+        }
       }
 
-      if (kk.length) {
-        const k = kk[0];
-        out.push(`\nKKPOKER:`);
-        out.push(`  dép ${k.deposited.toFixed(0)} · ret ${k.withdrawn.toFixed(0)} · net ${fmtAmount(k.net_usdt)} · agency ${fmtAmount(k.agency_cut_usdt)} USDT`);
+      if (allGames.grindhouse_usdt_all) {
+        out.push(`\nGRINDHOUSE: part agency ${fmtAmount(allGames.grindhouse_usdt_all)} USDT`);
       }
 
-      if (wp.length) {
-        const w = wp[0];
-        out.push(`\nWEPOKER:`);
-        out.push(`  Player P&L: ${fmtAmount(w.player_pnl_cny)} CNY`);
-        out.push(`  Agency: winnings ${fmtAmount(w.agency_winnings_split_cny)} · RB ${fmtAmount(w.agency_rakeback_split_cny)} · ins ${fmtAmount(w.agency_insurance_split_cny)}`);
-        out.push(`  Total agency: ${fmtAmount(w.total_agency_cny)} CNY = ${fmtAmount(w.total_agency_usdt)} USDT`);
+      if (allGames.games.length || allGames.grindhouse_usdt_all) {
+        out.push(`\nTotal agency (tous jeux): ${fmtAmount(allGames.total_agency_usdt_all)} USDT (30j: ${fmtAmount(allGames.total_agency_usdt_30d)}, 7j: ${fmtAmount(allGames.total_agency_usdt_7d)})`);
       }
-
-      const totalAgency = ak.reduce((s, r) => s + r.agency_cut_usdt, 0) + kk.reduce((s, r) => s + r.agency_cut_usdt, 0) + wp.reduce((s, r) => s + r.total_agency_usdt, 0);
-      if (ak.length || kk.length || wp.length) out.push(`\nTotal agency (all games): ${fmtAmount(totalAgency)} USDT`);
 
       if (recentTx.length) {
         out.push(`\n10 dernières tx:`);
@@ -670,8 +761,8 @@ export async function executeTool(name: string, input: any): Promise<string> {
       const total = getAgencyTotalPnL(period);
       const contributors = getTopContributors(period, 20);
       if (contributors.length === 0) return `Aucun revenu sur ${label}.`;
-      const lines = contributors.map(c => `${c.player_name} — AK: ${fmtAmount(c.akpoker_usdt)} · KK: ${fmtAmount(c.kkpoker_usdt)} · WP: ${fmtAmount(c.wepoker_usdt)} · total: ${fmtAmount(c.agency_usdt)} USDT`);
-      return `Revenu (${label}):\n${lines.join("\n")}\nTotal: ${fmtAmount(total.total_usdt)} USDT (AK: ${fmtAmount(total.akpoker_usdt)}, KK: ${fmtAmount(total.kkpoker_usdt)}, WP: ${total.wepoker_cny.toFixed(0)} CNY = ${fmtAmount(total.wepoker_usdt)}, GH: ${fmtAmount(total.grindhouse_usdt)})`;
+      const lines = contributors.map(c => `${c.player_name} — ${fmtContributorParts(c)} · total: ${fmtAmount(c.agency_usdt)} USDT`);
+      return `Revenu (${label}):\n${lines.join("\n")}\nTotal: ${fmtAmount(total.total_usdt)} USDT (AK: ${fmtAmount(total.akpoker_usdt)}, KK: ${fmtAmount(total.kkpoker_usdt)}, A5: ${fmtAmount(total.a5poker_usdt)}, AKS: ${fmtAmount(total.aks_usdt)}, NUTSPK: ${fmtAmount(total.nutspk_usdt)}, WP: ${total.wepoker_cny.toFixed(0)} CNY = ${fmtAmount(total.wepoker_usdt)}, GH: ${fmtAmount(total.grindhouse_usdt)})`;
     }
 
     if (name === "top_players_this_week") {
@@ -685,7 +776,7 @@ export async function executeTool(name: string, input: any): Promise<string> {
         : contributors.filter(c => c.agency_usdt < 0).reverse();
       const top = filtered.slice(0, limit);
       if (top.length === 0) return `Aucun ${side === "winners" ? "gagnant" : "perdant"} cette semaine.`;
-      return `Top ${top.length} ${side === "winners" ? "gagnants" : "perdants"} (semaine, agency cut):\n${top.map((c, i) => `${i + 1}. ${c.player_name} — ${fmtAmount(c.agency_usdt)} USDT (AK: ${fmtAmount(c.akpoker_usdt)}, KK: ${fmtAmount(c.kkpoker_usdt)}, WP: ${fmtAmount(c.wepoker_usdt)})`).join("\n")}`;
+      return `Top ${top.length} ${side === "winners" ? "gagnants" : "perdants"} (semaine, agency cut):\n${top.map((c, i) => `${i + 1}. ${c.player_name} — ${fmtAmount(c.agency_usdt)} USDT (${fmtContributorParts(c)})`).join("\n")}`;
     }
 
     if (name === "weekly_settlement_summary") {

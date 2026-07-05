@@ -18,6 +18,17 @@ export function getDb(): Database.Database {
   return _db;
 }
 
+// Read-only connection for the agent's query_db tool — the engine itself
+// rejects any write, regardless of what SQL slips past upstream validation.
+let _roDb: Database.Database | null = null;
+
+export function getReadonlyDb(): Database.Database {
+  if (_roDb) return _roDb;
+  getDb(); // ensure the file exists and migrations ran first
+  _roDb = new Database(DB_PATH, { readonly: true, fileMustExist: true });
+  return _roDb;
+}
+
 function initSchema(db: Database.Database) {
   console.log(`[BOOT] migrations starting, db=${DB_PATH}`);
   try {

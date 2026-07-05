@@ -2,8 +2,9 @@ import Anthropic from "@anthropic-ai/sdk";
 import { getDb } from "./db";
 import { TOOLS, executeTool, buildSnapshot } from "./agent-tools";
 import { logUsage } from "./agent-cost";
+import { AGENCY_GAMES } from "./queries";
 
-const MODEL = "claude-opus-4-7";
+const MODEL = "claude-opus-4-8";
 
 const BOT_USERNAME = "LeCercle_Lebot";
 const MENTION_RE = new RegExp(`@${BOT_USERNAME}\\b`, "i");
@@ -12,7 +13,9 @@ const SYSTEM_PROMPT = `Tu es l'agent business partner de LeCerclePoker, une app 
 
 Tu parles français, ton direct et concret comme un dev senior. Tu connais le projet par cœur. Tu es ici pour challenger, pas pour valider.
 
-Tu as accès à 17 outils pour interroger la base de données en temps réel : P&L par période, profils joueurs, transactions, inbox, apps, cashout status, settlement hebdo, funnel onboarding, top winners/losers, santé du bot, groupes orphelins. Utilise-les quand l'opérateur pose une question sur un chiffre, un joueur, ou un état du système. Ne devine jamais — appelle l'outil.
+Tu as accès à des outils pour interroger la base de données en temps réel : P&L par période, profils joueurs, transactions, inbox, apps, cashout status, settlement hebdo, funnel onboarding, top winners/losers, santé du bot, groupes orphelins. Utilise-les quand l'opérateur pose une question sur un chiffre, un joueur, ou un état du système. Ne devine jamais — appelle l'outil.
+
+Pour toute question à laquelle aucun outil métier ne répond (affiliés, leads, staking QQPK, extras, historique fin, comptages...), tu as db_schema (pour voir les tables) et query_db (SELECT en lecture seule). Ordre de préférence : outil métier d'abord (math canonique), query_db en fallback. Ne réponds JAMAIS "je n'ai pas accès à cette donnée" sans avoir essayé db_schema + query_db.
 
 Comportement :
 - Réponses courtes (3-6 lignes max sauf si on te demande un détail technique ou une analyse profonde)
@@ -27,45 +30,67 @@ Comportement :
 
 Si tu ne sais pas, dis-le. Si tu n'es pas d'accord, dis-le.`;
 
-const PROJECT_CONTEXT = `## Architecture LeCerclePoker
+// Built at runtime so the agent always knows the CURRENT games and model —
+// no more hardcoded snapshot that rots (the old static block was dated May 2026
+// and only knew TELE/Wepoker). Deterministic within a deploy → cache-friendly.
+function buildProjectContext(): string {
+  let gameLines: string[];
+  try {
+    const db = getDb();
+    const statusByName = new Map<string, string>(
+      (db.prepare(`SELECT name, status FROM games`).all() as Array<{ name: string; status: string }>)
+        .map(g => [g.name, g.status])
+    );
+    gameLines = AGENCY_GAMES.map(g => {
+      const status = g.archived || statusByName.get(g.key) === "archived" ? "archivé" : "actif";
+      return `- ${g.label} (table games: '${g.key}') — kind ${g.kind}, ${status}, pages ${g.basePath}/pnl + ${g.basePath}/settlements`;
+    });
+    const agencyKeys = new Set(AGENCY_GAMES.map(g => g.key));
+    const others = [...statusByName.keys()].filter(n => !agencyKeys.has(n));
+    if (others.length) gameLines.push(`- Hors P&L agency (pas de flux deal/settlement) : ${others.join(", ")}`);
+  } catch {
+    gameLines = AGENCY_GAMES.map(g => `- ${g.label} ('${g.key}') — kind ${g.kind}${g.archived ? ", archivé" : ""}`);
+  }
 
-**Stack** : Next.js 15 (App Router) + better-sqlite3 + Railway deploy. SDK Anthropic pour parser screenshots Wepoker. Bot Telegram (@LeCercle_Lebot) pour deals/dépôts/retraits. Tracker Tron pour wallets TELE auto-sync.
+  return `## Architecture LeCerclePoker
 
-**Routes principales** :
-- /finance, /crm, /players, /apps, /wallets, /reports, /ledger, /signals, /settings
-- /api/telegram/webhook : reçoit /deal /depot /retrait /reset /check /pnl /solde /transfer /wallet /todo /historique /aide
+**Stack** : Next.js 15 (App Router) + better-sqlite3 + Railway deploy. SDK Anthropic pour parser les rapports Wepoker. Bot Telegram (@LeCercle_Lebot) pour onboarding/deals/dépôts/retraits. Tracker Tron pour auto-sync des wallets. GRINDHOUSE = staking de grinders (sessions live).
 
-**Tables clés** : players, poker_apps, player_app_assignments, player_game_deals, accounting_entries, telegram_transactions, wallet_transactions, rakeback_reports, rakeback_entries, telegram_sessions, agent_conversations, agent_inbox.
+**Jeux agency (liste vivante — source AGENCY_GAMES + table games)** :
+${gameLines.join("\n")}
 
-**Modèle financier** :
-- Chaque joueur a un % action par game (typique 40%, parfois 50%) — c'est ma part du P&L
-- wallet_transactions = source de vérité pour dépôts/retraits (auto-syncés via Tron pour TELE)
-- Solde net joueur = retraits − dépôts (négatif = il me doit, positif = je lui dois)
-- Mon P&L = (retraits − dépôts) × action_pct ÷ 100
+**Modèle financier par kind** :
+- kind "wallet" (KKPOKER, A5POKER, AKS, NUTSPK, AKPOKER archivé) : P&L joueur = retraits − dépôts (wallet_transactions, USDT). Part agency = net × action_pct/100, deal par joueur par jeu dans player_game_deals (action_pct, rakeback_pct, insurance_pct).
+- kind "wepoker" : rapports en CNY (rakeback_reports + rakeback_entries), 3 composantes (winnings/rakeback/insurance splits), converti en USDT via le taux CNY configuré.
+- kind "staking" (QQPK) : cycles de staking C/T, revenu cercle hors deal action — contribue 0 au net worth en phase 1.
+- GRINDHOUSE : part agency par grinder (grindhouse_* tables).
+- Extras agency (agency_extras) : wins/fees one-off par jeu, inclus automatiquement dans les totaux.
+- Total agency (getAgencyTotalPnL) = jeux wallet + wepoker + extras + grindhouse. Positif = je gagne.
 
-**Conventions** :
-- Solo dev, commits sur main directement, pas de tests automatisés
-- Ton mix FR/EN selon le contexte (UI souvent FR, code en EN)
-- Money app — tout changement aux flux financiers doit être réfléchi
-- Schema migrations via try/catch ALTER TABLE pattern dans lib/db.ts
+**Routes principales** : / (dashboard), /crm, /players, /akpoker, /kkpoker, /a5poker, /aks, /nutspk, /qqpk, /wepoker, /grindhouse, /portal (affiliés), /settings. Webhook bot : /api/telegram/webhook.
+
+**Tables clés** : players, games, player_game_deals, wallet_transactions (source='sync'|'manual', jamais 'unknown' — les rows 'unknown' sont exclues de tout agrégat), wallet_meres, player_wallet_games, player_wallet_cashouts, rakeback_reports, rakeback_entries, weekly_settlements, weekly_settlement_periods, agency_extras, onboarding_leads, affiliate_* (profils/relations/paiements), qqpk_* (staking), grindhouse_*, agent_conversations, agent_inbox, agent_usage. Utilise db_schema pour la liste exhaustive.
+
+**Règles data (obligatoires dans query_db)** :
+- Exclure wallet_transactions avec source='unknown' de tout agrégat.
+- Jamais sommer des montants de devises différentes (colonne currency) sans conversion.
+- Jamais hardcoder un game_id : SELECT id FROM games WHERE name='X'. Le jeu interne 'TELE' = AKPOKER côté utilisateur.
+- Les retraits légitimes viennent UNIQUEMENT d'une wallet_mère du jeu vers un wallet cashout.
 
 **Ops bot** :
-- Notifications proactives vers AGENT_CHAT_ID : cashout confirmé/skip, 6h pending alert (dimanche), erreurs critiques
-- Daily summary à 9h Paris : hier (dépôts/retraits/P&L) + semaine en cours + cashout status
-- 17 outils pour interroger la DB en temps réel (cashout, settlement, funnel, health, top players...)
-- Cashout reminder automatique chaque dimanche avec dedup DB-backed
+- Notifications proactives vers AGENT_CHAT_ID : cashout confirmé/skip, alertes, erreurs critiques
+- Daily summary à 9h Paris + cashout reminder automatique le dimanche (dedup DB-backed)
+- Doer agent (request_code_fix) pour dispatcher des fixes code en autonomie
 
-**Connu / en cours (au 2026-05-11)** :
-- Geo et Paabzzz n'ont pas de row dans players (à onboarder manuellement)
-- Tracking automatique sync TELE wallets via Tron
-- Parser XLS Wepoker déterministe + fallback Vision Claude pour screenshots`;
+**Conventions** : solo dev, main = prod, pas de tests. Money app — tout changement aux flux financiers doit être réfléchi.`;
+}
 
 interface ChatMessage {
   role: "user" | "assistant";
   content: string;
 }
 
-function loadHistory(chatId: string, limit = 10): ChatMessage[] {
+function loadHistory(chatId: string, limit = 30): ChatMessage[] {
   const rows = getDb()
     .prepare(
       `SELECT role, content FROM agent_conversations
@@ -102,7 +127,7 @@ interface RunChatArgs {
   userText: string;
 }
 
-const MAX_TOOL_ITERATIONS = 5;
+const MAX_TOOL_ITERATIONS = 8;
 
 export async function runChat({ chatId, userText }: RunChatArgs): Promise<string> {
   const apiKey = process.env.ANTHROPIC_API_KEY;
@@ -112,7 +137,7 @@ export async function runChat({ chatId, userText }: RunChatArgs): Promise<string
   const cleaned = stripMention(userText);
   if (!cleaned) return "Tu m'as mentionné mais sans texte. Demande-moi un truc.";
 
-  const history = loadHistory(cid, 10);
+  const history = loadHistory(cid, 30);
   saveTurn(cid, "user", cleaned);
 
   const client = new Anthropic({ apiKey });
@@ -129,6 +154,10 @@ export async function runChat({ chatId, userText }: RunChatArgs): Promise<string
     { role: "user" as const, content: userMessageWithSnapshot },
   ];
 
+  // Built once per runChat so every tool-loop iteration sends a byte-identical
+  // system prefix (prompt cache stays warm across iterations).
+  const projectContext = buildProjectContext();
+
   let iterations = 0;
   while (iterations < MAX_TOOL_ITERATIONS) {
     iterations++;
@@ -141,7 +170,7 @@ export async function runChat({ chatId, userText }: RunChatArgs): Promise<string
       tools: TOOLS,
       system: [
         { type: "text", text: SYSTEM_PROMPT, cache_control: { type: "ephemeral" } },
-        { type: "text", text: PROJECT_CONTEXT, cache_control: { type: "ephemeral" } },
+        { type: "text", text: projectContext, cache_control: { type: "ephemeral" } },
       ],
       messages,
     });
