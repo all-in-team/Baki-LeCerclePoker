@@ -32,6 +32,8 @@ export { handleQqpkCallback } from "@/lib/games/qqpk/onboarding";
 export { handleStartQqpk } from "./startqqpk";
 export { handleStartAapkmy } from "./startaapkmy";
 export { handleAapkmyCallback } from "@/lib/games/aapkmy/onboarding";
+export { handleOkpokerCallback } from "@/lib/games/okpoker/onboarding";
+export { handleStartOkpoker } from "./startokpoker";
 export { handleAffiliation, handleAffiliationRawMessage } from "./affiliation";
 export { handleMyAffi } from "./myaffi";
 export { handleStartAffi } from "./startaffi";

@@ -85,6 +85,11 @@ export async function handleActionPctRawMessage(
       await sendAapkmyPitch(chatId, player.id, player, pct, tid);
       return true;
     }
+    case "OKPOKER": {
+      const { sendOkpokerPitch } = await import("@/lib/games/okpoker/onboarding");
+      await sendOkpokerPitch(chatId, player.id, player, pct, tid);
+      return true;
+    }
     default:
       await sendMsg(chatId, `❌ Game inconnue (<code>${gameKey}</code>). Contacte @baki77777`, tid);
       return true;

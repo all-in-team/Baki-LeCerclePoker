@@ -1765,4 +1765,24 @@ function initSchema(db: Database.Database) {
   } catch (err: any) {
     console.error(`[MIGRATION:add_qqpk_entry_log_v1] FAILED:`, err.message);
   }
+
+  // Seed OKPOKER game (wallet-based action game, mirror of AKS). The games.name CHECK was
+  // dropped in drop_games_name_check_v1, so a plain INSERT OR IGNORE suffices. default_action_pct=30
+  // is only a prompt hint — the real % is chosen per-player at onboarding (free text).
+  // Unlike AKS/NUTSPK the wallet mère IS seeded here (Baki provided it with the launch):
+  // address validated on-chain before shipping (TronGrid: existing account, real USDT history).
+  try {
+    const fixOkpoker = db.prepare(`INSERT OR IGNORE INTO _applied_fixes (name) VALUES (?)`).run("add_okpoker_game_v1");
+    if (fixOkpoker.changes > 0) {
+      db.prepare(`INSERT OR IGNORE INTO games (name, status, default_action_pct, currency) VALUES ('OKPOKER', 'active', 30, 'USDT')`).run();
+      const okGame = db.prepare(`SELECT id FROM games WHERE name = 'OKPOKER'`).get() as { id: number } | undefined;
+      if (okGame) {
+        db.prepare(`INSERT OR IGNORE INTO wallet_meres (address, label, game_id, status) VALUES (?, ?, ?, 'active')`)
+          .run("TYCBsKvJSrLoj6pudJCLFNFYdBcntNP1gU", "main", okGame.id);
+      }
+      console.log("[MIGRATION] add_okpoker_game_v1 applied");
+    }
+  } catch (err: any) {
+    console.error(`[MIGRATION:add_okpoker_game_v1] FAILED:`, err.message);
+  }
 }
