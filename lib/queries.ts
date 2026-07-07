@@ -744,6 +744,15 @@ export function getAllActiveWalletMereAddresses(): Set<string> {
   return new Set(rows.map(r => r.address.toLowerCase()));
 }
 
+// ALL mère addresses regardless of status — a retired mère is still operator
+// money: an incoming transfer from it is never a player deposit. Used by the
+// sync's Pass 1 skip rule (a transfer from a mère that is not an active mère
+// of the scanned game must not be imported under that game).
+export function getAllWalletMereAddressesAnyStatus(): Set<string> {
+  const rows = getDb().prepare(`SELECT address FROM wallet_meres`).all() as { address: string }[];
+  return new Set(rows.map(r => r.address.toLowerCase()));
+}
+
 export function listAllWalletMeres(): WalletMere[] {
   return getDb().prepare(`
     SELECT wm.id, wm.address, wm.label, wm.game_id, wm.status, wm.retired_at, wm.created_at, g.name AS game_name

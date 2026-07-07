@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getDb } from "@/lib/db";
-import { insertWalletTransactionByHash, getActiveWalletMeresForGame, getAllActiveWalletMereAddresses, getAllGameWalletsByPlayer, getAllCashoutsByPlayer, getPlayersOnGame, isGameArchived } from "@/lib/queries";
+import { insertWalletTransactionByHash, getActiveWalletMeresForGame, getAllWalletMereAddressesAnyStatus, getAllGameWalletsByPlayer, getAllCashoutsByPlayer, getPlayersOnGame, isGameArchived } from "@/lib/queries";
 
 const USDT_CONTRACT = "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t";
 
@@ -110,7 +110,10 @@ export async function POST(req: NextRequest) {
   if (mereAddrs.size === 0) {
     console.warn(`[SYNC] No active wallet_mère for game=${gameName}, withdrawals cannot be detected`);
   }
-  const allMereAddrs = getAllActiveWalletMereAddresses();
+  // ANY status: a transfer from a retired mère is still operator money, never a
+  // player deposit (history: retired KKPOKER mère funding a player's OKPOKER/AKS
+  // game wallets got imported as 8 phantom deposits).
+  const allMereAddrs = getAllWalletMereAddressesAnyStatus();
 
   // Build game-wallet map: player_id → [address, ...] (deduped by lowercase)
   const gameWalletEntries = getAllGameWalletsByPlayer(gameName);
@@ -132,6 +135,7 @@ export async function POST(req: NextRequest) {
   const results: Result[] = [];
   let totalDeposits = 0;
   let totalCashouts = 0;
+  let skippedFromMere = 0;
 
   // ── Pass 1 : scan WALLET GAME — deposits; withdrawal ONLY if sender is a mère of THIS game;
   //    incoming from another game's mère is skipped (that game's Pass 2 owns it)
@@ -154,7 +158,8 @@ export async function POST(req: NextRequest) {
           // it here would stamp it with the wrong game_id. It is not a deposit
           // either (operator money, not player funding), so skip entirely.
           if (!fromGameMere && allMereAddrs.has(fromLower)) {
-            console.warn(`[SYNC ${gameName}] skip tx ${tx.transaction_id}: from mère ${fromLower.slice(0, 10)}… of another game → belongs to that game's Pass 2 (player=${player.name})`);
+            skippedFromMere++;
+            console.warn(`[SYNC ${gameName}] skip tx ${tx.transaction_id}: from mère ${fromLower.slice(0, 10)}… (another game or retired) → not a ${gameName} tx (player=${player.name})`);
             continue;
           }
           const changed = insertWalletTransactionByHash({
@@ -238,6 +243,10 @@ export async function POST(req: NextRequest) {
     imported: totalDeposits + totalCashouts,
     deposits: totalDeposits,
     cashouts: totalCashouts,
+    // Txs seen on game wallets but coming from a mère that is not an active mère
+    // of THIS game (another game's cashout, or a retired mère) — deliberately not
+    // imported. Surfaced so a mis-registered cashout wallet doesn't fail silently.
+    skipped_from_mere: skippedFromMere,
     wallet_meres_configured: mereAddrs.size,
     cashout_wallets_configured: cashoutOwners.size,
     results,
