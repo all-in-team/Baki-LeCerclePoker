@@ -34,6 +34,8 @@ export { handleStartAapkmy } from "./startaapkmy";
 export { handleAapkmyCallback } from "@/lib/games/aapkmy/onboarding";
 export { handleOkpokerCallback } from "@/lib/games/okpoker/onboarding";
 export { handleStartOkpoker } from "./startokpoker";
+export { handleJvipCallback } from "@/lib/games/jvip/onboarding";
+export { handleStartJvip } from "./startjvip";
 export { handleAffiliation, handleAffiliationRawMessage } from "./affiliation";
 export { handleMyAffi } from "./myaffi";
 export { handleStartAffi } from "./startaffi";

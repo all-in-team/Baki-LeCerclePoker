@@ -76,6 +76,18 @@ export async function handleStart(chatId: number, fromId: number, fromName: stri
     return;
   }
 
+  // JVIP deep link — same DM-only flow as OKPOKER (config-only clone).
+  if (payload === "jvip" && chatId === fromId) {
+    const { handleJvipDeepLink } = await import("@/lib/games/jvip/onboarding");
+    await handleJvipDeepLink(chatId, {
+      id: fromId,
+      first_name: from?.first_name ?? fromName,
+      last_name: from?.last_name,
+      username: from?.username,
+    });
+    return;
+  }
+
   const linked = db.prepare(
     `SELECT id, name FROM players WHERE telegram_id = ?`
   ).get(fromId) as { id: number; name: string } | undefined;

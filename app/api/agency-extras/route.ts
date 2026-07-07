@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getDb } from "@/lib/db";
 
-const GAME_CURRENCY: Record<string, string> = { akpoker: "USDT", wepoker: "CNY", kkpoker: "USDT", a5poker: "USDT", aks: "USDT", nutspk: "USDT", okpoker: "USDT" };
+const GAME_CURRENCY: Record<string, string> = { akpoker: "USDT", wepoker: "CNY", kkpoker: "USDT", a5poker: "USDT", aks: "USDT", nutspk: "USDT", okpoker: "USDT", jvip: "USDT" };
 
 export async function GET(req: NextRequest) {
   const sp = req.nextUrl.searchParams;

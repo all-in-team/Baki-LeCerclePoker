@@ -90,6 +90,11 @@ export async function handleActionPctRawMessage(
       await sendOkpokerPitch(chatId, player.id, player, pct, tid);
       return true;
     }
+    case "JVIP": {
+      const { sendJvipPitch } = await import("@/lib/games/jvip/onboarding");
+      await sendJvipPitch(chatId, player.id, player, pct, tid);
+      return true;
+    }
     default:
       await sendMsg(chatId, `❌ Game inconnue (<code>${gameKey}</code>). Contacte @baki77777`, tid);
       return true;
