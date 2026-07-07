@@ -22,6 +22,8 @@ import {
   handleAapkmyCallback,
   handleOkpokerCallback,
   handleStartOkpoker,
+  handleJvipCallback,
+  handleStartJvip,
   handleAffiliation,
   handleMyAffi,
   handleStartAffi,
@@ -89,6 +91,8 @@ export async function POST(req: NextRequest) {
       await handleAapkmyCallback(cb.id, cbData, cbChatId, cbThreadId, cb.from, cb.message?.message_id);
     } else if (cbData.startsWith("okpoker_")) {
       await handleOkpokerCallback(cb.id, cbData, cbChatId, cbThreadId, cb.from, cb.message?.message_id);
+    } else if (cbData.startsWith("jvip_")) {
+      await handleJvipCallback(cb.id, cbData, cbChatId, cbThreadId, cb.from, cb.message?.message_id);
     } else if (cbData.startsWith("onboard:")) {
       await handleOnboardCallback(cb.id, cbData, cbChatId, cbThreadId);
     } else if (cbData.startsWith("onboard_")) {
@@ -211,6 +215,7 @@ export async function POST(req: NextRequest) {
       else if (cmd === "/startqqpk" || cmd === "/start_qqpk") await handleStartQqpk(chatId);
       else if (cmd === "/startaapkmy" || cmd === "/start_aapkmy") await handleStartAapkmy(chatId, threadId);
       else if (cmd === "/startokpoker" || cmd === "/start_okpoker") await handleStartOkpoker(chatId);
+      else if (cmd === "/startjvip" || cmd === "/start_jvip") await handleStartJvip(chatId);
     } catch (e: any) {
       console.error("[TG CMD]", e);
       await sendMsg(chatId, `❌ Erreur : ${e.message}`);

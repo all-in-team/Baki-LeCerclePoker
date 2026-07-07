@@ -1807,4 +1807,23 @@ function initSchema(db: Database.Database) {
   } catch (err: any) {
     console.error(`[MIGRATION:reclass_iacopo_a5_cashout_v1] FAILED:`, err.message);
   }
+
+  // Seed JVIP game (wallet-based action game, config-only clone of OKPOKER).
+  // default_action_pct=30 is only a prompt hint — the real % is chosen per-player at
+  // onboarding (free text). Wallet mère provided by Baki at launch, validated on-chain
+  // before shipping (TronGrid: existing account, recent activity).
+  try {
+    const fixJvip = db.prepare(`INSERT OR IGNORE INTO _applied_fixes (name) VALUES (?)`).run("add_jvip_game_v1");
+    if (fixJvip.changes > 0) {
+      db.prepare(`INSERT OR IGNORE INTO games (name, status, default_action_pct, currency) VALUES ('JVIP', 'active', 30, 'USDT')`).run();
+      const jvipGame = db.prepare(`SELECT id FROM games WHERE name = 'JVIP'`).get() as { id: number } | undefined;
+      if (jvipGame) {
+        db.prepare(`INSERT OR IGNORE INTO wallet_meres (address, label, game_id, status) VALUES (?, ?, ?, 'active')`)
+          .run("TKtLFAJ6wWSHZmQNgZfUGbxFRK5wf8jEzJ", "main", jvipGame.id);
+      }
+      console.log("[MIGRATION] add_jvip_game_v1 applied");
+    }
+  } catch (err: any) {
+    console.error(`[MIGRATION:add_jvip_game_v1] FAILED:`, err.message);
+  }
 }
