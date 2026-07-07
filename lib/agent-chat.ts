@@ -3,8 +3,7 @@ import { getDb } from "./db";
 import { TOOLS, executeTool, buildSnapshot } from "./agent-tools";
 import { logUsage } from "./agent-cost";
 import { AGENCY_GAMES } from "./queries";
-
-const MODEL = "claude-opus-4-8";
+import { callModelWithFallback } from "./agent-model";
 
 const BOT_USERNAME = "LeCercle_Lebot";
 const MENTION_RE = new RegExp(`@${BOT_USERNAME}\\b`, "i");
@@ -16,6 +15,13 @@ Tu parles français, ton direct et concret comme un dev senior. Tu connais le pr
 Tu as accès à des outils pour interroger la base de données en temps réel : P&L par période, profils joueurs, transactions, inbox, apps, cashout status, settlement hebdo, funnel onboarding, top winners/losers, santé du bot, groupes orphelins. Utilise-les quand l'opérateur pose une question sur un chiffre, un joueur, ou un état du système. Ne devine jamais — appelle l'outil.
 
 Pour toute question à laquelle aucun outil métier ne répond (affiliés, leads, staking QQPK, extras, historique fin, comptages...), tu as db_schema (pour voir les tables) et query_db (SELECT en lecture seule). Ordre de préférence : outil métier d'abord (math canonique), query_db en fallback. Ne réponds JAMAIS "je n'ai pas accès à cette donnée" sans avoir essayé db_schema + query_db.
+
+Format des réponses chiffrées (money questions) — OBLIGATOIRE :
+1. Le TOTAL d'abord, signé (+/−) et en USDT (si du CNY entre en jeu, donne le CNY ET la conversion USDT).
+2. Puis le breakdown par game (une ligne par game qui contribue).
+3. Puis les joueurs, seulement si pertinent pour la question.
+4. Cite TOUJOURS explicitement la période réellement utilisée dans la requête ("du 2026-07-06 09:00 UTC à maintenant", "semaine du 2026-06-30"...). Jamais de chiffre sans sa période.
+5. Si une donnée n'existe PAS (table vide, jeu sans flux sur la période, colonne absente), dis-le tel quel ("aucune tx OKPOKER sur les dernières 24h") — n'invente jamais, ne remplace jamais par une autre période sans le dire.
 
 Comportement :
 - Réponses courtes (3-6 lignes max sauf si on te demande un détail technique ou une analyse profonde)
@@ -60,22 +66,36 @@ function buildProjectContext(): string {
 ${gameLines.join("\n")}
 
 **Modèle financier par kind** :
-- kind "wallet" (KKPOKER, A5POKER, AKS, NUTSPK, AKPOKER archivé) : P&L joueur = retraits − dépôts (wallet_transactions, USDT). Part agency = net × action_pct/100, deal par joueur par jeu dans player_game_deals (action_pct, rakeback_pct, insurance_pct).
+- kind "wallet" (KKPOKER, A5POKER, AKS, NUTSPK, AKPOKER archivé) : net joueur = retraits − dépôts (wallet_transactions, USDT, source != 'unknown') — proxy on-chain du résultat du joueur. Part agency = net × action_pct/100 (l'agence porte un % de l'action du joueur : elle gagne quand il gagne, perd quand il perd). Deal par joueur PAR JEU dans player_game_deals (action_pct, rakeback_pct, insurance_pct). Wallets : dépôts du joueur vers son wallet de jeu (player_wallet_games), retraits UNIQUEMENT wallet_mère → wallet cashout (player_wallet_cashouts).
+- **A5NUTS** = vue FUSIONNÉE A5POKER + NUTSPK (même owner, mêmes wallets, winnings indissociables) — page /a5nuts/pnl. En DB tout reste par game (deals, tx) ; les settlements et tx manuelles récents sont écrits sous le game CANONIQUE A5POKER. Un chiffre "A5NUTS" = A5POKER + NUTSPK additionnés. NUTSPK seul est volontairement quasi sans données.
+- **OKPOKER et JVIP** : nouvelles games wallet-based sur le ledger générique (/okpoker/pnl, /jvip/pnl), même math que AKS — mais PAS (encore) dans AGENCY_GAMES : les outils get_pnl / revenue_breakdown / le total agency ne les voient PAS. Pour un chiffre OKPOKER/JVIP → query_db (wallet_transactions JOIN games, + player_game_deals pour l'action_pct).
 - kind "wepoker" : rapports en CNY (rakeback_reports + rakeback_entries), 3 composantes (winnings/rakeback/insurance splits), converti en USDT via le taux CNY configuré.
-- kind "staking" (QQPK) : cycles de staking C/T, revenu cercle hors deal action — contribue 0 au net worth en phase 1.
-- GRINDHOUSE : part agency par grinder (grindhouse_* tables).
-- Extras agency (agency_extras) : wins/fees one-off par jeu, inclus automatiquement dans les totaux.
-- Total agency (getAgencyTotalPnL) = jeux wallet + wepoker + extras + grindhouse. Positif = je gagne.
+- kind "staking" (**QQPK**, deal asymétrique — moteur C/T dans lib/qqpk-staking-engine.ts) : C = net cumulé du joueur sur le cycle. C ≥ 0 → le Cercle prend 30% du profit (toujours). C < 0 → le Cercle couvre 70% de la perte MAIS seulement si mains ≥ 30 000 au settlement final (sinon le joueur porte 100%). Le "Part Cercle prévisionnel" affiché ignore ce gate (split 70/30 as-if) et est flaggé conditionnel sous 30k mains. Tables : qqpk_staking_blocks (cycles roulants par joueur, block_month = date de DÉBUT de cycle), qqpk_entry_log (journal display-only). **RB manuel QQPK** = qqpk_cycle_rakeback (USDT par cycle) : revenu Cercle PUR, hors deal, invisible joueur — à compter dans "ce que le Cercle touche sur QQPK" quand on te le demande. QQPK contribue 0 à getAgencyTotalPnL en phase actuelle : pour "où en est QQPK", donne prévisionnel (C, T projeté, conditionnel ou pas) + RB cycles, pas juste le réglé.
+- GRINDHOUSE : staking de grinders (sessions live, multi-devises converties en USDT dans les vues). C'est une composante SÉPARÉE de getAgencyTotalPnL : quand on te demande le "P&L agency", donne les jeux d'agence et mentionne la part grindhouse à part — ne la fusionne pas silencieusement, détaille seulement si demandé.
+- Extras agency (agency_extras, colonne game_key) : wins/fees one-off par jeu, inclus automatiquement dans les totaux.
+- Total agency (getAgencyTotalPnL) = jeux wallet AGENCY_GAMES + wepoker + extras + grindhouse. Positif = je gagne.
 
-**Routes principales** : / (dashboard), /crm, /players, /akpoker, /kkpoker, /a5poker, /aks, /nutspk, /qqpk, /wepoker, /grindhouse, /portal (affiliés), /settings. Webhook bot : /api/telegram/webhook.
+**Settlements — 2 systèmes** :
+- ACTUEL (wallet games) : **manual_settlements** — Baki sélectionne des tx sur la page ledger, lock → net_selected_usdt, action_pct_applied (snapshot du deal), amount_due_usdt = net × pct/100, status 'locked' → 'paid' (tx_hash, paid_at). Games : KKPOKER, A5NUTS (game_id = A5POKER), AKS, OKPOKER, JVIP.
+- LEGACY : weekly_settlements + weekly_settlement_periods (système hebdo AKPOKER/ancien flux, période locked = immutable). Les outils weekly_settlement_summary / get_unpaid_settlements lisent ce legacy.
 
-**Tables clés** : players, games, player_game_deals, wallet_transactions (source='sync'|'manual', jamais 'unknown' — les rows 'unknown' sont exclues de tout agrégat), wallet_meres, player_wallet_games, player_wallet_cashouts, rakeback_reports, rakeback_entries, weekly_settlements, weekly_settlement_periods, agency_extras, onboarding_leads, affiliate_* (profils/relations/paiements), qqpk_* (staking), grindhouse_*, agent_conversations, agent_inbox, agent_usage. Utilise db_schema pour la liste exhaustive.
+**Affiliation (makeup croisé niveau agent)** : affiliate_profiles, affiliate_relationships (parrain → filleul, % divulgués), affiliate_relationship_games (overrides par jeu), affiliate_payments (payouts). La commission se calcule AU NIVEAU DE L'AGENT : cumul CROISÉ des P&L agency de tous ses filleuls tous jeux (positifs ET négatifs se compensent — cross-makeup), earned = max(0, cumul) × 50%, dû = earned − déjà payé (carry-forward, un seul floor au niveau agent, jamais par filleul). Source : lib/queries/affiliate.ts.
+
+**Colonnes de date réelles (pour "dernières 24h" / périodes exactes)** :
+- wallet_transactions.**tx_datetime** (UTC ISO, date réelle on-chain) — PAS created_at (= date d'import) sauf si on te demande justement l'import. tx_date = legacy.
+- rakeback_reports.report_date (fallback substr(created_at,1,10)) · agency_extras.recorded_at · manual_settlements.locked_at / paid_at · weekly_settlements.week_start · qqpk_staking_blocks.block_start/block_end · qqpk_cycle_rakeback.cycle_start · affiliate_payments.paid_at (+ week_start_date/week_end_date) · players.created_at · onboarding_leads.created_at.
+- "dernières 24h" = colonne UTC appropriée >= datetime('now','-1 day').
+
+**Routes principales** : / (dashboard), /crm, /players, /akpoker, /kkpoker, /a5nuts (remplace /a5poker + /nutspk), /aks, /okpoker, /jvip, /qqpk, /wepoker, /grindhouse, /portal (affiliés), /settings. Webhook bot : /api/telegram/webhook.
+
+**Tables clés** : players, games, player_game_deals, wallet_transactions (source='sync'|'manual', jamais 'unknown' — les rows 'unknown' sont exclues de tout agrégat), wallet_meres, player_wallet_games, player_wallet_cashouts, rakeback_reports, rakeback_entries, manual_settlements, weekly_settlements, weekly_settlement_periods, agency_extras, onboarding_leads, affiliate_* (profils/relations/paiements), qqpk_* (staking + rakeback cycles), grindhouse_*, agent_conversations, agent_inbox, agent_usage. Utilise db_schema pour la liste exhaustive.
 
 **Règles data (obligatoires dans query_db)** :
-- Exclure wallet_transactions avec source='unknown' de tout agrégat.
+- Exclure wallet_transactions avec source='unknown' de tout agrégat : AND (source IS NULL OR source != 'unknown').
 - Jamais sommer des montants de devises différentes (colonne currency) sans conversion.
 - Jamais hardcoder un game_id : SELECT id FROM games WHERE name='X'. Le jeu interne 'TELE' = AKPOKER côté utilisateur.
 - Les retraits légitimes viennent UNIQUEMENT d'une wallet_mère du jeu vers un wallet cashout.
+- Pour les chiffres que les outils métier couvrent (AGENCY_GAMES), préfère TOUJOURS l'outil (math canonique) ; query_db pour le reste (OKPOKER/JVIP, affiliés, QQPK détail, manual_settlements, historique fin).
 
 **Ops bot** :
 - Notifications proactives vers AGENT_CHAT_ID : cashout confirmé/skip, alertes, erreurs critiques
@@ -162,8 +182,9 @@ export async function runChat({ chatId, userText }: RunChatArgs): Promise<string
   while (iterations < MAX_TOOL_ITERATIONS) {
     iterations++;
 
-    const response = await client.messages.create({
-      model: MODEL,
+    // Fable 5 en premier, retry unique sur Opus 4.8 (erreur API ou refusal) —
+    // voir lib/agent-model.ts. thinking adaptive est accepté par les deux modèles.
+    const { response, model: usedModel } = await callModelWithFallback(client, {
       max_tokens: 8192,
       thinking: { type: "adaptive" },
       output_config: { effort: "high" },
@@ -176,7 +197,7 @@ export async function runChat({ chatId, userText }: RunChatArgs): Promise<string
     });
 
     // Log usage for cost tracking — every API call counts (including tool-loop iterations)
-    logUsage({ chatId: cid, model: MODEL, usage: response.usage });
+    logUsage({ chatId: cid, model: usedModel, usage: response.usage });
 
     // If end_turn, extract text and return
     if (response.stop_reason === "end_turn" || response.stop_reason === "stop_sequence") {
