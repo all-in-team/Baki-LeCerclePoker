@@ -210,6 +210,7 @@ export default function LedgerTable({
                         <SettlementFlow
                           playerId={row.player_id}
                           playerName={row.player_name}
+                          gameId={gameId}
                           avail={avail}
                           settlements={pSettlements}
                           previewAction={previewAction}

@@ -26,7 +26,7 @@ import Modal from "@/components/Modal";
 
 const TRONSCAN_TX = "https://tronscan.org/#/transaction/";
 
-export interface AvailableTx { id: number; tx_datetime: string; tx_date: string; type: "deposit" | "withdrawal"; amount: number; currency: string; source: string | null }
+export interface AvailableTx { id: number; tx_datetime: string; tx_date: string; type: "deposit" | "withdrawal"; amount: number; currency: string; source: string | null; tron_tx_hash?: string | null }
 export interface SettlementRow {
   id: number; player_id: number; player_name: string; net_selected_usdt: number;
   action_pct_applied: number; amount_due_usdt: number; status: "locked" | "paid";
@@ -85,6 +85,7 @@ function RecapLine({ label, value }: { label: string; value: string }) {
 export default function SettlementFlow({
   playerId, playerName, avail, settlements,
   previewAction, lockAction, markPaidAction, unlockAction,
+  gameId,
   readOnlyNotice = "Shadow — écriture désactivée",
 }: {
   playerId: number;
@@ -95,10 +96,16 @@ export default function SettlementFlow({
   lockAction?: (playerId: number, txIds: number[]) => Promise<{ ok: boolean; error?: string }>;
   markPaidAction?: (settlementId: number, txHash?: string) => Promise<{ ok: boolean; error?: string }>;
   unlockAction?: (settlementId: number) => Promise<{ ok: boolean; error?: string }>;
+  /**
+   * Game the manual-tx form writes to (canonical game on merged pages, e.g.
+   * A5POKER for A5NUTS). Undefined or read-only mode → the form is hidden.
+   */
+  gameId?: number;
   readOnlyNotice?: string;
 }) {
   const router = useRouter();
   const readOnly = !lockAction;
+  const canAddManualTx = !readOnly && gameId !== undefined;
 
   // distinct weeks present in this player's unsettled tx (ascending)
   const weekMap = new Map<string, string>();
@@ -116,6 +123,40 @@ export default function SettlementFlow({
   const [settleBusy, setSettleBusy] = useState(false);
   const [payHash, setPayHash] = useState<Record<number, string>>({});
   const [rowBusy, setRowBusy] = useState<number | null>(null);
+  const [manualTx, setManualTx] = useState({ type: "deposit" as "deposit" | "withdrawal", amount: "", date: new Date().toISOString().slice(0, 10) });
+  const [manualBusy, setManualBusy] = useState(false);
+
+  // Manual tx add/delete — thin calls to the existing /api/wallets endpoints
+  // (insertWalletTransaction stamps source='manual'; DELETE refuses non-manual
+  // rows). No money math here (invariant #2).
+  async function addManualTx() {
+    if (!canAddManualTx) return;
+    const amt = Number(manualTx.amount);
+    if (!Number.isFinite(amt) || amt <= 0) { alert("Montant invalide."); return; }
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(manualTx.date)) { alert("Date invalide."); return; }
+    setManualBusy(true);
+    try {
+      const res = await fetch("/api/wallets", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ player_id: playerId, game_id: gameId, type: manualTx.type, amount: amt, currency: "USDT", note: "manuel", tx_date: manualTx.date }),
+      });
+      if (!res.ok) { alert("Erreur lors de l'ajout de la transaction."); return; }
+      setManualTx(v => ({ ...v, amount: "" }));
+      router.refresh();
+    } finally { setManualBusy(false); }
+  }
+
+  async function deleteManualTx(txId: number) {
+    if (readOnly) return;
+    if (!confirm("Supprimer cette transaction manuelle ?")) return;
+    setManualBusy(true);
+    try {
+      const res = await fetch(`/api/wallets/${txId}`, { method: "DELETE" });
+      if (!res.ok) { alert("Suppression refusée (seules les tx manuelles sont supprimables)."); return; }
+      setSel(prev => { const set = new Set(prev); set.delete(txId); return set; });
+      router.refresh();
+    } finally { setManualBusy(false); }
+  }
 
   function toggleTx(txId: number) {
     setSel(prev => { const set = new Set(prev); if (set.has(txId)) set.delete(txId); else set.add(txId); return set; });
@@ -197,7 +238,7 @@ export default function SettlementFlow({
                 const inWeek = curWeek && weekInfo(tx.tx_datetime ?? tx.tx_date).key === curWeek;
                 return (
                   <div key={tx.id} onClick={() => toggleTx(tx.id)} style={{
-                    display: "grid", gridTemplateColumns: "32px 120px 140px 1fr 40px", gap: 12, alignItems: "center", padding: "9px 12px", cursor: "pointer",
+                    display: "grid", gridTemplateColumns: "32px 120px 140px 1fr 40px 26px", gap: 12, alignItems: "center", padding: "9px 12px", cursor: "pointer",
                     background: checked ? "rgba(34,197,94,0.10)" : "transparent",
                     borderBottom: "1px solid var(--border)",
                     borderLeft: inWeek ? "3px solid #F5C518" : "3px solid transparent",
@@ -206,7 +247,22 @@ export default function SettlementFlow({
                     <span style={{ fontSize: 12, color: "var(--text-muted)" }}>{(tx.tx_datetime ?? tx.tx_date).slice(0, 10)}</span>
                     <span style={{ display: "inline-flex", alignItems: "center", gap: 5, color: isDep ? "#f87171" : "var(--green)", fontWeight: 600, fontSize: 12 }}>{isDep ? <ArrowDownLeft size={13} /> : <ArrowUpRight size={13} />}{isDep ? "Dépôt" : "Retrait"}</span>
                     <span style={{ fontSize: 13, fontWeight: 700, color: isDep ? "#f87171" : "var(--green)" }}>{isDep ? "−" : "+"}{fmt(tx.amount)} {tx.currency}</span>
-                    <span style={{ textAlign: "center", fontSize: 13 }} title={tx.source ?? "?"}>{tx.source === "sync" ? "🔗" : tx.source === "manual" ? "✍️" : "⚠️"}</span>
+                    <span style={{ textAlign: "center", fontSize: 13 }}>
+                      {tx.source === "sync" && tx.tron_tx_hash ? (
+                        // Link to the on-chain transfer — stopPropagation so the click
+                        // opens Tronscan without toggling the row's checkbox.
+                        <a href={TRONSCAN_TX + tx.tron_tx_hash} target="_blank" rel="noopener noreferrer" onClick={e => e.stopPropagation()}
+                          title={`Voir le transfert ${tx.tron_tx_hash.slice(0, 12)}… sur Tronscan`} style={{ textDecoration: "none" }}>🔗</a>
+                      ) : (
+                        <span title={tx.source ?? "?"}>{tx.source === "sync" ? "🔗" : tx.source === "manual" ? "✍️" : "⚠️"}</span>
+                      )}
+                    </span>
+                    <span style={{ textAlign: "center" }}>
+                      {tx.source === "manual" && !readOnly && (
+                        <button onClick={e => { e.stopPropagation(); deleteManualTx(tx.id); }} disabled={manualBusy} title="Supprimer cette tx manuelle"
+                          style={{ background: "none", border: "none", cursor: "pointer", fontSize: 13, padding: 0, opacity: 0.7 }}>🗑</button>
+                      )}
+                    </span>
                   </div>
                 );
               })}
@@ -220,6 +276,26 @@ export default function SettlementFlow({
             </div>
           </div>
         </>
+      )}
+
+      {/* Manual tx entry — restores the TELEClient feature lost in the LedgerShell
+          migration. Writes through POST /api/wallets (source='manual'). */}
+      {canAddManualTx && (
+        <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", padding: "10px 12px", border: "1px dashed var(--border)", borderRadius: 10, background: "var(--bg-base)", marginBottom: 12 }}>
+          <span style={{ fontSize: 11, fontWeight: 700, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.06em" }}>➕ Tx manuelle</span>
+          <select value={manualTx.type} onChange={e => setManualTx(v => ({ ...v, type: e.target.value as "deposit" | "withdrawal" }))}
+            style={{ padding: "6px 10px", borderRadius: 6, fontSize: 12, fontWeight: 600, background: "var(--bg-elevated)", border: "1px solid var(--border)", color: manualTx.type === "deposit" ? "#f87171" : "var(--green)", cursor: "pointer" }}>
+            <option value="deposit">Dépôt</option>
+            <option value="withdrawal">Retrait</option>
+          </select>
+          <input type="number" min="0" step="0.01" value={manualTx.amount} onChange={e => setManualTx(v => ({ ...v, amount: e.target.value }))} placeholder="Montant USDT"
+            style={{ width: 130, padding: "6px 10px", borderRadius: 6, fontSize: 12, fontWeight: 600, background: "var(--bg-elevated)", border: "1px solid var(--border)", color: "var(--text)", outline: "none" }} />
+          <input type="date" value={manualTx.date} onChange={e => setManualTx(v => ({ ...v, date: e.target.value }))}
+            style={{ padding: "6px 10px", borderRadius: 6, fontSize: 12, fontWeight: 600, background: "var(--bg-elevated)", border: "1px solid var(--border)", color: "var(--text)", outline: "none", colorScheme: "dark" }} />
+          <Btn variant="secondary" onClick={addManualTx} disabled={manualBusy || !manualTx.amount} style={{ fontSize: 12, padding: "6px 12px" }}>
+            {manualBusy ? "…" : "Ajouter"}
+          </Btn>
+        </div>
       )}
 
       {/* Player's settlements */}
