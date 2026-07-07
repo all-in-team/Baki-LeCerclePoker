@@ -35,6 +35,7 @@ export interface AvailableTx {
   amount: number;
   currency: string;
   source: string | null;
+  tron_tx_hash: string | null;
 }
 
 export interface SettlementPreview {
@@ -102,7 +103,7 @@ export function getAvailableTransactions(gameId: GameScope, playerId: number): A
   const ids = scopeIds(gameId);
   const placeholders = ids.map(() => "?").join(", ");
   return db.prepare(`
-    SELECT id, tx_datetime, tx_date, type, amount, currency, source
+    SELECT id, tx_datetime, tx_date, type, amount, currency, source, tron_tx_hash
     FROM wallet_transactions
     WHERE game_id IN (${placeholders})
       AND player_id = ?
