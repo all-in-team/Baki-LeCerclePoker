@@ -1785,4 +1785,26 @@ function initSchema(db: Database.Database) {
   } catch (err: any) {
     console.error(`[MIGRATION:add_okpoker_game_v1] FAILED:`, err.message);
   }
+
+  // Reclassify Iacopo's A5 cashout mis-stamped QQPK (821.75 USDT, 2026-07-05).
+  // Verified on-chain: sent BY the A5POKER mère TVGMz… TO his A5POKER cashout
+  // wallet TMrfADRo… (also registered as his QQPK game wallet) — the QQPK sync's
+  // old cross-game Pass 1 rule claimed it first, and the tron_tx_hash dedup then
+  // blocked the correct A5 import. The sync rule is fixed (#7/#8); this repairs
+  // the one existing row. Keyed by hash, guarded on settled=0 + current game.
+  try {
+    const fixIacopo = db.prepare(`INSERT OR IGNORE INTO _applied_fixes (name) VALUES (?)`).run("reclass_iacopo_a5_cashout_v1");
+    if (fixIacopo.changes > 0) {
+      const r = db.prepare(`
+        UPDATE wallet_transactions
+        SET game_id = (SELECT id FROM games WHERE name = 'A5POKER')
+        WHERE tron_tx_hash = 'b8ee0f3655c57d86e880c9b2b52c258b735fdd4b60353f7e8bf8d3e2b91af281'
+          AND type = 'withdrawal' AND settled = 0
+          AND game_id = (SELECT id FROM games WHERE name = 'QQPK')
+      `).run();
+      console.log(`[MIGRATION] reclass_iacopo_a5_cashout_v1 applied (${r.changes} row)`);
+    }
+  } catch (err: any) {
+    console.error(`[MIGRATION:reclass_iacopo_a5_cashout_v1] FAILED:`, err.message);
+  }
 }
