@@ -133,7 +133,8 @@ export async function POST(req: NextRequest) {
   let totalDeposits = 0;
   let totalCashouts = 0;
 
-  // ── Pass 1 : scan WALLET GAME — deposits (or withdrawal if sender is any wallet mère)
+  // ── Pass 1 : scan WALLET GAME — deposits; withdrawal ONLY if sender is a mère of THIS game;
+  //    incoming from another game's mère is skipped (that game's Pass 2 owns it)
   for (const player of players) {
     const wallets = gameWalletsByPlayer.get(player.id) ?? [];
     let deposits = 0;
@@ -145,11 +146,21 @@ export async function POST(req: NextRequest) {
         const txs = await fetchAllTronTxs(walletAddr);
         for (const tx of txs) {
           if ((tx.to ?? "").toLowerCase() !== gameAddr) continue;
-          const fromMere = allMereAddrs.has((tx.from ?? "").toLowerCase());
+          const fromLower = (tx.from ?? "").toLowerCase();
+          const fromGameMere = mereAddrs.has(fromLower);
+          // Strict per-game rule (Baki 2026-07-07): a cashout of game X comes ONLY
+          // from a mère OF GAME X. An incoming from ANOTHER game's mère is that
+          // other game's cashout (its own sync imports it via Pass 2) — importing
+          // it here would stamp it with the wrong game_id. It is not a deposit
+          // either (operator money, not player funding), so skip entirely.
+          if (!fromGameMere && allMereAddrs.has(fromLower)) {
+            console.warn(`[SYNC ${gameName}] skip tx ${tx.transaction_id}: from mère ${fromLower.slice(0, 10)}… of another game → belongs to that game's Pass 2 (player=${player.name})`);
+            continue;
+          }
           const changed = insertWalletTransactionByHash({
             player_id: player.id,
             game_id: gameId,
-            type: fromMere ? "withdrawal" : "deposit",
+            type: fromGameMere ? "withdrawal" : "deposit",
             amount: toAmt(tx),
             currency: "USDT",
             tx_date: toDate(tx),
@@ -158,7 +169,7 @@ export async function POST(req: NextRequest) {
             counterparty_address: tx.from ?? null,
           });
           if (changed) {
-            if (fromMere) cashouts++;
+            if (fromGameMere) cashouts++;
             else deposits++;
           }
         }
