@@ -8,18 +8,30 @@ import { loadWalletLedger } from "@/lib/games/wallet-ledger";
 import { previewAction, lockAction, markPaidAction, unlockAction } from "./actions";
 
 /**
- * AKS P&L on the generic LedgerShell (same swap as KKPOKER/NUTSPK).
- * showSettlementPreview=true: the "N à régler" pills + estimated due stay
- * visible on the rows (Baki can flip the flag per game later).
+ * AKS/OK POKER — MERGED AKS + OKPOKER P&L (decision Baki: same game, two skins).
+ * Same club, same wallet mère on-chain: the split dashboard was a fiction. This
+ * page unions both games' deals + transactions; game rows, Telegram flows and
+ * player_game_deals stay per-game (two onboarding flows converge here).
+ * Canonical game = AKS (all settlement history): new settlements + manual txs
+ * are stamped with it. /okpoker/pnl redirects here.
+ *
+ * TWO sync buttons — wallets are registered per-game, a single button would
+ * leave the other game's wallets never synced (A5NUTS lesson).
  */
 export default async function AKSPage({ searchParams }: { searchParams: Promise<{ filter?: string; player?: string }> }) {
   const params = await searchParams;
   const data = loadWalletLedger(params, {
     gameName: "AKS",
-    extrasKey: "aks",
-    title: "AKS — P&L",
+    gameNames: ["AKS", "OKPOKER"],
+    extrasKey: ["aks", "okpoker"],
+    title: "AKS/OK POKER — P&L",
     basePath: "/aks/pnl",
   });
+
+  // Same mère address is registered under both games — dedupe for the banner.
+  const meresDeduped = data.walletMeres.filter(
+    (wm, i, arr) => arr.findIndex(w => w.address.toLowerCase() === wm.address.toLowerCase()) === i
+  );
 
   return (
     <>
@@ -36,12 +48,17 @@ export default async function AKSPage({ searchParams }: { searchParams: Promise<
             <a href="/aks/pnl" style={{ fontSize: 11, color: "var(--text-muted)", textDecoration: "none" }}>✕ Retirer le filtre</a>
           </span>
         ) : undefined}
-        actions={<SyncWalletsButton gameName="AKS" />}
-        walletMeresBanner={<WalletMeresBanner walletMeres={data.walletMeres} />}
+        actions={
+          <span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
+            <SyncWalletsButton gameName="AKS" />
+            <SyncWalletsButton gameName="OKPOKER" />
+          </span>
+        }
+        walletMeresBanner={<WalletMeresBanner walletMeres={meresDeduped} />}
       >
         <LedgerTable
           rows={data.summaryByPlayer}
-          gameLabel="AKS"
+          gameLabel="AKS/OK POKER"
           gameId={data.gameId}
           cashoutsByPlayer={data.cashoutsByPlayer}
           gameWalletsByPlayer={data.gameWalletsByPlayer}

@@ -31,15 +31,14 @@ const GROUPS: NavGroup[] = [
   { label: "A5NUTS", items: [
     { href: "/a5nuts/pnl", label: "P&L", icon: Wallet },
   ]},
-  { label: "AKS", items: [
+  // AKS/OK POKER = merged AKS + OKPOKER dashboard (same club, same wallet mère,
+  // two onboarding skins). /okpoker/pnl redirects to /aks/pnl.
+  { label: "AKS/OK POKER", items: [
     { href: "/aks/pnl", label: "P&L", icon: Wallet },
     { href: "/aks/settlements", label: "Settlements", icon: Scale },
   ]},
   { label: "QQPK", items: [
     { href: "/qqpk/pnl", label: "P&L", icon: Wallet },
-  ]},
-  { label: "OKPOKER", items: [
-    { href: "/okpoker/pnl", label: "P&L", icon: Wallet },
   ]},
   { label: "JVIP", items: [
     { href: "/jvip/pnl", label: "P&L", icon: Wallet },
