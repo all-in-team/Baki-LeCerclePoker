@@ -36,6 +36,8 @@ export { handleOkpokerCallback } from "@/lib/games/okpoker/onboarding";
 export { handleStartOkpoker } from "./startokpoker";
 export { handleJvipCallback } from "@/lib/games/jvip/onboarding";
 export { handleStartJvip } from "./startjvip";
+export { handleTtpokerCallback } from "@/lib/games/ttpoker/onboarding";
+export { handleStartTtpoker } from "./startttpoker";
 export { handleAffiliation, handleAffiliationRawMessage } from "./affiliation";
 export { handleMyAffi } from "./myaffi";
 export { handleStartAffi } from "./startaffi";

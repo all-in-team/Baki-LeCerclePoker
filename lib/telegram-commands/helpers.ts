@@ -435,6 +435,13 @@ export async function handleRawMessage(text: string, chatId: number, messageThre
     if (handled) return;
   }
 
+  // TTPOKER deep-link DM: same pre-guard rule as OKPOKER/JVIP (player created from this answer).
+  if (session.step === ("ttpoker_dm_waiting_name" as Step)) {
+    const { handleTtpokerDmNameRawMessage } = await import("@/lib/games/ttpoker/onboarding");
+    const handled = await handleTtpokerDmNameRawMessage(text, chatId, session);
+    if (handled) return;
+  }
+
   if (!session.player_id) { clearSession(chatId); return; }
 
   // KKPOKER wallet collection states — delegate to KKPOKER module
@@ -484,6 +491,13 @@ export async function handleRawMessage(text: string, chatId: number, messageThre
   if (session.step === ("awaiting_jvip_cashout_wallet" as Step) || session.step === ("awaiting_jvip_game_wallet" as Step)) {
     const { handleJvipRawMessage } = await import("@/lib/games/jvip/onboarding");
     const handled = await handleJvipRawMessage(text, chatId, session, messageThreadId);
+    if (handled) return;
+  }
+
+  // TTPOKER wallet collection states — delegate to TTPOKER module
+  if (session.step === ("awaiting_ttpoker_cashout_wallet" as Step) || session.step === ("awaiting_ttpoker_game_wallet" as Step)) {
+    const { handleTtpokerRawMessage } = await import("@/lib/games/ttpoker/onboarding");
+    const handled = await handleTtpokerRawMessage(text, chatId, session, messageThreadId);
     if (handled) return;
   }
 

@@ -1846,4 +1846,23 @@ function initSchema(db: Database.Database) {
   } catch (err: any) {
     console.error(`[MIGRATION:align_aksok_action_pct_100_v1] FAILED:`, err.message);
   }
+
+  // Seed TTPOKER game (wallet-based action game, config-only clone of OKPOKER/JVIP).
+  // default_action_pct=30 is only a prompt hint — the real % is chosen per-player at
+  // onboarding (free text). Wallet mère provided by Baki at launch, validated on-chain
+  // before shipping (TronGrid: existing account since 2025-02, recent activity).
+  try {
+    const fixTtpoker = db.prepare(`INSERT OR IGNORE INTO _applied_fixes (name) VALUES (?)`).run("add_ttpoker_game_v1");
+    if (fixTtpoker.changes > 0) {
+      db.prepare(`INSERT OR IGNORE INTO games (name, status, default_action_pct, currency) VALUES ('TTPOKER', 'active', 30, 'USDT')`).run();
+      const ttGame = db.prepare(`SELECT id FROM games WHERE name = 'TTPOKER'`).get() as { id: number } | undefined;
+      if (ttGame) {
+        db.prepare(`INSERT OR IGNORE INTO wallet_meres (address, label, game_id, status) VALUES (?, ?, ?, 'active')`)
+          .run("TDMm86DeHb4wqvoghxMS2oipt8MDu418Ma", "main", ttGame.id);
+      }
+      console.log("[MIGRATION] add_ttpoker_game_v1 applied");
+    }
+  } catch (err: any) {
+    console.error(`[MIGRATION:add_ttpoker_game_v1] FAILED:`, err.message);
+  }
 }

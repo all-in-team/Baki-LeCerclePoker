@@ -95,6 +95,11 @@ export async function handleActionPctRawMessage(
       await sendJvipPitch(chatId, player.id, player, pct, tid);
       return true;
     }
+    case "TTPOKER": {
+      const { sendTtpokerPitch } = await import("@/lib/games/ttpoker/onboarding");
+      await sendTtpokerPitch(chatId, player.id, player, pct, tid);
+      return true;
+    }
     default:
       await sendMsg(chatId, `❌ Game inconnue (<code>${gameKey}</code>). Contacte @baki77777`, tid);
       return true;

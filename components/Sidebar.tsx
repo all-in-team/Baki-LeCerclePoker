@@ -43,6 +43,9 @@ const GROUPS: NavGroup[] = [
   { label: "JVIP", items: [
     { href: "/jvip/pnl", label: "P&L", icon: Wallet },
   ]},
+  { label: "TTPOKER", items: [
+    { href: "/ttpoker/pnl", label: "P&L", icon: Wallet },
+  ]},
   { label: "WEPOKER", items: [
     { href: "/wepoker/pnl", label: "P&L", icon: BarChart3 },
     { href: "/wepoker/settlements", label: "Settlements", icon: FileText },

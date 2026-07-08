@@ -88,6 +88,18 @@ export async function handleStart(chatId: number, fromId: number, fromName: stri
     return;
   }
 
+  // TTPOKER deep link — same DM-only flow as OKPOKER/JVIP (config-only clone).
+  if (payload === "ttpoker" && chatId === fromId) {
+    const { handleTtpokerDeepLink } = await import("@/lib/games/ttpoker/onboarding");
+    await handleTtpokerDeepLink(chatId, {
+      id: fromId,
+      first_name: from?.first_name ?? fromName,
+      last_name: from?.last_name,
+      username: from?.username,
+    });
+    return;
+  }
+
   const linked = db.prepare(
     `SELECT id, name FROM players WHERE telegram_id = ?`
   ).get(fromId) as { id: number; name: string } | undefined;
