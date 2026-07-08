@@ -61,19 +61,18 @@ export async function handleStart(chatId: number, fromId: number, fromName: stri
     return;
   }
 
-  // OKPOKER / JVIP / TTPOKER deep links — lead capture ONLY (notif agent + message
-  // d'attente). L'onboarding réel se fait dans le groupe du joueur via /start<game>
-  // (% owner, pitch topic Onboarding) — voir game-deeplink-lead.ts pour l'historique
-  // du flow DM self-service retiré. Typed in a group, falls through to normal /start.
-  const leadGame = ({ okpoker: "OKPOKER", jvip: "JVIP", ttpoker: "TTPOKER" } as Record<string, string>)[payload ?? ""];
-  if (leadGame && chatId === fromId) {
-    const { handleGameDeepLinkLead } = await import("./game-deeplink-lead");
-    await handleGameDeepLinkLead(chatId, {
+  // OKPOKER / JVIP / TTPOKER deep links — full in-group self-service: click → group created
+  // → the game pitch auto-posts in the Onboarding topic on join (default %, in-group, never
+  // DM). See game-deeplink.ts. Typed in a group, falls through to normal /start below.
+  const dlGame = ({ okpoker: "OKPOKER", jvip: "JVIP", ttpoker: "TTPOKER" } as Record<string, string>)[payload ?? ""];
+  if (dlGame && chatId === fromId) {
+    const { handleGameDeepLink } = await import("./game-deeplink");
+    await handleGameDeepLink(chatId, {
       id: fromId,
       first_name: from?.first_name ?? fromName,
       last_name: from?.last_name,
       username: from?.username,
-    }, leadGame);
+    }, dlGame);
     return;
   }
 

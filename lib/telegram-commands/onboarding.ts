@@ -170,6 +170,18 @@ export async function handleOnboardingDirect(
           gameName,
         });
 
+        // Persist the pitch intent for self-service games (OKPOKER/JVIP/TTPOKER) so the
+        // pitch fires on join even after a redeploy or a delayed join — the in-memory Map
+        // above does not survive a restart. kk/a5 keep their Map-only askActionPct flow.
+        try {
+          const { AUTO_PITCH_GAMES, armPendingGamePitch } = await import("./pending-game-pitch");
+          if (gameName && AUTO_PITCH_GAMES.has(gameName)) {
+            armPendingGamePitch(from.id, gameName, String(result.chatId));
+          }
+        } catch (e: any) {
+          console.warn("[ONBOARDING] arm pending pitch failed:", e?.message ?? e);
+        }
+
         // Backfill kickoff_group_id on ref_ leads so handleNewMembers can match
         if (username) {
           db.prepare(

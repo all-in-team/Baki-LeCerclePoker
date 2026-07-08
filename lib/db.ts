@@ -1887,4 +1887,31 @@ function initSchema(db: Database.Database) {
   } catch (err: any) {
     console.error(`[MIGRATION:cleanup_paul_duplicate_wallets_v1] FAILED:`, err.message);
   }
+
+  // Persistent pitch-intent ledger for self-service deep-link games (OKPOKER/JVIP/TTPOKER).
+  // Makes ?start=<game> incassable: the auto-pitch fires on player join even after a redeploy
+  // or a delayed join (the in-memory pendingGroupData Map does not survive a restart).
+  // UNIQUE(player_telegram_id, game_name) = one live intent per player+game; consumed_at is
+  // the dedup marker (claimed atomically on join → never two pitches). See pending-game-pitch.ts.
+  try {
+    const fix = db.prepare(`INSERT OR IGNORE INTO _applied_fixes (name) VALUES (?)`).run("add_pending_game_pitches_v1");
+    if (fix.changes > 0) {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS pending_game_pitches (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          player_telegram_id INTEGER NOT NULL,
+          game_name TEXT NOT NULL,
+          group_id TEXT,
+          created_at TEXT NOT NULL DEFAULT (datetime('now')),
+          consumed_at TEXT,
+          UNIQUE(player_telegram_id, game_name)
+        );
+        CREATE INDEX IF NOT EXISTS idx_pending_game_pitches_lookup
+          ON pending_game_pitches(player_telegram_id, consumed_at);
+      `);
+      console.log("[MIGRATION] add_pending_game_pitches_v1 applied");
+    }
+  } catch (err: any) {
+    console.error(`[MIGRATION:add_pending_game_pitches_v1] FAILED:`, err.message);
+  }
 }

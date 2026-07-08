@@ -2,6 +2,7 @@ import { getDb } from "@/lib/db";
 import { sendMsg, sendMsgKeyboard, setSession, mentionOf, trackOnboardingStep, AGENT_CHAT_ID, type Step } from "./helpers";
 // PITCH_MSG imports removed — neutral default, game-specific pitches are inline in sendKkpokerPitch/sendA5pokerPitch
 import { consumePendingGroupData } from "./onboarding";
+import { claimPendingGamePitch, dispatchGamePitch } from "./pending-game-pitch";
 
 const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
 
@@ -181,6 +182,28 @@ export async function handleNewMembers(members: any[], chatTitle: string, chatId
       db.prepare(`UPDATE players SET telegram_chat_id = ? WHERE id = ?`).run(String(chatId), playerId);
       db.prepare(`INSERT INTO crm_notes (player_id, content, type) VALUES (?, ?, 'note')`)
         .run(playerId, `A rejoint "${chatTitle}"`);
+    }
+
+    // OKPOKER / JVIP / TTPOKER: self-service — auto-post the game pitch with the DEFAULT
+    // action % (no owner input). Source of truth = persistent pending_game_pitches, claimed
+    // atomically (survives redeploy / delayed join, and never posts twice even if Telegram
+    // delivers both new_chat_members and chat_member for this join).
+    const pendingPitch = claimPendingGamePitch(member.id);
+    if (pendingPitch) {
+      // Restart-safety: if the in-memory Map was lost, backfill the group binding from the
+      // persisted group_id so /solde etc. resolve the player's group.
+      if (!groupData && pendingPitch.group_id) {
+        db.prepare(`UPDATE players SET telegram_group_id = ? WHERE id = ?`).run(pendingPitch.group_id, playerId);
+      }
+      const { getOnboardingThreadId } = await import("./onboarding-topic");
+      const tid = await getOnboardingThreadId(chatId, playerId, pendingPitch.game_name);
+      await dispatchGamePitch(pendingPitch.game_name, chatId, playerId,
+        { name, telegram_id: member.id, telegram_handle: member.username ?? null }, tid);
+      await sendMsg(AGENT_CHAT_ID,
+        `🃏 <b>Pitch ${pendingPitch.game_name} auto-posté</b> pour <b>${name}</b>` +
+        (member.username ? ` (@${member.username})` : "") + ` (#${playerId}) — deal default, ajuste le % si besoin.`
+      );
+      continue;
     }
 
     // KKPOKER / A5POKER: owner picks the action % (free text) before the pitch fires.
