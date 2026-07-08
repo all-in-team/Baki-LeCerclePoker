@@ -197,7 +197,8 @@ export default function CRMClient({ players: initialPlayers, recentNotes }: {
 
   async function deletePlayer() {
     if (!selected || !confirm(`Supprimer ${selected.name} ? Irréversible.`)) return;
-    await fetch(`/api/players/${selected.id}`, { method: "DELETE" });
+    const res = await fetch(`/api/players/${selected.id}`, { method: "DELETE" });
+    if (!res.ok) { const d = await res.json().catch(() => ({})); alert(d.error ?? "Suppression refusée."); return; }
     setPlayerList(l => l.filter(p => p.id !== selected.id));
     setSelected(null);
   }

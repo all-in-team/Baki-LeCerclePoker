@@ -174,7 +174,11 @@ function useEditModal(players: Player[], dealsByPlayer: Record<number, Deal[]>, 
               <button onClick={() => setConfirmDelete(false)} style={{ padding: "6px 14px", borderRadius: 7, fontSize: 12, cursor: "pointer", background: "none", border: "1px solid var(--border)", color: "var(--text-muted)" }}>Annuler</button>
               <button disabled={saving} onClick={async () => {
                 setSaving(true);
-                try { await fetch(`/api/players/${editPlayer.id}`, { method: "DELETE" }); setEditPlayer(null); setConfirmDelete(false); router.refresh(); }
+                try {
+                  const res = await fetch(`/api/players/${editPlayer.id}`, { method: "DELETE" });
+                  if (!res.ok) { const d = await res.json().catch(() => ({})); alert(d.error ?? "Suppression refusée."); return; }
+                  setEditPlayer(null); setConfirmDelete(false); router.refresh();
+                }
                 catch (e: any) { alert("Erreur: " + (e.message ?? e)); }
                 finally { setSaving(false); }
               }} style={{ padding: "6px 14px", borderRadius: 7, fontSize: 12, fontWeight: 600, cursor: "pointer", background: "rgba(239,68,68,0.15)", border: "1px solid rgba(239,68,68,0.3)", color: "#EF4444" }}>
