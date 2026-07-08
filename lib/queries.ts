@@ -289,6 +289,33 @@ export function deletePlayerGameDeal(id: number) {
   getDb().prepare(`DELETE FROM player_game_deals WHERE id = ?`).run(id);
 }
 
+// Distinct action_pct values held by the player across a game scope. Length > 1 = divergent
+// deals (settlement blocked until aligned); length 1 = uniform. Used to decide the true no-op.
+export function getScopeActionPcts(playerId: number, gameIds: number[]): number[] {
+  const db = getDb();
+  const ph = gameIds.map(() => "?").join(", ");
+  return (db.prepare(
+    `SELECT DISTINCT action_pct FROM player_game_deals WHERE player_id = ? AND game_id IN (${ph})`
+  ).all(playerId, ...gameIds) as { action_pct: number }[]).map((r) => r.action_pct);
+}
+
+// Update ONLY action_pct on the player's EXISTING deals across a game scope — nothing else
+// touched (rakeback_pct, dates preserved), no deal created. On a merged view (A5NUTS, AKS/OK)
+// this aligns every game in scope to the same pct, which is exactly what the settlement engine's
+// divergent-deal guard (getDealActionPct) requires to allow a lock. Returns the distinct old
+// pcts and the number of rows updated. Money-adjacent (action_pct drives the agency cut).
+export function updatePlayerActionPct(playerId: number, gameIds: number[], newPct: number): { updated: number; oldPcts: number[] } {
+  const db = getDb();
+  const ph = gameIds.map(() => "?").join(", ");
+  const oldRows = db.prepare(
+    `SELECT DISTINCT action_pct FROM player_game_deals WHERE player_id = ? AND game_id IN (${ph})`
+  ).all(playerId, ...gameIds) as { action_pct: number }[];
+  const r = db.prepare(
+    `UPDATE player_game_deals SET action_pct = ? WHERE player_id = ? AND game_id IN (${ph})`
+  ).run(newPct, playerId, ...gameIds);
+  return { updated: r.changes, oldPcts: oldRows.map((o) => o.action_pct) };
+}
+
 // Append-only trace of explicit deal acceptances (anti-bypass gate proof).
 // Audit log of explicit deal acceptances. NOTE (Phase 2): for QQPK this is ALSO the source of
 // truth for the rolling-cycle anchor — getQqpkPlayerStartDate reads MIN(accepted_at). For other

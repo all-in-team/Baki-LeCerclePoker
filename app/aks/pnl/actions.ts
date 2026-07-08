@@ -35,3 +35,8 @@ export async function markPaidAction(settlementId: number, txHash?: string) {
 export async function unlockAction(settlementId: number) {
   return unlockSettlement(settlementId);
 }
+
+export async function updateActionPctAction(playerId: number, oldPct: number, newPct: number) {
+  const { updateDealActionPct } = await import("@/lib/deal-edit");
+  return updateDealActionPct(playerId, ["AKS", "OKPOKER"], "AKS/OK POKER", oldPct, newPct);
+}

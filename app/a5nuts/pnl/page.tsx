@@ -5,7 +5,7 @@ import WalletMeresBanner from "@/components/ledger/WalletMeresBanner";
 import SyncWalletsButton from "@/components/ledger/extras/SyncWalletsButton";
 import AgencyExtras from "@/components/AgencyExtras";
 import { loadWalletLedger } from "@/lib/games/wallet-ledger";
-import { previewAction, lockAction, markPaidAction, unlockAction } from "./actions";
+import { previewAction, lockAction, markPaidAction, unlockAction, updateActionPctAction } from "./actions";
 
 /**
  * A5NUTS — MERGED A5POKER + NUTSPK P&L (decision Baki, Tir 2).
@@ -53,6 +53,7 @@ export default async function A5NUTSPage({ searchParams }: { searchParams: Promi
           settlementsByPlayer={data.settlementsByPlayer}
           estimatedDueByPlayer={data.estimatedDueByPlayer}
           aliasByPlayer={data.aliasByPlayer}
+          updateActionPctAction={updateActionPctAction}
           previewAction={previewAction}
           lockAction={lockAction}
           markPaidAction={markPaidAction}

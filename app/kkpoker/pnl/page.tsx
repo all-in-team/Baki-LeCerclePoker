@@ -5,7 +5,7 @@ import WalletMeresBanner from "@/components/ledger/WalletMeresBanner";
 import SyncWalletsButton from "@/components/ledger/extras/SyncWalletsButton";
 import AgencyExtras from "@/components/AgencyExtras";
 import { loadWalletLedger } from "@/lib/games/wallet-ledger";
-import { previewAction, lockAction, markPaidAction, unlockAction } from "./actions";
+import { previewAction, lockAction, markPaidAction, unlockAction, updateActionPctAction } from "./actions";
 
 /**
  * KKPOKER P&L — first real page on the generic LedgerShell (shadow-validated).
@@ -50,6 +50,7 @@ export default async function KKPOKERPage({ searchParams }: { searchParams: Prom
           settlementsByPlayer={data.settlementsByPlayer}
           estimatedDueByPlayer={data.estimatedDueByPlayer}
           aliasByPlayer={data.aliasByPlayer}
+          updateActionPctAction={updateActionPctAction}
           previewAction={previewAction}
           lockAction={lockAction}
           markPaidAction={markPaidAction}

@@ -1,6 +1,7 @@
 "use client";
 
 import { Fragment, useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
 import { fmtSignedAmount } from "@/components/ledger/format";
 import PlayerWalletsPanel, { WalletBadgeButton, type WalletAddr } from "@/components/ledger/extras/PlayerWalletsPanel";
 import SettlementFlow, { dueLabel, type AvailableTx, type SettlementRow, type SettlementPreview } from "@/components/ledger/extras/SettlementFlow";
@@ -44,6 +45,7 @@ export default function LedgerTable({
   walletsReadOnly = false,
   headerNote,
   aliasByPlayer,
+  updateActionPctAction,
 }: {
   rows: LedgerTableRow[];
   gameLabel: string;
@@ -55,6 +57,8 @@ export default function LedgerTable({
   estimatedDueByPlayer: Record<number, number>;
   /** Alias membership (display-only "Vue alias"). Absent → toggle hidden. */
   aliasByPlayer?: Record<number, AliasInfo>;
+  /** Inline action-% edit (owner). Absent → the % cell stays read-only. */
+  updateActionPctAction?: (playerId: number, oldPct: number, newPct: number) => Promise<{ ok: boolean; changed: boolean; announced?: "group" | "agent" | "failed"; error?: string }>;
   previewAction: (playerId: number, txIds: number[]) => Promise<SettlementPreview>;
   lockAction?: (playerId: number, txIds: number[]) => Promise<{ ok: boolean; error?: string }>;
   markPaidAction?: (settlementId: number, txHash?: string) => Promise<{ ok: boolean; error?: string }>;
@@ -79,6 +83,32 @@ export default function LedgerTable({
   const [aliasView, setAliasView] = useState(false); // default OFF → OFF render is byte-identical to prod
   const [aliasExpanded, setAliasExpanded] = useState<number | null>(null);
   const [rescanning, setRescanning] = useState(false);
+  const router = useRouter();
+  const [editPctPlayer, setEditPctPlayer] = useState<number | null>(null); // player_id whose % is being edited
+  const [pctDraft, setPctDraft] = useState("");
+  const [pctSaving, setPctSaving] = useState(false);
+
+  async function commitPct(row: LedgerTableRow) {
+    const cleaned = pctDraft.trim().replace(/%$/, "").trim();
+    if (!/^\d+(?:\.\d+)?$/.test(cleaned)) { setEditPctPlayer(null); return; }
+    const newPct = parseFloat(cleaned);
+    if (!Number.isFinite(newPct) || newPct < 0 || newPct > 100) { alert("Le % doit être entre 0 et 100."); return; }
+    if (!updateActionPctAction) { setEditPctPlayer(null); return; }
+    // No client-side "newPct === row.action_pct" short-circuit: the displayed value may be one
+    // game of a divergent merged scope, and typing it must still align the others. The server
+    // decides the true no-op (already aligned) and returns changed:false.
+    setPctSaving(true);
+    try {
+      const res = await updateActionPctAction(row.player_id, row.action_pct, newPct);
+      if (!res.ok) { alert(res.error ?? "Erreur mise à jour du %"); return; }
+      setEditPctPlayer(null);
+      if (res.changed) {
+        if (res.announced === "agent") alert("✅ % mis à jour. Aucun groupe lié — préviens le joueur manuellement.");
+        else if (res.announced === "failed") alert("✅ % mis à jour, mais l'annonce Telegram a échoué — préviens le joueur manuellement.");
+        router.refresh();
+      }
+    } finally { setPctSaving(false); }
+  }
 
   const hasAliases = !!aliasByPlayer && Object.keys(aliasByPlayer).length > 0;
 
@@ -299,7 +329,29 @@ export default function LedgerTable({
                     </td>
                     <td style={{ padding: "12px 16px", fontSize: 13, fontWeight: 600, color: netC }}>{row.net === 0 ? "—" : fmtSignedAmount(row.net)}</td>
                     <td style={{ padding: "12px 16px", fontSize: 14, fontWeight: 700, color: myC }}>{row.my_pnl === 0 ? "—" : fmtSignedAmount(row.my_pnl)}</td>
-                    <td style={{ padding: "12px 16px", fontSize: 13, fontWeight: 600, color: "var(--gold)" }}>{row.action_pct}%</td>
+                    <td style={{ padding: "12px 16px", fontSize: 13, fontWeight: 600, color: "var(--gold)" }}>
+                      {updateActionPctAction && editPctPlayer === row.player_id ? (
+                        <input
+                          autoFocus
+                          value={pctDraft}
+                          disabled={pctSaving}
+                          onChange={e => setPctDraft(e.target.value)}
+                          onKeyDown={e => { if (e.key === "Enter") commitPct(row); else if (e.key === "Escape") setEditPctPlayer(null); }}
+                          onBlur={() => commitPct(row)}
+                          style={{ width: 54, padding: "3px 6px", borderRadius: 5, fontSize: 13, fontWeight: 600, fontFamily: "inherit", background: "var(--bg-elevated)", color: "var(--gold)", border: "1px solid var(--gold)", outline: "none" }}
+                        />
+                      ) : updateActionPctAction ? (
+                        <button
+                          onClick={() => { setPctDraft(String(row.action_pct)); setEditPctPlayer(row.player_id); }}
+                          title="Modifier le % action (annonce auto dans le groupe)"
+                          style={{ background: "transparent", border: "1px solid transparent", borderRadius: 5, padding: "2px 6px", fontSize: 13, fontWeight: 600, color: "var(--gold)", cursor: "pointer" }}
+                          onMouseEnter={e => (e.currentTarget.style.borderColor = "var(--gold)")}
+                          onMouseLeave={e => (e.currentTarget.style.borderColor = "transparent")}
+                        >{row.action_pct}% ✎</button>
+                      ) : (
+                        <>{row.action_pct}%</>
+                      )}
+                    </td>
                     <td style={{ padding: "12px 16px", fontSize: 13, fontWeight: 600, color: "#38bdf8" }}>{row.rakeback_pct}%</td>
                     <td style={{ padding: "12px 16px", fontSize: 12, fontWeight: 600, color: row.start_date ? "var(--text)" : "var(--text-dim)" }}>{row.start_date ?? "—"}</td>
                     <td style={{ padding: "12px 16px", textAlign: "center" }}>
