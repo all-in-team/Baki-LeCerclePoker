@@ -1826,4 +1826,24 @@ function initSchema(db: Database.Database) {
   } catch (err: any) {
     console.error(`[MIGRATION:add_jvip_game_v1] FAILED:`, err.message);
   }
+
+  // Align Hugo Roine (player 1) and Hakim AMIRUL (player 53) to 100% action on
+  // BOTH AKS and OKPOKER (decision Baki, with the AKS/OK POKER merge): their
+  // OKPOKER deals were 30/50 while AKS was 100, and the settlement engine's
+  // divergent-deal guard blocks any settlement for them on the merged view
+  // until the deals agree. AKS rows are already 100 — idempotent there.
+  try {
+    const fixAlign = db.prepare(`INSERT OR IGNORE INTO _applied_fixes (name) VALUES (?)`).run("align_aksok_action_pct_100_v1");
+    if (fixAlign.changes > 0) {
+      const r = db.prepare(`
+        UPDATE player_game_deals
+        SET action_pct = 100
+        WHERE player_id IN (1, 53)
+          AND game_id IN (SELECT id FROM games WHERE name IN ('AKS', 'OKPOKER'))
+      `).run();
+      console.log(`[MIGRATION] align_aksok_action_pct_100_v1 applied (${r.changes} rows)`);
+    }
+  } catch (err: any) {
+    console.error(`[MIGRATION:align_aksok_action_pct_100_v1] FAILED:`, err.message);
+  }
 }
