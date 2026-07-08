@@ -3,7 +3,7 @@ import { sendMsg, AGENT_CHAT_ID } from "./helpers";
 import { getPlayerGameWallets, getPlayerCashouts } from "@/lib/queries";
 import { askActionPct } from "./action-pct-prompt";
 import { getOnboardingThreadId } from "./onboarding-topic";
-import { TTPOKER_GAME_LINK } from "@/lib/games/ttpoker/config";
+import { TTPOKER_ROOM_BOT, TTPOKER_INVITE_CODE } from "@/lib/games/ttpoker/config";
 
 export async function handleStartTtpoker(chatId: number) {
   const db = getDb();
@@ -23,8 +23,8 @@ export async function handleStartTtpoker(chatId: number) {
     const existingCashouts = getPlayerCashouts(player.id, ttpokerGameId);
     if (existingWallets.length > 0 || existingCashouts.length > 0) {
       await sendMsg(chatId,
-        `✅ <b>${player.name}</b> a déjà TTPOKER actif.` +
-        (TTPOKER_GAME_LINK ? `\nLien : ${TTPOKER_GAME_LINK}` : "")
+        `✅ <b>${player.name}</b> a déjà TTPOKER actif.\n` +
+        `Room : <a href="${TTPOKER_ROOM_BOT}">@ttpokers_bot</a> + code d'invitation <code>${TTPOKER_INVITE_CODE}</code>`
       );
       return;
     }

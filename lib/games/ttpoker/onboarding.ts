@@ -5,7 +5,7 @@ import {
   type Step,
 } from "@/lib/telegram-commands/helpers";
 import { addPlayerCashout, addPlayerGameWallet, recordDealAcceptance } from "@/lib/queries";
-import { TTPOKER_GAME_NAME, TTPOKER_GAME_LINK, TTPOKER_DEFAULT_ACTION_PCT } from "./config";
+import { TTPOKER_GAME_NAME, TTPOKER_ROOM_BOT, TTPOKER_INVITE_CODE, TTPOKER_DEFAULT_ACTION_PCT } from "./config";
 
 const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
 
@@ -105,9 +105,10 @@ export async function handleTtpokerCallback(
     return;
   }
 
-  // ── J'accepte le deal → record acceptance, THEN reveal link, then wallet check ──
-  // Anti-bypass gate: the game link is sent ONLY here, after an explicit acceptance
-  // click, never in the pitch.
+  // ── J'accepte le deal → record acceptance, THEN reveal room access, then wallet check ──
+  // Anti-bypass gate: the room access instructions are sent ONLY here, after an explicit
+  // acceptance click, never in the pitch. Access = start the room bot + enter our invite code
+  // (Me → Code d'invitation) to land under the LeCercle line (critical step), then wallets.
   if (data === "ttpoker_accept") {
     if (session.step !== ("ttpoker_pitch_sent" as Step)) return;
     if (messageId) await editMessageReplyMarkup(chatId, messageId).catch(() => {});
@@ -122,11 +123,17 @@ export async function handleTtpokerCallback(
     setSession(chatId, "ttpoker_wallet_check" as Step, session.player_id, session.expected_tg_id);
 
     await sendMsg(chatId, `✅ <b>Deal accepté !</b>`, tid);
-    if (TTPOKER_GAME_LINK) {
-      await sleep(1200);
-      // Link revealed ONLY now — after explicit acceptance.
-      await sendMsg(chatId, `🃏 Parfait ! Rejoins la game TTPOKER 👉 ${TTPOKER_GAME_LINK}`, tid);
-    }
+    await sleep(1200);
+    // Room access — revealed ONLY now, after explicit acceptance.
+    await sendMsg(chatId,
+      `🃏 <b>Accès à la room TTPOKER</b> — suis bien les 3 étapes :\n\n` +
+      `<b>1️⃣ Démarre le bot de la room</b> 👉 <a href="${TTPOKER_ROOM_BOT}">@ttpokers_bot</a>\n\n` +
+      `<b>2️⃣ Une fois dans l'app</b> : va dans <b>Me → Code d'invitation</b> et entre le code :\n` +
+      `<code>${TTPOKER_INVITE_CODE}</code>\n` +
+      `⚠️ <b>Sans ce code, tu n'es PAS sous notre ligne — étape obligatoire, ne la saute pas.</b>\n\n` +
+      `<b>3️⃣ On configure tes wallets</b> USDT (juste en dessous 👇) et tu peux grind 🎰`,
+      tid
+    );
     await sleep(1500);
     await sendMsgKeyboard(chatId,
       `Avant de finaliser, question rapide : tu as déjà un wallet crypto USDT en TRC20 (réseau Tron) ?`,
@@ -276,8 +283,8 @@ export async function handleTtpokerRawMessage(
         : `🎉 <b>Onboarding TTPOKER complet — ${playerName}</b>\n`) +
       `Deal : ${playerPct}/${actionPct} (action_pct=${actionPct})\n` +
       `Wallet retrait : <code>${cashoutAddress}</code>\n` +
-      `Wallet game TTPOKER : <code>${text}</code>` +
-      (TTPOKER_GAME_LINK ? `\nLien : ${TTPOKER_GAME_LINK}` : "")
+      `Wallet game TTPOKER : <code>${text}</code>\n` +
+      `Accès room : @ttpokers_bot + code <code>${TTPOKER_INVITE_CODE}</code>`
     );
 
     return true;
