@@ -211,24 +211,31 @@ export async function POST(req: NextRequest) {
           // Invariant #1: withdrawal ONLY if sender is a known wallet mère
           if (!mereAddrs.has((tx.from ?? "").toLowerCase())) continue;
 
-          for (const pid of playerIds) {
-            const changed = insertWalletTransactionByHash({
-              player_id: pid,
-              game_id: gameId,
-              type: "withdrawal",
-              amount: toAmt(tx),
-              currency: "USDT",
-              tx_date: toDate(tx),
-              tx_datetime: toDatetime(tx),
-              tron_tx_hash: tx.transaction_id,
-              counterparty_address: tx.from ?? null,
-            });
-            if (changed) {
-              totalCashouts++;
-              const player = players.find(p => p.id === pid);
-              const r = results.find(r => player && r.player === player.name);
-              if (r) r.cashouts++;
-            }
+          // ANTI-DOUBLE-COUNT (money-critical): a shared cashout address = same entity/team
+          // (alias). The withdrawal must be counted ONCE, under a SINGLE player — never once
+          // per sharer (that inflates net/agency). Deterministic + stable attribution: the
+          // lowest player_id among the sharers (= the alias anchor, cf. detectAliases which
+          // labels by lowest id). playerIds here are all registered on THIS game (Pass 2 is
+          // game-scoped), which is the emitting mère's game — so this is exactly "the player
+          // holding the address on the mère's game". INSERT OR IGNORE keeps prior rows intact
+          // (no reattribution of already-imported tx).
+          const attributedPid = Math.min(...playerIds);
+          const changed = insertWalletTransactionByHash({
+            player_id: attributedPid,
+            game_id: gameId,
+            type: "withdrawal",
+            amount: toAmt(tx),
+            currency: "USDT",
+            tx_date: toDate(tx),
+            tx_datetime: toDatetime(tx),
+            tron_tx_hash: tx.transaction_id,
+            counterparty_address: tx.from ?? null,
+          });
+          if (changed) {
+            totalCashouts++;
+            const player = players.find(p => p.id === attributedPid);
+            const r = results.find(r => player && r.player === player.name);
+            if (r) r.cashouts++;
           }
         }
       } catch (e: any) {

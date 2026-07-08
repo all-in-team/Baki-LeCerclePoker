@@ -2,8 +2,6 @@ import { NextRequest, NextResponse } from "next/server";
 import { getPlayerCashouts, setPlayerCashouts } from "@/lib/queries";
 import { getDb } from "@/lib/db";
 
-const SHARED_WALLET_ALLOWED = new Set([1, 2]); // Hugo + Baki can share cashout wallets
-
 export async function GET(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
   return NextResponse.json(getPlayerCashouts(Number(id)));
@@ -21,23 +19,32 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
     .map((a: any) => ({ address: a.address.trim(), label: a.label?.trim() || null }))
     .filter((a: any) => a.address.length > 0);
 
-  // Check for shared wallets (except Baki+Hugo)
-  if (!SHARED_WALLET_ALLOWED.has(playerId)) {
-    const db = getDb();
-    for (const c of cleaned) {
-      const existing = db.prepare(
-        `SELECT pwc.player_id, p.name FROM player_wallet_cashouts pwc JOIN players p ON p.id = pwc.player_id WHERE pwc.address = ? AND pwc.player_id != ?`
-      ).get(c.address, playerId) as { player_id: number; name: string } | undefined;
-      if (existing) {
-        return NextResponse.json(
-          { error: `L'adresse ${c.address.slice(0, 8)}… est déjà utilisée par ${existing.name}. Un wallet cashout ne peut appartenir qu'à un seul joueur.` },
-          { status: 409 }
-        );
-      }
-    }
+  const db = getDb();
+
+  // A shared cashout address is ALLOWED (business rule: same address = same entity/team → alias).
+  // We no longer block it — we surface who it is shared with (informational) so the owner sees
+  // the alias forming. The money side (a shared-address cashout must be counted ONCE, under one
+  // player) is enforced deterministically in the wallet sync (app/api/wallets/sync Pass 2), not here.
+  const sharedWith: { address: string; names: string[] }[] = [];
+  for (const c of cleaned) {
+    const others = db.prepare(
+      `SELECT DISTINCT p.name FROM player_wallet_cashouts pwc JOIN players p ON p.id = pwc.player_id WHERE pwc.address = ? AND pwc.player_id != ?`
+    ).all(c.address, playerId) as { name: string }[];
+    if (others.length > 0) sharedWith.push({ address: c.address, names: others.map((o) => o.name) });
   }
 
   const gameId = typeof body.game_id === "number" ? body.game_id : undefined;
   setPlayerCashouts(playerId, cleaned, gameId);
-  return NextResponse.json({ ok: true, count: cleaned.length });
+
+  // Shared cashout → (re)build aliases immediately so the grouping shows without a full sync.
+  if (sharedWith.length > 0) {
+    try {
+      const { detectAliases } = await import("@/lib/aliases");
+      detectAliases();
+    } catch (e: any) {
+      console.warn("[CASHOUTS] detectAliases failed (non-blocking):", e?.message ?? e);
+    }
+  }
+
+  return NextResponse.json({ ok: true, count: cleaned.length, shared_with: sharedWith });
 }

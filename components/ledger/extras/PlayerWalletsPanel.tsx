@@ -77,7 +77,16 @@ export default function PlayerWalletsPanel({
       await fetch(`/api/players/${playerId}/game-wallets`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ addresses: gamePayload, game_id: gameId }) });
       const cashoutPayload = walletInlineVals.cashouts.map(a => ({ address: a.trim() })).filter(a => a.address.length > 0);
       const res = await fetch(`/api/players/${playerId}/cashouts`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ addresses: cashoutPayload, game_id: gameId }) });
-      if (res.ok) { router.refresh(); } else { const err = await res.json().catch(() => null); alert(err?.error ?? "Erreur sauvegarde wallets"); }
+      if (res.ok) {
+        // Shared cashout address is allowed (same address = same entity → alias). Non-blocking info.
+        const data = await res.json().catch(() => null);
+        const shared: { address: string; names: string[] }[] = data?.shared_with ?? [];
+        if (shared.length > 0) {
+          const who = [...new Set(shared.flatMap(s => s.names))].join(", ");
+          alert(`ℹ️ Adresse de retrait partagée avec ${who} → regroupés en alias (les retraits ne sont comptés qu'une fois).`);
+        }
+        router.refresh();
+      } else { const err = await res.json().catch(() => null); alert(err?.error ?? "Erreur sauvegarde wallets"); }
     } finally { setSavingWallet(false); }
   }
 
