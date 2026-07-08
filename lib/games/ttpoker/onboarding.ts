@@ -4,7 +4,7 @@ import {
   getSession, setSession, mentionOf, trackOnboardingStep, TRC20_RE, AGENT_CHAT_ID,
   type Step,
 } from "@/lib/telegram-commands/helpers";
-import { addPlayerCashout, addPlayerGameWallet, recordDealAcceptance, getPlayerGameWallets, getPlayerCashouts, upsertPlayerFromTelegram } from "@/lib/queries";
+import { addPlayerCashout, addPlayerGameWallet, recordDealAcceptance } from "@/lib/queries";
 import { TTPOKER_GAME_NAME, TTPOKER_GAME_LINK, TTPOKER_DEFAULT_ACTION_PCT } from "./config";
 
 const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
@@ -63,121 +63,6 @@ export async function sendTtpokerPitch(
     [{ text: "✅ J'accepte le deal", callback_data: "ttpoker_accept" }],
     [{ text: "❓ J'ai une question", callback_data: "ttpoker_choice_question" }],
   ], tid);
-}
-
-// ── Deep-link DM flow: https://t.me/LeCercle_Lebot?start=ttpoker ──
-// The player NEVER chooses his % here (règle métier) : existing TTPOKER deal is kept
-// as-is, otherwise games.default_action_pct (30). The pitch/accept/wallet machinery
-// below is chat-agnostic (sessions are keyed by chat_id), so the DM reuses it verbatim.
-
-export async function handleTtpokerDeepLink(
-  chatId: number,
-  from: { id: number; first_name?: string; last_name?: string; username?: string },
-) {
-  const db = getDb();
-  const gameId = getTtpokerGameId();
-  if (!gameId) {
-    await sendMsg(chatId, `❌ Erreur interne (game TTPOKER introuvable). Contacte @baki77777`);
-    return;
-  }
-
-  const player = db.prepare(
-    `SELECT id, name, telegram_id, telegram_handle FROM players WHERE telegram_id = ?`
-  ).get(from.id) as { id: number; name: string; telegram_id: number | null; telegram_handle: string | null } | undefined;
-
-  if (player) {
-    await startTtpokerDmFlow(chatId, player, gameId);
-    return;
-  }
-
-  // Unknown user — MVP: one question (pseudo), then create a minimal player via the
-  // existing upsertPlayerFromTelegram mechanic. The username is stashed in pending_cmd
-  // because the raw-message handler doesn't receive `from`.
-  setSession(chatId, "ttpoker_dm_waiting_name" as Step, null, from.id, from.username ?? null);
-  await sendMsg(chatId,
-    `🃏 <b>Bienvenue sur Le Cercle !</b>\n\n` +
-    `Avant de te présenter le deal TTPOKER, une question rapide :\n` +
-    `c'est quoi ton pseudo (ou prénom) ?`
-  );
-}
-
-async function startTtpokerDmFlow(
-  chatId: number,
-  player: { id: number; name: string; telegram_id: number | null; telegram_handle: string | null },
-  gameId: number,
-) {
-  const db = getDb();
-
-  // Dedup: wallets + deal already in place → no re-flow.
-  const existingDeal = getTtpokerDeal(player.id);
-  const hasWallets = getPlayerGameWallets(player.id, gameId).length > 0
-    || getPlayerCashouts(player.id, gameId).length > 0;
-  if (existingDeal && hasWallets) {
-    await sendMsg(chatId,
-      `✅ <b>${player.name}</b>, TTPOKER est déjà configuré pour toi !\n\n` +
-      `Questions ? → @baki77777`
-    );
-    return;
-  }
-
-  // Existing deal kept as-is; otherwise the game's default. sendTtpokerPitch upserts
-  // with this exact value, so re-pitching an existing deal is a no-op on the %.
-  const defaultPct = (db.prepare(`SELECT default_action_pct FROM games WHERE id = ?`).get(gameId) as { default_action_pct: number | null } | undefined)?.default_action_pct
-    ?? TTPOKER_DEFAULT_ACTION_PCT;
-  const pct = existingDeal?.action_pct ?? defaultPct;
-
-  await sendTtpokerPitch(chatId, player.id, player, pct, undefined);
-}
-
-// Raw handler for the pseudo question (unknown user). Runs BEFORE the generic
-// "session must have a player_id" guard in helpers.handleRawMessage.
-export async function handleTtpokerDmNameRawMessage(
-  text: string,
-  chatId: number,
-  session: { step: Step; player_id: number | null; expected_tg_id: number | null; pending_cmd?: string | null },
-): Promise<boolean> {
-  if (session.step !== ("ttpoker_dm_waiting_name" as Step)) return false;
-
-  const name = text.trim().replace(/\s+/g, " ").slice(0, 60);
-  if (name.length < 2) {
-    await sendMsg(chatId, `❌ Envoie un pseudo d'au moins 2 caractères.`);
-    return true;
-  }
-  if (!session.expected_tg_id) {
-    await sendMsg(chatId, `❌ Erreur interne. Relance le lien ou contacte @baki77777`);
-    return true;
-  }
-
-  const gameId = getTtpokerGameId();
-  if (!gameId) {
-    await sendMsg(chatId, `❌ Erreur interne (game TTPOKER introuvable). Contacte @baki77777`);
-    return true;
-  }
-
-  const handle = session.pending_cmd ?? null;
-  const { id: playerId, isNew } = upsertPlayerFromTelegram({
-    telegram_id: session.expected_tg_id,
-    name,
-    telegram_handle: handle,
-    joined_via: "ttpoker_deeplink",
-  });
-  getDb().prepare(`UPDATE players SET telegram_chat_id = ? WHERE id = ?`).run(String(chatId), playerId);
-
-  if (isNew) {
-    await sendMsg(AGENT_CHAT_ID,
-      `🆕 <b>Player créé via deep link TTPOKER</b>\n` +
-      `👤 <b>${name}</b>${handle ? ` (@${handle})` : ""}\n` +
-      `🆔 TG: <code>${session.expected_tg_id}</code>`
-    );
-  }
-
-  const player = getDb().prepare(
-    `SELECT id, name, telegram_id, telegram_handle FROM players WHERE id = ?`
-  ).get(playerId) as { id: number; name: string; telegram_id: number | null; telegram_handle: string | null };
-
-  await sendMsg(chatId, `Enchanté <b>${name}</b> 🤝`);
-  await startTtpokerDmFlow(chatId, player, gameId);
-  return true;
 }
 
 export async function handleTtpokerCallback(

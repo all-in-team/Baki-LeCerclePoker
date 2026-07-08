@@ -61,42 +61,19 @@ export async function handleStart(chatId: number, fromId: number, fromName: stri
     return;
   }
 
-  // OKPOKER deep link — DM-only flow (chatId === fromId in a private chat), no group
-  // creation: pitch + wallets happen directly in the DM. The player never chooses his
-  // % (existing deal kept, otherwise the game default). Typed in a group, it falls
-  // through to the normal /start behavior below.
-  if (payload === "okpoker" && chatId === fromId) {
-    const { handleOkpokerDeepLink } = await import("@/lib/games/okpoker/onboarding");
-    await handleOkpokerDeepLink(chatId, {
+  // OKPOKER / JVIP / TTPOKER deep links — lead capture ONLY (notif agent + message
+  // d'attente). L'onboarding réel se fait dans le groupe du joueur via /start<game>
+  // (% owner, pitch topic Onboarding) — voir game-deeplink-lead.ts pour l'historique
+  // du flow DM self-service retiré. Typed in a group, falls through to normal /start.
+  const leadGame = ({ okpoker: "OKPOKER", jvip: "JVIP", ttpoker: "TTPOKER" } as Record<string, string>)[payload ?? ""];
+  if (leadGame && chatId === fromId) {
+    const { handleGameDeepLinkLead } = await import("./game-deeplink-lead");
+    await handleGameDeepLinkLead(chatId, {
       id: fromId,
       first_name: from?.first_name ?? fromName,
       last_name: from?.last_name,
       username: from?.username,
-    });
-    return;
-  }
-
-  // JVIP deep link — same DM-only flow as OKPOKER (config-only clone).
-  if (payload === "jvip" && chatId === fromId) {
-    const { handleJvipDeepLink } = await import("@/lib/games/jvip/onboarding");
-    await handleJvipDeepLink(chatId, {
-      id: fromId,
-      first_name: from?.first_name ?? fromName,
-      last_name: from?.last_name,
-      username: from?.username,
-    });
-    return;
-  }
-
-  // TTPOKER deep link — same DM-only flow as OKPOKER/JVIP (config-only clone).
-  if (payload === "ttpoker" && chatId === fromId) {
-    const { handleTtpokerDeepLink } = await import("@/lib/games/ttpoker/onboarding");
-    await handleTtpokerDeepLink(chatId, {
-      id: fromId,
-      first_name: from?.first_name ?? fromName,
-      last_name: from?.last_name,
-      username: from?.username,
-    });
+    }, leadGame);
     return;
   }
 

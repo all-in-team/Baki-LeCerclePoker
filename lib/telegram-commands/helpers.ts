@@ -107,7 +107,7 @@ export async function askWalletGame(chatId: number | string, mention: string, me
 }
 
 // ── Session helpers ───────────────────────────────────────
-export type Step = "pitch_sent" | "solo_declined" | "contract_shown" | "signed_active" | "contract_questions" | "awaiting_wallet_address" | "onboarding_complete" | "awaiting_deposit_wallet" | "awaiting_cashout_wallet" | "wallets_complete" | "waiting_action_pct" | "waiting_game_action_pct" | "waiting_wallet_game" | "waiting_wallet_cashout" | "waiting_game" | "waiting_player" | "awaiting_human_response" | "kkpoker_pitch_sent" | "kkpoker_contract_shown" | "awaiting_kkpoker_cashout_wallet" | "awaiting_kkpoker_game_wallet" | "a5poker_pitch_sent" | "a5poker_contract_shown" | "a5poker_wallet_check" | "awaiting_a5poker_cashout_wallet" | "awaiting_a5poker_game_wallet" | "aks_awaiting_pct" | "waiting_aks_pct" | "aks_pitch_sent" | "aks_contract_shown" | "aks_wallet_check" | "awaiting_aks_cashout_wallet" | "awaiting_aks_game_wallet" | "nutspk_pitch_sent" | "nutspk_wallet_check" | "awaiting_nutspk_cashout_wallet" | "awaiting_nutspk_game_wallet" | "qqpk_pitch_sent" | "qqpk_wallet_check" | "awaiting_qqpk_cashout_wallet" | "awaiting_qqpk_game_wallet" | "affiliation_awaiting_handle" | "aapkmy_pitch_sent" | "aapkmy_waiting_id" | "aapkmy_waiting_proof" | "okpoker_pitch_sent" | "okpoker_wallet_check" | "awaiting_okpoker_cashout_wallet" | "awaiting_okpoker_game_wallet" | "okpoker_dm_waiting_name" | "jvip_pitch_sent" | "jvip_wallet_check" | "awaiting_jvip_cashout_wallet" | "awaiting_jvip_game_wallet" | "jvip_dm_waiting_name";
+export type Step = "pitch_sent" | "solo_declined" | "contract_shown" | "signed_active" | "contract_questions" | "awaiting_wallet_address" | "onboarding_complete" | "awaiting_deposit_wallet" | "awaiting_cashout_wallet" | "wallets_complete" | "waiting_action_pct" | "waiting_game_action_pct" | "waiting_wallet_game" | "waiting_wallet_cashout" | "waiting_game" | "waiting_player" | "awaiting_human_response" | "kkpoker_pitch_sent" | "kkpoker_contract_shown" | "awaiting_kkpoker_cashout_wallet" | "awaiting_kkpoker_game_wallet" | "a5poker_pitch_sent" | "a5poker_contract_shown" | "a5poker_wallet_check" | "awaiting_a5poker_cashout_wallet" | "awaiting_a5poker_game_wallet" | "aks_awaiting_pct" | "waiting_aks_pct" | "aks_pitch_sent" | "aks_contract_shown" | "aks_wallet_check" | "awaiting_aks_cashout_wallet" | "awaiting_aks_game_wallet" | "nutspk_pitch_sent" | "nutspk_wallet_check" | "awaiting_nutspk_cashout_wallet" | "awaiting_nutspk_game_wallet" | "qqpk_pitch_sent" | "qqpk_wallet_check" | "awaiting_qqpk_cashout_wallet" | "awaiting_qqpk_game_wallet" | "affiliation_awaiting_handle" | "aapkmy_pitch_sent" | "aapkmy_waiting_id" | "aapkmy_waiting_proof" | "okpoker_pitch_sent" | "okpoker_wallet_check" | "awaiting_okpoker_cashout_wallet" | "awaiting_okpoker_game_wallet" | "jvip_pitch_sent" | "jvip_wallet_check" | "awaiting_jvip_cashout_wallet" | "awaiting_jvip_game_wallet";
 
 export function getSession(chatId: string | number): { step: Step; player_id: number; expected_tg_id: number | null; pending_cmd: string | null } | null {
   return getDb().prepare(
@@ -418,28 +418,6 @@ export async function handleRawMessage(text: string, chatId: number, messageThre
     if (cmdType === "retrait") { await commandRegistry.handleTx?.("withdrawal", fullArgs, chatId); return; }
     if (cmdType === "reset")   { await commandRegistry.handleReset?.(fullArgs, chatId); return; }
     return;
-  }
-
-  // OKPOKER deep-link DM: unknown user typing his pseudo — the session has NO player_id
-  // yet (the player is created from this answer), so this MUST run before the guard below.
-  if (session.step === ("okpoker_dm_waiting_name" as Step)) {
-    const { handleOkpokerDmNameRawMessage } = await import("@/lib/games/okpoker/onboarding");
-    const handled = await handleOkpokerDmNameRawMessage(text, chatId, session);
-    if (handled) return;
-  }
-
-  // JVIP deep-link DM: same pre-guard rule as OKPOKER (player created from this answer).
-  if (session.step === ("jvip_dm_waiting_name" as Step)) {
-    const { handleJvipDmNameRawMessage } = await import("@/lib/games/jvip/onboarding");
-    const handled = await handleJvipDmNameRawMessage(text, chatId, session);
-    if (handled) return;
-  }
-
-  // TTPOKER deep-link DM: same pre-guard rule as OKPOKER/JVIP (player created from this answer).
-  if (session.step === ("ttpoker_dm_waiting_name" as Step)) {
-    const { handleTtpokerDmNameRawMessage } = await import("@/lib/games/ttpoker/onboarding");
-    const handled = await handleTtpokerDmNameRawMessage(text, chatId, session);
-    if (handled) return;
   }
 
   if (!session.player_id) { clearSession(chatId); return; }
