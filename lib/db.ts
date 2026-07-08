@@ -1865,4 +1865,26 @@ function initSchema(db: Database.Database) {
   } catch (err: any) {
     console.error(`[MIGRATION:add_ttpoker_game_v1] FAILED:`, err.message);
   }
+
+  // Duplicate CRM player "Paul" (id 10, no telegram) shares his cashout/game wallet
+  // addresses with the real "Paul ☀️" (id 45): the shared-wallet sync then imported
+  // each on-chain transfer under BOTH players (31 double-counted txs), and the
+  // one-owner-per-cashout guard blocks every wallet save on id 45. Baki: solve the
+  // address conflict. This removes id 10's WALLET REGISTRATIONS ONLY — his
+  // wallet_transactions / deals / settlement history is deliberately untouched
+  // (separate, explicitly-scoped cleanup if Baki wants the historical dedup).
+  try {
+    const fixPaul = db.prepare(`INSERT OR IGNORE INTO _applied_fixes (name) VALUES (?)`).run("cleanup_paul_duplicate_wallets_v1");
+    if (fixPaul.changes > 0) {
+      const co = db.prepare(`DELETE FROM player_wallet_cashouts WHERE player_id = 10`).run();
+      const gw = db.prepare(`DELETE FROM player_wallet_games WHERE player_id = 10`).run();
+      // Legacy TELE columns too — verified set in prod (tele_wallet_cashout holds the
+      // shared TTHWAph… address). TELE is archived so they are dormant, but nulling
+      // them removes the last registration of the shared addresses under id 10.
+      db.prepare(`UPDATE players SET tron_address = NULL, tele_wallet_cashout = NULL WHERE id = 10`).run();
+      console.log(`[MIGRATION] cleanup_paul_duplicate_wallets_v1 applied (${co.changes} cashouts, ${gw.changes} game wallets, legacy cols nulled)`);
+    }
+  } catch (err: any) {
+    console.error(`[MIGRATION:cleanup_paul_duplicate_wallets_v1] FAILED:`, err.message);
+  }
 }

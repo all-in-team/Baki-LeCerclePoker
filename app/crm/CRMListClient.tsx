@@ -290,7 +290,8 @@ export default function CRMListClient({ players, gamesByPlayer, dealsByPlayer, a
                 <button disabled={saving} onClick={async () => {
                   setSaving(true);
                   try {
-                    await fetch(`/api/players/${editPlayer.id}`, { method: "DELETE" });
+                    const res = await fetch(`/api/players/${editPlayer.id}`, { method: "DELETE" });
+                    if (!res.ok) { const d = await res.json().catch(() => ({})); alert(d.error ?? "Suppression refusée."); return; }
                     setEditPlayer(null); setConfirmDelete(false); router.refresh();
                   } catch (e: any) { alert("Erreur: " + (e.message ?? e)); }
                   finally { setSaving(false); }

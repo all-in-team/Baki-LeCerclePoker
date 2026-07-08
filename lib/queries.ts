@@ -52,7 +52,42 @@ export function updatePlayer(id: number, data: Partial<{ name: string; telegram_
 }
 
 export function deletePlayer(id: number) {
-  getDb().prepare(`DELETE FROM players WHERE id = ?`).run(id);
+  const db = getDb();
+  const tx = db.transaction(() => {
+    // Money-history guard: a player with financial history must NOT be hard-deleted —
+    // the ON DELETE CASCADE on wallet_transactions / player_game_deals / manual_settlements
+    // would silently wipe his ledger. Refuse with an explicit reason instead.
+    // (History: the old code was a bare DELETE that either nuked history or crashed on
+    // the FK of the six tables declared without ON DELETE — the CRM then swallowed the
+    // 500 and the player "reappeared" on refresh.)
+    const guards: [string, string][] = [
+      ["wallet_transactions", "transactions wallet"],
+      ["manual_settlements", "règlements manuels"],
+      ["weekly_settlements", "settlements hebdo"],
+      ["qqpk_staking_blocks", "blocs staking QQPK"],
+      ["grindhouse_settlements", "settlements grindhouse"],
+      ["grindhouse_expenses", "frais grindhouse"],
+      ["rakeback_entries", "lignes de rapport (rakeback)"],
+      ["accounting_entries", "écritures accounting (legacy)"],
+    ];
+    const blocking: string[] = [];
+    for (const [table, label] of guards) {
+      const n = (db.prepare(`SELECT COUNT(*) AS n FROM ${table} WHERE player_id = ?`).get(id) as { n: number }).n;
+      if (n > 0) blocking.push(`${n} ${label}`);
+    }
+    if (blocking.length > 0) {
+      throw new Error(`Suppression refusée : ce joueur a un historique financier (${blocking.join(", ")}). Archive-le (status) ou nettoie son historique d'abord — le supprimer effacerait son ledger.`);
+    }
+    // Referencing tables declared WITHOUT ON DELETE (would block the FK) — all non-money
+    // at this point thanks to the guard above.
+    db.prepare(`DELETE FROM grindhouse_sessions WHERE player_id = ?`).run(id);
+    db.prepare(`DELETE FROM grindhouse_grinders WHERE player_id = ?`).run(id);
+    db.prepare(`DELETE FROM qqpk_entry_log WHERE player_id = ?`).run(id);
+    db.prepare(`DELETE FROM qqpk_cycle_rakeback WHERE player_id = ?`).run(id);
+    db.prepare(`UPDATE affiliate_leads SET converted_player_id = NULL WHERE converted_player_id = ?`).run(id);
+    db.prepare(`DELETE FROM players WHERE id = ?`).run(id);
+  });
+  tx();
 }
 
 export function upsertPlayerFromTelegram(data: {

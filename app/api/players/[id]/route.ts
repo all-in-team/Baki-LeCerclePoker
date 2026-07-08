@@ -10,6 +10,12 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
 
 export async function DELETE(_: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-  deletePlayer(Number(id));
-  return NextResponse.json({ ok: true });
+  try {
+    deletePlayer(Number(id));
+    return NextResponse.json({ ok: true });
+  } catch (e: any) {
+    // Money-history guard or FK failure — surface the reason instead of a silent 500
+    // (the CRM used to swallow it and the player "reappeared" on refresh).
+    return NextResponse.json({ error: e.message }, { status: 409 });
+  }
 }
