@@ -1914,4 +1914,31 @@ function initSchema(db: Database.Database) {
   } catch (err: any) {
     console.error(`[MIGRATION:add_pending_game_pitches_v1] FAILED:`, err.message);
   }
+
+  // Player aliases (display-only MVP): two players sharing a cashout wallet address = same
+  // entity/team → grouped under an alias so the P&L views can mix their results. This is
+  // PRESENTATION ONLY — settlements stay per-player, the money engine is untouched. A player
+  // belongs to at most ONE alias (UNIQUE player_id), and once a member it is never moved
+  // automatically (stability). Detection = shared cashout address, union-find (lib/aliases.ts).
+  try {
+    const fix = db.prepare(`INSERT OR IGNORE INTO _applied_fixes (name) VALUES (?)`).run("add_player_aliases_v1");
+    if (fix.changes > 0) {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS player_aliases (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          label TEXT NOT NULL,
+          created_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+        CREATE TABLE IF NOT EXISTS player_alias_members (
+          alias_id INTEGER NOT NULL REFERENCES player_aliases(id) ON DELETE CASCADE,
+          player_id INTEGER NOT NULL UNIQUE REFERENCES players(id),
+          added_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+        CREATE INDEX IF NOT EXISTS idx_player_alias_members_alias ON player_alias_members(alias_id);
+      `);
+      console.log("[MIGRATION] add_player_aliases_v1 applied");
+    }
+  } catch (err: any) {
+    console.error(`[MIGRATION:add_player_aliases_v1] FAILED:`, err.message);
+  }
 }

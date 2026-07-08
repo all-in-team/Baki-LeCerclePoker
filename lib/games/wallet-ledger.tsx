@@ -11,6 +11,7 @@ import {
   type WalletMere,
 } from "@/lib/queries";
 import { getAvailableTransactions, getManualSettlementHistory, previewSettlement } from "@/lib/manual-settlement-engine";
+import { getAliasesForPlayers, type AliasInfo } from "@/lib/aliases";
 import { computePeriodFilter } from "@/lib/period-filter";
 import { getLast12Weeks } from "@/lib/date-utils";
 import { fmtKpiAmount } from "@/components/ledger/format";
@@ -61,6 +62,8 @@ export interface WalletLedgerData {
   settlementsByPlayer: Record<number, SettlementRow[]>;
   /** amount_due_usdt from previewSettlement over ALL unsettled tx (absent if none or preview !ok). */
   estimatedDueByPlayer: Record<number, number>;
+  /** Alias membership for the listed players (display-only "Vue alias"). Absent players have no alias. */
+  aliasByPlayer: Record<number, AliasInfo>;
 }
 
 export interface WalletLedgerGame {
@@ -161,6 +164,9 @@ export function loadWalletLedger(
     }
   }
 
+  // Alias membership (display-only) for the listed players — powers the "Vue alias" toggle.
+  const aliasByPlayer = getAliasesForPlayers(summaryByPlayer.map((r) => r.player_id));
+
   const myPnlAccent: "gold" | "red" = kpis.my_total_pnl >= 0 ? "gold" : "red";
   const netAccent: "green" | "red" | "neutral" = kpis.total_net > 0 ? "green" : kpis.total_net < 0 ? "red" : "neutral";
 
@@ -202,5 +208,6 @@ export function loadWalletLedger(
     availableByPlayer,
     settlementsByPlayer,
     estimatedDueByPlayer,
+    aliasByPlayer,
   };
 }

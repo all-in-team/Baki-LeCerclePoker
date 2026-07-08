@@ -76,6 +76,8 @@ ${gameLines.join("\n")}
 - Extras agency (agency_extras, colonne game_key) : wins/fees one-off par jeu, inclus automatiquement dans les totaux.
 - Total agency (getAgencyTotalPnL) = jeux wallet AGENCY_GAMES + wepoker + extras + grindhouse. Positif = je gagne.
 
+**Alias joueurs (display-only)** : deux joueurs qui enregistrent la MÊME adresse de wallet de retrait (player_wallet_cashouts) = même entité/team → groupés sous un alias (tables player_aliases + player_alias_members, un joueur = 1 alias max). C'est de l'AFFICHAGE seulement : les settlements et la math restent PAR JOUEUR, rien n'est fusionné côté argent. Les pages P&L ont un toggle "Vue alias" qui somme net/agency des membres. Détection = union-find sur adresse cashout partagée (lib/aliases.ts), au sync + bouton "Re-scanner". Les joueurs opérateur (Hugo/Baki) sont exclus. **Si on te demande le P&L d'un joueur membre d'un alias → donne le chiffre du JOUEUR ET mentionne l'alias (les autres membres partagent sa wallet de retrait), sans additionner sauf demande explicite.**
+
 **Settlements — 2 systèmes** :
 - ACTUEL (wallet games) : **manual_settlements** — Baki sélectionne des tx sur la page ledger, lock → net_selected_usdt, action_pct_applied (snapshot du deal), amount_due_usdt = net × pct/100, status 'locked' → 'paid' (tx_hash, paid_at). Games : KKPOKER, A5NUTS (game_id = A5POKER), AKS/OK (game_id = AKS), JVIP, TTPOKER.
 - LEGACY : weekly_settlements + weekly_settlement_periods (système hebdo AKPOKER/ancien flux, période locked = immutable). Les outils weekly_settlement_summary / get_unpaid_settlements lisent ce legacy.

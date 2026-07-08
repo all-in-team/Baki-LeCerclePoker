@@ -5,7 +5,9 @@ import { fmtSignedAmount } from "@/components/ledger/format";
 import PlayerWalletsPanel, { WalletBadgeButton, type WalletAddr } from "@/components/ledger/extras/PlayerWalletsPanel";
 import SettlementFlow, { dueLabel, type AvailableTx, type SettlementRow, type SettlementPreview } from "@/components/ledger/extras/SettlementFlow";
 import Btn from "@/components/Btn";
-import { Scale, Search, ChevronDown, ChevronUp } from "lucide-react";
+import { Scale, Search, ChevronDown, ChevronUp, Users } from "lucide-react";
+
+export interface AliasInfo { alias_id: number; label: string; member_ids: number[] }
 
 /**
  * Generic ledger table — the per-player rows of a wallet-based action game on
@@ -41,6 +43,7 @@ export default function LedgerTable({
   showSettlementPreview = true,
   walletsReadOnly = false,
   headerNote,
+  aliasByPlayer,
 }: {
   rows: LedgerTableRow[];
   gameLabel: string;
@@ -50,6 +53,8 @@ export default function LedgerTable({
   availableByPlayer: Record<number, AvailableTx[]>;
   settlementsByPlayer: Record<number, SettlementRow[]>;
   estimatedDueByPlayer: Record<number, number>;
+  /** Alias membership (display-only "Vue alias"). Absent → toggle hidden. */
+  aliasByPlayer?: Record<number, AliasInfo>;
   previewAction: (playerId: number, txIds: number[]) => Promise<SettlementPreview>;
   lockAction?: (playerId: number, txIds: number[]) => Promise<{ ok: boolean; error?: string }>;
   markPaidAction?: (settlementId: number, txHash?: string) => Promise<{ ok: boolean; error?: string }>;
@@ -71,6 +76,23 @@ export default function LedgerTable({
   const [search, setSearch] = useState("");
   const [sortKey, setSortKey] = useState<SortKey>("my_pnl");
   const [sortDir, setSortDir] = useState<1 | -1>(-1); // -1 = desc (default, matches prod my_pnl desc)
+  const [aliasView, setAliasView] = useState(false); // default OFF → OFF render is byte-identical to prod
+  const [aliasExpanded, setAliasExpanded] = useState<number | null>(null);
+  const [rescanning, setRescanning] = useState(false);
+
+  const hasAliases = !!aliasByPlayer && Object.keys(aliasByPlayer).length > 0;
+
+  async function rescanAliases() {
+    setRescanning(true);
+    try { await fetch("/api/aliases/rescan", { method: "POST" }); window.location.reload(); }
+    finally { setRescanning(false); }
+  }
+  async function renameAlias(aliasId: number, current: string) {
+    const label = window.prompt("Nouveau nom de l'alias :", current);
+    if (!label || !label.trim()) return;
+    await fetch("/api/aliases/rename", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ alias_id: aliasId, label: label.trim() }) });
+    window.location.reload();
+  }
 
   function toggleSort(key: SortKey) {
     if (sortKey === key) { setSortDir(d => (d === 1 ? -1 : 1)); }
@@ -92,6 +114,51 @@ export default function LedgerTable({
       return cmp * sortDir;
     });
   }, [rows, search, sortKey, sortDir, estimatedDueByPlayer]);
+
+  // Alias view (display-only): merge members of an alias into one summed row. Non-members
+  // stay as normal rows. Pure addition of the server-computed net/my_pnl/due — no new math.
+  type AliasUnit =
+    | { kind: "alias"; alias_id: number; label: string; members: LedgerTableRow[]; net: number; my_pnl: number; due: number }
+    | { kind: "solo"; row: LedgerTableRow };
+  const aliasUnits = useMemo<AliasUnit[] | null>(() => {
+    if (!aliasView || !aliasByPlayer) return null;
+    const groups = new Map<number, { label: string; members: LedgerTableRow[] }>();
+    const solos: LedgerTableRow[] = [];
+    for (const r of displayed) {
+      const a = aliasByPlayer[r.player_id];
+      if (a) {
+        if (!groups.has(a.alias_id)) groups.set(a.alias_id, { label: a.label, members: [] });
+        groups.get(a.alias_id)!.members.push(r);
+      } else solos.push(r);
+    }
+    const units: AliasUnit[] = [];
+    for (const [alias_id, g] of groups) {
+      units.push({
+        kind: "alias", alias_id, label: g.label, members: g.members,
+        net: g.members.reduce((s, m) => s + m.net, 0),
+        my_pnl: g.members.reduce((s, m) => s + m.my_pnl, 0),
+        due: g.members.reduce((s, m) => s + (estimatedDueByPlayer[m.player_id] ?? 0), 0),
+      });
+    }
+    for (const row of solos) units.push({ kind: "solo", row });
+    const uval = (u: AliasUnit): number | string => {
+      if (u.kind === "alias") {
+        if (sortKey === "name") return u.label.toLowerCase();
+        if (sortKey === "net") return u.net;
+        if (sortKey === "due") return u.due;
+        return u.my_pnl;
+      }
+      if (sortKey === "name") return u.row.player_name.toLowerCase();
+      if (sortKey === "net") return u.row.net;
+      if (sortKey === "due") return estimatedDueByPlayer[u.row.player_id] ?? 0;
+      return u.row.my_pnl;
+    };
+    return units.sort((a, b) => {
+      const va = uval(a), vb = uval(b);
+      const cmp = typeof va === "string" ? va.localeCompare(vb as string) : (va as number) - (vb as number);
+      return cmp * sortDir;
+    });
+  }, [aliasView, aliasByPlayer, displayed, sortKey, sortDir, estimatedDueByPlayer]);
 
   const COLS = 7;
   const nbToSettle = rows.filter(r => (availableByPlayer[r.player_id]?.length ?? 0) > 0).length;
@@ -116,6 +183,21 @@ export default function LedgerTable({
         {showSettlementPreview && nbToSettle > 0 && <span style={{ fontSize: 11, fontWeight: 700, color: "#F5C518", background: "rgba(245,197,24,0.12)", border: "1px solid rgba(245,197,24,0.3)", padding: "2px 8px", borderRadius: 10 }}>{nbToSettle} à régler</span>}
         {nbLocked > 0 && <span style={{ fontSize: 11, fontWeight: 700, color: "#10B981", background: "rgba(16,185,129,0.12)", border: "1px solid rgba(16,185,129,0.3)", padding: "2px 8px", borderRadius: 10 }}>{nbLocked} à payer</span>}
         <div style={{ flex: 1 }} />
+        {hasAliases && (
+          <>
+            <button
+              onClick={() => setAliasView(v => !v)}
+              title="Grouper les joueurs qui partagent une wallet de retrait (affichage seulement, règlements par joueur)"
+              style={{ display: "inline-flex", alignItems: "center", gap: 6, background: aliasView ? "rgba(139,92,246,0.15)" : "var(--bg-surface)", border: `1px solid ${aliasView ? "rgba(139,92,246,0.5)" : "var(--border)"}`, borderRadius: 7, padding: "5px 10px", fontSize: 12, fontWeight: 600, color: aliasView ? "#a78bfa" : "var(--text-muted)", cursor: "pointer" }}>
+              <Users size={12} /> Vue alias {aliasView ? "ON" : "OFF"}
+            </button>
+            {aliasView && (
+              <button onClick={rescanAliases} disabled={rescanning} title="Re-scanner les wallets partagées pour (re)créer les alias" style={{ background: "var(--bg-surface)", border: "1px solid var(--border)", borderRadius: 7, padding: "5px 10px", fontSize: 12, fontWeight: 600, color: "var(--text-muted)", cursor: rescanning ? "default" : "pointer", opacity: rescanning ? 0.6 : 1 }}>
+                {rescanning ? "Scan…" : "Re-scanner"}
+              </button>
+            )}
+          </>
+        )}
         <span style={{ display: "inline-flex", alignItems: "center", gap: 6, background: "var(--bg-surface)", border: "1px solid var(--border)", borderRadius: 7, padding: "5px 10px" }}>
           <Search size={12} color="var(--text-dim)" />
           <input
@@ -146,7 +228,44 @@ export default function LedgerTable({
               <tr><td colSpan={COLS} style={{ padding: 32, textAlign: "center", color: "var(--text-dim)", fontSize: 13 }}>
                 {search ? `Aucun joueur ne correspond à « ${search} »` : `Aucun joueur ${gameLabel} — ajoute un deal à un joueur depuis son profil`}
               </td></tr>
-            ) : displayed.map(row => {
+            ) : aliasUnits ? aliasUnits.map(unit => {
+              if (unit.kind === "solo") return renderPlayerRow(unit.row);
+              const isExp = aliasExpanded === unit.alias_id;
+              const netC = unit.net > 0 ? "var(--green)" : unit.net < 0 ? "#f87171" : "rgba(255,255,255,0.15)";
+              const myC = unit.my_pnl > 0 ? "var(--green)" : unit.my_pnl < 0 ? "#f87171" : "rgba(255,255,255,0.15)";
+              return (
+                <Fragment key={`alias-${unit.alias_id}`}>
+                  <tr style={{ borderBottom: isExp ? "none" : "1px solid var(--border)", background: "rgba(139,92,246,0.05)" }}>
+                    <td style={{ padding: "12px 16px", fontSize: 13, fontWeight: 700, color: "var(--text)" }}>
+                      <span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
+                        <button onClick={() => setAliasExpanded(isExp ? null : unit.alias_id)} title={isExp ? "Réduire" : "Voir les joueurs"} style={{ display: "inline-flex", alignItems: "center", background: "transparent", border: "none", cursor: "pointer", color: "#a78bfa", padding: 0 }}>
+                          {isExp ? <ChevronUp size={15} /> : <ChevronDown size={15} />}
+                        </button>
+                        <Users size={13} color="#a78bfa" />
+                        <span>{unit.label}</span>
+                        <span style={{ fontSize: 10, fontWeight: 700, color: "#a78bfa", background: "rgba(139,92,246,0.12)", border: "1px solid rgba(139,92,246,0.3)", padding: "1px 7px", borderRadius: 10 }}>×{unit.members.length} joueurs</span>
+                        <button onClick={() => renameAlias(unit.alias_id, unit.label)} title="Renommer l'alias" style={{ background: "transparent", border: "none", cursor: "pointer", color: "var(--text-dim)", fontSize: 11, padding: 0 }}>✏️</button>
+                      </span>
+                    </td>
+                    <td style={{ padding: "12px 16px", fontSize: 13, fontWeight: 700, color: netC }}>{unit.net === 0 ? "—" : fmtSignedAmount(unit.net)}</td>
+                    <td style={{ padding: "12px 16px", fontSize: 14, fontWeight: 700, color: myC }}>{unit.my_pnl === 0 ? "—" : fmtSignedAmount(unit.my_pnl)}</td>
+                    <td style={{ padding: "12px 16px", fontSize: 12, color: "var(--text-dim)" }}>—</td>
+                    <td style={{ padding: "12px 16px", fontSize: 12, color: "var(--text-dim)" }}>—</td>
+                    <td style={{ padding: "12px 16px", fontSize: 12, color: "var(--text-dim)" }}>—</td>
+                    <td style={{ padding: "12px 16px", textAlign: "center", fontSize: 10, color: "var(--text-dim)", fontStyle: "italic" }}>règlements par joueur ↴</td>
+                  </tr>
+                  {isExp && unit.members.map(m => renderPlayerRow(m, true))}
+                </Fragment>
+              );
+            }) : displayed.map(row => renderPlayerRow(row))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+
+  function renderPlayerRow(row: LedgerTableRow, nested = false) {
+    {
               const netC = row.net > 0 ? "var(--green)" : row.net < 0 ? "#f87171" : "rgba(255,255,255,0.15)";
               const myC = row.my_pnl > 0 ? "var(--green)" : row.my_pnl < 0 ? "#f87171" : "rgba(255,255,255,0.15)";
               const gw = gameWalletsByPlayer[row.player_id] ?? [];
@@ -160,7 +279,7 @@ export default function LedgerTable({
               const rowOpen = isWalletOpen || isSettleOpen;
               return (
                 <Fragment key={row.player_id}>
-                  <tr style={{ borderBottom: rowOpen ? "none" : "1px solid var(--border)", background: avail.length > 0 ? "rgba(245,197,24,0.04)" : undefined }}>
+                  <tr style={{ borderBottom: rowOpen ? "none" : "1px solid var(--border)", background: avail.length > 0 ? "rgba(245,197,24,0.04)" : (nested ? "rgba(139,92,246,0.03)" : undefined) }}>
                     <td style={{ padding: "12px 16px", fontSize: 13, fontWeight: 600, color: "var(--text)" }}>
                       <span style={{ display: "inline-flex", alignItems: "center", gap: 7 }}>
                         <WalletBadgeButton count={walletCount} isOpen={isWalletOpen} onClick={() => { setSettleOpen(null); setWalletOpen(isWalletOpen ? null : row.player_id); }} />
@@ -223,10 +342,6 @@ export default function LedgerTable({
                   )}
                 </Fragment>
               );
-            })}
-          </tbody>
-        </table>
-      </div>
-    </div>
-  );
+    }
+  }
 }

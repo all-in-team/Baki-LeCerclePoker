@@ -238,6 +238,15 @@ export async function POST(req: NextRequest) {
     }
   }
 
+  // Display-only: refresh player aliases (shared cashout wallets → same entity). Runs AFTER
+  // all money logic, writes only to the alias tables, never blocks the sync response.
+  try {
+    const { detectAliases } = await import("@/lib/aliases");
+    detectAliases();
+  } catch (e: any) {
+    console.warn("[SYNC] detectAliases failed (non-blocking):", e?.message ?? e);
+  }
+
   return NextResponse.json({
     ok: true,
     imported: totalDeposits + totalCashouts,
