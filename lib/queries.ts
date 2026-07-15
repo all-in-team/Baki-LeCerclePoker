@@ -2593,6 +2593,38 @@ function getQqpkCycleNet(playerId: number, startIso: string, endIso: string): nu
   return r?.net ?? 0;
 }
 
+export interface QqpkCycleTx {
+  id: number;
+  tx_datetime: string | null;
+  tx_date: string;
+  type: "deposit" | "withdrawal";
+  amount: number;
+  source: string | null;
+  tron_tx_hash: string | null;
+}
+
+// The transactions composing a cycle's résultat — DISPLAY-ONLY (never feeds the
+// engine/settlement/lock). Filters mirror getWalletSummaryByPlayer's join for QQPK
+// exactly (source != 'unknown', deal start/end bounds, tx_datetime window) so that
+// Σ(withdrawals − deposits) of this list == the resultat_periode shown next to it
+// for the ACTIVE cycle. Settled views re-query live over the stored block window:
+// a tx imported after settle could appear in the list while the footer keeps the
+// frozen engine snapshot (correct — the settled number is immutable).
+export function getQqpkCycleTransactions(playerId: number, startIso: string, endIso: string): QqpkCycleTx[] {
+  return getDb().prepare(`
+    SELECT wt.id, wt.tx_datetime, wt.tx_date, wt.type, wt.amount, wt.source, wt.tron_tx_hash
+    FROM wallet_transactions wt
+    JOIN games g ON g.id = wt.game_id AND g.name = 'QQPK'
+    JOIN player_game_deals pgd ON pgd.player_id = wt.player_id AND pgd.game_id = g.id
+    WHERE wt.player_id = ?
+      AND (wt.source IS NULL OR wt.source != 'unknown')
+      AND (pgd.start_date IS NULL OR wt.tx_datetime >= pgd.start_date)
+      AND (pgd.end_date IS NULL OR wt.tx_datetime <= pgd.end_date)
+      AND wt.tx_datetime >= ? AND wt.tx_datetime <= ?
+    ORDER BY wt.tx_datetime ASC, wt.id ASC
+  `).all(playerId, startIso, endIso) as QqpkCycleTx[];
+}
+
 // Pure projection of the active cycle for one player: net + stored mains + RESET-SEC carry
 // (always 0/0) → engine. Two views of the same inputs:
 //   • RÉEL (computeStakingBlock, is_final_settlement=true) == what settling now produces
@@ -2874,8 +2906,9 @@ export function getQqpkStakingOverview(): { rows: QqpkStakingRow[] } {
   return { rows };
 }
 
-// History: all settled cycles, newest first.
-export function getQqpkBlockHistory(): (QqpkStakingRow & { settled_at: string | null })[] {
+// History: all settled cycles, newest first. block_start/block_end = the settled
+// cycle's UTC ISO bounds, exposed so the tx-detail view can query the same window.
+export function getQqpkBlockHistory(): (QqpkStakingRow & { settled_at: string | null; block_start: string | null; block_end: string | null })[] {
   const rows = getDb().prepare(
     `SELECT b.*, p.name AS player_name
      FROM qqpk_staking_blocks b
@@ -2899,6 +2932,8 @@ export function getQqpkBlockHistory(): (QqpkStakingRow & { settled_at: string | 
     // Past cycles keep the RB entered while they were active (no destructive reset).
     rb_manual: rbMap.get(`${b.player_id}|${b.block_month}`) ?? 0,
     settled_at: b.updated_at ?? b.created_at ?? null,
+    block_start: b.block_start ?? null,
+    block_end: b.block_end ?? null,
   }));
 }
 
