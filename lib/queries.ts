@@ -815,6 +815,28 @@ export function getAllWalletMereAddressesAnyStatus(): Set<string> {
   return new Set(rows.map(r => r.address.toLowerCase()));
 }
 
+// Each player's OWN cashout addresses (all games + legacy TELE column), lowercased.
+// Exception to the Pass 1 skip rule above: money arriving on a game wallet FROM the
+// player's own cashout address is the player re-injecting his cashed-out funds — a
+// real buy-in, even when that address is (also) registered in wallet_meres. (Baki
+// 2026-07-15: TJLB… is Max's cashout address; its dual registration as retired KK
+// mère made the sync silently skip 10 real AKS buy-ins.)
+export function getOwnCashoutAddrsByPlayer(): Map<number, Set<string>> {
+  const rows = getDb().prepare(`
+    SELECT player_id, address FROM player_wallet_cashouts
+    UNION
+    SELECT id AS player_id, tele_wallet_cashout AS address FROM players
+    WHERE tele_wallet_cashout IS NOT NULL AND tele_wallet_cashout != ''
+  `).all() as { player_id: number; address: string }[];
+  const map = new Map<number, Set<string>>();
+  for (const r of rows) {
+    let set = map.get(r.player_id);
+    if (!set) map.set(r.player_id, (set = new Set()));
+    set.add(r.address.toLowerCase());
+  }
+  return map;
+}
+
 export function listAllWalletMeres(): WalletMere[] {
   return getDb().prepare(`
     SELECT wm.id, wm.address, wm.label, wm.game_id, wm.status, wm.retired_at, wm.created_at, g.name AS game_name
@@ -1099,6 +1121,26 @@ export function insertWalletTransactionByHash(data: {
 }) {
   const db = getDb();
   const params = { note: "auto-sync", counterparty_address: null, ...data };
+  // Reassignment guard (money-critical): an on-chain tx already attributed to
+  // ANOTHER player is never imported a second time. When a game wallet changes
+  // owner, its history stays with the owner of the time — only NEW txs land on
+  // the new owner. The UNIQUE index is (tron_tx_hash, player_id), so without
+  // this check a re-registered address re-imports its full history under the
+  // new player. (History 2026-07-14: 3 AKS wallets moved Paul ☀️ → Max Legreen
+  // duplicated 1 800 USDT of Paul's already-settled buy-ins under Max.)
+  const dup = db.prepare(
+    `SELECT 1 FROM wallet_transactions WHERE tron_tx_hash = ? AND player_id != ? LIMIT 1`
+  ).get(params.tron_tx_hash, params.player_id);
+  if (dup) {
+    if (params.counterparty_address) {
+      db.prepare(`
+        UPDATE wallet_transactions
+        SET counterparty_address = @counterparty_address
+        WHERE tron_tx_hash = @tron_tx_hash AND counterparty_address IS NULL
+      `).run(params);
+    }
+    return 0;
+  }
   // First: try insert. INSERT OR IGNORE returns 0 changes on conflict (existing hash).
   const ins = db.prepare(`
     INSERT OR IGNORE INTO wallet_transactions (player_id, game_id, type, amount, currency, tx_date, tx_datetime, tron_tx_hash, counterparty_address, note, source)

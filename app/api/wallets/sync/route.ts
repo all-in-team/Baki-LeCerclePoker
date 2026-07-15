@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getDb } from "@/lib/db";
-import { insertWalletTransactionByHash, getActiveWalletMeresForGame, getAllWalletMereAddressesAnyStatus, getAllGameWalletsByPlayer, getAllCashoutsByPlayer, getPlayersOnGame, isGameArchived } from "@/lib/queries";
+import { insertWalletTransactionByHash, getActiveWalletMeresForGame, getAllWalletMereAddressesAnyStatus, getAllGameWalletsByPlayer, getAllCashoutsByPlayer, getOwnCashoutAddrsByPlayer, getPlayersOnGame, isGameArchived } from "@/lib/queries";
 
 const USDT_CONTRACT = "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t";
 
@@ -114,6 +114,12 @@ export async function POST(req: NextRequest) {
   // player deposit (history: retired KKPOKER mère funding a player's OKPOKER/AKS
   // game wallets got imported as 8 phantom deposits).
   const allMereAddrs = getAllWalletMereAddressesAnyStatus();
+  // …EXCEPT when the sending address is the player's OWN registered cashout wallet:
+  // that's the player re-injecting his cashed-out funds = a real buy-in (Baki
+  // 2026-07-15, TJLB…/Max case — dual-registered as retired KK mère AND Max's
+  // cashout; 10 real AKS buy-ins were silently skipped). An active mère of THIS
+  // game still wins (fromGameMere → withdrawal) even if also registered as cashout.
+  const ownCashoutsByPlayer = getOwnCashoutAddrsByPlayer();
 
   // Build game-wallet map: player_id → [address, ...] (deduped by lowercase)
   const gameWalletEntries = getAllGameWalletsByPlayer(gameName);
@@ -157,7 +163,9 @@ export async function POST(req: NextRequest) {
           // other game's cashout (its own sync imports it via Pass 2) — importing
           // it here would stamp it with the wrong game_id. It is not a deposit
           // either (operator money, not player funding), so skip entirely.
-          if (!fromGameMere && allMereAddrs.has(fromLower)) {
+          // Exception: the player's own cashout address (see ownCashoutsByPlayer).
+          const fromOwnCashout = ownCashoutsByPlayer.get(player.id)?.has(fromLower) ?? false;
+          if (!fromGameMere && allMereAddrs.has(fromLower) && !fromOwnCashout) {
             skippedFromMere++;
             console.warn(`[SYNC ${gameName}] skip tx ${tx.transaction_id}: from mère ${fromLower.slice(0, 10)}… (another game or retired) → not a ${gameName} tx (player=${player.name})`);
             continue;
