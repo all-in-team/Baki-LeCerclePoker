@@ -1952,8 +1952,8 @@ function initSchema(db: Database.Database) {
   try {
     const fix = db.prepare(`INSERT OR IGNORE INTO _applied_fixes (name) VALUES (?)`).run("dedup_aks_paul_max_reassigned_deposits_v1");
     if (fix.changes > 0) {
-      const r = db.prepare(`
-        DELETE FROM wallet_transactions
+      const dupFilter = `
+        SELECT id FROM wallet_transactions
         WHERE player_id = 29 AND type = 'deposit' AND source = 'sync'
           AND settled = 0 AND settlement_id IS NULL
           AND tron_tx_hash IN (
@@ -1961,9 +1961,16 @@ function initSchema(db: Database.Database) {
             'd8ede9a44923cf5785ea228cca53d5a661eb472712fd65909bd3128452ed5fca',
             '7225dd6876a649635509bea6529b015eac49acde132db3bcad0df776745ea8dd',
             '214fd6754b186d3180d28f0f2a85fca96c95bdb371dad6b77d44a9e562b959bf'
-          )
-      `).run();
-      console.log(`[MIGRATION] dedup_aks_paul_max_reassigned_deposits_v1 applied (${r.changes} rows deleted, expected 4)`);
+          )`;
+      const tx = db.transaction(() => {
+        // weekly_settlement_tx_overrides has a FK on wallet_transactions with no ON
+        // DELETE: an override on a dupe row would abort the DELETE while the
+        // _applied_fixes marker is already consumed. Purge overrides first.
+        const ov = db.prepare(`DELETE FROM weekly_settlement_tx_overrides WHERE wallet_transaction_id IN (${dupFilter})`).run();
+        const r = db.prepare(`DELETE FROM wallet_transactions WHERE id IN (${dupFilter})`).run();
+        console.log(`[MIGRATION] dedup_aks_paul_max_reassigned_deposits_v1 applied (${r.changes} rows deleted, expected 4; ${ov.changes} overrides purged)`);
+      });
+      tx();
     }
   } catch (err: any) {
     console.error(`[MIGRATION:dedup_aks_paul_max_reassigned_deposits_v1] FAILED:`, err.message);
