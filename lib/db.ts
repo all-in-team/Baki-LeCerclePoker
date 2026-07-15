@@ -1941,4 +1941,31 @@ function initSchema(db: Database.Database) {
   } catch (err: any) {
     console.error(`[MIGRATION:add_player_aliases_v1] FAILED:`, err.message);
   }
+
+  // 3 AKS game wallets moved Paul ☀️ (45) → Maxime Legreen (29) on 2026-07-14: the next
+  // sync re-imported the addresses' full history under Max — his 4 rows below duplicate
+  // Paul's 4 buy-ins of 2026-07-13 (3×500 + 300 USDT), already settled under Paul.
+  // Delete Max's unsettled copies only, keyed by hash + player, guarded settled=0 and
+  // settlement_id IS NULL so a settlement done in the meantime is never touched. The
+  // reassignment guard in insertWalletTransactionByHash keeps the next sync from
+  // recreating them (hashes stay attributed to Paul).
+  try {
+    const fix = db.prepare(`INSERT OR IGNORE INTO _applied_fixes (name) VALUES (?)`).run("dedup_aks_paul_max_reassigned_deposits_v1");
+    if (fix.changes > 0) {
+      const r = db.prepare(`
+        DELETE FROM wallet_transactions
+        WHERE player_id = 29 AND type = 'deposit' AND source = 'sync'
+          AND settled = 0 AND settlement_id IS NULL
+          AND tron_tx_hash IN (
+            'dc6da59ddab1d786bbf393168c6d1000935174c3b745d8b3433c58a25e129bc4',
+            'd8ede9a44923cf5785ea228cca53d5a661eb472712fd65909bd3128452ed5fca',
+            '7225dd6876a649635509bea6529b015eac49acde132db3bcad0df776745ea8dd',
+            '214fd6754b186d3180d28f0f2a85fca96c95bdb371dad6b77d44a9e562b959bf'
+          )
+      `).run();
+      console.log(`[MIGRATION] dedup_aks_paul_max_reassigned_deposits_v1 applied (${r.changes} rows deleted, expected 4)`);
+    }
+  } catch (err: any) {
+    console.error(`[MIGRATION:dedup_aks_paul_max_reassigned_deposits_v1] FAILED:`, err.message);
+  }
 }
