@@ -1975,4 +1975,34 @@ function initSchema(db: Database.Database) {
   } catch (err: any) {
     console.error(`[MIGRATION:dedup_aks_paul_max_reassigned_deposits_v1] FAILED:`, err.message);
   }
+
+  // Same reassignment dedup, Hugo Roine (1) → Sacha Bouaziz (31) on AKS: 3 deposits of
+  // 2026-07-10 (3×500 USDT, funded from Hugo's cashout wallet TUMXxSL6…) were re-imported
+  // under Sacha when the game wallets moved to him — they are Hugo's stakes, not Sacha's
+  // buy-ins (Baki 2026-07-16: "ce n'était pas de lui, j'ai utilisé ma wallet cashout").
+  // Delete Sacha's copies only; Hugo's originals stay (consistent with his 27 other
+  // TUMXxSL6-funded deposits). The reassignment guard blocks any re-import under Sacha.
+  try {
+    const fix = db.prepare(`INSERT OR IGNORE INTO _applied_fixes (name) VALUES (?)`).run("dedup_aks_hugo_sacha_reassigned_deposits_v1");
+    if (fix.changes > 0) {
+      const dupFilter = `
+        SELECT id FROM wallet_transactions
+        WHERE player_id = 31 AND type = 'deposit' AND source = 'sync'
+          AND settled = 0 AND settlement_id IS NULL
+          AND tron_tx_hash IN (
+            'ea5ce1222512e2c8f3675622fe9b186cdd46d5e164dfeff91de5cf24fe573ffb',
+            '576733e9fffcbb9ad15b930505d0aff3ac7f9cad793331cc30da6e44d0681ab6',
+            'fa9ca28adf77b3ffdc3a2a4f89a6212cee7d43ebbf73e97a65bc2d355f684a40'
+          )`;
+      const tx = db.transaction(() => {
+        // Same FK precaution as the Paul→Max dedup above: purge overrides first.
+        const ov = db.prepare(`DELETE FROM weekly_settlement_tx_overrides WHERE wallet_transaction_id IN (${dupFilter})`).run();
+        const r = db.prepare(`DELETE FROM wallet_transactions WHERE id IN (${dupFilter})`).run();
+        console.log(`[MIGRATION] dedup_aks_hugo_sacha_reassigned_deposits_v1 applied (${r.changes} rows deleted, expected 3; ${ov.changes} overrides purged)`);
+      });
+      tx();
+    }
+  } catch (err: any) {
+    console.error(`[MIGRATION:dedup_aks_hugo_sacha_reassigned_deposits_v1] FAILED:`, err.message);
+  }
 }
