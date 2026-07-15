@@ -4,11 +4,14 @@ import {
   getQqpkStakingOverview,
   getQqpkBlockHistory,
   getQqpkGraphData,
+  getQqpkActiveCycle,
+  getQqpkCycleTransactions,
   getWalletMeresForGame,
   getPlayerCashouts,
   getPlayerGameWallets,
   type QqpkStakingRow,
   type QqpkGraphData,
+  type QqpkCycleTx,
   type WalletMere,
 } from "@/lib/queries";
 import { fmtKpiAmount } from "@/components/ledger/format";
@@ -31,7 +34,7 @@ import type { WalletAddr } from "@/components/ledger/extras/PlayerWalletsPanel";
  *              (players with fewer settled cycles are absent from that view).
  */
 
-export type QqpkHistoryRow = QqpkStakingRow & { settled_at: string | null };
+export type QqpkHistoryRow = QqpkStakingRow & { settled_at: string | null; block_start: string | null; block_end: string | null };
 
 export interface QqpkLedgerData {
   config: LedgerGameConfig;
@@ -50,6 +53,11 @@ export interface QqpkLedgerData {
   history: QqpkHistoryRow[];
   cashoutsByPlayer: Record<number, WalletAddr[]>;
   gameWalletsByPlayer: Record<number, WalletAddr[]>;
+  /** Dépôts/retraits composant le résultat de la vue affichée — display-only,
+   *  mêmes filtres que le net (Σ liste == résultat), jamais lu par le lock. */
+  transactionsByPlayer: Record<number, QqpkCycleTx[]>;
+  /** Horodatage du chargement serveur (fraîcheur affichée + refresh au focus). */
+  loadedAt: string;
   /** Séries datées du graph d'évolution (display-only, jamais lu par le lock). */
   graph: QqpkGraphData;
   /** Vérité du graph : dernier point vue cycle (tous joueurs) DOIT == ce KPI. */
@@ -142,6 +150,19 @@ export function loadQqpkLedger(params: { cycle?: string }): QqpkLedgerData {
     gameWalletsByPlayer[r.player_id] = gameId ? (getPlayerGameWallets(r.player_id, gameId) as WalletAddr[]) : [];
   }
 
+  // Tx detail of the displayed view. Window = active cycle bounds (view 0) or the
+  // settled block's stored bounds (view −n) — the exact window the net was computed on.
+  const transactionsByPlayer: Record<number, QqpkCycleTx[]> = {};
+  for (const r of rows) {
+    if (cycleView === 0) {
+      const cyc = getQqpkActiveCycle(r.player_id);
+      if (cyc) transactionsByPlayer[r.player_id] = getQqpkCycleTransactions(r.player_id, cyc.start_iso, cyc.end_iso);
+    } else {
+      const h = r as QqpkHistoryRow;
+      if (h.block_start && h.block_end) transactionsByPlayer[r.player_id] = getQqpkCycleTransactions(r.player_id, h.block_start, h.block_end);
+    }
+  }
+
   return {
     config: {
       title: "QQPK — Staking",
@@ -160,6 +181,8 @@ export function loadQqpkLedger(params: { cycle?: string }): QqpkLedgerData {
     history,
     cashoutsByPlayer,
     gameWalletsByPlayer,
+    transactionsByPlayer,
+    loadedAt: new Date().toISOString(),
     graph: getQqpkGraphData(cycleView),
     totalCercleKpi: totalCercle,
   };

@@ -1,8 +1,8 @@
 "use client";
 
-import { useMemo, useState, Fragment } from "react";
+import { useEffect, useMemo, useState, Fragment } from "react";
 import { useRouter } from "next/navigation";
-import { Check, Scale, AlertTriangle, CalendarClock, Search, ChevronDown, ChevronUp, ArrowDownLeft, ArrowUpRight } from "lucide-react";
+import { Check, Scale, AlertTriangle, CalendarClock, Search, ChevronDown, ChevronUp, ArrowDownLeft, ArrowUpRight, ExternalLink } from "lucide-react";
 import Modal from "@/components/Modal";
 import Btn from "@/components/Btn";
 import PlayerWalletsPanel, { WalletBadgeButton, type WalletAddr } from "@/components/ledger/extras/PlayerWalletsPanel";
@@ -67,6 +67,19 @@ interface Cycle {
   cycle_end_incl: string; settle_date: string; start_iso: string; end_iso: string;
   due: boolean; days_overdue: number;
 }
+
+/** Dépôt/retrait du cycle — display-only, fourni par le loader (mêmes filtres que le net). */
+interface CycleTx {
+  id: number;
+  tx_datetime: string | null;
+  tx_date: string;
+  type: "deposit" | "withdrawal";
+  amount: number;
+  source: string | null;
+  tron_tx_hash: string | null;
+}
+
+const TRONSCAN_TX = "https://tronscan.org/#/transaction/";
 interface Preview {
   ok: boolean; error?: string; player_id: number; cycle?: Cycle;
   resultat_periode?: number; mains?: number; c?: number; t?: number;
@@ -131,7 +144,7 @@ function RbValue({ amount }: { amount: number }) {
 type SortKey = "name" | "resultat" | "part";
 
 export default function QqpkShellTable({
-  rows, history, gameId, cycleView, cashoutsByPlayer = {}, gameWalletsByPlayer = {},
+  rows, history, gameId, cycleView, cashoutsByPlayer = {}, gameWalletsByPlayer = {}, transactionsByPlayer = {}, loadedAt,
 }: {
   rows: Row[];
   history: Row[];
@@ -140,6 +153,10 @@ export default function QqpkShellTable({
   cycleView: number;
   cashoutsByPlayer?: Record<number, WalletAddr[]>;
   gameWalletsByPlayer?: Record<number, WalletAddr[]>;
+  /** Dépôts/retraits du cycle affiché, par joueur — Σ liste == Résultat (garanti côté loader). */
+  transactionsByPlayer?: Record<number, CycleTx[]>;
+  /** ISO du rendu serveur — affiché en header, rafraîchi par le refresh au focus. */
+  loadedAt?: string;
 }) {
   const router = useRouter();
   const isCurrent = cycleView === 0;
@@ -150,9 +167,22 @@ export default function QqpkShellTable({
   const [recap, setRecap] = useState<{ player: Row; preview: Preview } | null>(null);
   const [confirming, setConfirming] = useState(false);
   const [expandedWallet, setExpandedWallet] = useState<number | null>(null);
+  const [expandedTx, setExpandedTx] = useState<number | null>(null);
   const [search, setSearch] = useState("");
   const [sortKey, setSortKey] = useState<SortKey>("name");
   const [sortDir, setSortDir] = useState<1 | -1>(1); // name asc par défaut (ordre historique de la page)
+
+  // Fraîcheur : un onglet laissé ouvert des jours affichait un état périmé face au
+  // modal Régler (toujours frais via server action). Retour de focus → refresh serveur.
+  useEffect(() => {
+    const refresh = () => { if (document.visibilityState === "visible") router.refresh(); };
+    window.addEventListener("focus", refresh);
+    document.addEventListener("visibilitychange", refresh);
+    return () => {
+      window.removeEventListener("focus", refresh);
+      document.removeEventListener("visibilitychange", refresh);
+    };
+  }, [router]);
 
   function toggleSort(key: SortKey) {
     if (sortKey === key) { setSortDir((d) => (d === 1 ? -1 : 1)); }
@@ -245,6 +275,11 @@ export default function QqpkShellTable({
           <span style={{ fontSize: 13, fontWeight: 700, color: "var(--text)" }}>
             {isCurrent ? "Cycles actifs (roulant par joueur · reset sec)" : `Cycle −${cycleView} — cycles réglés (lecture seule)`}
           </span>
+          {loadedAt && (
+            <span title="Heure du dernier chargement serveur — la page se rafraîchit automatiquement au retour sur l'onglet" style={{ fontSize: 10, color: "var(--text-dim)", cursor: "help" }}>
+              données au {new Date(loadedAt).toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit", timeZone: "Europe/Paris" })}
+            </span>
+          )}
           <div style={{ flex: 1 }} />
           <span style={{ display: "inline-flex", alignItems: "center", gap: 6, background: "var(--bg-base)", border: "1px solid var(--border)", borderRadius: 7, padding: "5px 10px" }}>
             <Search size={12} color="var(--text-dim)" />
@@ -295,9 +330,11 @@ export default function QqpkShellTable({
                   const co = cashoutsByPlayer[r.player_id] ?? [];
                   const walletCount = gw.length + co.length;
                   const isWalletOpen = expandedWallet === r.player_id;
+                  const txs = transactionsByPlayer[r.player_id] ?? [];
+                  const isTxOpen = expandedTx === r.player_id;
                   return (
                     <Fragment key={`${r.player_id}-${r.cycle_start}`}>
-                      <tr style={{ borderBottom: isWalletOpen ? "none" : "1px solid var(--border)", background: isCurrent && r.due ? "rgba(245,197,24,0.04)" : undefined }}>
+                      <tr style={{ borderBottom: isWalletOpen || isTxOpen ? "none" : "1px solid var(--border)", background: isCurrent && r.due ? "rgba(245,197,24,0.04)" : undefined }}>
                         <td style={{ ...td, textAlign: "left", fontWeight: 600, color: "var(--text)" }}>
                           <span style={{ display: "inline-flex", alignItems: "center", gap: 7 }}>
                             <WalletBadgeButton count={walletCount} isOpen={isWalletOpen} onClick={() => setExpandedWallet(isWalletOpen ? null : r.player_id)} />
@@ -318,7 +355,20 @@ export default function QqpkShellTable({
                         ) : (
                           <td style={{ ...td, textAlign: "left", fontSize: 11, color: "var(--text-muted)", whiteSpace: "nowrap" }}>{r.settled_at ? fmtDate(r.settled_at) : "—"}</td>
                         )}
-                        <td style={{ ...td, color: r.resultat_periode >= 0 ? "#10B981" : "#EF4444", fontWeight: 600 }}>{signed(r.resultat_periode)}</td>
+                        <td style={{ ...td, color: r.resultat_periode >= 0 ? "#10B981" : "#EF4444", fontWeight: 600 }}>
+                          {txs.length > 0 ? (
+                            <button
+                              onClick={() => setExpandedTx(isTxOpen ? null : r.player_id)}
+                              title={`Voir les ${txs.length} transactions du cycle (dépôts/retraits composant ce résultat)`}
+                              style={{ background: "transparent", border: "none", cursor: "pointer", color: "inherit", fontWeight: "inherit", fontSize: "inherit", fontVariantNumeric: "tabular-nums", display: "inline-flex", alignItems: "center", gap: 4, padding: 0 }}
+                            >
+                              {signed(r.resultat_periode)}
+                              {isTxOpen ? <ChevronUp size={11} /> : <ChevronDown size={11} />}
+                            </button>
+                          ) : (
+                            signed(r.resultat_periode)
+                          )}
+                        </td>
                         <td style={td}>
                           {isCurrent ? (
                             <span style={{ display: "inline-flex", alignItems: "center", gap: 4, justifyContent: "flex-end" }}>
@@ -398,6 +448,13 @@ export default function QqpkShellTable({
                           </td>
                         </tr>
                       )}
+                      {isTxOpen && (
+                        <tr style={{ borderBottom: "1px solid var(--border)", background: "var(--bg-base)" }}>
+                          <td colSpan={COLS} style={{ padding: "12px 20px" }}>
+                            <CycleTxList txs={txs} resultat={r.resultat_periode} onClose={() => setExpandedTx(null)} />
+                          </td>
+                        </tr>
+                      )}
                     </Fragment>
                   );
                 })}
@@ -473,12 +530,23 @@ export default function QqpkShellTable({
                   {(() => {
                     const reglement = recap.preview.reglement ?? 0;
                     const reg = dueLabel(reglement);
+                    // Direction en toutes lettres (le "−1 511,40" nu se lisait comme une
+                    // perte alors que règlement <0 = le joueur paie le Cercle). La phrase
+                    // porte le sens, le montant moteur reste affiché en dessous.
+                    const sentence = Math.abs(reglement) < 0.005
+                      ? "Rien à régler (0,00 USDT)"
+                      : reglement > 0
+                        ? `Le Cercle paie ${fmt(reglement)} USDT au joueur`
+                        : `Le joueur paie ${fmt(reglement)} USDT au Cercle`;
                     return (
-                      // Direction lisible sans phrase : flèche discrète (↗ = sortie du
-                      // Cercle, ↘ = entrée) + tooltip, comme le recap du SettlementFlow.
-                      <div title={reg.hint} style={{ fontSize: 18, fontWeight: 700, color: reg.color, display: "inline-flex", alignItems: "center", gap: 6, cursor: "help" }}>
-                        {Math.abs(reglement) >= 0.005 && (reglement > 0 ? <ArrowUpRight size={15} /> : <ArrowDownLeft size={15} />)}
-                        {reg.text}
+                      <div title={reg.hint} style={{ cursor: "help" }}>
+                        <div style={{ fontSize: 16, fontWeight: 700, color: reg.color, display: "inline-flex", alignItems: "center", gap: 6 }}>
+                          {Math.abs(reglement) >= 0.005 && (reglement > 0 ? <ArrowUpRight size={15} /> : <ArrowDownLeft size={15} />)}
+                          {sentence}
+                        </div>
+                        <div style={{ fontSize: 11, color: "var(--text-dim)", marginTop: 2, fontVariantNumeric: "tabular-nums" }}>
+                          règlement moteur : {reg.text}
+                        </div>
                       </div>
                     );
                   })()}
@@ -521,6 +589,60 @@ function RecapLine({ label, value }: { label: string; value: string }) {
     <div style={{ display: "flex", justifyContent: "space-between", padding: "6px 0", borderBottom: "1px solid var(--border)" }}>
       <span style={{ color: "var(--text-muted)" }}>{label}</span>
       <span style={{ color: "var(--text)", fontWeight: 600, fontVariantNumeric: "tabular-nums" }}>{value}</span>
+    </div>
+  );
+}
+
+// Liste des dépôts/retraits composant le résultat du cycle — affichage pur (les montants
+// viennent du loader avec les mêmes filtres que le net ; le footer réaffiche le résultat
+// moteur, aucune somme recalculée ici).
+function CycleTxList({ txs, resultat, onClose }: { txs: CycleTx[]; resultat: number; onClose: () => void }) {
+  const fmtTxDate = (t: CycleTx) => {
+    const raw = t.tx_datetime ?? t.tx_date;
+    const iso = raw.includes("T") ? raw : raw + "T00:00:00Z";
+    const d = new Date(iso);
+    if (isNaN(d.getTime())) return t.tx_date;
+    return d.toLocaleDateString("fr-FR", { day: "2-digit", month: "2-digit", year: "numeric", timeZone: "UTC" });
+  };
+  return (
+    <div>
+      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8 }}>
+        <span style={{ fontSize: 11, fontWeight: 700, color: "var(--text)" }}>
+          Transactions du cycle ({txs.length}) — dépôts & retraits composant le résultat
+        </span>
+        <div style={{ flex: 1 }} />
+        <button onClick={onClose} style={{ background: "none", border: "none", cursor: "pointer", color: "var(--text-dim)", fontSize: 11, padding: 0 }}>✕ fermer</button>
+      </div>
+      <div style={{ border: "1px solid var(--border)", borderRadius: 8, overflow: "hidden" }}>
+        {txs.map((t, i) => {
+          const isDeposit = t.type === "deposit";
+          return (
+            <div key={t.id} style={{ display: "flex", alignItems: "center", gap: 12, padding: "7px 12px", borderTop: i > 0 ? "1px solid var(--border)" : "none", fontSize: 12 }}>
+              <span style={{ color: "var(--text-muted)", fontVariantNumeric: "tabular-nums", width: 78 }}>{fmtTxDate(t)}</span>
+              <span style={{ display: "inline-flex", alignItems: "center", gap: 5, width: 76, color: isDeposit ? "#EF4444" : "#10B981", fontWeight: 600 }}>
+                {isDeposit ? <ArrowDownLeft size={12} /> : <ArrowUpRight size={12} />}
+                {isDeposit ? "Dépôt" : "Retrait"}
+              </span>
+              <span style={{ fontVariantNumeric: "tabular-nums", fontWeight: 600, color: isDeposit ? "#EF4444" : "#10B981", width: 120, textAlign: "right" }}>
+                {isDeposit ? "−" : "+"}{fmt(t.amount)} USDT
+              </span>
+              {t.source === "manual" && (
+                <span style={{ fontSize: 9, fontWeight: 700, padding: "1px 6px", borderRadius: 4, background: "rgba(136,136,160,0.15)", color: "var(--text-muted)" }}>manuel</span>
+              )}
+              <div style={{ flex: 1 }} />
+              {t.tron_tx_hash && (
+                <a href={TRONSCAN_TX + t.tron_tx_hash} target="_blank" rel="noopener noreferrer" title={t.tron_tx_hash} style={{ color: "var(--text-dim)", display: "inline-flex" }}>
+                  <ExternalLink size={12} />
+                </a>
+              )}
+            </div>
+          );
+        })}
+        <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, padding: "8px 12px", borderTop: "1px solid var(--border)", background: "var(--bg-surface)", fontSize: 12 }}>
+          <span style={{ color: "var(--text-muted)" }}>Net du cycle (retraits − dépôts) :</span>
+          <span style={{ fontWeight: 700, fontVariantNumeric: "tabular-nums", color: resultat >= 0 ? "#10B981" : "#EF4444" }}>{signed(resultat)} USDT</span>
+        </div>
+      </div>
     </div>
   );
 }

@@ -84,6 +84,8 @@ export default async function QQPKPage({ searchParams }: { searchParams: Promise
         cycleView={data.cycleView}
         cashoutsByPlayer={data.cashoutsByPlayer}
         gameWalletsByPlayer={data.gameWalletsByPlayer}
+        transactionsByPlayer={data.transactionsByPlayer}
+        loadedAt={data.loadedAt}
       />
     </LedgerShell>
   );
