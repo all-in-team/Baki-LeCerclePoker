@@ -2005,4 +2005,48 @@ function initSchema(db: Database.Database) {
   } catch (err: any) {
     console.error(`[MIGRATION:dedup_aks_hugo_sacha_reassigned_deposits_v1] FAILED:`, err.message);
   }
+
+  // TVGMzH… mère cleanup (Hugo/GO 2026-07-16). The address is registered as an active
+  // mère on TELE + KKPOKER + A5POKER but is now A5's mère in practice: July audit shows
+  // all its 34 withdrawals attributed to A5 except one — a 1 072,73 A5 cashout to Hugo
+  // claimed by the KK sync because his cashout TUMXxSL6… was registered on KK but not A5.
+  // Four ops, each individually guarded/idempotent:
+  //   1. retire the KKPOKER row of TVGMzH… (KK Pass 2 stops claiming its transfers;
+  //      TELE and A5POKER rows untouched)
+  //   2. register TUMXxSL6… as Hugo's A5POKER cashout (future TVGMzH→TUMX cashouts
+  //      import under A5 instead of vanishing)
+  //   3. reclass the one mis-stamped withdrawal KK→A5 (same pattern as
+  //      reclass_iacopo_a5_cashout_v1; guarded settled=0 + no settlement link)
+  //   4. reopen Hugo's KKPOKER deal (end_date=NULL) — it was soft-closed 2026-05-25,
+  //      which blanked his Net P&L while July txs kept importing.
+  try {
+    const fix = db.prepare(`INSERT OR IGNORE INTO _applied_fixes (name) VALUES (?)`).run("reclass_hugo_a5_kk_cleanup_v1");
+    if (fix.changes > 0) {
+      const retire = db.prepare(`
+        UPDATE wallet_meres SET status = 'retired', retired_at = datetime('now')
+        WHERE address = 'TVGMzHejH9pbgREEQxCCDK7EzexDCvAKpB'
+          AND game_id = (SELECT id FROM games WHERE name = 'KKPOKER')
+          AND status = 'active'
+      `).run();
+      const cashout = db.prepare(`
+        INSERT OR IGNORE INTO player_wallet_cashouts (player_id, address, game_id)
+        SELECT 1, 'TUMXxSL6ZPrHFtYYepYYY5BjwqT3TQDkGd', id FROM games WHERE name = 'A5POKER'
+      `).run();
+      const reclass = db.prepare(`
+        UPDATE wallet_transactions
+        SET game_id = (SELECT id FROM games WHERE name = 'A5POKER')
+        WHERE tron_tx_hash = 'bda937ba373aff8f121182bbec92cad86691a2d2887cfd8e278c411dee8f781f'
+          AND player_id = 1 AND type = 'withdrawal'
+          AND settled = 0 AND settlement_id IS NULL
+          AND game_id = (SELECT id FROM games WHERE name = 'KKPOKER')
+      `).run();
+      const deal = db.prepare(`
+        UPDATE player_game_deals SET end_date = NULL
+        WHERE player_id = 1 AND game_id = (SELECT id FROM games WHERE name = 'KKPOKER')
+      `).run();
+      console.log(`[MIGRATION] reclass_hugo_a5_kk_cleanup_v1 applied (mere retired: ${retire.changes}, cashout added: ${cashout.changes}, tx reclassed: ${reclass.changes}, deal reopened: ${deal.changes} — expected 1/1/1/1)`);
+    }
+  } catch (err: any) {
+    console.error(`[MIGRATION:reclass_hugo_a5_kk_cleanup_v1] FAILED:`, err.message);
+  }
 }
