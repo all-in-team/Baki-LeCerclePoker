@@ -1,7 +1,7 @@
 export const dynamic = "force-dynamic";
 import {
   getAgencyTotalPnL, getActivePlayersCount, getTopContributors, getPnLOverTime,
-  getOpsFeed, getDashboardStatus, getVolumeByGame, type GameVolume,
+  getDashboardStatus, getVolumeByGame, type GameVolume,
 } from "@/lib/queries";
 import { getDb } from "@/lib/db";
 import Link from "next/link";
@@ -9,7 +9,7 @@ import { TrendingUp, Users, Wallet, AlertTriangle, CheckCircle, BarChart3, Activ
 import StatCard from "@/components/StatCard";
 import Odometer from "@/components/Odometer";
 import WarRoomHero from "./WarRoomHero";
-import OpsFeedTerminal from "./OpsFeedTerminal";
+import TreasuryPanel from "./TreasuryPanel";
 import PlatformTickers, { type PlatformTicker } from "./PlatformTickers";
 import { WarRoomPnLChart } from "./WarRoomCharts";
 import DashboardActions from "./DashboardActions";
@@ -71,7 +71,6 @@ export default function DashboardPage() {
 
   const activePlayers7d = getActivePlayersCount({ from: d7, to: today });
   const status = getDashboardStatus();
-  const events = getOpsFeed(20);
   const top5 = getTopContributors({ from: d7, to: today }, 5);
   const timeline = getPnLOverTime({});
 
@@ -132,9 +131,9 @@ export default function DashboardPage() {
             activePlatforms={status.active_games}
           />
         </div>
-        {/* Mobile: feed sits right under the hero. Desktop: right column spanning hero + chart rows. */}
+        {/* Mobile: le panneau trésorerie sous le hero. Desktop: colonne droite sur hero + chart. */}
         <div className="min-w-0 lg:col-start-3 lg:row-start-1 lg:row-span-2" style={{ maxHeight: 560 }}>
-          <OpsFeedTerminal events={events} />
+          <TreasuryPanel />
         </div>
         <div className="lg:col-span-2 min-w-0 glass-card" style={{ padding: 24 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 16 }}>
