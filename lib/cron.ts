@@ -50,6 +50,23 @@ export function initCronJobs() {
     console.log("[CRON] shell-purge DISABLED");
   }
 
+  // Snapshot quotidien de trésorerie — 23h50 Paris (graph "Trésorerie · évolution").
+  if (process.env.TREASURY_SNAPSHOT_ENABLED !== "false") {
+    cron.schedule("50 23 * * *", async () => {
+      console.log("[CRON] treasury-snapshot firing");
+      try {
+        const { snapshotTreasuryToday } = await import("./treasury");
+        const r = await snapshotTreasuryToday();
+        console.log(`[CRON] treasury-snapshot done: written=${r.written}${r.errors.length ? ` errors=${r.errors.join("; ")}` : ""}`);
+      } catch (e: any) {
+        console.error("[CRON] treasury-snapshot failed:", e);
+      }
+    }, opts);
+    console.log("[CRON] treasury-snapshot registered (23h50 Paris)");
+  } else {
+    console.log("[CRON] treasury-snapshot DISABLED");
+  }
+
   // Onboarding auto-reminders — every 30 min
   if (process.env.ONBOARDING_REMINDERS_ENABLED !== "false") {
     cron.schedule("*/30 * * * *", async () => {

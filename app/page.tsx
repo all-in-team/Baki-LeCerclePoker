@@ -10,6 +10,8 @@ import StatCard from "@/components/StatCard";
 import Odometer from "@/components/Odometer";
 import WarRoomHero from "./WarRoomHero";
 import TreasuryPanel from "./TreasuryPanel";
+import TreasuryChart from "./TreasuryChart";
+import { getTreasurySeries } from "@/lib/treasury";
 import PlatformTickers, { type PlatformTicker } from "./PlatformTickers";
 import { WarRoomPnLChart } from "./WarRoomCharts";
 import DashboardActions from "./DashboardActions";
@@ -73,6 +75,7 @@ export default function DashboardPage() {
   const status = getDashboardStatus();
   const top5 = getTopContributors({ from: d7, to: today }, 5);
   const timeline = getPnLOverTime({});
+  const treasurySeries = getTreasurySeries();
 
   // Volume par game (déposits + retraits, USDT) — current vs previous period for evolution %.
   const range = (from: string, to: string) => ({ since_date: from + "T00:00:00Z", end_date: to + "T23:59:59Z" });
@@ -143,6 +146,15 @@ export default function DashboardPage() {
             </span>
           </div>
           <WarRoomPnLChart data={timeline} />
+        </div>
+        <div className="lg:col-span-2 min-w-0 glass-card" style={{ padding: 24 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 16 }}>
+            <Wallet size={15} color="#F0B90B" />
+            <span style={{ fontSize: 14, fontWeight: 600, color: "#E8E8EE" }}>
+              Trésorerie · évolution (soldes quotidiens)
+            </span>
+          </div>
+          <TreasuryChart data={treasurySeries} />
         </div>
       </div>
 
