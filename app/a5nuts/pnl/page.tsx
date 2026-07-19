@@ -40,7 +40,15 @@ export default async function A5NUTSPage({ searchParams }: { searchParams: Promi
             <a href="/a5nuts/pnl" style={{ fontSize: 11, color: "var(--text-muted)", textDecoration: "none" }}>✕ Retirer le filtre</a>
           </span>
         ) : undefined}
-        actions={<SyncWalletsButton gameName="A5POKER" />}
+        actions={
+          // Vue fusionnée A5+NUTS : un bouton par game, comme la page AKS/OKPOKER.
+          // (History: seul A5POKER était syncable ici — les wallets NUTSPK n'étaient
+          // JAMAIS scannés, ex. buy-in 190 USDT de Gaetan du 04/07 invisible.)
+          <span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
+            <SyncWalletsButton gameName="A5POKER" />
+            <SyncWalletsButton gameName="NUTSPK" />
+          </span>
+        }
         walletMeresBanner={<WalletMeresBanner walletMeres={data.walletMeres} />}
       >
         <LedgerTable
