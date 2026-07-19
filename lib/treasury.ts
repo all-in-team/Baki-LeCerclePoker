@@ -102,6 +102,10 @@ export async function backfillWalletHistory(address: string): Promise<{
       const json = await res.json();
       for (const tx of json.data ?? []) {
         if (tx.block_timestamp < minTs) continue;
+        // L'endpoint trc20 renvoie transferts ET approvals. Une approval illimitée
+        // porte value = 2^256−1 : la compter comme une sortie a fait exploser la
+        // reconstruction (bug du 19/07 — total affiché en 10^68). Transferts only.
+        if ((tx.type ?? "Transfer") !== "Transfer") continue;
         const amt = Number(tx.value) / Math.pow(10, tx.token_info?.decimals ?? 6);
         const day = parisDate(tx.block_timestamp);
         const isIn = (tx.to ?? "").toLowerCase() === addrLower;
