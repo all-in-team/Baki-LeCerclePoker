@@ -31,6 +31,25 @@ export function initCronJobs() {
 
   console.log("[CRON] daily-summary registered (9h Paris, every day)");
 
+  // Purge hebdo des shells "x LeCercle" morts — lundi 10h Paris (Hugo 2026-07-19).
+  // Kick équipe + bot puis le userbot sort ; rapport posté dans le chat agent.
+  if (process.env.SHELL_PURGE_ENABLED !== "false") {
+    cron.schedule("0 10 * * 1", async () => {
+      console.log("[CRON] shell-purge firing");
+      try {
+        const { purgeDeadShells, reportShellPurge } = await import("./shell-purge");
+        const result = await purgeDeadShells();
+        console.log(`[CRON] shell-purge done: purged=${result.purged.length} skipped=${result.skipped.length} remaining=${result.remaining_candidates}`);
+        await reportShellPurge(result);
+      } catch (e: any) {
+        console.error("[CRON] shell-purge failed:", e);
+      }
+    }, opts);
+    console.log("[CRON] shell-purge registered (lundi 10h Paris)");
+  } else {
+    console.log("[CRON] shell-purge DISABLED");
+  }
+
   // Onboarding auto-reminders — every 30 min
   if (process.env.ONBOARDING_REMINDERS_ENABLED !== "false") {
     cron.schedule("*/30 * * * *", async () => {
