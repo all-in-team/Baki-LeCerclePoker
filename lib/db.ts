@@ -2049,4 +2049,27 @@ function initSchema(db: Database.Database) {
   } catch (err: any) {
     console.error(`[MIGRATION:reclass_hugo_a5_kk_cleanup_v1] FAILED:`, err.message);
   }
+
+  // Snapshots quotidiens de trésorerie (graph "Trésorerie · évolution" du dashboard).
+  // Table neuve, display-only — aucun lien avec wallet_transactions ni le money engine.
+  // Peuplée par le backfill on-chain (route admin) puis le cron 23h50 Paris.
+  try {
+    const fix = db.prepare(`INSERT OR IGNORE INTO _applied_fixes (name) VALUES (?)`).run("add_treasury_snapshots_v1");
+    if (fix.changes > 0) {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS treasury_snapshots (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          date TEXT NOT NULL,
+          address TEXT NOT NULL,
+          usdt REAL NOT NULL,
+          created_at TEXT NOT NULL DEFAULT (datetime('now')),
+          UNIQUE(date, address)
+        );
+        CREATE INDEX IF NOT EXISTS idx_treasury_snapshots_date ON treasury_snapshots(date);
+      `);
+      console.log("[MIGRATION] add_treasury_snapshots_v1 applied");
+    }
+  } catch (err: any) {
+    console.error(`[MIGRATION:add_treasury_snapshots_v1] FAILED:`, err.message);
+  }
 }
