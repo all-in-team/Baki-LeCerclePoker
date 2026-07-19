@@ -811,6 +811,27 @@ export async function leaveUserbotChannels(chatIds: string[]): Promise<{
   return { ok: failed.length === 0, left, failed, error: null };
 }
 
+// Kick a member out of a channel/supergroup the userbot administrates (used by the
+// weekly shell purge — the userbot created the shells, so it holds the rights).
+// Telegram semantics: EditBanned(viewMessages) = ban+remove; fine for dead groups
+// that everyone is abandoning.
+export async function kickFromChannel(chatId: string, userId: number): Promise<{ ok: boolean; error: string | null }> {
+  const client = await getClient();
+  if (!client) return { ok: false, error: "Userbot not connected" };
+  try {
+    const channel = await client.getEntity(Number(chatId));
+    const participant = await client.getInputEntity(userId);
+    await client.invoke(new Api.channels.EditBanned({
+      channel: channel as any,
+      participant,
+      bannedRights: new Api.ChatBannedRights({ untilDate: 0, viewMessages: true }),
+    }));
+    return { ok: true, error: null };
+  } catch (e: any) {
+    return { ok: false, error: errMsg(e) };
+  }
+}
+
 // ── getInviteLink (admin utility) ────────────────────────
 
 export async function getInviteLink(chatId: number): Promise<{ ok: boolean; link: string; error: string | null }> {

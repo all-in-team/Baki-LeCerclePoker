@@ -80,6 +80,16 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ ok: true, userbot: me, groups });
   }
 
+  // mode "purge-shells" : run manuel de la purge hebdo (même logique que le cron du
+  // lundi — voir lib/shell-purge.ts). body.cap optionnel (défaut 20, max 20).
+  if (mode === "purge-shells") {
+    const { purgeDeadShells, reportShellPurge } = await import("@/lib/shell-purge");
+    const cap = Number.isInteger(body.cap) && body.cap > 0 ? body.cap : undefined;
+    const result = await purgeDeadShells(cap);
+    await reportShellPurge(result);
+    return NextResponse.json(result);
+  }
+
   // mode "bot-leave" : fait sortir LE BOT (@LeCercle_Lebot) des groupes fournis via
   // l'API Bot leaveChat — pour finir le nettoyage des shells une fois le compte
   // userbot parti (Hugo 2026-07-19 : "take off the bot in all groups with me only").
