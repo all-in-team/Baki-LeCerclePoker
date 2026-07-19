@@ -738,6 +738,64 @@ export async function listGroups(): Promise<{
   }
 }
 
+// ── Channel capacity management (admin utility) ─────────────────────────────
+// Telegram caps an account at ~500 channels/supergroups: past it, MigrateChat
+// fails with CHANNELS_TOO_MUCH and EVERY new onboarding group creation breaks
+// (history: YuS 2026-07-19). These two helpers power /api/admin/userbot-leave-groups:
+// full inventory of the userbot's channels, then targeted LeaveChannel on ids the
+// owner validated. The route enforces the keep-guard; this layer just executes.
+
+export async function listUserbotChannels(): Promise<{
+  ok: boolean;
+  total_channels: number;
+  channels: { chat_id: string; title: string; member_count: number; megagroup: boolean }[];
+  error: string | null;
+}> {
+  const client = await getClient();
+  if (!client) return { ok: false, total_channels: 0, channels: [], error: "Userbot not connected" };
+  try {
+    // iterDialogs walks ALL dialogs (getDialogs({limit}) truncates — the account
+    // is near the ~500-channel cap, so a 200 cut would hide most of the problem).
+    const channels: { chat_id: string; title: string; member_count: number; megagroup: boolean }[] = [];
+    for await (const d of client.iterDialogs({})) {
+      const entity = d.entity as any;
+      if (!entity || entity.className !== "Channel") continue;
+      channels.push({
+        chat_id: `-100${toNum(entity.id)}`,
+        title: entity.title ?? "(untitled)",
+        member_count: entity.participantsCount ?? 0,
+        megagroup: !!(entity.megagroup || entity.gigagroup),
+      });
+    }
+    return { ok: true, total_channels: channels.length, channels, error: null };
+  } catch (e: any) {
+    return { ok: false, total_channels: 0, channels: [], error: errMsg(e) };
+  }
+}
+
+export async function leaveUserbotChannels(chatIds: string[]): Promise<{
+  ok: boolean;
+  left: string[];
+  failed: { chat_id: string; error: string }[];
+  error: string | null;
+}> {
+  const client = await getClient();
+  if (!client) return { ok: false, left: [], failed: [], error: "Userbot not connected" };
+  const left: string[] = [];
+  const failed: { chat_id: string; error: string }[] = [];
+  for (const chatId of chatIds) {
+    try {
+      const entity = await client.getEntity(Number(chatId));
+      await client.invoke(new Api.channels.LeaveChannel({ channel: entity as any }));
+      left.push(chatId);
+    } catch (e: any) {
+      failed.push({ chat_id: chatId, error: errMsg(e) });
+    }
+    await sleep(1100); // flood-wait margin — leaving is rate-limited like any write
+  }
+  return { ok: failed.length === 0, left, failed, error: null };
+}
+
 // ── getInviteLink (admin utility) ────────────────────────
 
 export async function getInviteLink(chatId: number): Promise<{ ok: boolean; link: string; error: string | null }> {
