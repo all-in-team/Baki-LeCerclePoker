@@ -1,7 +1,7 @@
 export const dynamic = "force-dynamic";
 import { NextRequest, NextResponse } from "next/server";
 import { getDb } from "@/lib/db";
-import { listUserbotChannels, leaveUserbotChannels } from "@/lib/telegram-userbot";
+import { listUserbotChannels, leaveUserbotChannels, getChatMembers, getUserbotMe } from "@/lib/telegram-userbot";
 import { AGENT_CHAT_ID } from "@/lib/telegram-commands/helpers";
 
 // Libère de la capacité canaux sur le compte userbot (cap Telegram ~500 →
@@ -48,6 +48,36 @@ export async function POST(req: NextRequest) {
       candidate_count: channels.filter((c) => c.decision === "CANDIDAT").length,
       channels,
     });
+  }
+
+  // mode "inspect" : liste les membres de chaque groupe demandé et marque only_owners
+  // (= aucun humain à part @Baki77777 / @HugoRoine / le compte userbot lui-même →
+  // le joueur n'a jamais rejoint, shell mort). Critère Hugo 2026-07-19.
+  if (mode === "inspect") {
+    const requested: string[] = Array.isArray(body.chat_ids) ? body.chat_ids.map(String) : [];
+    if (requested.length === 0) return NextResponse.json({ error: "chat_ids required" }, { status: 400 });
+    if (requested.length > 40) return NextResponse.json({ error: "max 40 chat_ids par appel" }, { status: 400 });
+
+    const OWNER_USERNAMES = new Set(["baki77777", "hugoroine"]);
+    const me = await getUserbotMe();
+    const groups: any[] = [];
+    for (const chatId of requested) {
+      const members = await getChatMembers(chatId);
+      const humansOther = members.filter((m) =>
+        !m.bot &&
+        m.id !== me?.id &&
+        !OWNER_USERNAMES.has((m.username ?? "").toLowerCase())
+      );
+      groups.push({
+        chat_id: chatId,
+        fetched_members: members.length,
+        only_owners: members.length > 0 && humansOther.length === 0,
+        other_humans: humansOther.map((m) => ({ username: m.username ?? null, name: [m.first_name, m.last_name].filter(Boolean).join(" ") })),
+        members: members.map((m) => (m.bot ? `🤖 ${m.username ?? m.first_name ?? m.id}` : `@${m.username ?? "?"} ${[m.first_name, m.last_name].filter(Boolean).join(" ")}`)),
+      });
+      await new Promise((r) => setTimeout(r, 1100));
+    }
+    return NextResponse.json({ ok: true, userbot: me, groups });
   }
 
   if (mode === "leave") {

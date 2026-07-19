@@ -519,6 +519,7 @@ export async function getChatMembers(chatId: string): Promise<Array<{
   first_name?: string;
   last_name?: string;
   username?: string;
+  bot?: boolean;
 }>> {
   const client = await getClient();
   if (!client) return [];
@@ -545,6 +546,7 @@ export async function getChatMembers(chatId: string): Promise<Array<{
       first_name: u.firstName ?? undefined,
       last_name: u.lastName ?? undefined,
       username: u.username ?? undefined,
+      bot: !!u.bot,
     }));
   } catch (e: any) {
     console.warn(`[USERBOT] getChatMembers(${chatId}) failed: ${errMsg(e)}`);
@@ -582,6 +584,19 @@ export async function renamePlayerGroup(
 }
 
 // ── getMe (expose bot user id) ─────────────────────────
+
+// Identity of the userbot account itself — the inspect flow must not count it as
+// a "human member" of the groups it created.
+export async function getUserbotMe(): Promise<{ id: number; username: string | null } | null> {
+  const client = await getClient();
+  if (!client) return null;
+  try {
+    const me: any = await client.getMe();
+    return { id: toNum(me.id), username: me.username ?? null };
+  } catch {
+    return null;
+  }
+}
 
 export async function getUserbotId(): Promise<number | null> {
   const client = await getClient();
