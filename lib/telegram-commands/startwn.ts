@@ -1,9 +1,8 @@
 import { getDb } from "@/lib/db";
 import { sendMsg, AGENT_CHAT_ID } from "./helpers";
 import { getPlayerGameWallets, getPlayerCashouts } from "@/lib/queries";
-import { askActionPct } from "./action-pct-prompt";
 import { getOnboardingThreadId } from "./onboarding-topic";
-import { WN_ROOM_INVITE_LINK } from "@/lib/games/wn/config";
+import { WN_ROOM_INVITE_LINK, WN_DEFAULT_ACTION_PCT } from "@/lib/games/wn/config";
 
 export async function handleStartWn(chatId: number) {
   const db = getDb();
@@ -37,7 +36,8 @@ export async function handleStartWn(chatId: number) {
   // Resolve (and repair-if-missing) the Onboarding topic so the flow never posts in General.
   const tid = await getOnboardingThreadId(chatId, player.id, "WN");
 
-  // Owner types the action % (free text) before the pitch. Le % WN est INDÉPENDANT
-  // du deal A5/NUTS (Hugo 2026-07-20) — ce qui est tapé ici est ce qui s'applique.
-  await askActionPct(chatId, player.id, player, "WN", tid);
+  // Deal forcé à 40% (Hugo 2026-07-20 — pas de question de %). Modifiable ensuite
+  // via l'éditeur « WN % » de la page A5NUTS (indépendant du % A5/NUTS).
+  const { sendWnPitch } = await import("@/lib/games/wn/onboarding");
+  await sendWnPitch(chatId, player.id, player, WN_DEFAULT_ACTION_PCT, tid);
 }
