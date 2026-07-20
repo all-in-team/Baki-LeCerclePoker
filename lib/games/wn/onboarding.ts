@@ -118,24 +118,24 @@ export async function handleWnCallback(
       db.prepare(`UPDATE players SET status = 'active' WHERE id = ?`).run(session.player_id);
     }
 
-    setSession(chatId, "wn_wallet_check" as Step, session.player_id, session.expected_tg_id);
+    setSession(chatId, "wn_room_join_check" as Step, session.player_id, session.expected_tg_id);
 
     await sendMsg(chatId, `✅ <b>Deal accepté !</b>`, tid);
     await sleep(1200);
-    // Room access — révélé UNIQUEMENT ici, après acceptation explicite.
+    // Room access — révélé UNIQUEMENT ici, après acceptation explicite. Le join est
+    // CRITIQUE (Hugo 2026-07-20) : sans clic sur "Request to Join" le joueur n'est
+    // pas rattaché à notre ligne → gate explicite avant de passer aux wallets.
     await sendMsg(chatId,
-      `🃏 <b>Accès à la room WN</b> :\n\n` +
-      `<b>1️⃣ Rejoins la room</b> 👉 <a href="${WN_ROOM_INVITE_LINK}">clique ici pour entrer</a>\n\n` +
-      `<b>2️⃣ On configure tes wallets</b> USDT (juste en dessous 👇) et tu peux grind 🎰`,
+      `🃏 <b>Accès à la room WN</b> — étape OBLIGATOIRE :\n\n` +
+      `<b>1️⃣ Clique sur le lien</b> 👉 <a href="${WN_ROOM_INVITE_LINK}">entrer dans la room</a>\n` +
+      `<b>2️⃣ PUIS clique sur « REQUEST TO JOIN »</b> dans le groupe.\n\n` +
+      `⚠️ <b>Sans le clic JOIN tu n'es pas rattaché à nous</b> — ne saute pas cette étape.`,
       tid
     );
     await sleep(1500);
     await sendMsgKeyboard(chatId,
-      `Avant de finaliser, question rapide : tu as déjà un wallet crypto USDT en TRC20 (réseau Tron) ?`,
-      [
-        [{ text: "✅ Oui j'ai un wallet", callback_data: "wn_wallet_yes" }],
-        [{ text: "❌ Non, j'en ai pas", callback_data: "wn_wallet_no" }],
-      ],
+      `Quand c'est fait, confirme 👇`,
+      [[{ text: "✅ Fait, j'ai rejoint le groupe", callback_data: "wn_room_joined" }]],
       tid
     );
 
@@ -147,39 +147,47 @@ export async function handleWnCallback(
     return;
   }
 
-  // ── Wallet YES → collect wallets ──
-  if (data === "wn_wallet_yes") {
-    if (session.step !== ("wn_wallet_check" as Step)) return;
+  // ── Room rejointe confirmée → instructions wallet WNPK vierge (Hugo 2026-07-20) ──
+  // Pas de question "as-tu un wallet ?" : WN exige dans TOUS les cas une NOUVELLE
+  // wallet vierge dédiée — c'est elle qui sépare le tracking WN du tracking A5
+  // (la wallet game de dépôt est la même pour les deux).
+  if (data === "wn_room_joined") {
+    if (session.step !== ("wn_room_join_check" as Step)) return;
     if (messageId) await editMessageReplyMarkup(chatId, messageId).catch(() => {});
 
     await sendMsg(chatId,
-      `Top. On va te demander 2 adresses Tron USDT TRC20.\n\n` +
-      `⚠️ <b>CRITIQUE</b> : utilise bien TRC20, jamais ERC20 ni BEP20. Sinon fonds perdus.\n\n` +
-      `<b>Étape 1 — Ton adresse de RETRAIT</b>\n` +
-      `C'est l'adresse où tu veux recevoir tes cashouts.\n` +
-      `Envoie-la maintenant (format T... 34 caractères).`,
+      `👌 Dernière étape : ta wallet dédiée WN.\n\n` +
+      `⚠️ <b>Pour cette game il te faut une NOUVELLE wallet VIERGE</b> (du TRX pour les gas fees c'est OK, ` +
+      `mais <b>aucune transaction USDT</b> dessus).\n\n` +
+      `👉 Crée-en une nouvelle dans ton <b>TronLink</b> et <b>nomme-la « WNPK »</b> pour ne pas te tromper par la suite.\n\n` +
+      `🔒 <b>Règle absolue</b> : TOUS tes cash in et cash out WN doivent partir et arriver de CETTE wallet. ` +
+      `Sinon ton tracking sera mélangé avec l'autre game (la wallet game de dépôt est la même pour les deux).\n\n` +
+      `Envoie-moi maintenant l'adresse de ta wallet WNPK (format T... 34 caractères, TRC20).`,
       tid
     );
 
     setSession(chatId, "awaiting_wn_cashout_wallet" as Step, session.player_id, session.expected_tg_id);
     return;
   }
+}
 
-  // ── Wallet NO → tutorial + bail ──
-  if (data === "wn_wallet_no") {
-    if (session.step !== ("wn_wallet_check" as Step)) return;
-    if (messageId) await editMessageReplyMarkup(chatId, messageId).catch(() => {});
-
-    await sendMsg(chatId,
-      `Pas de souci, ça se crée en 5 min :\n\n` +
-      `🔹 <b>Option simple (exchange)</b> : crée un compte Binance ou Bybit (gratuit). ` +
-      `Section "Wallet" → "Deposit USDT" → choisis réseau TRC20. Tu obtiens ton adresse Tron automatiquement.\n\n` +
-      `🔹 <b>Option perso</b> : Trust Wallet (mobile) ou TronLink (extension Chrome). 100% à toi.\n\n` +
-      `⚠️ Critique : utilise bien TRC20 (pas ERC20 ni BEP20), sinon les fonds sont perdus.\n\n` +
-      `Une fois ton wallet créé, préviens Baki pour reprendre le setup.`,
-      tid
+// Vierge = zéro transfert USDT TRC20 (un top-up TRX pour les gas n'apparaît pas sur cet
+// endpoint → autorisé, conforme à la règle "gas fee possible mais sans transaction").
+// En cas d'erreur TronGrid on n'a PAS le droit de bloquer l'onboarding : accept + alerte agent.
+async function isWalletVirgin(address: string): Promise<{ virgin: boolean; checked: boolean }> {
+  try {
+    const headers: Record<string, string> = { Accept: "application/json" };
+    const apiKey = process.env.TRONGRID_API_KEY;
+    if (apiKey) headers["TRON-PRO-API-KEY"] = apiKey;
+    const res = await fetch(
+      `https://api.trongrid.io/v1/accounts/${address}/transactions/trc20?limit=1&contract_address=TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t`,
+      { headers }
     );
-    return;
+    if (!res.ok) return { virgin: true, checked: false };
+    const json = await res.json();
+    return { virgin: (json.data ?? []).length === 0, checked: true };
+  } catch {
+    return { virgin: true, checked: false };
   }
 }
 
@@ -221,6 +229,24 @@ export async function handleWnRawMessage(
         `de ta wallet A5 — c'est elle qui permet de séparer tes deux deals. Envoie une autre adresse TRC20.`
       );
       return true;
+    }
+
+    // Wallet VIERGE exigée (Hugo 2026-07-20) : zéro transfert USDT. Une wallet déjà
+    // utilisée = tracking pollué dès le départ → refus avec explication.
+    const virgin = await isWalletVirgin(text);
+    if (virgin.checked && !virgin.virgin) {
+      await reply(
+        `⚠️ Cette wallet a déjà des transactions USDT — il faut une wallet <b>VIERGE</b> ` +
+        `(le TRX pour les gas c'est OK, mais aucun transfert USDT).\n` +
+        `Crée une nouvelle wallet dans TronLink, nomme-la <b>WNPK</b>, et envoie-moi son adresse.`
+      );
+      return true;
+    }
+    if (!virgin.checked) {
+      await sendMsg(AGENT_CHAT_ID,
+        `⚠️ <b>WN onboarding</b> : vérification "wallet vierge" impossible (TronGrid KO) pour ` +
+        `<code>${text}</code> — adresse acceptée, à contrôler à la main.`
+      );
     }
 
     addPlayerCashout(session.player_id, text, gameId);
