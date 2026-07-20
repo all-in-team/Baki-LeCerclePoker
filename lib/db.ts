@@ -2091,4 +2091,22 @@ function initSchema(db: Database.Database) {
   } catch (err: any) {
     console.error(`[MIGRATION:add_wn_game_v1] FAILED:`, err.message);
   }
+
+  // Deal WN de Hakim AMIRUL : l'ancienne règle d'alignement a écrasé le 40 tapé par
+  // Hugo avec son 25 A5 (test du 2026-07-20). Les % sont désormais indépendants →
+  // remise à 40 (guard action_pct=25 : si Hugo l'a déjà corrigé à la main, no-op).
+  try {
+    const fixHakim = db.prepare(`INSERT OR IGNORE INTO _applied_fixes (name) VALUES (?)`).run("fix_hakim_wn_pct_40_v1");
+    if (fixHakim.changes > 0) {
+      const r = db.prepare(`
+        UPDATE player_game_deals SET action_pct = 40
+        WHERE player_id = (SELECT id FROM players WHERE name = 'Hakim AMIRUL')
+          AND game_id = (SELECT id FROM games WHERE name = 'WN')
+          AND action_pct = 25
+      `).run();
+      console.log(`[MIGRATION] fix_hakim_wn_pct_40_v1 applied (${r.changes} row)`);
+    }
+  } catch (err: any) {
+    console.error(`[MIGRATION:fix_hakim_wn_pct_40_v1] FAILED:`, err.message);
+  }
 }

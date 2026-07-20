@@ -48,6 +48,8 @@ export interface WalletLedgerRow {
 }
 
 export interface WalletLedgerData {
+  /** id du game WN si présent dans le scope (badge tx + éditeur % indépendant), sinon null. */
+  wnGameId: number | null;
   config: LedgerGameConfig;
   kpiCards: LedgerKpiCard[];
   period: LedgerPeriod;
@@ -123,14 +125,41 @@ export function loadWalletLedger(
   const players = getPlayers() as { id: number; name: string }[];
   const filterPlayerName = playerFilter ? (players.find((p) => p.id === playerFilter)?.name ?? `#${playerFilter}`) : null;
 
+  // WN a un % INDÉPENDANT (Hugo 2026-07-20) : il ne doit jamais devenir le % "principal"
+  // de la ligne fusionnée (celui-ci reste le % A5/NUTS) — il s'affiche à côté (action_pct_wn).
+  const wnGameId = gameNames.includes("WN")
+    ? (db.prepare(`SELECT id FROM games WHERE name = 'WN'`).get() as { id: number } | undefined)?.id ?? null
+    : null;
+  const wnPctByPlayer = new Map<number, number>();
+  if (wnGameId) {
+    for (const r of db.prepare(`SELECT player_id, action_pct FROM player_game_deals WHERE game_id = ?`).all(wnGameId) as { player_id: number; action_pct: number }[]) {
+      wnPctByPlayer.set(r.player_id, r.action_pct);
+    }
+  }
+
   // Aggregate deals per player + sort by my_pnl desc — copied verbatim from TELEClient.
+  // Primary action_pct = first NON-WN row (le % WN vit dans action_pct_wn).
   const summaryByPlayer = Object.values(
     summary.reduce<Record<number, WalletLedgerRow>>((acc, r) => {
+      const isWnRow = wnGameId !== null && (r as any).game_id === wnGameId;
       if (!acc[r.player_id]) { acc[r.player_id] = { ...r }; }
-      else { acc[r.player_id].total_deposited += r.total_deposited; acc[r.player_id].total_withdrawn += r.total_withdrawn; acc[r.player_id].net += r.net; acc[r.player_id].my_pnl += r.my_pnl; }
+      else {
+        acc[r.player_id].total_deposited += r.total_deposited; acc[r.player_id].total_withdrawn += r.total_withdrawn; acc[r.player_id].net += r.net; acc[r.player_id].my_pnl += r.my_pnl;
+        // Un row non-WN arrive après un row WN accumulé → son % devient le principal.
+        if (!isWnRow && wnGameId !== null && (acc[r.player_id] as any).game_id === wnGameId) {
+          acc[r.player_id].action_pct = r.action_pct;
+          acc[r.player_id].rakeback_pct = r.rakeback_pct;
+          (acc[r.player_id] as any).game_id = (r as any).game_id;
+        }
+      }
       return acc;
     }, {})
   ).sort((a, b) => b.my_pnl - a.my_pnl);
+  if (wnGameId) {
+    for (const row of summaryByPlayer) {
+      (row as any).action_pct_wn = wnPctByPlayer.get(row.player_id) ?? null;
+    }
+  }
 
   // Extras data — per listed player, same calls as app/a5poker/pnl/page.tsx.
   // Merged scope: wallet lists span all games, deduped by address (same owner → same wallets
@@ -155,13 +184,25 @@ export function loadWalletLedger(
   // MUST match the Régler recap to the cent → same engine path (previewSettlement)
   // with ALL unsettled tx selected. No math here (invariant #2); skipped when
   // preview reports ok:false (e.g. missing deal).
+  // WN = bucket de règlement indépendant → le dû estimé est la SOMME des previews par
+  // bucket (chacun avec son %), jamais un preview mélangé (deals divergents = refus, à raison).
   const estimatedDueByPlayer: Record<number, number> = {};
   for (const r of summaryByPlayer) {
     const avail = availableByPlayer[r.player_id];
-    if (gameIds.length && avail.length > 0) {
-      const p = previewSettlement(gameIds, r.player_id, avail.map(t => t.id));
-      if (p.ok) estimatedDueByPlayer[r.player_id] = p.amount_due_usdt;
+    if (!gameIds.length || avail.length === 0) continue;
+    const wnTx = wnGameId ? avail.filter(t => t.game_id === wnGameId) : [];
+    const baseTx = wnGameId ? avail.filter(t => t.game_id !== wnGameId) : avail;
+    const baseScope = wnGameId ? gameIds.filter(id => id !== wnGameId) : gameIds;
+    let due: number | null = null;
+    if (baseTx.length > 0 && baseScope.length > 0) {
+      const p = previewSettlement(baseScope, r.player_id, baseTx.map(t => t.id));
+      if (p.ok) due = (due ?? 0) + p.amount_due_usdt;
     }
+    if (wnTx.length > 0 && wnGameId) {
+      const p = previewSettlement([wnGameId], r.player_id, wnTx.map(t => t.id));
+      if (p.ok) due = (due ?? 0) + p.amount_due_usdt;
+    }
+    if (due !== null) estimatedDueByPlayer[r.player_id] = due;
   }
 
   // Alias membership (display-only) for the listed players — powers the "Vue alias" toggle.
@@ -203,6 +244,7 @@ export function loadWalletLedger(
     summaryByPlayer,
     filterPlayerName,
     gameId,
+    wnGameId,
     cashoutsByPlayer,
     gameWalletsByPlayer,
     availableByPlayer,

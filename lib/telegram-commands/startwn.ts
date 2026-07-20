@@ -37,7 +37,7 @@ export async function handleStartWn(chatId: number) {
   // Resolve (and repair-if-missing) the Onboarding topic so the flow never posts in General.
   const tid = await getOnboardingThreadId(chatId, player.id, "WN");
 
-  // Owner types the action % (free text) before the pitch. NB: if the player already
-  // holds an A5POKER/NUTSPK deal, sendWnPitch overrides with HIS % (alignement A5NUTS).
+  // Owner types the action % (free text) before the pitch. Le % WN est INDÉPENDANT
+  // du deal A5/NUTS (Hugo 2026-07-20) — ce qui est tapé ici est ce qui s'applique.
   await askActionPct(chatId, player.id, player, "WN", tid);
 }
