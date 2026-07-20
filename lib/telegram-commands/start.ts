@@ -64,7 +64,7 @@ export async function handleStart(chatId: number, fromId: number, fromName: stri
   // OKPOKER / JVIP / TTPOKER deep links — full in-group self-service: click → group created
   // → the game pitch auto-posts in the Onboarding topic on join (default %, in-group, never
   // DM). See game-deeplink.ts. Typed in a group, falls through to normal /start below.
-  const dlGame = ({ okpoker: "OKPOKER", jvip: "JVIP", ttpoker: "TTPOKER" } as Record<string, string>)[payload ?? ""];
+  const dlGame = ({ okpoker: "OKPOKER", jvip: "JVIP", ttpoker: "TTPOKER", wn: "WN" } as Record<string, string>)[payload ?? ""];
   if (dlGame && chatId === fromId) {
     const { handleGameDeepLink } = await import("./game-deeplink");
     await handleGameDeepLink(chatId, {

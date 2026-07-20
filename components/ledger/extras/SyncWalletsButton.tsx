@@ -10,7 +10,7 @@ import Btn from "@/components/Btn";
  * game's DB name. The sync logic itself (cashout source rule included) lives
  * untouched in app/api/wallets/sync/route.ts.
  */
-export default function SyncWalletsButton({ gameName }: { gameName: string }) {
+export default function SyncWalletsButton({ gameName, label }: { gameName: string; label?: string }) {
   const [syncing, setSyncing] = useState(false);
   const [syncResult, setSyncResult] = useState<{ imported: number; results?: { player: string; imported: number; error?: string }[] } | null>(null);
 
@@ -29,7 +29,7 @@ export default function SyncWalletsButton({ gameName }: { gameName: string }) {
     <>
       <Btn variant="secondary" onClick={syncWallets} disabled={syncing}>
         <RefreshCw size={14} style={{ animation: syncing ? "spin 1s linear infinite" : "none" }} />
-        {syncing ? "Sync en cours…" : "Sync Wallets"}
+        {syncing ? "Sync en cours…" : label ?? "Sync Wallets"}
       </Btn>
       {syncResult && (
         <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>

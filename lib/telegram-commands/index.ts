@@ -38,6 +38,8 @@ export { handleJvipCallback } from "@/lib/games/jvip/onboarding";
 export { handleStartJvip } from "./startjvip";
 export { handleTtpokerCallback } from "@/lib/games/ttpoker/onboarding";
 export { handleStartTtpoker } from "./startttpoker";
+export { handleWnCallback } from "@/lib/games/wn/onboarding";
+export { handleStartWn } from "./startwn";
 export { handleAffiliation, handleAffiliationRawMessage } from "./affiliation";
 export { handleMyAffi } from "./myaffi";
 export { handleStartAffi } from "./startaffi";

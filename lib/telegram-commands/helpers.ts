@@ -473,6 +473,12 @@ export async function handleRawMessage(text: string, chatId: number, messageThre
   }
 
   // TTPOKER wallet collection states — delegate to TTPOKER module
+  if (session.step === ("awaiting_wn_cashout_wallet" as Step) || session.step === ("awaiting_wn_game_wallet" as Step)) {
+    const { handleWnRawMessage } = await import("@/lib/games/wn/onboarding");
+    const handledWn = await handleWnRawMessage(text, chatId, session, messageThreadId);
+    if (handledWn) return;
+  }
+
   if (session.step === ("awaiting_ttpoker_cashout_wallet" as Step) || session.step === ("awaiting_ttpoker_game_wallet" as Step)) {
     const { handleTtpokerRawMessage } = await import("@/lib/games/ttpoker/onboarding");
     const handled = await handleTtpokerRawMessage(text, chatId, session, messageThreadId);
