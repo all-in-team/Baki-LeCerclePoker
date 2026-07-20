@@ -11,7 +11,7 @@ import { previewSettlement, lockSettlement, markPaid, unlockSettlement } from "@
 function a5nutsGameIds(): number[] {
   const db = getDb();
   const ids: number[] = [];
-  for (const name of ["A5POKER", "NUTSPK"]) {
+  for (const name of ["A5POKER", "NUTSPK", "WN"]) {
     const row = db.prepare(`SELECT id FROM games WHERE name = ?`).get(name) as { id: number } | undefined;
     if (row) ids.push(row.id);
   }
@@ -37,5 +37,5 @@ export async function unlockAction(settlementId: number) {
 
 export async function updateActionPctAction(playerId: number, oldPct: number, newPct: number) {
   const { updateDealActionPct } = await import("@/lib/deal-edit");
-  return updateDealActionPct(playerId, ["A5POKER", "NUTSPK"], "A5NUTS", oldPct, newPct);
+  return updateDealActionPct(playerId, ["A5POKER", "NUTSPK", "WN"], "A5NUTS", oldPct, newPct);
 }

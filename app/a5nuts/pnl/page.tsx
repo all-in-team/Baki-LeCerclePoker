@@ -19,8 +19,8 @@ export default async function A5NUTSPage({ searchParams }: { searchParams: Promi
   const params = await searchParams;
   const data = loadWalletLedger(params, {
     gameName: "A5POKER",
-    gameNames: ["A5POKER", "NUTSPK"],
-    extrasKey: ["a5poker", "nutspk"],
+    gameNames: ["A5POKER", "NUTSPK", "WN"],
+    extrasKey: ["a5poker", "nutspk", "wn"],
     title: "A5NUTS — P&L",
     basePath: "/a5nuts/pnl",
   });
@@ -41,12 +41,13 @@ export default async function A5NUTSPage({ searchParams }: { searchParams: Promi
           </span>
         ) : undefined}
         actions={
-          // Vue fusionnée A5+NUTS : un bouton par game, comme la page AKS/OKPOKER.
+          // Vue fusionnée A5+NUTS+WN : un bouton étiqueté par game.
           // (History: seul A5POKER était syncable ici — les wallets NUTSPK n'étaient
           // JAMAIS scannés, ex. buy-in 190 USDT de Gaetan du 04/07 invisible.)
           <span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
-            <SyncWalletsButton gameName="A5POKER" />
-            <SyncWalletsButton gameName="NUTSPK" />
+            <SyncWalletsButton gameName="A5POKER" label="Sync A5" />
+            <SyncWalletsButton gameName="NUTSPK" label="Sync NUTS" />
+            <SyncWalletsButton gameName="WN" label="Sync WN" />
           </span>
         }
         walletMeresBanner={<WalletMeresBanner walletMeres={data.walletMeres} />}

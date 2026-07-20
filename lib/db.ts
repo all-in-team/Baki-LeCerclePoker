@@ -2072,4 +2072,23 @@ function initSchema(db: Database.Database) {
   } catch (err: any) {
     console.error(`[MIGRATION:add_treasury_snapshots_v1] FAILED:`, err.message);
   }
+
+  // Seed WN game (room sur la même app que A5POKER/NUTSPK — vue fusionnée A5NUTS,
+  // même wallet mère TVGMzH…). default_action_pct=40 = suggestion du pitch (GO Hugo
+  // 2026-07-20), le % réel est choisi par l'owner et aligné sur le deal A5NUTS
+  // existant du joueur (le settlement fusionné refuse les % divergents).
+  try {
+    const fixWn = db.prepare(`INSERT OR IGNORE INTO _applied_fixes (name) VALUES (?)`).run("add_wn_game_v1");
+    if (fixWn.changes > 0) {
+      db.prepare(`INSERT OR IGNORE INTO games (name, status, default_action_pct, currency) VALUES ('WN', 'active', 40, 'USDT')`).run();
+      const wnGame = db.prepare(`SELECT id FROM games WHERE name = 'WN'`).get() as { id: number } | undefined;
+      if (wnGame) {
+        db.prepare(`INSERT OR IGNORE INTO wallet_meres (address, label, game_id, status) VALUES (?, ?, ?, 'active')`)
+          .run("TVGMzHejH9pbgREEQxCCDK7EzexDCvAKpB", "1st A5poker (WN)", wnGame.id);
+      }
+      console.log("[MIGRATION] add_wn_game_v1 applied");
+    }
+  } catch (err: any) {
+    console.error(`[MIGRATION:add_wn_game_v1] FAILED:`, err.message);
+  }
 }

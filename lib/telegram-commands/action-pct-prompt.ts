@@ -100,6 +100,11 @@ export async function handleActionPctRawMessage(
       await sendTtpokerPitch(chatId, player.id, player, pct, tid);
       return true;
     }
+    case "WN": {
+      const { sendWnPitch } = await import("@/lib/games/wn/onboarding");
+      await sendWnPitch(chatId, player.id, player, pct, tid);
+      return true;
+    }
     default:
       await sendMsg(chatId, `❌ Game inconnue (<code>${gameKey}</code>). Contacte @baki77777`, tid);
       return true;

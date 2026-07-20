@@ -8,7 +8,7 @@ import { getDb } from "@/lib/db";
 // self-service flow incassable: a delayed join or a redeploy still fires the pitch.
 //
 // kk/a5 keep their existing Map-based askActionPct flow — NOT touched here.
-export const AUTO_PITCH_GAMES = new Set(["OKPOKER", "JVIP", "TTPOKER"]);
+export const AUTO_PITCH_GAMES = new Set(["OKPOKER", "JVIP", "TTPOKER", "WN"]);
 
 // Default action % for the auto-pitch (owner adjusts after via /crm or a re-run). Never
 // asked to the player. Falls back to 30 if the game row has no default.
@@ -94,6 +94,11 @@ export async function dispatchGamePitch(
     case "TTPOKER": {
       const { sendTtpokerPitch } = await import("@/lib/games/ttpoker/onboarding");
       await sendTtpokerPitch(chatId, playerId, player, pct, tid);
+      return;
+    }
+    case "WN": {
+      const { sendWnPitch } = await import("@/lib/games/wn/onboarding");
+      await sendWnPitch(chatId, playerId, player, pct, tid);
       return;
     }
   }
