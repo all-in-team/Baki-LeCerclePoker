@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getDb } from "@/lib/db";
-import { insertWalletTransactionByHash, getActiveWalletMeresForGame, getAllWalletMereAddressesAnyStatus, getAllGameWalletsByPlayer, getAllCashoutsByPlayer, getOwnCashoutAddrsByPlayer, getPlayersOnGame, isGameArchived } from "@/lib/queries";
+import { insertWalletTransactionByHash, getActiveWalletMeresForGame, getAllWalletMereAddressesAnyStatus, getAllGameWalletsByPlayer, getAllCashoutsByPlayer, getOwnCashoutAddrsByPlayer, getPlayersOnGame, getPlayerIdsWithDealOnGame, isGameArchived } from "@/lib/queries";
 
 const USDT_CONTRACT = "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t";
 
@@ -137,6 +137,33 @@ export async function POST(req: NextRequest) {
     seenAddresses.set(e.player_id, seen);
   }
 
+  // ── Attribution des DÉPÔTS par expéditeur (A5POKER/WN, decision Hugo 2026-07-20) ──
+  // A5 et WN partagent l'app (même wallet game de dépôt). La game d'un dépôt se lit sur
+  // l'EXPÉDITEUR : envoyé depuis la wallet WN du joueur → dépôt WN ; toute autre source
+  // (wallet A5, exchange, inconnu) → A5 par défaut. Un joueur WN-only (sans deal A5)
+  // garde le game scanné. Les retraits ne changent pas (attribution par destination, Pass 2).
+  const senderAttributionActive = gameName === "A5POKER" || gameName === "WN";
+  let wnGameIdForDeposits: number | null = null;
+  let a5GameIdForDeposits: number | null = null;
+  let wnCashoutsByPlayer = new Map<number, Set<string>>();
+  let a5DealPlayers = new Set<number>();
+  if (senderAttributionActive) {
+    wnGameIdForDeposits = getGameId("WN");
+    a5GameIdForDeposits = getGameId("A5POKER");
+    for (const c of getAllCashoutsByPlayer("WN")) {
+      let set = wnCashoutsByPlayer.get(c.player_id);
+      if (!set) wnCashoutsByPlayer.set(c.player_id, (set = new Set()));
+      set.add(c.address.toLowerCase());
+    }
+    a5DealPlayers = getPlayerIdsWithDealOnGame("A5POKER");
+  }
+  function depositGameId(playerId: number, fromLower: string): number {
+    if (!senderAttributionActive || wnGameIdForDeposits === null || a5GameIdForDeposits === null) return gameId!;
+    if (wnCashoutsByPlayer.get(playerId)?.has(fromLower)) return wnGameIdForDeposits;
+    if (a5DealPlayers.has(playerId)) return a5GameIdForDeposits;
+    return gameId!;
+  }
+
   type Result = { player: string; deposits: number; cashouts: number; error?: string };
   const results: Result[] = [];
   let totalDeposits = 0;
@@ -172,7 +199,7 @@ export async function POST(req: NextRequest) {
           }
           const changed = insertWalletTransactionByHash({
             player_id: player.id,
-            game_id: gameId,
+            game_id: fromGameMere ? gameId : depositGameId(player.id, fromLower),
             type: fromGameMere ? "withdrawal" : "deposit",
             amount: toAmt(tx),
             currency: "USDT",

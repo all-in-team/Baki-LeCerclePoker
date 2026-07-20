@@ -29,6 +29,7 @@ import { toUsdt, getExchangeRate } from "./queries";
 
 export interface AvailableTx {
   id: number;
+  game_id: number | null;
   tx_datetime: string;
   tx_date: string;
   type: "deposit" | "withdrawal";
@@ -95,6 +96,29 @@ function scopeIds(scope: GameScope): number[] {
   return Array.isArray(scope) ? scope : [scope];
 }
 
+// Selection-scope resolution for pages mixing INDEPENDENT settle buckets (decision Hugo
+// 2026-07-20: WN a son propre % — la page A5NUTS affiche tout mais un règlement porte UN
+// seul %). The scope of a settlement is the bucket containing ALL selected txs; a mixed
+// selection is refused with an explicit error, never split silently.
+export function resolveSelectionScope(
+  txIds: number[],
+  buckets: number[][],
+): { scope: number[] } | { error: string } {
+  if (!Array.isArray(txIds) || txIds.length === 0) return { error: "Aucune transaction sélectionnée" };
+  const ids = [...new Set(txIds)];
+  const placeholders = ids.map(() => "?").join(",");
+  const rows = getDb().prepare(
+    `SELECT DISTINCT game_id FROM wallet_transactions WHERE id IN (${placeholders})`
+  ).all(...ids) as { game_id: number | null }[];
+  const games = rows.map((r) => r.game_id).filter((g): g is number => g !== null);
+  const matching = buckets.filter((b) => games.some((g) => b.includes(g)));
+  if (matching.length > 1) {
+    return { error: "Sélection mixte (A5/NUTS et WN) — règle-les séparément : les % sont indépendants." };
+  }
+  if (matching.length === 0) return { error: "Aucun game reconnu dans la sélection" };
+  return { scope: matching[0] };
+}
+
 // ── 1) getAvailableTransactions ──────────────────────────
 // Player's still-unsettled txs for a game scope (settled=0), real sources only, oldest→newest.
 
@@ -103,7 +127,7 @@ export function getAvailableTransactions(gameId: GameScope, playerId: number): A
   const ids = scopeIds(gameId);
   const placeholders = ids.map(() => "?").join(", ");
   return db.prepare(`
-    SELECT id, tx_datetime, tx_date, type, amount, currency, source, tron_tx_hash
+    SELECT id, game_id, tx_datetime, tx_date, type, amount, currency, source, tron_tx_hash
     FROM wallet_transactions
     WHERE game_id IN (${placeholders})
       AND player_id = ?

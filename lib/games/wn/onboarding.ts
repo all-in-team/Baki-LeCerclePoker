@@ -22,23 +22,10 @@ function getWnDeal(playerId: number): { action_pct: number; rakeback_pct: number
   ).get(playerId, gameId) as { action_pct: number; rakeback_pct: number } | undefined ?? null;
 }
 
-// % existant du joueur sur le scope A5NUTS (A5POKER prioritaire, sinon NUTSPK).
-// Le moteur de settlement fusionné refuse les % divergents dans le scope → un joueur
-// déjà sur A5/NUTS garde SON % pour WN, quoi que l'owner ait tapé au pitch.
-function getExistingA5nutsPct(playerId: number): number | null {
-  const row = getDb().prepare(`
-    SELECT pgd.action_pct FROM player_game_deals pgd
-    JOIN games g ON g.id = pgd.game_id AND g.name IN ('A5POKER', 'NUTSPK')
-    WHERE pgd.player_id = ?
-    ORDER BY CASE g.name WHEN 'A5POKER' THEN 0 ELSE 1 END
-    LIMIT 1
-  `).get(playerId) as { action_pct: number } | undefined;
-  return row?.action_pct ?? null;
-}
-
-// WN pitch — même mécanique que TTPOKER (deal upserté, % modulable) avec la règle
-// d'alignement A5NUTS ci-dessus. Room = lien d'invitation direct, révélé APRÈS
-// "J'accepte" uniquement (anti-bypass).
+// WN pitch — même mécanique que TTPOKER (deal upserté, % modulable). Le % WN est
+// INDÉPENDANT du deal A5/NUTS (decision Hugo 2026-07-20 — l'ancienne règle d'alignement
+// écrasait le % tapé) : les règlements WN et A5/NUTS sont séparés côté CRM.
+// Room = lien d'invitation direct, révélé APRÈS "J'accepte" uniquement (anti-bypass).
 export async function sendWnPitch(
   chatId: number,
   playerId: number,
@@ -47,8 +34,7 @@ export async function sendWnPitch(
   onboardingTopicId?: number,
 ) {
   const db = getDb();
-  const inherited = getExistingA5nutsPct(playerId);
-  const pct = inherited ?? actionPct;
+  const pct = actionPct;
 
   const gameId = getWnGameId();
   if (gameId) {
@@ -56,12 +42,6 @@ export async function sendWnPitch(
       `INSERT INTO player_game_deals (player_id, game_id, action_pct, rakeback_pct) VALUES (?, ?, ?, 0)
        ON CONFLICT(player_id, game_id) DO UPDATE SET action_pct = excluded.action_pct`
     ).run(playerId, gameId, pct);
-  }
-
-  if (inherited !== null && Math.abs(inherited - actionPct) > 0.001) {
-    await sendMsg(AGENT_CHAT_ID,
-      `ℹ️ <b>WN — ${player.name}</b> : % aligné sur son deal A5NUTS existant (<b>${inherited}%</b>, au lieu de ${actionPct} demandé) — le settlement fusionné refuse les % divergents. Modifie le % via la page A5NUTS si besoin (alignement auto du scope).`
-    );
   }
 
   const playerPct = 100 - pct;
@@ -223,6 +203,23 @@ export async function handleWnRawMessage(
     const gameId = getWnGameId();
     if (!gameId) {
       await reply(`❌ Erreur interne (game WN introuvable). Contacte @baki77777`);
+      return true;
+    }
+
+    // RÈGLE DURE (Hugo 2026-07-20) : la wallet WN doit être DIFFÉRENTE des wallets
+    // A5/NUTS du joueur — c'est elle qui dissocie les flux (cashouts WN par destination,
+    // dépôts WN par expéditeur). Une adresse déjà enregistrée en A5/NUTS = refus.
+    const clashA5 = getDb().prepare(`
+      SELECT 1 FROM player_wallet_cashouts pwc
+      JOIN games g ON g.id = pwc.game_id AND g.name IN ('A5POKER', 'NUTSPK')
+      WHERE pwc.player_id = ? AND LOWER(pwc.address) = LOWER(?)
+      LIMIT 1
+    `).get(session.player_id, text);
+    if (clashA5) {
+      await reply(
+        `⚠️ Cette adresse est déjà ta wallet A5. Pour WN il faut une <b>NOUVELLE adresse</b>, différente ` +
+        `de ta wallet A5 — c'est elle qui permet de séparer tes deux deals. Envoie une autre adresse TRC20.`
+      );
       return true;
     }
 

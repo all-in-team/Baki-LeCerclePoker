@@ -254,6 +254,16 @@ export function getAllCashoutsByPlayer(gameName: string) {
   `).all(gameName, gameName) as { player_id: number; address: string }[];
 }
 
+// Player ids holding a deal on a game — powers the sync's deposit-by-sender attribution
+// (A5/WN partagent l'app : un dépôt de source inconnue tombe en A5 si le joueur a un deal A5).
+export function getPlayerIdsWithDealOnGame(gameName: string): Set<number> {
+  const rows = getDb().prepare(`
+    SELECT pgd.player_id FROM player_game_deals pgd
+    JOIN games g ON g.id = pgd.game_id AND g.name = ?
+  `).all(gameName) as { player_id: number }[];
+  return new Set(rows.map((r) => r.player_id));
+}
+
 export function getPlayersOnGame(gameName: string) {
   return getDb().prepare(`
     SELECT DISTINCT p.id, p.name

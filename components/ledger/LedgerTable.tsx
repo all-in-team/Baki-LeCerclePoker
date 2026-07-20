@@ -28,6 +28,8 @@ export interface LedgerTableRow {
   player_id: number;
   player_name: string;
   action_pct: number;
+  /** % WN indépendant (vue A5NUTS) — null/absent = pas de deal WN. */
+  action_pct_wn?: number | null;
   rakeback_pct: number;
   start_date: string | null;
   total_deposited: number;
@@ -39,7 +41,7 @@ export interface LedgerTableRow {
 type SortKey = "name" | "net" | "my_pnl" | "due";
 
 export default function LedgerTable({
-  rows, gameLabel, gameId, cashoutsByPlayer, gameWalletsByPlayer, availableByPlayer, settlementsByPlayer, estimatedDueByPlayer,
+  rows, gameLabel, gameId, wnGameId, cashoutsByPlayer, gameWalletsByPlayer, availableByPlayer, settlementsByPlayer, estimatedDueByPlayer, updateWnActionPctAction,
   previewAction, lockAction, markPaidAction, unlockAction,
   showSettlementPreview = true,
   walletsReadOnly = false,
@@ -59,6 +61,9 @@ export default function LedgerTable({
   aliasByPlayer?: Record<number, AliasInfo>;
   /** Inline action-% edit (owner). Absent → the % cell stays read-only. */
   updateActionPctAction?: (playerId: number, oldPct: number, newPct: number) => Promise<{ ok: boolean; changed: boolean; announced?: "group" | "agent" | "failed"; error?: string }>;
+  updateWnActionPctAction?: (playerId: number, oldPct: number, newPct: number) => Promise<{ ok: boolean; changed: boolean; announced?: "group" | "agent" | "failed"; error?: string }>;
+  /** id du game WN (badge sur les tx WN dans le flow de règlement). */
+  wnGameId?: number | null;
   previewAction: (playerId: number, txIds: number[]) => Promise<SettlementPreview>;
   lockAction?: (playerId: number, txIds: number[]) => Promise<{ ok: boolean; error?: string }>;
   markPaidAction?: (settlementId: number, txHash?: string) => Promise<{ ok: boolean; error?: string }>;
@@ -85,6 +90,9 @@ export default function LedgerTable({
   const [rescanning, setRescanning] = useState(false);
   const router = useRouter();
   const [editPctPlayer, setEditPctPlayer] = useState<number | null>(null); // player_id whose % is being edited
+  const [editPctWnPlayer, setEditPctWnPlayer] = useState<number | null>(null);
+  const [pctWnDraft, setPctWnDraft] = useState("");
+  const [pctWnSaving, setPctWnSaving] = useState(false);
   const [pctDraft, setPctDraft] = useState("");
   const [pctSaving, setPctSaving] = useState(false);
 
@@ -108,6 +116,19 @@ export default function LedgerTable({
         router.refresh();
       }
     } finally { setPctSaving(false); }
+  }
+
+  // % WN indépendant — même UX que commitPct, action dédiée (jamais aligné sur A5/NUTS).
+  async function commitPctWn(row: LedgerTableRow) {
+    if (!updateWnActionPctAction) { setEditPctWnPlayer(null); return; }
+    const newPct = parseFloat(pctWnDraft.trim().replace(",", "."));
+    if (!Number.isFinite(newPct) || newPct < 0 || newPct > 100) { setEditPctWnPlayer(null); return; }
+    setPctWnSaving(true);
+    try {
+      const res = await updateWnActionPctAction(row.player_id, row.action_pct_wn ?? 0, newPct);
+      if (!res.ok) alert(res.error ?? "Erreur maj % WN");
+      router.refresh();
+    } finally { setPctWnSaving(false); setEditPctWnPlayer(null); }
   }
 
   const hasAliases = !!aliasByPlayer && Object.keys(aliasByPlayer).length > 0;
@@ -351,6 +372,30 @@ export default function LedgerTable({
                       ) : (
                         <>{row.action_pct}%</>
                       )}
+                      {row.action_pct_wn != null && (
+                        <span style={{ marginLeft: 6, fontSize: 11, color: "#A855F7", whiteSpace: "nowrap" }}>
+                          · WN{" "}
+                          {updateWnActionPctAction && editPctWnPlayer === row.player_id ? (
+                            <input
+                              autoFocus
+                              value={pctWnDraft}
+                              disabled={pctWnSaving}
+                              onChange={e => setPctWnDraft(e.target.value)}
+                              onKeyDown={e => { if (e.key === "Enter") commitPctWn(row); else if (e.key === "Escape") setEditPctWnPlayer(null); }}
+                              onBlur={() => commitPctWn(row)}
+                              style={{ width: 46, padding: "2px 5px", borderRadius: 5, fontSize: 11, fontWeight: 600, fontFamily: "inherit", background: "var(--bg-elevated)", color: "#A855F7", border: "1px solid #A855F7", outline: "none" }}
+                            />
+                          ) : updateWnActionPctAction ? (
+                            <button
+                              onClick={() => { setPctWnDraft(String(row.action_pct_wn)); setEditPctWnPlayer(row.player_id); }}
+                              title="Modifier le % action WN (indépendant du % A5/NUTS)"
+                              style={{ background: "transparent", border: "1px solid transparent", borderRadius: 5, padding: "1px 4px", fontSize: 11, fontWeight: 600, color: "#A855F7", cursor: "pointer" }}
+                            >{row.action_pct_wn}% ✎</button>
+                          ) : (
+                            <>{row.action_pct_wn}%</>
+                          )}
+                        </span>
+                      )}
                     </td>
                     <td style={{ padding: "12px 16px", fontSize: 13, fontWeight: 600, color: "#38bdf8" }}>{row.rakeback_pct}%</td>
                     <td style={{ padding: "12px 16px", fontSize: 12, fontWeight: 600, color: row.start_date ? "var(--text)" : "var(--text-dim)" }}>{row.start_date ?? "—"}</td>
@@ -382,6 +427,7 @@ export default function LedgerTable({
                           playerId={row.player_id}
                           playerName={row.player_name}
                           gameId={gameId}
+                          wnGameId={wnGameId}
                           avail={avail}
                           settlements={pSettlements}
                           previewAction={previewAction}

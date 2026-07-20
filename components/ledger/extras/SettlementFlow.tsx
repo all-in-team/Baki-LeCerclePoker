@@ -26,7 +26,7 @@ import Modal from "@/components/Modal";
 
 const TRONSCAN_TX = "https://tronscan.org/#/transaction/";
 
-export interface AvailableTx { id: number; tx_datetime: string; tx_date: string; type: "deposit" | "withdrawal"; amount: number; currency: string; source: string | null; tron_tx_hash?: string | null }
+export interface AvailableTx { id: number; game_id?: number | null; tx_datetime: string; tx_date: string; type: "deposit" | "withdrawal"; amount: number; currency: string; source: string | null; tron_tx_hash?: string | null }
 export interface SettlementRow {
   id: number; player_id: number; player_name: string; net_selected_usdt: number;
   action_pct_applied: number; amount_due_usdt: number; status: "locked" | "paid";
@@ -86,6 +86,7 @@ export default function SettlementFlow({
   playerId, playerName, avail, settlements,
   previewAction, lockAction, markPaidAction, unlockAction,
   gameId,
+  wnGameId = null,
   readOnlyNotice = "Shadow — écriture désactivée",
 }: {
   playerId: number;
@@ -101,6 +102,8 @@ export default function SettlementFlow({
    * A5POKER for A5NUTS). Undefined or read-only mode → the form is hidden.
    */
   gameId?: number;
+  /** id du game WN — badge violet sur les tx WN (les % étant indépendants). */
+  wnGameId?: number | null;
   readOnlyNotice?: string;
 }) {
   const router = useRouter();
@@ -245,7 +248,7 @@ export default function SettlementFlow({
                   }}>
                     <input type="checkbox" checked={checked} onChange={() => toggleTx(tx.id)} onClick={e => e.stopPropagation()} style={{ cursor: "pointer", accentColor: "#10B981" }} />
                     <span style={{ fontSize: 12, color: "var(--text-muted)" }}>{(tx.tx_datetime ?? tx.tx_date).slice(0, 10)}</span>
-                    <span style={{ display: "inline-flex", alignItems: "center", gap: 5, color: isDep ? "#f87171" : "var(--green)", fontWeight: 600, fontSize: 12 }}>{isDep ? <ArrowDownLeft size={13} /> : <ArrowUpRight size={13} />}{isDep ? "Dépôt" : "Retrait"}</span>
+                    <span style={{ display: "inline-flex", alignItems: "center", gap: 5, color: isDep ? "#f87171" : "var(--green)", fontWeight: 600, fontSize: 12 }}>{isDep ? <ArrowDownLeft size={13} /> : <ArrowUpRight size={13} />}{isDep ? "Dépôt" : "Retrait"}{wnGameId != null && tx.game_id === wnGameId && (<span style={{ fontSize: 9, fontWeight: 700, padding: "1px 6px", borderRadius: 4, background: "rgba(168,85,247,0.15)", color: "#A855F7" }}>WN</span>)}</span>
                     <span style={{ fontSize: 13, fontWeight: 700, color: isDep ? "#f87171" : "var(--green)" }}>{isDep ? "−" : "+"}{fmt(tx.amount)} {tx.currency}</span>
                     <span style={{ textAlign: "center", fontSize: 13 }}>
                       {tx.source === "sync" && tx.tron_tx_hash ? (
