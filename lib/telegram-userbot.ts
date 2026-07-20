@@ -832,6 +832,45 @@ export async function kickFromChannel(chatId: string, userId: number): Promise<{
   }
 }
 
+// ── Room membership verification (WN join-gate) ──────────────────────────────
+// Le bot ne peut pas être invité dans le groupe de la room (droits côté room) —
+// la vérification passe par le COMPTE userbot, qui doit simplement être membre.
+
+// Résout un lien d'invitation t.me/+HASH → chat id. Ne marche que si le userbot
+// est DÉJÀ membre (ChatInviteAlready) — sinon Telegram ne révèle pas l'id.
+export async function resolveInviteHash(hash: string): Promise<{ chatId: string | null; error: string | null }> {
+  const client = await getClient();
+  if (!client) return { chatId: null, error: "Userbot not connected" };
+  try {
+    const res: any = await client.invoke(new Api.messages.CheckChatInvite({ hash }));
+    if (res.className === "ChatInviteAlready" && res.chat) {
+      return { chatId: `-100${toNum(res.chat.id)}`, error: null };
+    }
+    return { chatId: null, error: "userbot pas membre du groupe (clique le lien d'invitation avec le compte Baki)" };
+  } catch (e: any) {
+    return { chatId: null, error: errMsg(e) };
+  }
+}
+
+// Le user est-il membre du channel/supergroupe ? checked=false = vérification
+// impossible (session down, userbot pas membre…) — l'appelant décide (fail-open).
+export async function isUserInChannel(chatId: string, userId: number): Promise<{ member: boolean; checked: boolean; error: string | null }> {
+  const client = await getClient();
+  if (!client) return { member: false, checked: false, error: "Userbot not connected" };
+  try {
+    const channel = await client.getEntity(Number(chatId));
+    const participant = await client.getInputEntity(userId);
+    await client.invoke(new Api.channels.GetParticipant({ channel: channel as any, participant }));
+    return { member: true, checked: true, error: null };
+  } catch (e: any) {
+    const msg = errMsg(e);
+    if (msg.includes("USER_NOT_PARTICIPANT") || msg.includes("PARTICIPANT_ID_INVALID")) {
+      return { member: false, checked: true, error: null };
+    }
+    return { member: false, checked: false, error: msg };
+  }
+}
+
 // ── getInviteLink (admin utility) ────────────────────────
 
 export async function getInviteLink(chatId: number): Promise<{ ok: boolean; link: string; error: string | null }> {

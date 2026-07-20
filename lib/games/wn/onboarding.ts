@@ -5,7 +5,7 @@ import {
   type Step,
 } from "@/lib/telegram-commands/helpers";
 import { addPlayerCashout, addPlayerGameWallet, recordDealAcceptance } from "@/lib/queries";
-import { WN_GAME_NAME, WN_ROOM_INVITE_LINK, WN_DEFAULT_ACTION_PCT } from "./config";
+import { WN_GAME_NAME, WN_ROOM_INVITE_LINK, WN_ROOM_INVITE_HASH, WN_DEFAULT_ACTION_PCT } from "./config";
 
 const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
 
@@ -153,6 +153,34 @@ export async function handleWnCallback(
   // (la wallet game de dépôt est la même pour les deux).
   if (data === "wn_room_joined") {
     if (session.step !== ("wn_room_join_check" as Step)) return;
+
+    // VÉRIFICATION RÉELLE du join (Hugo 2026-07-20) via le compte userbot (le bot ne
+    // peut pas être invité dans le groupe room). Membre → on continue ; pas membre →
+    // blocage avec ré-explication (une demande "Request to Join" pas encore approuvée
+    // compte comme non-membre). Vérification impossible (userbot down / pas membre du
+    // groupe / telegram_id inconnu) → FAIL-OPEN : on ne bloque jamais un onboarding
+    // sur une panne infra, mais on alerte le chat agent pour contrôle manuel.
+    const playerTgId = player?.telegram_id ?? session.expected_tg_id ?? null;
+    const check = await verifyWnRoomMembership(playerTgId);
+    if (check.checked && !check.member) {
+      await sendMsg(chatId,
+        `🔍 Je ne te vois pas encore dans le groupe de la room.\n\n` +
+        `1️⃣ <a href="${WN_ROOM_INVITE_LINK}">Clique le lien</a>\n` +
+        `2️⃣ Clique <b>« REQUEST TO JOIN »</b>\n\n` +
+        `<i>Si tu as déjà fait la demande, attends qu'elle soit approuvée puis re-clique le bouton ci-dessous.</i>`,
+        tid
+      );
+      await sendMsgKeyboard(chatId, `Quand c'est fait, confirme 👇`,
+        [[{ text: "✅ Fait, j'ai rejoint le groupe", callback_data: "wn_room_joined" }]], tid);
+      return;
+    }
+    if (!check.checked) {
+      await sendMsg(AGENT_CHAT_ID,
+        `⚠️ <b>WN onboarding — ${playerName}</b> : vérification du join room impossible (${check.error ?? "?"}) — ` +
+        `flow continué sans contrôle, vérifie à la main qu'il est bien dans le groupe.`
+      );
+    }
+
     if (messageId) await editMessageReplyMarkup(chatId, messageId).catch(() => {});
 
     await sendMsg(chatId,
@@ -168,6 +196,28 @@ export async function handleWnCallback(
 
     setSession(chatId, "awaiting_wn_cashout_wallet" as Step, session.player_id, session.expected_tg_id);
     return;
+  }
+}
+
+// Vérifie l'appartenance du joueur au groupe room WN via le userbot. Le chat id est
+// résolu une fois depuis le hash du lien d'invitation (exige le userbot membre) puis
+// caché dans settings ('wn_room_chat_id').
+async function verifyWnRoomMembership(playerTgId: number | null): Promise<{ member: boolean; checked: boolean; error: string | null }> {
+  if (!playerTgId) return { member: false, checked: false, error: "telegram_id joueur inconnu" };
+  try {
+    const db = getDb();
+    let chatId = (db.prepare(`SELECT value FROM settings WHERE key = 'wn_room_chat_id'`).get() as { value: string } | undefined)?.value ?? null;
+    if (!chatId) {
+      const { resolveInviteHash } = await import("@/lib/telegram-userbot");
+      const r = await resolveInviteHash(WN_ROOM_INVITE_HASH);
+      if (!r.chatId) return { member: false, checked: false, error: r.error };
+      chatId = r.chatId;
+      db.prepare(`INSERT OR REPLACE INTO settings (key, value) VALUES ('wn_room_chat_id', ?)`).run(chatId);
+    }
+    const { isUserInChannel } = await import("@/lib/telegram-userbot");
+    return await isUserInChannel(chatId, playerTgId);
+  } catch (e: any) {
+    return { member: false, checked: false, error: e?.message ?? String(e) };
   }
 }
 
