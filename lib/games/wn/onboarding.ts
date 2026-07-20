@@ -157,8 +157,8 @@ export async function handleWnCallback(
 
     await sendMsg(chatId,
       `👌 Dernière étape : ta wallet dédiée WN.\n\n` +
-      `⚠️ <b>Pour cette game il te faut une NOUVELLE wallet VIERGE</b> (du TRX pour les gas fees c'est OK, ` +
-      `mais <b>aucune transaction USDT</b> dessus).\n\n` +
+      `⚠️ <b>Pour cette game il te faut une NOUVELLE wallet VIERGE</b> — <b>GasFee autorisé sur cette game</b> ` +
+      `(du TRX pour les frais c'est OK), mais <b>aucune transaction USDT</b> dessus.\n\n` +
       `👉 Crée-en une nouvelle dans ton <b>TronLink</b> et <b>nomme-la « WNPK »</b> pour ne pas te tromper par la suite.\n\n` +
       `🔒 <b>Règle absolue</b> : TOUS tes cash in et cash out WN doivent partir et arriver de CETTE wallet. ` +
       `Sinon ton tracking sera mélangé avec l'autre game (la wallet game de dépôt est la même pour les deux).\n\n` +
