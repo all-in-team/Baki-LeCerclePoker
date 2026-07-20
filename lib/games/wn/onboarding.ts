@@ -147,10 +147,10 @@ export async function handleWnCallback(
     return;
   }
 
-  // ── Room rejointe confirmée → instructions wallet WNPK vierge (Hugo 2026-07-20) ──
-  // Pas de question "as-tu un wallet ?" : WN exige dans TOUS les cas une NOUVELLE
-  // wallet vierge dédiée — c'est elle qui sépare le tracking WN du tracking A5
-  // (la wallet game de dépôt est la même pour les deux).
+  // ── Room rejointe confirmée → instructions wallet WN dédiée (Hugo 2026-07-20) ──
+  // Pas de question "as-tu un wallet ?" : WN exige une wallet DÉDIÉE (pas forcément
+  // vierge — assouplissement Hugo — mais jamais la wallet A5 du joueur) : c'est elle
+  // qui sépare le tracking WN du tracking A5 (même wallet game de dépôt).
   if (data === "wn_room_joined") {
     if (session.step !== ("wn_room_join_check" as Step)) return;
 
@@ -185,12 +185,12 @@ export async function handleWnCallback(
 
     await sendMsg(chatId,
       `👌 Dernière étape : ta wallet dédiée WN.\n\n` +
-      `⚠️ <b>Pour cette game il te faut une NOUVELLE wallet VIERGE</b> — <b>GasFee autorisé sur cette game</b> ` +
-      `(du TRX pour les frais c'est OK), mais <b>aucune transaction USDT</b> dessus.\n\n` +
-      `👉 Crée-en une nouvelle dans ton <b>TronLink</b> et <b>nomme-la « WNPK »</b> pour ne pas te tromper par la suite.\n\n` +
+      `⚠️ <b>Il te faut une wallet DÉDIÉE à cette game</b> — pas besoin qu'elle soit neuve, ` +
+      `mais elle ne doit <b>PAS être ta wallet A5</b> ni servir pour A5. GasFee autorisé sur cette game.\n\n` +
+      `👉 Le plus simple : crée-en une dans ton <b>TronLink</b> et <b>nomme-la « WNPK »</b> pour ne pas te tromper par la suite.\n\n` +
       `🔒 <b>Règle absolue</b> : TOUS tes cash in et cash out WN doivent partir et arriver de CETTE wallet. ` +
       `Sinon ton tracking sera mélangé avec l'autre game (la wallet game de dépôt est la même pour les deux).\n\n` +
-      `Envoie-moi maintenant l'adresse de ta wallet WNPK (format T... 34 caractères, TRC20).`,
+      `Envoie-moi maintenant l'adresse de ta wallet WN (format T... 34 caractères, TRC20).`,
       tid
     );
 
@@ -218,26 +218,6 @@ async function verifyWnRoomMembership(playerTgId: number | null): Promise<{ memb
     return await isUserInChannel(chatId, playerTgId);
   } catch (e: any) {
     return { member: false, checked: false, error: e?.message ?? String(e) };
-  }
-}
-
-// Vierge = zéro transfert USDT TRC20 (un top-up TRX pour les gas n'apparaît pas sur cet
-// endpoint → autorisé, conforme à la règle "gas fee possible mais sans transaction").
-// En cas d'erreur TronGrid on n'a PAS le droit de bloquer l'onboarding : accept + alerte agent.
-async function isWalletVirgin(address: string): Promise<{ virgin: boolean; checked: boolean }> {
-  try {
-    const headers: Record<string, string> = { Accept: "application/json" };
-    const apiKey = process.env.TRONGRID_API_KEY;
-    if (apiKey) headers["TRON-PRO-API-KEY"] = apiKey;
-    const res = await fetch(
-      `https://api.trongrid.io/v1/accounts/${address}/transactions/trc20?limit=1&contract_address=TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t`,
-      { headers }
-    );
-    if (!res.ok) return { virgin: true, checked: false };
-    const json = await res.json();
-    return { virgin: (json.data ?? []).length === 0, checked: true };
-  } catch {
-    return { virgin: true, checked: false };
   }
 }
 
@@ -279,24 +259,6 @@ export async function handleWnRawMessage(
         `de ta wallet A5 — c'est elle qui permet de séparer tes deux deals. Envoie une autre adresse TRC20.`
       );
       return true;
-    }
-
-    // Wallet VIERGE exigée (Hugo 2026-07-20) : zéro transfert USDT. Une wallet déjà
-    // utilisée = tracking pollué dès le départ → refus avec explication.
-    const virgin = await isWalletVirgin(text);
-    if (virgin.checked && !virgin.virgin) {
-      await reply(
-        `⚠️ Cette wallet a déjà des transactions USDT — il faut une wallet <b>VIERGE</b> ` +
-        `(le TRX pour les gas c'est OK, mais aucun transfert USDT).\n` +
-        `Crée une nouvelle wallet dans TronLink, nomme-la <b>WNPK</b>, et envoie-moi son adresse.`
-      );
-      return true;
-    }
-    if (!virgin.checked) {
-      await sendMsg(AGENT_CHAT_ID,
-        `⚠️ <b>WN onboarding</b> : vérification "wallet vierge" impossible (TronGrid KO) pour ` +
-        `<code>${text}</code> — adresse acceptée, à contrôler à la main.`
-      );
     }
 
     addPlayerCashout(session.player_id, text, gameId);
