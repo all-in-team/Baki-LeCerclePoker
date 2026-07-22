@@ -61,6 +61,7 @@ export default function QqpkFunnelClient({ leads, reports }: {
     { label: "App installée", count: atLeast(1), sub: pct(atLeast(1)) },
     { label: "Dépôt fait", count: atLeast(2), sub: pct(atLeast(2)) },
     { label: "Débloqués (ID reçu)", count: atLeast(4), sub: pct(atLeast(4)) },
+    { label: "Vérifiés room", count: leads.filter(l => l.weeks_count > 0).length, sub: "ID vu dans un import" },
     { label: "Ont joué", count: leads.filter(l => l.total_rake > 0).length, sub: "rake > 0" },
   ];
 
@@ -202,9 +203,16 @@ function FragmentRow({ lead, stage, weekly, isOpen, played, onToggle }: {
         <td style={{ padding: "10px 14px", whiteSpace: "nowrap" }}>
           <span style={{ color: stage.color, fontWeight: 600 }}>{stage.label}</span>
         </td>
-        <td style={{ padding: "10px 14px", color: "#E8E8EE", fontFamily: "monospace" }}>
+        <td style={{ padding: "10px 14px", color: "#E8E8EE", fontFamily: "monospace", whiteSpace: "nowrap" }}>
           {lead.qqpk_member_id ?? "—"}
           {lead.nickname && <span style={{ color: "#555568", marginLeft: 6, fontFamily: "inherit" }}>({lead.nickname})</span>}
+          {/* Vérifié = l'ID apparaît dans au moins un export hebdo de la room → le compte
+              existe vraiment. Un ID inventé reste "à vérifier" pour toujours. */}
+          {lead.qqpk_member_id && (lead.weeks_count > 0 ? (
+            <span style={{ marginLeft: 6, fontSize: 10, padding: "2px 6px", borderRadius: 4, background: "rgba(16,185,129,0.12)", color: "#10B981", fontWeight: 700, fontFamily: "inherit" }}>✓ VÉRIFIÉ</span>
+          ) : (
+            <span style={{ marginLeft: 6, fontSize: 10, padding: "2px 6px", borderRadius: 4, background: "rgba(240,185,11,0.10)", color: "#F0B90B", fontWeight: 600, fontFamily: "inherit" }} title="ID jamais vu dans un import — vérifié au prochain import hebdo, ou ID bidon">⏳ à vérifier</span>
+          ))}
         </td>
         <td style={{ padding: "10px 14px", color: "#8888A0", whiteSpace: "nowrap" }}>{fmtDate(lead.created_at)}</td>
         <td style={{ padding: "10px 14px", color: "#8888A0", whiteSpace: "nowrap" }}>{fmtDate(lead.stage4_at)}</td>
