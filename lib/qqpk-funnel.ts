@@ -85,7 +85,7 @@ async function sendStep4(chatId: number, memberId: string) {
     `✅ ID enregistré : <code>${memberId}</code>\n\n` +
     `<b>Étape 4/4 — Tu es prêt 🔓</b>\n\n` +
     `📊 <b>Ranges Ante 0.2bb</b> : 🎥 vidéo à venir\n` +
-    `🎰 <b>Live play</b> : 🎥 vidéo à venir\n\n` +
+    `🎰 <b>MindMap</b> : 🎥 vidéo à venir\n\n` +
     `GL aux tables 🃏\n` +
     `Des questions ? DM @hugoroine`
   );
