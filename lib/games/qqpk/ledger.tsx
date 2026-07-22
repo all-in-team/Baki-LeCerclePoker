@@ -159,7 +159,18 @@ export function loadQqpkLedger(params: { cycle?: string }): QqpkLedgerData {
       if (cyc) transactionsByPlayer[r.player_id] = getQqpkCycleTransactions(r.player_id, cyc.start_iso, cyc.end_iso);
     } else {
       const h = r as QqpkHistoryRow;
-      if (h.block_start && h.block_end) transactionsByPlayer[r.player_id] = getQqpkCycleTransactions(r.player_id, h.block_start, h.block_end);
+      if (h.block_start && h.block_end) {
+        // Fin effective = min(fin théorique, instant du settle) : un settle anticipé n'a
+        // figé que ce qui existait à ce moment-là — les tx datées après lui appartiennent
+        // au cycle suivant (fenêtre élargie de getQqpkActiveCycle) et ne doivent pas
+        // apparaître en double ici. Σ liste == résultat figé du bloc.
+        let endIso = h.block_end;
+        if (h.settled_at) {
+          const s = h.settled_at.includes("T") ? h.settled_at : h.settled_at.replace(" ", "T") + (h.settled_at.endsWith("Z") ? "" : "Z");
+          if (s < endIso) endIso = s;
+        }
+        transactionsByPlayer[r.player_id] = getQqpkCycleTransactions(r.player_id, h.block_start, endIso);
+      }
     }
   }
 
