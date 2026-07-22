@@ -42,8 +42,16 @@ function touch(tgId: number) {
 // ── Messages des étapes ────────────────────────────────────
 
 async function sendStep1(chatId: number) {
+  // Value stacking (Hugo 2026-07-22) : répondre à "what's in it for me" dès le
+  // premier message — offre irrésistible avant de demander le moindre effort.
   await sendMsgKeyboard(chatId,
     `🃏 <b>Bienvenue au Cercle — QQPK</b>\n\n` +
+    `En t'inscrivant via nous, tu obtiens <b>DIRECTEMENT</b> :\n\n` +
+    `🎁 <b>20% de rakeback</b>\n` +
+    `💰 <b>Bonus 888$</b> sur ton premier dépôt\n` +
+    `📊 <b>Ranges Ante 0.2bb</b> pour exploit le field\n` +
+    `🎥 <b>Live play</b> par Baki\n` +
+    `🧠 <b>Réponses à tes HH</b> par Baki\n\n` +
     `<b>Étape 1/4 — Installe l'app et inscris-toi</b>\n\n` +
     `🎥 Regarde cette vidéo, tout est dedans :\n${QQPK_FUNNEL_LOOM_APP}\n\n` +
     `Quand ton compte est créé, clique sur le bouton 👇`,
