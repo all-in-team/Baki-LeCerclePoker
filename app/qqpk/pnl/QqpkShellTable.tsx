@@ -2,12 +2,12 @@
 
 import { useEffect, useMemo, useState, Fragment } from "react";
 import { useRouter } from "next/navigation";
-import { Check, Scale, AlertTriangle, CalendarClock, Search, ChevronDown, ChevronUp, ArrowDownLeft, ArrowUpRight, ExternalLink } from "lucide-react";
+import { Check, Scale, AlertTriangle, CalendarClock, Search, ChevronDown, ChevronUp, ArrowDownLeft, ArrowUpRight, ExternalLink, Ban } from "lucide-react";
 import Modal from "@/components/Modal";
 import Btn from "@/components/Btn";
 import PlayerWalletsPanel, { WalletBadgeButton, type WalletAddr } from "@/components/ledger/extras/PlayerWalletsPanel";
 import { dueLabel } from "@/components/ledger/extras/SettlementFlow";
-import { saveMainsAction, saveCycleRakebackAction, previewSettlementAction, settleCycleAction } from "./actions";
+import { saveMainsAction, saveCycleRakebackAction, previewSettlementAction, settleCycleAction, previewStopAction, stopPlayerAction } from "./actions";
 
 /**
  * QQPK staking table on LedgerShell — the per-player cycle rows + history +
@@ -166,6 +166,9 @@ export default function QqpkShellTable({
   const [busy, setBusy] = useState<number | null>(null);
   const [recap, setRecap] = useState<{ player: Row; preview: Preview } | null>(null);
   const [confirming, setConfirming] = useState(false);
+  type StopPreview = { ok: boolean; error?: string; player_name?: string; cycle_start?: string; cycle_end_incl?: string; tx_count?: number; resultat_periode?: number };
+  const [stopRecap, setStopRecap] = useState<{ player: Row; preview: StopPreview } | null>(null);
+  const [stopping, setStopping] = useState(false);
   const [expandedWallet, setExpandedWallet] = useState<number | null>(null);
   const [expandedTx, setExpandedTx] = useState<number | null>(null);
   const [search, setSearch] = useState("");
@@ -249,6 +252,25 @@ export default function QqpkShellTable({
       setRecap(null);
       router.refresh();
     } finally { setConfirming(false); }
+  }
+
+  async function openStopRecap(player: Row) {
+    setBusy(player.player_id);
+    try {
+      const preview = (await previewStopAction(player.player_id)) as StopPreview;
+      setStopRecap({ player, preview });
+    } finally { setBusy(null); }
+  }
+
+  async function confirmStop() {
+    if (!stopRecap) return;
+    setStopping(true);
+    try {
+      const res = await stopPlayerAction(stopRecap.player.player_id);
+      if (!res.ok) { alert(res.error ?? "Erreur stop"); return; }
+      setStopRecap(null);
+      router.refresh();
+    } finally { setStopping(false); }
   }
 
   const th: React.CSSProperties = { textAlign: "right", padding: "8px 10px", color: "var(--text-muted)", fontWeight: 600, fontSize: 11, whiteSpace: "nowrap" };
@@ -427,10 +449,18 @@ export default function QqpkShellTable({
                         <td style={{ padding: "10px 10px 10px 16px", textAlign: "left" }}><ReglementCell reglement={r.reglement_projected} /></td>
                         <td style={{ ...td, textAlign: "center" }}><ConditionBadge row={r} /></td>
                         {isCurrent && (
-                          <td style={{ ...td, textAlign: "center" }}>
+                          <td style={{ ...td, textAlign: "center", whiteSpace: "nowrap" }}>
                             <Btn onClick={() => openRecap(r)} disabled={busy === r.player_id} style={{ fontSize: 11, gap: 5, padding: "6px 10px" }}>
                               <Scale size={13} /> Régler
                             </Btn>
+                            <button
+                              onClick={() => openStopRecap(r)}
+                              disabled={busy === r.player_id}
+                              title="Stopper ce joueur (borne son deal QQPK — il sort du board, l'historique reste)"
+                              style={{ marginLeft: 6, padding: "6px 8px", borderRadius: 6, background: "rgba(239,68,68,0.10)", border: "1px solid rgba(239,68,68,0.3)", color: "#EF4444", cursor: "pointer", display: "inline-flex", verticalAlign: "middle" }}
+                            >
+                              <Ban size={13} />
+                            </button>
                           </td>
                         )}
                       </tr>
@@ -575,6 +605,47 @@ export default function QqpkShellTable({
               <Btn onClick={() => setRecap(null)} style={{ background: "var(--bg-base)" }}>Annuler</Btn>
               {recap.preview.ok && (
                 <Btn variant="primary" onClick={confirmSettle} disabled={confirming}>{confirming ? "..." : "Confirmer le règlement"}</Btn>
+              )}
+            </div>
+          </div>
+        )}
+      </Modal>
+
+      {/* Stop d'un joueur — borne son deal QQPK, aucune donnée supprimée */}
+      <Modal open={!!stopRecap} onClose={() => setStopRecap(null)} title="Stopper le joueur — confirmation">
+        {stopRecap && (
+          <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+            {!stopRecap.preview.ok ? (
+              <div style={{ padding: 14, borderRadius: 8, background: "rgba(239,68,68,0.1)", color: "#EF4444", fontSize: 13, display: "flex", gap: 8, alignItems: "center" }}>
+                <AlertTriangle size={16} /> {stopRecap.preview.error ?? "Impossible de stopper ce joueur."}
+              </div>
+            ) : (
+              <>
+                <div style={{ fontSize: 13, color: "var(--text)" }}>
+                  Stopper <b>{stopRecap.player.player_name}</b> sur QQPK ?
+                </div>
+                {(stopRecap.preview.tx_count ?? 0) > 0 && (
+                  <div style={{ padding: "10px 12px", borderRadius: 8, background: "rgba(245,197,24,0.08)", border: "1px solid rgba(245,197,24,0.3)", fontSize: 12, color: "#F5C518" }}>
+                    ⚠️ Son cycle en cours ({fmtDate(stopRecap.preview.cycle_start ?? "")} → {fmtDate(stopRecap.preview.cycle_end_incl ?? "")})
+                    contient <b>{stopRecap.preview.tx_count} transaction{(stopRecap.preview.tx_count ?? 0) > 1 ? "s" : ""}</b> non
+                    réglée{(stopRecap.preview.tx_count ?? 0) > 1 ? "s" : ""} (résultat {signed(stopRecap.preview.resultat_periode ?? 0)} USDT).
+                    Si tu veux les régler, clique <b>Régler</b> d&apos;abord — sinon elles ne seront jamais comptées dans un règlement.
+                  </div>
+                )}
+                <div style={{ fontSize: 12, color: "var(--text-muted)", lineHeight: 1.6 }}>
+                  • Il disparaît du board actif (deal borné à maintenant).<br />
+                  • Ses cycles réglés restent dans l&apos;historique et le cumul (rien n&apos;est supprimé).<br />
+                  • Les transactions datées après l&apos;arrêt ne seront plus comptées.<br />
+                  • Réversible : on peut réactiver son deal plus tard.
+                </div>
+              </>
+            )}
+            <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 4 }}>
+              <Btn onClick={() => setStopRecap(null)} style={{ background: "var(--bg-base)" }}>Annuler</Btn>
+              {stopRecap.preview.ok && (
+                <Btn onClick={confirmStop} disabled={stopping} style={{ background: "rgba(239,68,68,0.15)", color: "#EF4444", border: "1px solid rgba(239,68,68,0.4)" }}>
+                  {stopping ? "..." : "🛑 Stopper le joueur"}
+                </Btn>
               )}
             </div>
           </div>
