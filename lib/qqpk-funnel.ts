@@ -46,15 +46,15 @@ async function sendStep1(chatId: number) {
   // premier message — offre irrésistible avant de demander le moindre effort.
   await sendMsgKeyboard(chatId,
     `🃏 <b>Bienvenue au Cercle — QQPK</b>\n\n` +
-    `En t'inscrivant via nous, tu obtiens <b>DIRECTEMENT</b> :\n\n` +
-    `🎁 <b>20% de rakeback</b> chaque semaine, crédité sur ton compte\n` +
-    `💰 <b>Bonus 888$</b> sur ton premier dépôt\n` +
-    `📊 <b>Ranges Ante 0.2bb</b> pour exploit le field\n` +
-    `🎥 <b>Mindmap avec les Explo du field</b> pour te faire gagner du temps = Argent\n` +
-    `🧠 <b>Réponses à tes HH</b> par Baki\n\n` +
-    `<b>Étape 1/4 — Installe l'app et inscris-toi</b>\n\n` +
-    `🎥 Regarde cette vidéo, tout est dedans :\n${QQPK_FUNNEL_LOOM_APP}\n\n` +
-    `Quand ton compte est créé, clique sur le bouton 👇`,
+    `Ton inscription via nous débloque immédiatement :\n\n` +
+    `💰 <b>888$ de bonus</b> sur ton premier dépôt\n` +
+    `🎁 <b>20% de rakeback au lieu de 10%</b> — versé chaque semaine en automatique\n` +
+    `📊 <b>Ranges Ante 0.2bb</b> prêtes à l'emploi pour exploit le field\n` +
+    `🎥 <b>Mindmap des Explo du field</b> → moins de taf, plus d'argent\n` +
+    `🧠 <b>Tes HH analysées par Baki</b>, direct sur Telegram\n\n` +
+    `⚡ <b>Étape 1/4 — 3 minutes chrono</b>\n\n` +
+    `Regarde cette vidéo, tout y est 👇\n${QQPK_FUNNEL_LOOM_APP}\n\n` +
+    `Compte créé ? Clique sur le bouton 👇`,
     [[{ text: "✅ App installée", callback_data: "qf_app_ok" }]]
   );
 }
