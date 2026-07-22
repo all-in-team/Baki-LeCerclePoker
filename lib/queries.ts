@@ -2583,13 +2583,34 @@ export function getQqpkActiveCycle(playerId: number): QqpkCycle | null {
   const due = now >= endExcl.getTime();
   const days_overdue = due ? Math.floor((now - endExcl.getTime()) / 86400000) : 0;
 
+  // SETTLE ANTICIPÉ / TX EN RETARD (GO Hugo 2026-07-22 — cas Antoine) : un cycle réglé
+  // AVANT sa fin théorique fige son résultat à l'instant du settle ; les tx datées entre
+  // ce settle et l'anniversaire suivant tombaient dans une zone morte (cycle précédent
+  // immutable sans elles, cycle actif démarrant à l'anniversaire). Miroir de l'invariant
+  // des settlements hebdo — une tx en retard appartient à la période ouverte suivante :
+  // le cycle actif démarre au moment du dernier settle quand celui-ci précède
+  // l'anniversaire. min() garantit zéro double comptage : un settle en retard a figé une
+  // fenêtre bornée à l'anniversaire, donc on ne recule jamais au-delà de ce qui est déjà
+  // compté. Le settle du cycle actif persistera cette borne dans block_start (fenêtre
+  // élargie figée), donc la chaîne reste contiguë settle après settle.
+  let startIso = toUTCISO(startBound);
+  const prevSettle = getDb().prepare(
+    `SELECT MAX(COALESCE(updated_at, created_at)) AS t FROM qqpk_staking_blocks
+     WHERE player_id = ? AND status = 'settled' AND block_month < ?`
+  ).get(playerId, cycleStart) as { t: string | null } | undefined;
+  if (prevSettle?.t) {
+    const raw = prevSettle.t;
+    const prevIso = raw.includes("T") ? raw : raw.replace(" ", "T") + (raw.endsWith("Z") ? "" : "Z");
+    if (prevIso < startIso) startIso = prevIso;
+  }
+
   return {
     player_start_date: startStr,
     cycle_index: k,
     cycle_start: cycleStart,
     cycle_end_incl: toParisDate(toUTCISO(endIncl)),
     settle_date: settleDate,
-    start_iso: toUTCISO(startBound),
+    start_iso: startIso,
     end_iso: toUTCISO(endIncl),
     due,
     days_overdue,
