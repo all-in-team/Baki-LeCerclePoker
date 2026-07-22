@@ -2109,4 +2109,53 @@ function initSchema(db: Database.Database) {
   } catch (err: any) {
     console.error(`[MIGRATION:fix_hakim_wn_pct_40_v1] FAILED:`, err.message);
   }
+
+  // QQPK Funnel (GO Hugo 2026-07-22) — funnel de masse Instagram → bot DM, ZÉRO lien
+  // avec le système QQPK staking existant (cycles/settlements intouchés). Tables neuves,
+  // isolées : leads (pas des players) + reports hebdo importés du back-office de la room.
+  // Seules les lignes dont Member ID = ID enregistré par un lead sont importées.
+  try {
+    const fix = db.prepare(`INSERT OR IGNORE INTO _applied_fixes (name) VALUES (?)`).run("add_qqpk_funnel_v1");
+    if (fix.changes > 0) {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS qqpk_funnel_leads (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          telegram_id INTEGER NOT NULL UNIQUE,
+          username TEXT,
+          first_name TEXT,
+          stage INTEGER NOT NULL DEFAULT 0,
+          qqpk_member_id TEXT,
+          blocked INTEGER NOT NULL DEFAULT 0,
+          reminders_sent INTEGER NOT NULL DEFAULT 0,
+          last_reminder_at TEXT,
+          stage1_at TEXT,
+          stage2_at TEXT,
+          stage3_at TEXT,
+          stage4_at TEXT,
+          created_at TEXT NOT NULL DEFAULT (datetime('now')),
+          updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+        CREATE INDEX IF NOT EXISTS idx_qqpk_funnel_leads_stage ON qqpk_funnel_leads(stage);
+        CREATE INDEX IF NOT EXISTS idx_qqpk_funnel_leads_member ON qqpk_funnel_leads(qqpk_member_id);
+        CREATE TABLE IF NOT EXISTS qqpk_funnel_reports (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          member_id TEXT NOT NULL,
+          week_start TEXT NOT NULL,
+          nickname TEXT,
+          rake REAL NOT NULL DEFAULT 0,
+          deposits REAL NOT NULL DEFAULT 0,
+          withdrawals REAL NOT NULL DEFAULT 0,
+          winloss REAL NOT NULL DEFAULT 0,
+          insurance REAL NOT NULL DEFAULT 0,
+          rewards REAL NOT NULL DEFAULT 0,
+          created_at TEXT NOT NULL DEFAULT (datetime('now')),
+          UNIQUE(member_id, week_start)
+        );
+        CREATE INDEX IF NOT EXISTS idx_qqpk_funnel_reports_member ON qqpk_funnel_reports(member_id);
+      `);
+      console.log("[MIGRATION] add_qqpk_funnel_v1 applied");
+    }
+  } catch (err: any) {
+    console.error(`[MIGRATION:add_qqpk_funnel_v1] FAILED:`, err.message);
+  }
 }

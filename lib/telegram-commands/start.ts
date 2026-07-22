@@ -11,6 +11,14 @@ export async function handleStart(chatId: number, fromId: number, fromName: stri
     return;
   }
 
+  // QQPK Funnel — funnel de masse IG, 100% DM, aucun groupe, aucun lien avec players.
+  // Lead créé/repris dans qqpk_funnel_leads, séquence pilotée par boutons qf_*.
+  if (payload === "qqpkfunnel" && chatId === fromId) {
+    const { handleQqpkFunnelStart } = await import("@/lib/qqpk-funnel");
+    await handleQqpkFunnelStart(chatId, from ?? { id: fromId, first_name: fromName });
+    return;
+  }
+
   // ref_<affiliate_id> deep link: prospect referred by an affiliate.
   // Attribution is keyed on the referred user's telegram_id so it survives a missing
   // @username (referred_handle is NOT NULL → store a synthetic "tg:<id>" when no handle).

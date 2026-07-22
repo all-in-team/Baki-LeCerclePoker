@@ -101,6 +101,9 @@ export async function POST(req: NextRequest) {
       await handleTtpokerCallback(cb.id, cbData, cbChatId, cbThreadId, cb.from, cb.message?.message_id);
     } else if (cbData.startsWith("wn_")) {
       await handleWnCallback(cb.id, cbData, cbChatId, cbThreadId, cb.from, cb.message?.message_id);
+    } else if (cbData.startsWith("qf_")) {
+      const { handleQqpkFunnelCallback } = await import("@/lib/qqpk-funnel");
+      await handleQqpkFunnelCallback(cb.id, cbData, cbChatId, cb.from);
     } else if (cbData.startsWith("onboard:")) {
       await handleOnboardCallback(cb.id, cbData, cbChatId, cbThreadId);
     } else if (cbData.startsWith("onboard_")) {
@@ -231,6 +234,19 @@ export async function POST(req: NextRequest) {
       await sendMsg(chatId, `❌ Erreur : ${e.message}`);
     }
     return NextResponse.json({ ok: true });
+  }
+
+  // QQPK Funnel — DM d'un lead (capture ID joueur, resume d'étape). Les leads ne sont
+  // pas des players ; si une vraie session d'onboarding existe sur ce chat (lead devenu
+  // player via le funnel normal), elle est prioritaire → on ne touche pas au message.
+  if (msg?.text && !msg.text.startsWith("/") && msg.chat?.type === "private" && msg.from?.id && !getSession(chatId)) {
+    try {
+      const { handleQqpkFunnelDm } = await import("@/lib/qqpk-funnel");
+      const handled = await handleQqpkFunnelDm(chatId, msg.from.id, msg.text);
+      if (handled) return NextResponse.json({ ok: true });
+    } catch (e: any) {
+      console.error("[TG QQPK FUNNEL DM]", e?.message ?? e);
+    }
   }
 
   // Raw message → guided onboarding flow (action %, addresses)
