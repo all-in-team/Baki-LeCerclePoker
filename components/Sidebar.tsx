@@ -6,7 +6,7 @@ import { useState, useEffect } from "react";
 import {
   X, LogOut, LayoutDashboard, ContactRound, Users, Network,
   Sliders, Settings, Wallet, Scale, BarChart3, FileText,
-  TrendingUp, ChevronDown, ChevronRight, CalendarDays,
+  TrendingUp, ChevronDown, ChevronRight, CalendarDays, Rocket,
 } from "lucide-react";
 
 type NavItem = { href: string; label: string; icon: React.ComponentType<{ size?: number; strokeWidth?: number }> };
@@ -17,6 +17,7 @@ const MAIN: NavItem[] = [
   { href: "/crm", label: "CRM Joueurs", icon: ContactRound },
   { href: "/players", label: "Joueurs", icon: Users },
   { href: "/crm/affiliates", label: "Affiliates", icon: Network },
+  { href: "/qqpk-funnel", label: "QQPK Funnel", icon: Rocket },
   { href: "/crm/games", label: "Games & Deals", icon: Sliders },
   { href: "/settings", label: "Settings", icon: Settings },
 ];

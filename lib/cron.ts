@@ -84,6 +84,24 @@ export function initCronJobs() {
     console.log("[CRON] onboarding-reminders DISABLED");
   }
 
+  // Relances QQPK Funnel — toutes les heures. Leads bloqués à une étape < 4 :
+  // J+1 / J+3 / J+7 (max 3 relances), 403 → blocked. Aucun lien avec players.
+  if (process.env.QQPK_FUNNEL_REMINDERS_ENABLED !== "false") {
+    cron.schedule("15 * * * *", async () => {
+      console.log("[CRON] qqpk-funnel-reminders firing");
+      try {
+        const { runQqpkFunnelReminders } = await import("./qqpk-funnel");
+        const r = await runQqpkFunnelReminders();
+        console.log(`[CRON] qqpk-funnel-reminders done: sent=${r.sent} blocked=${r.blocked} skipped=${r.skipped}`);
+      } catch (e: any) {
+        console.error("[CRON] qqpk-funnel-reminders failed:", e);
+      }
+    }, opts);
+    console.log("[CRON] qqpk-funnel-reminders registered (hourly :15)");
+  } else {
+    console.log("[CRON] qqpk-funnel-reminders DISABLED");
+  }
+
   if (process.env.CASHOUT_CRONS_ENABLED !== "true") {
     console.log("[CRON] cashout crons DISABLED (set CASHOUT_CRONS_ENABLED=true to enable)");
     return;
