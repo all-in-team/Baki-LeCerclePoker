@@ -84,8 +84,11 @@ async function sendStep4(chatId: number, memberId: string) {
   await sendMsg(chatId,
     `✅ ID enregistré : <code>${memberId}</code>\n\n` +
     `<b>Étape 4/4 — Tu es prêt 🔓</b>\n\n` +
+    `Jusqu'à <b>888$ de bonus</b> pour ton premier dépôt\n` +
     `📊 <b>Ranges Ante 0.2bb</b> : 🎥 vidéo à venir\n` +
     `🎰 <b>MindMap</b> : 🎥 vidéo à venir\n\n` +
+    `• <b>20% de RB</b> envoyé chaque lundi\n` +
+    `• @LecercleSupportPK pour poser tes questions poker\n\n` +
     `GL aux tables 🃏\n` +
     `Des questions ? DM @hugoroine`
   );
