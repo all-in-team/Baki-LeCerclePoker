@@ -2889,7 +2889,15 @@ export function getQqpkGraphData(cycleView: number): QqpkGraphData {
       if (cycle) cycleRaw.push(...buildQqpkCycleWalk(p, cycle.cycle_start, cycle.start_iso, cycle.end_iso, null, rbMap.get(`${p.player_id}|${cycle.cycle_start}`) ?? 0));
     } else {
       const b = settledDesc[cycleView - 1];
-      if (b) cycleRaw.push(...buildQqpkCycleWalk(p, b.block_month, b.block_start, b.block_end, { reglement: b.reglement, settled_at: b.updated_at ?? b.created_at }, rbMap.get(`${p.player_id}|${b.block_month}`) ?? 0));
+      if (b) {
+        // Même cap que la liste tx du ledger : la courbe d'un cycle figé s'arrête à
+        // l'instant du settle — les tx en retard appartiennent au cycle suivant et ne
+        // doivent pas apparaître ici en plus (dernier point == valeur réglée).
+        const rawAt = b.updated_at ?? b.created_at;
+        const settleIso = rawAt.includes("T") ? rawAt : rawAt.replace(" ", "T") + (rawAt.endsWith("Z") ? "" : "Z");
+        const endCapped = settleIso < b.block_end ? settleIso : b.block_end;
+        cycleRaw.push(...buildQqpkCycleWalk(p, b.block_month, b.block_start, endCapped, { reglement: b.reglement, settled_at: rawAt }, rbMap.get(`${p.player_id}|${b.block_month}`) ?? 0));
+      }
     }
 
     // — vue GLOBALE : cycles passés = valeur finale (réel réglé + RB), courant = courbe vive —
