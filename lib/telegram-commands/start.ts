@@ -13,7 +13,9 @@ export async function handleStart(chatId: number, fromId: number, fromName: stri
 
   // QQPK Funnel — funnel de masse IG, 100% DM, aucun groupe, aucun lien avec players.
   // Lead créé/repris dans qqpk_funnel_leads, séquence pilotée par boutons qf_*.
-  if (payload === "qqpkfunnel" && chatId === fromId) {
+  // Payload public : "qqpk" (Hugo — "funnel" a mauvaise connotation) ; l'ancien
+  // "qqpkfunnel" reste accepté si un vieux lien circule.
+  if ((payload === "qqpk" || payload === "qqpkfunnel") && chatId === fromId) {
     const { handleQqpkFunnelStart } = await import("@/lib/qqpk-funnel");
     await handleQqpkFunnelStart(chatId, from ?? { id: fromId, first_name: fromName });
     return;
