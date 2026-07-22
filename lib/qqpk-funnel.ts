@@ -47,10 +47,10 @@ async function sendStep1(chatId: number) {
   await sendMsgKeyboard(chatId,
     `🃏 <b>Bienvenue au Cercle — QQPK</b>\n\n` +
     `En t'inscrivant via nous, tu obtiens <b>DIRECTEMENT</b> :\n\n` +
-    `🎁 <b>20% de rakeback</b>\n` +
+    `🎁 <b>20% de rakeback</b> chaque semaine, crédité sur ton compte\n` +
     `💰 <b>Bonus 888$</b> sur ton premier dépôt\n` +
     `📊 <b>Ranges Ante 0.2bb</b> pour exploit le field\n` +
-    `🎥 <b>Live play</b> par Baki\n` +
+    `🎥 <b>Mindmap avec les Explo du field</b> pour te faire gagner du temps = Argent\n` +
     `🧠 <b>Réponses à tes HH</b> par Baki\n\n` +
     `<b>Étape 1/4 — Installe l'app et inscris-toi</b>\n\n` +
     `🎥 Regarde cette vidéo, tout est dedans :\n${QQPK_FUNNEL_LOOM_APP}\n\n` +
