@@ -9,6 +9,9 @@ import { sendMsg, sendMsgKeyboard, answerCbQuery, AGENT_CHAT_ID } from "@/lib/te
 
 export const QQPK_FUNNEL_LOOM_APP = "https://www.loom.com/share/f84ddf126b0e4f0e8921f8f2a915467e";
 export const QQPK_FUNNEL_LOOM_DEPOSIT = "https://www.loom.com/share/e779faa631b54ef391d02fa53af03365";
+// Lien d'affiliation QQPK — le shareCode applique le code automatiquement à l'inscription.
+export const QQPK_FUNNEL_SIGNUP_LINK = "https://my.qqpk.game/?shareCode=MG371N";
+export const QQPK_FUNNEL_SHARE_CODE = "MG371N";
 
 // Member ID QQPK = numérique (ex: 5666849, 7 chiffres) — on tolère 5 à 10.
 export const QQPK_MEMBER_ID_RE = /^\d{5,10}$/;
@@ -54,6 +57,7 @@ async function sendStep1(chatId: number) {
     `🧠 <b>Tes HH analysées par Baki</b>, direct sur Telegram\n\n` +
     `⚡ <b>Étape 1/4 — 3 minutes chrono</b>\n\n` +
     `Regarde cette vidéo, tout y est 👇\n${QQPK_FUNNEL_LOOM_APP}\n\n` +
+    `🔗 Inscris-toi avec ce lien (code <code>${QQPK_FUNNEL_SHARE_CODE}</code> appliqué automatiquement) :\n${QQPK_FUNNEL_SIGNUP_LINK}\n\n` +
     `Compte créé ? Clique sur le bouton 👇`,
     [[{ text: "✅ App installée", callback_data: "qf_app_ok" }]]
   );
@@ -237,7 +241,7 @@ async function sendDmRaw(tgId: number, text: string, keyboard?: any[][]): Promis
 function reminderContent(lead: FunnelLead): { text: string; keyboard?: any[][] } {
   if (lead.stage <= 0) {
     return {
-      text: `👋 Toujours partant ?\n\n<b>Étape 1/4 — Installe l'app et inscris-toi</b>\n🎥 ${QQPK_FUNNEL_LOOM_APP}\n\nQuand c'est fait, clique 👇`,
+      text: `👋 Toujours partant ?\n\n<b>Étape 1/4 — Installe l'app et inscris-toi</b>\n🎥 ${QQPK_FUNNEL_LOOM_APP}\n🔗 ${QQPK_FUNNEL_SIGNUP_LINK}\n\nQuand c'est fait, clique 👇`,
       keyboard: [[{ text: "✅ App installée", callback_data: "qf_app_ok" }]],
     };
   }
