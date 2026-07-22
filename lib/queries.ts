@@ -2857,13 +2857,17 @@ function finalizeQqpkEvents(events: Omit<QqpkGraphEvent, "cumul_player" | "cumul
 
 export function getQqpkGraphData(cycleView: number): QqpkGraphData {
   const db = getDb();
+  // On garde TOUS les joueurs (les cycles réglés d'un joueur stoppé font partie du
+  // cumul) mais on ne trace plus le cycle actif de ceux dont le deal est borné.
   const players = db.prepare(
-    `SELECT p.id AS player_id, p.name AS player_name
+    `SELECT p.id AS player_id, p.name AS player_name,
+            MAX(CASE WHEN pgd.end_date IS NULL THEN 1 ELSE 0 END) AS deal_active
      FROM players p
      JOIN player_game_deals pgd ON pgd.player_id = p.id
      JOIN games g ON g.id = pgd.game_id AND g.name = 'QQPK'
+     GROUP BY p.id, p.name
      ORDER BY p.name COLLATE NOCASE`
-  ).all() as { player_id: number; player_name: string }[];
+  ).all() as { player_id: number; player_name: string; deal_active: number }[];
 
   const rbMap = getQqpkCycleRakebackMap();
   const blocks = db.prepare(
@@ -2885,7 +2889,7 @@ export function getQqpkGraphData(cycleView: number): QqpkGraphData {
 
     // — vue CYCLE (same relative semantics as the table: 0 = actif, n = n-th settled) —
     if (cycleView === 0) {
-      const cycle = getQqpkActiveCycle(p.player_id);
+      const cycle = p.deal_active ? getQqpkActiveCycle(p.player_id) : null;
       if (cycle) cycleRaw.push(...buildQqpkCycleWalk(p, cycle.cycle_start, cycle.start_iso, cycle.end_iso, null, rbMap.get(`${p.player_id}|${cycle.cycle_start}`) ?? 0));
     } else {
       const b = settledDesc[cycleView - 1];
@@ -2911,7 +2915,7 @@ export function getQqpkGraphData(cycleView: number): QqpkGraphData {
         note: `Cycle ${b.block_month} réglé (réel + RB du cycle)`,
       });
     }
-    const active = getQqpkActiveCycle(p.player_id);
+    const active = p.deal_active ? getQqpkActiveCycle(p.player_id) : null;
     if (active) globalRaw.push(...buildQqpkCycleWalk(p, active.cycle_start, active.start_iso, active.end_iso, null, rbMap.get(`${p.player_id}|${active.cycle_start}`) ?? 0));
   }
 
@@ -2920,11 +2924,14 @@ export function getQqpkGraphData(cycleView: number): QqpkGraphData {
 
 // Board view: one row per QQPK player = their active cycle + live "if settled now" projection.
 export function getQqpkStakingOverview(): { rows: QqpkStakingRow[] } {
+  // end_date IS NULL : un joueur stoppé (bouton 🛑 → deal borné) sort du board actif.
+  // Ses cycles réglés restent dans l'historique et le graph (blocs immutables).
   const players = getDb().prepare(
     `SELECT p.id AS player_id, p.name AS player_name
      FROM players p
      JOIN player_game_deals pgd ON pgd.player_id = p.id
      JOIN games g ON g.id = pgd.game_id AND g.name = 'QQPK'
+     WHERE pgd.end_date IS NULL
      ORDER BY p.name COLLATE NOCASE`
   ).all() as { player_id: number; player_name: string }[];
 
@@ -3056,4 +3063,55 @@ export function settleQqpkCycle(playerId: number): { ok: boolean; error?: string
       operator_pnl_projected: operatorPnlFromReglement(res.reglement),
     },
   };
+}
+
+// ── STOP d'un joueur QQPK (GO Hugo 2026-07-22) ───────────────────────────────
+// Mécanisme standard du repo : borner le deal (end_date). Effets :
+//   • le board actif le masque (getQqpkStakingOverview filtre end_date IS NULL) ;
+//   • le graph ne trace plus son cycle actif (ses cycles réglés restent dans le cumul) ;
+//   • les tx datées après l'arrêt ne comptent plus (borne pgd.end_date déjà présente
+//     dans getWalletSummaryByPlayer / getQqpkCycleTransactions).
+// AUCUNE suppression : cycles réglés immutables, historique intact. Réversible en
+// vidant end_date (SQL / futur bouton réactiver).
+
+// Recap read-only pour le dialogue de confirmation : état du cycle en cours.
+export function previewQqpkStop(playerId: number): {
+  ok: boolean; error?: string; player_name?: string;
+  cycle_start?: string; cycle_end_incl?: string;
+  tx_count?: number; resultat_periode?: number;
+} {
+  const db = getDb();
+  const player = db.prepare(`SELECT name FROM players WHERE id = ?`).get(playerId) as { name: string } | undefined;
+  if (!player) return { ok: false, error: "Joueur introuvable." };
+  const deal = db.prepare(
+    `SELECT pgd.id FROM player_game_deals pgd
+     JOIN games g ON g.id = pgd.game_id AND g.name = 'QQPK'
+     WHERE pgd.player_id = ? AND pgd.end_date IS NULL`
+  ).get(playerId);
+  if (!deal) return { ok: false, error: "Pas de deal QQPK actif pour ce joueur." };
+  const cycle = getQqpkActiveCycle(playerId);
+  if (!cycle) return { ok: true, player_name: player.name, tx_count: 0, resultat_periode: 0 };
+  const txs = getQqpkCycleTransactions(playerId, cycle.start_iso, cycle.end_iso);
+  return {
+    ok: true, player_name: player.name,
+    cycle_start: cycle.cycle_start, cycle_end_incl: cycle.cycle_end_incl,
+    tx_count: txs.length,
+    resultat_periode: getQqpkCycleNet(playerId, cycle.start_iso, cycle.end_iso),
+  };
+}
+
+export function stopQqpkPlayer(playerId: number): { ok: boolean; error?: string } {
+  const db = getDb();
+  // end_date = instant précis de l'arrêt (UTC ISO, même format que tx_datetime) :
+  // les tx du jour déjà passées restent comptées, celles d'après sont exclues.
+  const nowIso = toUTCISO(new Date());
+  const r = db.prepare(
+    `UPDATE player_game_deals SET end_date = ?
+     WHERE player_id = ?
+       AND game_id = (SELECT id FROM games WHERE name = 'QQPK')
+       AND end_date IS NULL`
+  ).run(nowIso, playerId);
+  if (r.changes === 0) return { ok: false, error: "Pas de deal QQPK actif pour ce joueur (déjà stoppé ?)." };
+  console.log(`[QQPK] player ${playerId} stopped — deal end_date = ${nowIso}`);
+  return { ok: true };
 }
