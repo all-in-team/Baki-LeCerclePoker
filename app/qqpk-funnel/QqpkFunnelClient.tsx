@@ -155,7 +155,7 @@ export default function QqpkFunnelClient({ leads, reports }: {
           <tbody>
             {leads.length === 0 && (
               <tr><td colSpan={12} style={{ padding: 24, textAlign: "center", color: "#555568" }}>
-                Aucun lead pour l&apos;instant — partage le deep link <code style={{ color: "#8888A0" }}>t.me/LeCercle_Lebot?start=qqpkfunnel</code>
+                Aucun lead pour l&apos;instant — partage le deep link <code style={{ color: "#8888A0" }}>t.me/LeCercle_Lebot?start=qqpk</code>
               </td></tr>
             )}
             {leads.map(lead => {

@@ -11,7 +11,7 @@ export default function QqpkFunnelPage() {
     <>
       <PageHeader
         title="QQPK Funnel"
-        subtitle="Leads Instagram → bot DM · deep link ?start=qqpkfunnel · import hebdo du report room"
+        subtitle="Leads Instagram → bot DM · deep link ?start=qqpk · import hebdo du report room"
       />
       <QqpkFunnelClient leads={leads} reports={reports} />
     </>
