@@ -2583,26 +2583,40 @@ export function getQqpkActiveCycle(playerId: number): QqpkCycle | null {
   const due = now >= endExcl.getTime();
   const days_overdue = due ? Math.floor((now - endExcl.getTime()) / 86400000) : 0;
 
-  // SETTLE ANTICIPÉ / TX EN RETARD (GO Hugo 2026-07-22 — cas Antoine) : un cycle réglé
-  // AVANT sa fin théorique fige son résultat à l'instant du settle ; les tx datées entre
-  // ce settle et l'anniversaire suivant tombaient dans une zone morte (cycle précédent
-  // immutable sans elles, cycle actif démarrant à l'anniversaire). Miroir de l'invariant
-  // des settlements hebdo — une tx en retard appartient à la période ouverte suivante :
-  // le cycle actif démarre au moment du dernier settle quand celui-ci précède
-  // l'anniversaire. min() garantit zéro double comptage : un settle en retard a figé une
-  // fenêtre bornée à l'anniversaire, donc on ne recule jamais au-delà de ce qui est déjà
-  // compté. Le settle du cycle actif persistera cette borne dans block_start (fenêtre
-  // élargie figée), donc la chaîne reste contiguë settle après settle.
+  // FENÊTRE SETTLE-À-SETTLE (GO Hugo 2026-07-22 — cas Antoine puis Xabi) :
+  // l'anniversaire fixe l'échéance et les labels, mais la frontière réelle entre deux
+  // cycles est l'INSTANT DU SETTLE. Deux moitiés symétriques :
+  //   • DÉBUT : le cycle actif démarre à la couverture réelle du settle précédent =
+  //     min(instant du settle τ, block_end figé + 1s). Settle anticipé (τ < anniversaire,
+  //     cas Antoine) → on recule à τ, récupérant les tx de la zone morte. Settle en
+  //     retard pré-extension (block_end = anniversaire−1s < τ) → le +1s redonne
+  //     exactement l'anniversaire (aucun changement vs comportement déjà audité).
+  //     Settle en retard post-extension (block_end = τ) → on démarre à τ, car le freeze
+  //     a couvert jusque-là. Zéro trou, zéro chevauchement.
+  //   • FIN : un cycle échu NON réglé continue d'absorber les tx jusqu'à maintenant
+  //     (cas Xabi : le cashout de fin arrive après l'anniversaire). end_iso s'étend à
+  //     now quand due ; le settle fige cette borne dans block_end (déjà persisté), et
+  //     le cycle suivant démarre donc à la couverture réelle. Un cycle NON échu garde
+  //     sa borne anniversaire (max(end, now) = end).
+  const normIso = (raw: string) => raw.includes("T") ? raw : raw.replace(" ", "T") + (raw.endsWith("Z") ? "" : "Z");
   let startIso = toUTCISO(startBound);
-  const prevSettle = getDb().prepare(
-    `SELECT MAX(COALESCE(updated_at, created_at)) AS t FROM qqpk_staking_blocks
-     WHERE player_id = ? AND status = 'settled' AND block_month < ?`
-  ).get(playerId, cycleStart) as { t: string | null } | undefined;
-  if (prevSettle?.t) {
-    const raw = prevSettle.t;
-    const prevIso = raw.includes("T") ? raw : raw.replace(" ", "T") + (raw.endsWith("Z") ? "" : "Z");
-    if (prevIso < startIso) startIso = prevIso;
+  const prev = getDb().prepare(
+    `SELECT block_end, COALESCE(updated_at, created_at) AS settled_at
+     FROM qqpk_staking_blocks
+     WHERE player_id = ? AND status = 'settled' AND block_month < ?
+     ORDER BY block_month DESC LIMIT 1`
+  ).get(playerId, cycleStart) as { block_end: string | null; settled_at: string } | undefined;
+  if (prev?.settled_at) {
+    let coverageEnd = normIso(prev.settled_at);
+    if (prev.block_end) {
+      const bePlus1s = toUTCISO(new Date(new Date(normIso(prev.block_end)).getTime() + 1000));
+      if (bePlus1s < coverageEnd) coverageEnd = bePlus1s;
+    }
+    startIso = coverageEnd;
   }
+
+  const nowDate = new Date();
+  const effEndIncl = due && nowDate.getTime() > endIncl.getTime() ? nowDate : endIncl;
 
   return {
     player_start_date: startStr,
@@ -2611,7 +2625,7 @@ export function getQqpkActiveCycle(playerId: number): QqpkCycle | null {
     cycle_end_incl: toParisDate(toUTCISO(endIncl)),
     settle_date: settleDate,
     start_iso: startIso,
-    end_iso: toUTCISO(endIncl),
+    end_iso: toUTCISO(effEndIncl),
     due,
     days_overdue,
   };
