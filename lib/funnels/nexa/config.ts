@@ -20,8 +20,12 @@ export const NEXA_DOWNLOADS = {
 
 export type NexaOs = keyof typeof NEXA_DOWNLOADS;
 
-/** Member ID NEXAPOKER : numérique, 5 à 10 chiffres. */
-export const NEXA_MEMBER_ID_RE = /^\d{5,10}$/;
+// Member ID NEXAPOKER : exactement 7 chiffres (ex. 2518550 — constaté sur les
+// comptes réels). Piloté par ces constantes : pour élargir un jour (6-8 par
+// exemple), passer NEXA_MEMBER_ID_DIGITS à { min, max } ici et rien ailleurs.
+export const NEXA_MEMBER_ID_DIGITS = 7;
+export const NEXA_MEMBER_ID_RE = new RegExp(`^\\d{${NEXA_MEMBER_ID_DIGITS}}$`);
+export const NEXA_MEMBER_ID_HINT = `${NEXA_MEMBER_ID_DIGITS} chiffres`;
 
 /** Relances J+1 / J+3 / J+7 après la dernière interaction, puis flag `cold`. */
 export const NEXA_REMINDER_THRESHOLDS_H = [24, 72, 168];

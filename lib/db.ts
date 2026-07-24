@@ -2248,4 +2248,22 @@ function initSchema(db: Database.Database) {
   } catch (err: any) {
     console.error(`[MIGRATION:add_nexa_funnel_v1] FAILED:`, err.message);
   }
+
+  // Anti-doublon de création/annonce du groupe Nexa (bug constaté en test : le
+  // message « Bienvenue en direct avec nous » partait deux fois).
+  // Cause : la création de groupe (CreateChat + MigrateChat + 5 topics + invite)
+  // dépassait le délai d'attente du webhook Telegram, qui rejouait alors le même
+  // callback → double traitement.
+  //   • group_claimed_at  : verrou atomique — un seul traitement crée le groupe.
+  //   • group_announced_at: le message de bienvenue + lien ne part qu'une fois.
+  try {
+    const fix = db.prepare(`INSERT OR IGNORE INTO _applied_fixes (name) VALUES (?)`).run("add_nexa_group_claim_v1");
+    if (fix.changes > 0) {
+      try { db.exec(`ALTER TABLE nexa_leads ADD COLUMN group_claimed_at TEXT`); } catch {}
+      try { db.exec(`ALTER TABLE nexa_leads ADD COLUMN group_announced_at TEXT`); } catch {}
+      console.log("[MIGRATION] add_nexa_group_claim_v1 applied");
+    }
+  } catch (err: any) {
+    console.error(`[MIGRATION:add_nexa_group_claim_v1] FAILED:`, err.message);
+  }
 }

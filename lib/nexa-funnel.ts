@@ -18,7 +18,7 @@
 import { getDb } from "@/lib/db";
 import { sendMsg, sendMsgKeyboard, answerCbQuery, AGENT_CHAT_ID } from "@/lib/telegram-commands/helpers";
 import {
-  NEXA_ROOM_LABEL, NEXA_BONUS_CODE, NEXA_DOWNLOADS, NEXA_MEMBER_ID_RE,
+  NEXA_ROOM_LABEL, NEXA_BONUS_CODE, NEXA_DOWNLOADS, NEXA_MEMBER_ID_RE, NEXA_MEMBER_ID_HINT,
   NEXA_STAGE_ORDER, NEXA_REMINDER_THRESHOLDS_H, NEXA_MAX_REMINDERS, NEXA_REMINDER_MIN_GAP_H,
   type NexaStage, type NexaOs,
 } from "@/lib/funnels/nexa/config";
@@ -40,6 +40,9 @@ export type NexaLead = {
   played_at: string | null;
   group_chat_id: string | null;
   group_invite_link: string | null;
+  /** Verrou de création (anti double-groupe) et garde d'annonce (anti double-message). */
+  group_claimed_at: string | null;
+  group_announced_at: string | null;
   relances_count: number;
   last_reminder_at: string | null;
   last_interaction_at: string | null;
@@ -133,19 +136,37 @@ function withQuestion(rows: any[][]): any[][] {
 
 async function sendWelcome(chatId: number) {
   await sendMsgKeyboard(chatId,
-    `🃏 <b>Bienvenue au Cercle — ${NEXA_ROOM_LABEL}</b>\n\n` +
-    `On t'accompagne de A à Z sur ${NEXA_ROOM_LABEL} :\n\n` +
-    `🎁 <b>Code bonus <code>${NEXA_BONUS_CODE}</code></b> appliqué à ton inscription\n` +
-    `🤝 <b>Accompagnement complet</b> — on est là à chaque étape\n` +
-    `⚡ <b>Dépôts et retraits en direct avec nous</b> : la room fonctionne en système d'agent, donc tout passe par nous — c'est plus rapide et tu n'es jamais seul\n\n` +
+    `🃏 <b>Bienvenue au Cercle — Onboarding ${NEXA_ROOM_LABEL}</b>\n\n` +
+    `On t'accompagne de A à Z. Voici les 3 étapes :\n\n` +
+    `<b>1</b> — 📲 Tu télécharges l'app (30 sec)\n` +
+    `<b>2</b> — 📝 Tu crées ton compte avec le code 🎁 <b>${NEXA_BONUS_CODE}</b> et tu m'envoies ton ID\n` +
+    `<b>3</b> — 🤝 On crée ton groupe privé avec Hugo &amp; Baki : dépôts et retraits en direct ⚡, suivi perso, et accès à d'autres games qui peuvent te correspondre\n\n` +
+    `En bonus : accès au <b>PokerDex</b> 🧠 — notre data AI sur le field pour jouer avec un coup d'avance.\n\n` +
     `Ça prend 5 minutes, on y va 👇`,
+    withQuestion([
+      [{ text: "C'est parti →", callback_data: "nf_go" }],
+      [{ text: "💡 C'est quoi le deal ?", callback_data: "nf_deal" }],
+    ])
+  );
+}
+
+/** Transparence business — le lead reste à `started` tant qu'il n'a pas cliqué « C'est parti ». */
+async function sendDealExplainer(chatId: number) {
+  await sendMsgKeyboard(chatId,
+    `💡 <b>Comment on gagne de l'argent ?</b>\n\n` +
+    `La room nous reverse une part du rake que tu génères — c'est elle qui nous paye, pas toi. ` +
+    `Jouer via nous te coûte <b>0</b> et te rapporte le bonus + l'accompagnement.\n\n` +
+    `Et si un jour ton niveau fait que la room te tag « pro » et coupe le RB, on te proposera un ` +
+    `deal d'action ensemble — on investit sur toi, on gagne quand tu gagnes… et on perd quand tu perds, ` +
+    `mais j'espère plutôt que tu nous rendras riche lol 🤝\n\n` +
+    `Bref : nos intérêts sont alignés avec les tiens dès le jour 1.`,
     withQuestion([[{ text: "C'est parti →", callback_data: "nf_go" }]])
   );
 }
 
 async function sendDownloadStep(chatId: number) {
   await sendMsgKeyboard(chatId,
-    `<b>Étape 1 — Télécharge l'app</b>\n\n` +
+    `<b>Étape 1/3 — Télécharge l'app</b>\n\n` +
     `Sur quoi tu joues ? Choisis ta plateforme 👇`,
     withQuestion([
       [{ text: NEXA_DOWNLOADS.windows.label, callback_data: "nf_os:windows" }],
@@ -165,24 +186,22 @@ async function sendDownloadLink(chatId: number, os: NexaOs) {
 }
 
 async function sendSignupStep(chatId: number) {
-  await sendMsg(chatId,
-    `<b>Étape 2 — Crée ton compte</b>\n\n` +
-    `Dans l'app, inscris-toi en entrant le code <b><code>${NEXA_BONUS_CODE}</code></b>.\n` +
-    `⚠️ Sans ce code, pas de bonus — et on ne peut pas te suivre ni t'accompagner.\n\n` +
-    `ℹ️ L'app va te demander une vérification d'identité (KYC) : c'est normal et obligatoire côté room. Si tu bloques, utilise le bouton « ❓ J'ai une question ».\n\n` +
-    `Une fois ton compte créé, envoie-moi ton <b>ID joueur</b> (visible dans ton profil) 👇`
-  );
   await sendMsgKeyboard(chatId,
-    `Envoie juste le numéro ici (5 à 10 chiffres).`,
+    `<b>Étape 2/3 — Crée ton compte</b>\n\n` +
+    `Dans l'app, inscris-toi en entrant le code <b>${NEXA_BONUS_CODE}</b>.\n` +
+    `Sans ce code, l'agent ne peut pas créditer tes dépôts.\n\n` +
+    `📌 <b>Important</b> : ton Nom, Prénom et date de naissance doivent correspondre exactement à ton ID.\n\n` +
+    `Une fois ton compte créé, envoie-moi ton <b>ID joueur</b> (visible dans ton profil) 👇\n\n` +
+    `Envoie juste le numéro ici (${NEXA_MEMBER_ID_HINT}).`,
     [[QUESTION_BTN]]
   );
 }
 
 async function sendDepositStep(chatId: number) {
   await sendMsgKeyboard(chatId,
-    `<b>Étape 3 — Ton premier dépôt</b>\n\n` +
-    `${NEXA_ROOM_LABEL} fonctionne en <b>système d'agent</b> : tous les dépôts et retraits passent par nous. C'est plus rapide, et on t'accompagne à chaque opération.\n\n` +
-    `Clique ci-dessous et on ouvre ton canal privé avec nous 👇`,
+    `<b>Étape 3/3 — Ton premier dépôt + ton groupe privé</b>\n\n` +
+    `${NEXA_ROOM_LABEL} fonctionne en <b>système d'agent</b> : tous les dépôts et retraits passent par nous.\n\n` +
+    `Clique ci-dessous : on ouvre ton canal privé avec Hugo &amp; Baki, et tu reçois ton accès <b>PokerDex</b> 🧠 pour la game 👇`,
     withQuestion([[{ text: "💰 Faire mon premier dépôt", callback_data: "nf_deposit" }]])
   );
 }
@@ -195,6 +214,20 @@ async function sendGroupReady(chatId: number, link: string) {
   );
 }
 
+/**
+ * Annonce du groupe — EXACTEMENT UNE FOIS par lead (fix du double message).
+ * La garde est un UPDATE conditionnel : deux exécutions concurrentes du même
+ * callback (webhook rejoué par Telegram) ne peuvent pas toutes les deux gagner.
+ */
+async function announceGroupOnce(leadId: number, chatId: number, link: string) {
+  const claimed = getDb().prepare(
+    `UPDATE nexa_leads SET group_announced_at = datetime('now'), updated_at = datetime('now')
+     WHERE id = ? AND group_announced_at IS NULL`
+  ).run(leadId);
+  if (claimed.changes === 0) return; // déjà annoncé → on ne renvoie rien
+  await sendGroupReady(chatId, link);
+}
+
 /** Renvoie le prompt de l'étape courante (reprise après /start ou relance). */
 async function sendCurrentStep(chatId: number, lead: NexaLead) {
   switch (lead.stage) {
@@ -205,8 +238,13 @@ async function sendCurrentStep(chatId: number, lead: NexaLead) {
     case "account_created":
       await sendDepositStep(chatId); return;
     default:
-      // Dépôt fait / vérifié / joue : plus rien à demander.
-      if (lead.group_invite_link) { await sendGroupReady(chatId, lead.group_invite_link); return; }
+      // Dépôt fait / vérifié / joue : plus rien à demander. Message léger — le 🎉
+      // d'accueil du groupe ne part qu'une seule fois (announceGroupOnce).
+      if (lead.group_invite_link) {
+        await sendMsgKeyboard(chatId, `Voici ton canal privé 👇`,
+          [[{ text: "🔐 Rejoindre mon canal privé", url: lead.group_invite_link }]]);
+        return;
+      }
       await sendMsg(chatId, `Tout est bon de ton côté 🃏\nUne question ? Écris-nous ici.`);
   }
 }
@@ -274,6 +312,15 @@ export async function handleNexaFunnelCallback(callbackId: string, data: string,
     return;
   }
 
+  // 💡 « C'est quoi le deal ? » — loggé comme les questions, ne fait PAS avancer
+  // le lead : il reste à `started` tant qu'il n'a pas cliqué « C'est parti ».
+  if (data === "nf_deal") {
+    logNexaEvent(lead.id, "question", { stage: lead.stage, actor: "bot", payload: "deal" });
+    touchInteraction(lead.id);
+    await sendDealExplainer(chatId);
+    return;
+  }
+
   if (data === "nf_go") {
     touchInteraction(lead.id);
     await sendDownloadStep(chatId);
@@ -298,18 +345,31 @@ export async function handleNexaFunnelCallback(callbackId: string, data: string,
 
   if (data === "nf_deposit") {
     touchInteraction(lead.id);
-    // Idempotence : groupe déjà créé → on renvoie le lien, aucune re-création.
+    // Groupe déjà là → on redonne juste le lien (message léger, pas le 🎉 d'accueil
+    // qui, lui, ne part qu'une fois via announceGroupOnce).
     if (lead.group_invite_link) {
-      await sendGroupReady(chatId, lead.group_invite_link);
+      await sendMsgKeyboard(chatId, `Voici ton canal privé 👇`,
+        [[{ text: "🔐 Rejoindre mon canal privé", url: lead.group_invite_link }]]);
       return;
     }
-    await sendMsg(chatId, `Top, on t'ajoute tout de suite 👌`);
-    const res = await ensureNexaGroup(lead.id, "bot");
-    if (res.ok && res.link) {
-      await sendGroupReady(chatId, res.link);
-    } else {
-      await sendMsg(chatId, `On finalise ton accès — un membre de l'équipe te contacte dans la minute 👌`);
-    }
+
+    await sendMsg(chatId,
+      `⏳ Top ! Je te prépare ton canal privé avec Hugo &amp; Baki — ça prend jusqu'à 1 minute, ` +
+      `ton lien arrive juste en dessous, bouge pas 🤙`
+    );
+
+    // FIX du double message : la création (CreateChat + MigrateChat + 5 topics +
+    // seed + invite) dépassait le délai du webhook, que Telegram rejouait ensuite.
+    // On rend la main IMMÉDIATEMENT et on crée en tâche de fond ; le verrou dans
+    // ensureNexaGroup empêche de toute façon deux créations concurrentes.
+    void ensureNexaGroup(lead.id, "bot")
+      .then(async (res) => {
+        if (res.ok && res.link) await announceGroupOnce(lead.id, chatId, res.link);
+        else if (!res.pending) {
+          await sendMsg(chatId, `On finalise ton accès — un membre de l'équipe te contacte dans la minute 👌`).catch(() => {});
+        }
+      })
+      .catch((e) => console.error(`[NEXA] group flow failed for lead ${lead.id}:`, e?.message ?? e));
     return;
   }
 }
@@ -338,8 +398,7 @@ export async function handleNexaFunnelDm(chatId: number, fromId: number, text: s
   const candidate = text.trim();
   if (!NEXA_MEMBER_ID_RE.test(candidate)) {
     await sendMsg(chatId,
-      `❌ Ça ne ressemble pas à un ID joueur.\n` +
-      `Envoie juste le numéro (5 à 10 chiffres), il est visible dans ton profil ${NEXA_ROOM_LABEL}.`
+      `Hmm, ton ID doit faire ${NEXA_MEMBER_ID_HINT} — tu le trouves dans ton profil dans l'app 👀 Renvoie-le moi.`
     );
     touchInteraction(lead.id);
     return true;
@@ -383,23 +442,37 @@ export async function handleNexaFunnelDm(chatId: number, fromId: number, text: s
 // pas en déclencher un second. En cas d'échec (userbot HS, CHANNELS_TOO_MUCH…),
 // l'admin est notifié pour créer le groupe à la main — le lead n'est jamais bloqué.
 
-export async function ensureNexaGroup(leadId: number, actor: Actor = "bot"): Promise<{ ok: boolean; link?: string; error?: string }> {
+export async function ensureNexaGroup(
+  leadId: number, actor: Actor = "bot",
+): Promise<{ ok: boolean; link?: string; error?: string; pending?: boolean }> {
   const lead = getNexaLeadById(leadId);
   if (!lead) return { ok: false, error: "Lead introuvable" };
   if (lead.group_invite_link) return { ok: true, link: lead.group_invite_link };
 
+  // VERROU ATOMIQUE : une seule exécution crée le groupe. Un webhook rejoué (ou un
+  // double clic) perd la course et repart en `pending` sans rien envoyer ni créer.
+  // Le verrou expire après 5 min pour ne pas bloquer un retry après un vrai crash.
+  const claim = getDb().prepare(`
+    UPDATE nexa_leads SET group_claimed_at = datetime('now'), updated_at = datetime('now')
+    WHERE id = ? AND group_chat_id IS NULL
+      AND (group_claimed_at IS NULL OR (julianday('now') - julianday(group_claimed_at)) * 1440 > 5)
+  `).run(leadId);
+  if (claim.changes === 0) return { ok: false, pending: true, error: "Création déjà en cours" };
+
   const display = lead.first_name || lead.tg_username || `Lead ${lead.id}`;
   try {
     const { createPlayerGroup } = await import("@/lib/telegram-userbot");
+    // Pas de suffixe d'agent : même format que les groupes existants « X x LeCercle ».
     const res = await createPlayerGroup(
       lead.tg_user_id,
       display,
       process.env.TELEGRAM_BOT_TOKEN,
       lead.tg_username ?? undefined,
-      NEXA_ROOM_LABEL,
     );
     if (!res || !res.inviteLink) {
       const err = res?.errors?.join("; ") || "userbot indisponible";
+      // Verrou relâché : l'admin peut relancer depuis la fiche lead.
+      getDb().prepare(`UPDATE nexa_leads SET group_claimed_at = NULL WHERE id = ?`).run(leadId);
       await notifyGroupFailure(lead, err);
       return { ok: false, error: err };
     }
@@ -408,6 +481,24 @@ export async function ensureNexaGroup(leadId: number, actor: Actor = "bot"): Pro
       `UPDATE nexa_leads SET group_chat_id = ?, group_invite_link = ?, updated_at = datetime('now') WHERE id = ?`
     ).run(String(res.chatId), res.inviteLink, lead.id);
     logNexaEvent(lead.id, "group_created", { stage: lead.stage, actor, payload: String(res.chatId) });
+
+    // Seed des topics — mêmes templates que les groupes existants (TOPIC_MESSAGES),
+    // notamment le topic Dépôt avec les coordonnées bancaires/crypto. Le bot est
+    // promu admin avant la création des topics, donc il poste même dans les topics
+    // fermés en lecture seule.
+    try {
+      const { TOPIC_MESSAGES } = await import("@/lib/telegram-commands/onboarding");
+      for (const [key, msg] of Object.entries(TOPIC_MESSAGES)) {
+        const topicId = res.topicIds[key];
+        if (topicId) await sendMsg(res.chatId, msg, topicId);
+      }
+    } catch (e: any) {
+      console.error(`[NEXA] topic seeding failed for lead ${lead.id}:`, e?.message ?? e);
+    }
+
+    // Retry lancé depuis le back-office : le lead n'a jamais reçu son lien → on le
+    // lui envoie ici (le chemin bot, lui, annonce côté appelant).
+    if (actor === "admin") await announceGroupOnce(lead.id, lead.tg_user_id, res.inviteLink);
 
     await sendMsg(AGENT_CHAT_ID,
       `🔐 <b>Nexa Funnel</b> — groupe dépôt créé pour <b>${leadName(lead)}</b>\n` +
@@ -420,6 +511,7 @@ export async function ensureNexaGroup(leadId: number, actor: Actor = "bot"): Pro
   } catch (e: any) {
     const err = e?.message ?? String(e);
     console.error(`[NEXA] group creation failed for lead ${lead.id}:`, err);
+    getDb().prepare(`UPDATE nexa_leads SET group_claimed_at = NULL WHERE id = ?`).run(leadId);
     await notifyGroupFailure(lead, err);
     return { ok: false, error: err };
   }
