@@ -176,25 +176,31 @@ async function sendDownloadStep(chatId: number) {
   );
 }
 
-async function sendDownloadLink(chatId: number, os: NexaOs) {
-  const dl = NEXA_DOWNLOADS[os];
-  await sendMsgKeyboard(chatId,
-    `${dl.label} — voici ton lien de téléchargement 👇\n${dl.url}\n\n` +
-    `Installe l'app, puis clique sur le bouton.`,
-    withQuestion([[{ text: "App installée ✅", callback_data: "nf_installed" }]])
-  );
-}
-
-async function sendSignupStep(chatId: number) {
-  await sendMsgKeyboard(chatId,
-    `<b>Étape 2/3 — Crée ton compte</b>\n\n` +
+/** Bloc « crée ton compte » — commun au message combiné et aux relances. */
+function signupBlock(): string {
+  return `<b>Étape 2/3 — Crée ton compte</b>\n\n` +
     `Dans l'app, inscris-toi en entrant le code <b>${NEXA_BONUS_CODE}</b>.\n` +
     `Sans ce code, l'agent ne peut pas créditer tes dépôts.\n\n` +
-    `📌 <b>Important</b> : ton Nom, Prénom et date de naissance doivent correspondre exactement à ton ID.\n\n` +
+    `📌 <b>Important</b> : Il faut mettre <b>Andorra</b> comme pays de résidence ` +
+    `(pas de justificatif de domicile demandé)\n\n` +
+    `Et ton Nom, Prénom et date de naissance doivent correspondre exactement à ton ID.\n\n` +
     `Une fois ton compte créé, envoie-moi ton <b>ID joueur</b> (visible dans ton profil) 👇\n\n` +
-    `Envoie juste le numéro ici (${NEXA_MEMBER_ID_HINT}).`,
-    [[QUESTION_BTN]]
-  );
+    `Envoie juste le numéro ici (${NEXA_MEMBER_ID_HINT}).`;
+}
+
+/**
+ * Message COMBINÉ lien de téléchargement + création de compte (Hugo 2026-07-24).
+ * Le clic sur la plateforme vaut confirmation d'installation : il n'y a plus de
+ * bouton « App installée ✅ ». Identique pour Windows / Android / Mac — seule la
+ * première ligne change. `os` null (OS inconnu, vieux lead) → bloc compte seul.
+ */
+function downloadHead(os: NexaOs | null): string {
+  if (!os) return "";
+  return `${NEXA_DOWNLOADS[os].label} — voici ton lien de téléchargement 👇\n${NEXA_DOWNLOADS[os].url}\n\n`;
+}
+
+async function sendDownloadAndSignup(chatId: number, os: NexaOs | null) {
+  await sendMsgKeyboard(chatId, downloadHead(os) + signupBlock(), [[QUESTION_BTN]]);
 }
 
 async function sendDepositStep(chatId: number) {
@@ -234,7 +240,7 @@ async function sendCurrentStep(chatId: number, lead: NexaLead) {
     case "started":
       await sendWelcome(chatId); return;
     case "app_installed":
-      await sendSignupStep(chatId); return;
+      await sendDownloadAndSignup(chatId, (lead.os as NexaOs | null) ?? null); return;
     case "account_created":
       await sendDepositStep(chatId); return;
     default:
@@ -327,19 +333,28 @@ export async function handleNexaFunnelCallback(callbackId: string, data: string,
     return;
   }
 
+  // Choix de la plateforme = confirmation d'installation : on enregistre l'OS,
+  // on marque app_installed, et on envoie le message combiné (lien + compte).
+  // Comportement identique pour les trois OS.
   const osMatch = data.match(/^nf_os:(windows|android|mac)$/);
   if (osMatch) {
     const os = osMatch[1] as NexaOs;
-    db.prepare(`UPDATE nexa_leads SET os = ?, last_interaction_at = datetime('now'), updated_at = datetime('now') WHERE id = ?`)
-      .run(os, lead.id);
-    await sendDownloadLink(chatId, os);
+    db.prepare(`UPDATE nexa_leads SET os = ?, updated_at = datetime('now') WHERE id = ?`).run(os, lead.id);
+    recordMilestone(lead.id, "app_installed", "bot");
+    await sendDownloadAndSignup(chatId, os);
     return;
   }
 
+  // Legacy : bouton « App installée ✅ » des messages envoyés avant le passage au
+  // message combiné. Conservé pour ne pas laisser un vieux message sans effet.
   if (data === "nf_installed") {
-    const advanced = recordMilestone(lead.id, "app_installed", "bot");
-    if (advanced || lead.stage === "app_installed") await sendSignupStep(chatId);
-    else await sendCurrentStep(chatId, getNexaLeadByTgId(tgId)!); // déjà plus loin
+    recordMilestone(lead.id, "app_installed", "bot");
+    const fresh = getNexaLeadByTgId(tgId);
+    if (fresh && NEXA_STAGE_ORDER[fresh.stage] > NEXA_STAGE_ORDER.app_installed) {
+      await sendCurrentStep(chatId, fresh);
+    } else {
+      await sendDownloadAndSignup(chatId, (fresh?.os as NexaOs | null) ?? null);
+    }
     return;
   }
 
@@ -584,11 +599,12 @@ function reminderContent(lead: NexaLead): { text: string; keyboard?: any[][] } {
       keyboard: withQuestion([[{ text: "C'est parti →", callback_data: "nf_go" }]]),
     };
   }
+  // A choisi son OS mais n'a pas envoyé son ID → on rejoue le message combiné
+  // (lien de SON OS + création de compte), précédé d'un nudge.
   if (lead.stage === "app_installed") {
     return {
-      text: `👋 App installée, il ne manque que ton compte !\n\n` +
-        `Inscris-toi avec le code <b><code>${NEXA_BONUS_CODE}</code></b> (sans lui, pas de bonus), ` +
-        `puis envoie-moi ton <b>ID joueur</b> ici 👇`,
+      text: `👋 Il ne manque plus que ton compte !\n\n` +
+        downloadHead((lead.os as NexaOs | null) ?? null) + signupBlock(),
       keyboard: [[QUESTION_BTN]],
     };
   }
