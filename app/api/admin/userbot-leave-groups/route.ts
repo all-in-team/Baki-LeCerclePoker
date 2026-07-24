@@ -24,7 +24,24 @@ function keepSet(): Map<string, string> {
     `SELECT telegram_group_id, name FROM players WHERE telegram_group_id IS NOT NULL AND telegram_group_id != ''`
   ).all() as { telegram_group_id: string; name: string }[];
   for (const r of rows) keep.set(r.telegram_group_id, `groupe joueur — ${r.name}`);
+  // Groupes dépôt des leads Nexa (pas des players) — sans ça, un `leave` validé sur
+  // une mauvaise liste pouvait tuer le groupe d'un lead actif du funnel.
+  try {
+    const nexa = getDb().prepare(
+      `SELECT group_chat_id, COALESCE(first_name, tg_username, 'lead #' || id) AS label
+       FROM nexa_leads WHERE group_chat_id IS NOT NULL AND group_chat_id != ''`
+    ).all() as { group_chat_id: string; label: string }[];
+    for (const r of nexa) keep.set(r.group_chat_id, `groupe lead Nexa — ${r.label}`);
+  } catch { /* table absente (dev) */ }
   return keep;
+}
+
+// Timestamp SQLite ("YYYY-MM-DD HH:MM:SS") ou ISO → ms epoch (0 si illisible).
+function toMs(raw: string | null): number {
+  if (!raw) return 0;
+  const iso = raw.includes("T") ? raw : raw.replace(" ", "T") + (raw.endsWith("Z") ? "" : "Z");
+  const t = Date.parse(iso);
+  return Number.isFinite(t) ? t : 0;
 }
 
 export async function POST(req: NextRequest) {
@@ -47,6 +64,77 @@ export async function POST(req: NextRequest) {
       keep_count: channels.filter((c) => c.decision === "KEEP").length,
       candidate_count: channels.filter((c) => c.decision === "CANDIDAT").length,
       channels,
+    });
+  }
+
+  // mode "classify" : GROS TRI (Hugo 2026-07-24). Critère : DERNIER MESSAGE du
+  // groupe il y a plus de `stale_days` jours (défaut 60). Lecture seule — renvoie
+  // la liste des groupes "stales" annotée (joueur lié + statut + dernière tx, lead
+  // Nexa, shell) pour décision owner. Le chat agent est exclu d'office ; les
+  // groupes joueurs/leads restent DANS la liste mais flaggés `protected: true`
+  // (le mode leave les refusera de toute façon via le keep-guard serveur).
+  if (mode === "classify") {
+    const staleDays = Number.isInteger(body.stale_days) && body.stale_days > 0 ? body.stale_days : 60;
+    const inv = await listUserbotChannels();
+    if (!inv.ok) return NextResponse.json({ ok: false, error: inv.error }, { status: 502 });
+
+    const db = getDb();
+    const playersByGroup = new Map(
+      (db.prepare(
+        `SELECT telegram_group_id, id, name, status FROM players
+         WHERE telegram_group_id IS NOT NULL AND telegram_group_id != ''`
+      ).all() as { telegram_group_id: string; id: number; name: string; status: string }[])
+        .map((r) => [String(r.telegram_group_id), r])
+    );
+    const lastTxByPlayer = new Map(
+      (db.prepare(`SELECT player_id, MAX(tx_datetime) AS last_tx FROM wallet_transactions GROUP BY player_id`)
+        .all() as { player_id: number; last_tx: string | null }[])
+        .map((r) => [r.player_id, r.last_tx])
+    );
+    let nexaGroups = new Map<string, string>();
+    try {
+      nexaGroups = new Map(
+        (db.prepare(
+          `SELECT group_chat_id, COALESCE(first_name, tg_username, 'lead #' || id) AS label
+           FROM nexa_leads WHERE group_chat_id IS NOT NULL AND group_chat_id != ''`
+        ).all() as { group_chat_id: string; label: string }[]).map((r) => [r.group_chat_id, r.label])
+      );
+    } catch { /* table absente */ }
+
+    const now = Date.now();
+    const stale: any[] = [];
+    let fresh = 0, noDate = 0;
+
+    for (const c of inv.channels) {
+      if (c.chat_id === String(AGENT_CHAT_ID)) continue;
+      const msgMs = toMs(c.last_message_at);
+      const daysSinceMsg = msgMs > 0 ? Math.floor((now - msgMs) / 86400000) : null;
+      if (daysSinceMsg === null) { noDate++; continue; }
+      if (daysSinceMsg <= staleDays) { fresh++; continue; }
+
+      const p = playersByGroup.get(c.chat_id);
+      const nexaLabel = nexaGroups.get(c.chat_id);
+      const lastTx = p ? (lastTxByPlayer.get(p.id) ?? null) : null;
+      stale.push({
+        chat_id: c.chat_id,
+        title: c.title,
+        days_since_msg: daysSinceMsg,
+        last_message_at: c.last_message_at,
+        linked: p ? `joueur ${p.name} (${p.status})` : nexaLabel ? `lead Nexa ${nexaLabel}` : null,
+        last_tx: lastTx,
+        shell: /x\s*LeCercle/i.test(c.title),
+        protected: !!p || !!nexaLabel,
+      });
+    }
+    stale.sort((a, b) => b.days_since_msg - a.days_since_msg);
+
+    return NextResponse.json({
+      ok: true,
+      total_channels: inv.total_channels,
+      slots_left: Math.max(0, 500 - inv.total_channels),
+      stale_days: staleDays,
+      counts: { stale: stale.length, fresh, no_date: noDate },
+      stale,
     });
   }
 
