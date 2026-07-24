@@ -2158,4 +2158,94 @@ function initSchema(db: Database.Database) {
   } catch (err: any) {
     console.error(`[MIGRATION:add_qqpk_funnel_v1] FAILED:`, err.message);
   }
+
+  // Nexa Funnel (GO Hugo 2026-07-24) — funnel de masse NEXAPOKER, même modèle que
+  // QQPK mais parcours différent : pas de rakeback (pitch = code bonus), room en
+  // système d'agent → groupe Telegram privé créé au premier dépôt.
+  // Tables neuves ISOLÉES : aucun lien avec players, QQPK, ni le money engine.
+  //   • stage = palier MAX atteint (n'avance jamais à reculons) ; les timestamps
+  //     par palier restent indépendants → « Marquer dépôt fait » fonctionne même
+  //     si un import a déjà promu le lead à room_verified.
+  //   • member_id UNIQUE nullable : SQLite tolère plusieurs NULL ; un ID déjà pris
+  //     par un autre lead lève duplicate_id au lieu d'écraser.
+  //   • nexa_lead_events : journal unique (transitions, relances, clics « question »,
+  //     création de groupe, actions admin) — alimente la fiche lead et les logs.
+  try {
+    const fix = db.prepare(`INSERT OR IGNORE INTO _applied_fixes (name) VALUES (?)`).run("add_nexa_funnel_v1");
+    if (fix.changes > 0) {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS nexa_leads (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          tg_user_id INTEGER NOT NULL UNIQUE,
+          tg_username TEXT,
+          first_name TEXT,
+          source TEXT NOT NULL DEFAULT 'direct',
+          os TEXT,
+          member_id TEXT UNIQUE,
+          stage TEXT NOT NULL DEFAULT 'started'
+            CHECK(stage IN ('started','app_installed','account_created','deposit_done','room_verified','played')),
+          started_at TEXT,
+          installed_at TEXT,
+          account_at TEXT,
+          deposit_at TEXT,
+          verified_at TEXT,
+          played_at TEXT,
+          group_chat_id TEXT,
+          group_invite_link TEXT,
+          relances_count INTEGER NOT NULL DEFAULT 0,
+          last_reminder_at TEXT,
+          last_interaction_at TEXT,
+          duplicate_id INTEGER NOT NULL DEFAULT 0,
+          cold INTEGER NOT NULL DEFAULT 0,
+          blocked INTEGER NOT NULL DEFAULT 0,
+          notes TEXT,
+          created_at TEXT NOT NULL DEFAULT (datetime('now')),
+          updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+        CREATE INDEX IF NOT EXISTS idx_nexa_leads_stage ON nexa_leads(stage);
+        CREATE INDEX IF NOT EXISTS idx_nexa_leads_member ON nexa_leads(member_id);
+
+        CREATE TABLE IF NOT EXISTS nexa_lead_events (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          lead_id INTEGER NOT NULL REFERENCES nexa_leads(id),
+          kind TEXT NOT NULL
+            CHECK(kind IN ('stage_change','question','reminder','group_created','admin')),
+          stage TEXT,
+          payload TEXT,
+          actor TEXT NOT NULL DEFAULT 'bot'
+            CHECK(actor IN ('bot','import','admin')),
+          created_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+        CREATE INDEX IF NOT EXISTS idx_nexa_events_lead ON nexa_lead_events(lead_id, created_at);
+
+        CREATE TABLE IF NOT EXISTS nexa_weekly_reports (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          week_start TEXT NOT NULL,
+          filename TEXT,
+          rows_read INTEGER NOT NULL DEFAULT 0,
+          matched_count INTEGER NOT NULL DEFAULT 0,
+          uploaded_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+        CREATE INDEX IF NOT EXISTS idx_nexa_reports_week ON nexa_weekly_reports(week_start);
+
+        CREATE TABLE IF NOT EXISTS nexa_weekly_stats (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          report_id INTEGER REFERENCES nexa_weekly_reports(id),
+          member_id TEXT NOT NULL,
+          week_start TEXT NOT NULL,
+          nickname TEXT,
+          rake REAL NOT NULL DEFAULT 0,
+          deposits REAL NOT NULL DEFAULT 0,
+          withdrawals REAL NOT NULL DEFAULT 0,
+          winloss REAL NOT NULL DEFAULT 0,
+          created_at TEXT NOT NULL DEFAULT (datetime('now')),
+          UNIQUE(week_start, member_id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_nexa_stats_member ON nexa_weekly_stats(member_id);
+      `);
+      console.log("[MIGRATION] add_nexa_funnel_v1 applied");
+    }
+  } catch (err: any) {
+    console.error(`[MIGRATION:add_nexa_funnel_v1] FAILED:`, err.message);
+  }
 }

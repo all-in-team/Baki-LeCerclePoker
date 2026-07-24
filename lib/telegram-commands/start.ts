@@ -21,6 +21,15 @@ export async function handleStart(chatId: number, fromId: number, fromName: stri
     return;
   }
 
+  // Nexa Funnel — NEXAPOKER, 100% DM ; le groupe privé n'arrive qu'au premier dépôt.
+  // Match par PRÉFIXE : "nexa" (source « direct ») ou "nexa_<source>" (nexa_ig,
+  // nexa_story…) pour tracer d'où vient le lead. Séquence pilotée par boutons nf_*.
+  if (payload && (payload === "nexa" || payload.startsWith("nexa_")) && chatId === fromId) {
+    const { handleNexaFunnelStart } = await import("@/lib/nexa-funnel");
+    await handleNexaFunnelStart(chatId, from ?? { id: fromId, first_name: fromName }, payload);
+    return;
+  }
+
   // ref_<affiliate_id> deep link: prospect referred by an affiliate.
   // Attribution is keyed on the referred user's telegram_id so it survives a missing
   // @username (referred_handle is NOT NULL → store a synthetic "tg:<id>" when no handle).

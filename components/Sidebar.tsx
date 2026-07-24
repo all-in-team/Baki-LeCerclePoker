@@ -41,6 +41,11 @@ const GROUPS: NavGroup[] = [
   { label: "QQPK", items: [
     { href: "/qqpk/pnl", label: "P&L", icon: Wallet },
   ]},
+  // NEXAPOKER : room d'acquisition pure (funnel bot + report hebdo), pas de P&L
+  // staking — les leads ne sont pas des players.
+  { label: "NEXAPOKER", items: [
+    { href: "/nexa-funnel", label: "Nexa Funnel", icon: Rocket },
+  ]},
   { label: "JVIP", items: [
     { href: "/jvip/pnl", label: "P&L", icon: Wallet },
   ]},
