@@ -102,6 +102,25 @@ export function initCronJobs() {
     console.log("[CRON] qqpk-funnel-reminders DISABLED");
   }
 
+  // Relances Nexa Funnel — toutes les heures (décalé de QQPK pour ne pas cumuler
+  // les envois Telegram). Leads bloqués sur started/app_installed/account_created :
+  // J+1 / J+3 / J+7, puis flag `cold`. 403 → blocked.
+  if (process.env.NEXA_FUNNEL_REMINDERS_ENABLED !== "false") {
+    cron.schedule("35 * * * *", async () => {
+      console.log("[CRON] nexa-funnel-reminders firing");
+      try {
+        const { runNexaFunnelReminders } = await import("./nexa-funnel");
+        const r = await runNexaFunnelReminders();
+        console.log(`[CRON] nexa-funnel-reminders done: sent=${r.sent} blocked=${r.blocked} cold=${r.cold} skipped=${r.skipped}`);
+      } catch (e: any) {
+        console.error("[CRON] nexa-funnel-reminders failed:", e);
+      }
+    }, opts);
+    console.log("[CRON] nexa-funnel-reminders registered (hourly :35)");
+  } else {
+    console.log("[CRON] nexa-funnel-reminders DISABLED");
+  }
+
   if (process.env.CASHOUT_CRONS_ENABLED !== "true") {
     console.log("[CRON] cashout crons DISABLED (set CASHOUT_CRONS_ENABLED=true to enable)");
     return;
