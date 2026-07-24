@@ -605,12 +605,14 @@ export async function renamePlayerGroup(
 
 // Identity of the userbot account itself — the inspect flow must not count it as
 // a "human member" of the groups it created.
-export async function getUserbotMe(): Promise<{ id: number; username: string | null } | null> {
+export async function getUserbotMe(): Promise<{ id: number; username: string | null; first_name: string | null; premium: boolean } | null> {
   const client = await getClient();
   if (!client) return null;
   try {
     const me: any = await client.getMe();
-    return { id: toNum(me.id), username: me.username ?? null };
+    // `premium` répond à "pourquoi CHANNELS_TOO_MUCH à ~495 ?" : limite Telegram
+    // 500 channels sans Premium, 1000 avec — si false, le Premium n'est pas sur CE compte.
+    return { id: toNum(me.id), username: me.username ?? null, first_name: me.firstName ?? null, premium: !!me.premium };
   } catch {
     return null;
   }

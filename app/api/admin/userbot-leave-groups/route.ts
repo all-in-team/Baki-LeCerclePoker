@@ -51,6 +51,14 @@ export async function POST(req: NextRequest) {
   const mode: string = body.mode ?? "dry-run";
   const keep = keepSet();
 
+  // mode "whoami" : identité du compte userbot + flag Premium (diagnostic plafond :
+  // 500 channels sans Premium, 1000 avec).
+  if (mode === "whoami") {
+    const me = await getUserbotMe();
+    if (!me) return NextResponse.json({ ok: false, error: "userbot not connected" }, { status: 502 });
+    return NextResponse.json({ ok: true, userbot: me, channels_limit: me.premium ? 1000 : 500 });
+  }
+
   if (mode === "dry-run") {
     const inv = await listUserbotChannels();
     if (!inv.ok) return NextResponse.json({ ok: false, error: inv.error }, { status: 502 });
