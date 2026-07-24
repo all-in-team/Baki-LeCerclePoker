@@ -31,14 +31,18 @@ export interface ShellPurgeResult {
   purged: { chat_id: string; title: string }[];
   skipped: { chat_id: string; title: string; reason: string }[];
   remaining_candidates: number;
+  // Nombre de channels du compte AVANT la purge de ce run — pour l'alerte de
+  // plafond (limite Telegram 500) dans le rapport agent.
+  total_channels: number;
   error: string | null;
 }
 
 export async function purgeDeadShells(cap: number = DEFAULT_CAP): Promise<ShellPurgeResult> {
-  const res: ShellPurgeResult = { ok: false, scanned: 0, purged: [], skipped: [], remaining_candidates: 0, error: null };
+  const res: ShellPurgeResult = { ok: false, scanned: 0, purged: [], skipped: [], remaining_candidates: 0, total_channels: 0, error: null };
 
   const inv = await listUserbotChannels();
   if (!inv.ok) { res.error = inv.error ?? "listUserbotChannels failed"; return res; }
+  res.total_channels = inv.total_channels ?? inv.channels.length;
   const me = await getUserbotMe();
   if (!me) { res.error = "getUserbotMe failed"; return res; }
 
@@ -108,6 +112,11 @@ export async function reportShellPurge(r: ShellPurgeResult): Promise<void> {
       lines.push(`❌ Échec : ${r.error}`);
     } else {
       lines.push(`✅ ${r.purged.length} groupe(s) purgé(s) · ${r.skipped.length} ignoré(s) · ${r.remaining_candidates} restant(s) pour les prochains runs`);
+      if (r.total_channels > 0) {
+        const after = r.total_channels - r.purged.length;
+        lines.push(`📡 Compte userbot : ~${after} channels — ~${Math.max(0, 500 - after)} slot(s) libre(s) (limite Telegram 500)`);
+        if (after >= 480) lines.push(`⚠️ Plafond proche — lancer un tri (listes B/C) ou prévoir un 2ᵉ compte userbot.`);
+      }
       if (r.purged.length) lines.push(r.purged.map((p) => `  • ${p.title}`).join("\n"));
       const manual = r.skipped.filter((s) => s.reason.includes("manuellement"));
       if (manual.length) lines.push(`⚠️ À nettoyer à la main :\n` + manual.map((s) => `  • ${s.title} (${s.reason})`).join("\n"));

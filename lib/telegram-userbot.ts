@@ -328,9 +328,9 @@ export async function createPlayerGroup(
     const rawChatId = toNum(chat.id);
 
     // ── Step 2: Migrate to supergroup ──
-    let channelId: number;
-    let channelPeer: Api.InputChannel;
-    try {
+    let channelId!: number;
+    let channelPeer!: Api.InputChannel;
+    const tryMigrate = async () => {
       const migrateResult = await client.invoke(
         new Api.messages.MigrateChat({
           chatId: BigInt(rawChatId) as any,
@@ -346,6 +346,24 @@ export async function createPlayerGroup(
         new Api.PeerChannel({ channelId: BigInt(channelId) as any })
       );
       channelPeer = resolved as unknown as Api.InputChannel;
+    };
+    try {
+      try {
+        await tryMigrate();
+      } catch (e: any) {
+        // SELF-HEAL borné (GO Hugo 2026-07-24) : plafond Telegram des 500 channels
+        // atteint → UNE purge de shells morts (mêmes garde-fous que le cron du lundi)
+        // puis UN retry de la migration. Jamais de boucle : si la purge ne libère
+        // rien ou que le retry échoue, on retombe sur le fallback existant (chat
+        // simple + notif admin côté appelant). Import dynamique → pas de cycle.
+        if (!/CHANNELS_TOO_MUCH/i.test(errMsg(e))) throw e;
+        console.warn("[USERBOT] CHANNELS_TOO_MUCH — tentative de self-heal (purge shells + retry unique)");
+        const { purgeDeadShells, reportShellPurge } = await import("./shell-purge");
+        const purge = await purgeDeadShells(20);
+        await reportShellPurge(purge);
+        if (purge.purged.length === 0) throw e;
+        await tryMigrate();
+      }
       console.log("[USERBOT] migrated to supergroup, channelId:", channelId);
     } catch (e: any) {
       const msg = errMsg(e);
@@ -763,7 +781,7 @@ export async function listGroups(): Promise<{
 export async function listUserbotChannels(): Promise<{
   ok: boolean;
   total_channels: number;
-  channels: { chat_id: string; title: string; member_count: number; megagroup: boolean }[];
+  channels: { chat_id: string; title: string; member_count: number; megagroup: boolean; last_message_at: string | null }[];
   error: string | null;
 }> {
   const client = await getClient();
@@ -771,15 +789,21 @@ export async function listUserbotChannels(): Promise<{
   try {
     // iterDialogs walks ALL dialogs (getDialogs({limit}) truncates — the account
     // is near the ~500-channel cap, so a 200 cut would hide most of the problem).
-    const channels: { chat_id: string; title: string; member_count: number; megagroup: boolean }[] = [];
+    // Each dialog carries its top message → last_message_at (critère d'inactivité
+    // du gros tri : "dernier message il y a +N jours", demande Hugo 2026-07-24).
+    const channels: { chat_id: string; title: string; member_count: number; megagroup: boolean; last_message_at: string | null }[] = [];
     for await (const d of client.iterDialogs({})) {
       const entity = d.entity as any;
       if (!entity || entity.className !== "Channel") continue;
+      const topDate = (d as any).message?.date;
       channels.push({
         chat_id: `-100${toNum(entity.id)}`,
         title: entity.title ?? "(untitled)",
         member_count: entity.participantsCount ?? 0,
         megagroup: !!(entity.megagroup || entity.gigagroup),
+        last_message_at: typeof topDate === "number" && topDate > 0
+          ? new Date(topDate * 1000).toISOString().replace(/\.\d{3}Z$/, "Z")
+          : null,
       });
     }
     return { ok: true, total_channels: channels.length, channels, error: null };
