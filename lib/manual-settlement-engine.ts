@@ -705,6 +705,141 @@ export function getOverdueBuckets(): OverdueBucket[] {
   return out;
 }
 
+// ── Regroupements par joueur (vues calculées) ────────────
+//
+// Fonctions PURES sur les tableaux déjà renvoyés par getPendingSettlements() /
+// getOverdueBuckets() : aucune requête, aucune nouvelle math métier, aucune écriture.
+// Elles regroupent et additionnent des montants DÉJÀ figés — même nature que le
+// « Net cumulé » de l'historique. Un règlement garde toujours son état propre :
+// markPaid() ne s'applique jamais à un agrégat, seulement à un settlement_id réel.
+
+/** Solde net d'un joueur, toutes rooms compensées, sur ses règlements lockés non payés. */
+export interface PlayerPendingGroup {
+  player_id: number;
+  player_name: string;
+  settlements: HubSettlement[];
+  count: number;
+  /**
+   * Σ amount_due_usdt SIGNÉE, toutes rooms confondues. Les sens opposés se compensent
+   * d'eux-mêmes puisque le signe porte déjà l'information (>0 sortie / <0 entrée) :
+   * −300 (il nous doit sur KKPOKER) + 500 (on lui doit sur A5NUTS) = +200 → on lui doit 200.
+   * Sert à décider du virement final ; le détail par room reste dans `rooms` + `settlements`
+   * pour la traçabilité. Jamais persisté.
+   */
+  net_usdt: number;
+  owed_to_player: number;   // Σ des règlements > 0 — la partie sortante avant compensation
+  owed_by_player: number;   // Σ |règlements < 0| — la partie entrante
+  /** Détail par room : ce qui justifie le net global. */
+  rooms: { label: string; color: string; base_path: string; net_usdt: number; count: number }[];
+  oldest_age_days: number;
+}
+
+/**
+ * Un groupe par joueur, tous ses règlements lockés de toutes les rooms.
+ * Tri : le plus vieux lock d'abord (= le plus urgent), puis |net| décroissant.
+ */
+export function groupPendingByPlayer(pending: HubSettlement[]): PlayerPendingGroup[] {
+  const byPlayer = new Map<number, PlayerPendingGroup>();
+
+  for (const s of pending) {
+    let g = byPlayer.get(s.player_id);
+    if (!g) {
+      g = {
+        player_id: s.player_id, player_name: s.player_name,
+        settlements: [], count: 0,
+        net_usdt: 0, owed_to_player: 0, owed_by_player: 0,
+        rooms: [], oldest_age_days: 0,
+      };
+      byPlayer.set(s.player_id, g);
+    }
+    g.settlements.push(s);
+    g.count++;
+    g.net_usdt += s.amount_due_usdt;
+    if (s.amount_due_usdt > 0) g.owed_to_player += s.amount_due_usdt;
+    else if (s.amount_due_usdt < 0) g.owed_by_player += -s.amount_due_usdt;
+    if (s.age_days > g.oldest_age_days) g.oldest_age_days = s.age_days;
+
+    const room = g.rooms.find(r => r.label === s.room_label);
+    if (room) { room.net_usdt += s.amount_due_usdt; room.count++; }
+    else g.rooms.push({ label: s.room_label, color: s.room_color, base_path: s.room_base_path, net_usdt: s.amount_due_usdt, count: 1 });
+  }
+
+  const out = [...byPlayer.values()];
+  for (const g of out) {
+    // Dans le dépli : le plus ancien lock en haut, comme la vue plate triée par ancienneté.
+    g.settlements.sort((a, b) => b.age_days - a.age_days || a.room_label.localeCompare(b.room_label));
+    g.rooms.sort((a, b) => a.label.localeCompare(b.label));
+  }
+  out.sort((a, b) => (b.oldest_age_days - a.oldest_age_days) || (Math.abs(b.net_usdt) - Math.abs(a.net_usdt)) || a.player_name.localeCompare(b.player_name));
+  return out;
+}
+
+/**
+ * Semaines impayées regroupées par (joueur, room).
+ *
+ * ATTENTION — `net_brut_usdt` est la somme des `OverdueBucket.net_usdt`, donc un net JOUEUR
+ * BRUT (retraits − dépôts) : aucun action_pct n'y est appliqué, puisqu'aucun règlement
+ * n'existe encore. Ce n'est PAS un « total dû » et ça ne doit jamais être présenté comme tel
+ * (un net de 10 000 à 20 % se lirait sinon comme une dette de 10 000). Le montant dû
+ * n'existera qu'au règlement dans la room.
+ */
+export interface PlayerOverdueGroup {
+  player_id: number;
+  player_name: string;
+  room_label: string;
+  room_color: string;
+  room_base_path: string;
+  buckets: OverdueBucket[];
+  weeks_count: number;
+  net_brut_usdt: number;
+  tx_count: number;
+  unconvertible: number;
+  oldest_week_monday: string;
+  oldest_week_label: string;
+  max_weeks_late: number;
+  /** Pire cas du groupe : critical dès qu'une seule semaine du groupe l'est. */
+  severity: "late" | "critical";
+  never_settled: boolean;
+}
+
+/** Tri : plus vieille semaine impayée d'abord (l'ancienneté est ce qui fait mal). */
+export function groupOverdueByPlayer(buckets: OverdueBucket[]): PlayerOverdueGroup[] {
+  const byKey = new Map<string, PlayerOverdueGroup>();
+
+  for (const b of buckets) {
+    const key = `${b.player_id}|${b.room_label}`;
+    let g = byKey.get(key);
+    if (!g) {
+      g = {
+        player_id: b.player_id, player_name: b.player_name,
+        room_label: b.room_label, room_color: b.room_color, room_base_path: b.room_base_path,
+        buckets: [], weeks_count: 0, net_brut_usdt: 0, tx_count: 0, unconvertible: 0,
+        oldest_week_monday: b.week_monday, oldest_week_label: b.week_label,
+        max_weeks_late: 0, severity: "late", never_settled: b.never_settled,
+      };
+      byKey.set(key, g);
+    }
+    g.buckets.push(b);
+    g.weeks_count++;
+    g.net_brut_usdt += b.net_usdt;
+    g.tx_count += b.tx_count;
+    g.unconvertible += b.unconvertible;
+    if (b.week_monday < g.oldest_week_monday) { g.oldest_week_monday = b.week_monday; g.oldest_week_label = b.week_label; }
+    if (b.weeks_late > g.max_weeks_late) g.max_weeks_late = b.weeks_late;
+    if (b.severity === "critical") g.severity = "critical";
+    if (b.never_settled) g.never_settled = true;
+  }
+
+  const out = [...byKey.values()];
+  for (const g of out) g.buckets.sort((a, b) => a.week_monday.localeCompare(b.week_monday));
+  out.sort((a, b) =>
+    a.oldest_week_monday.localeCompare(b.oldest_week_monday) ||
+    (b.weeks_count - a.weeks_count) ||
+    a.player_name.localeCompare(b.player_name)
+  );
+  return out;
+}
+
 // ── Header totals ────────────────────────────────────────
 
 export interface PaymentsTotals {

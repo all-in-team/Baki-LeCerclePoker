@@ -2,12 +2,14 @@ export const dynamic = "force-dynamic";
 
 import PageHeader from "@/components/PageHeader";
 import PaymentsClient from "./PaymentsClient";
-import { markPaidAction, unlockAction } from "./actions";
+import { markPaidAction, markPaidBulkAction, unlockAction } from "./actions";
 import {
   getPendingSettlements,
   getPaidSettlements,
   getOverdueBuckets,
   getPaymentsTotals,
+  groupPendingByPlayer,
+  groupOverdueByPlayer,
   SETTLE_ROOMS,
   OVERDUE_GRACE_DAYS,
 } from "@/lib/manual-settlement-engine";
@@ -29,6 +31,12 @@ export default async function PaymentsPage() {
   const paid = getPaidSettlements();
   const totals = getPaymentsTotals(pending, overdue);
 
+  // Vues calculées (fonctions pures du moteur, aucune écriture) : solde net par joueur toutes
+  // rooms compensées, et semaines impayées regroupées par (joueur, room). Les tableaux plats
+  // restent passés tels quels — la vue « Détaillé » et les actions unitaires s'appuient dessus.
+  const pendingGroups = groupPendingByPlayer(pending);
+  const overdueGroups = groupOverdueByPlayer(overdue);
+
   return (
     <>
       <PageHeader
@@ -37,12 +45,15 @@ export default async function PaymentsPage() {
       />
       <PaymentsClient
         pending={pending}
+        pendingGroups={pendingGroups}
         overdue={overdue}
+        overdueGroups={overdueGroups}
         paid={paid}
         totals={totals}
         rooms={SETTLE_ROOMS.map(r => r.label)}
         graceDays={OVERDUE_GRACE_DAYS}
         markPaidAction={markPaidAction}
+        markPaidBulkAction={markPaidBulkAction}
         unlockAction={unlockAction}
       />
     </>

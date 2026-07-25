@@ -1,29 +1,35 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
   AlertTriangle, BadgeCheck, Banknote, Clock, ExternalLink, Unlock,
-  ArrowDownLeft, ArrowUpRight,
+  ArrowDownLeft, ArrowUpRight, ChevronDown, ChevronRight, X,
 } from "lucide-react";
 import Btn from "@/components/Btn";
 import Modal from "@/components/Modal";
-import type { HubSettlement, OverdueBucket, PaymentsTotals } from "@/lib/manual-settlement-engine";
+import type {
+  HubSettlement, OverdueBucket, PaymentsTotals, PlayerPendingGroup, PlayerOverdueGroup,
+} from "@/lib/manual-settlement-engine";
 
 /**
  * Paiements — vue agrégée. Aucune math métier ici (invariant #2) : tous les montants
- * arrivent déjà calculés par lib/manual-settlement-engine.ts. Ce composant se limite à
- * l'affichage, aux filtres, et à une somme de présentation (le « net cumulé » de la liste
- * filtrée, qui n'additionne que des montants déjà figés en USDT). Arrondi au rendu
- * uniquement (invariant #9).
+ * arrivent déjà calculés par lib/manual-settlement-engine.ts, y compris les regroupements
+ * par joueur (fonctions pures du moteur). Ce composant se limite à l'affichage, aux filtres,
+ * et à des sommes de présentation sur des montants déjà figés en USDT. Arrondi au rendu
+ * uniquement (invariant #9), jamais de comparaison de flottants à l'égalité.
  *
  * Convention de signe, identique aux pages room :
  *   amount_due_usdt > 0  →  sortie, on doit au joueur
  *   amount_due_usdt < 0  →  entrée, le joueur nous doit
+ * C'est ce signe qui fait la compensation cross-room du solde net par joueur : −300 sur
+ * KKPOKER + 500 sur A5NUTS = +200, on lui doit 200. Le net est une VUE : il n'est jamais
+ * persisté et jamais passé à une action. Tout « Marquer payé » agit sur des settlement_id
+ * réels, un par un.
  *
- * ATTENTION — OverdueBucket.net_usdt n'est PAS un montant dû : c'est le net joueur brut,
- * sans action_pct (aucun règlement n'existe encore, donc aucun % n'est figé). Il est rendu
- * en neutre, jamais avec le vocabulaire « on lui doit / il nous doit ».
+ * ATTENTION — OverdueBucket.net_usdt (et le net_brut_usdt de son groupe) n'est PAS un montant
+ * dû : c'est le net joueur brut, sans action_pct (aucun règlement n'existe encore, donc aucun
+ * % n'est figé). Rendu en neutre, jamais avec le vocabulaire « on lui doit / il nous doit ».
  */
 
 const TRONSCAN_TX = "https://tronscan.org/#/transaction/";
@@ -37,11 +43,21 @@ function fmtDate(s: string | null): string {
 }
 function today(): string { return new Date().toISOString().slice(0, 10); }
 
+/** Seuil de présentation — jamais `=== 0` sur un flottant (invariant #9). */
+const ZERO = 0.005;
+
 /** Sens du règlement — la formulation demandée par Baki, explicite dans la colonne. */
 function direction(due: number): { label: string; color: string; icon: typeof ArrowUpRight | null } {
-  if (Math.abs(due) < 0.005) return { label: "Rien à payer", color: "var(--text-dim)", icon: null };
+  if (Math.abs(due) < ZERO) return { label: "Rien à payer", color: "var(--text-dim)", icon: null };
   if (due > 0) return { label: "On lui doit", color: "#EF4444", icon: ArrowUpRight };
   return { label: "Il nous doit", color: "#10B981", icon: ArrowDownLeft };
+}
+
+/** Sens d'un solde net compensé — un net à zéro n'est PAS « rien à faire ». */
+function netDirection(net: number): { label: string; color: string } {
+  if (Math.abs(net) < ZERO) return { label: "équilibré après compensation", color: "var(--text-muted)" };
+  if (net > 0) return { label: "on lui doit", color: "#EF4444" };
+  return { label: "il nous doit", color: "#10B981" };
 }
 
 // ── Petits blocs de présentation ─────────────────────────
@@ -111,34 +127,63 @@ function EmptyState({ children }: { children: React.ReactNode }) {
   );
 }
 
+/** Checkbox à 3 états — `indeterminate` n'existe qu'en propriété DOM, pas en attribut React. */
+function TriCheckbox({ checked, indeterminate, onChange, title }: { checked: boolean; indeterminate?: boolean; onChange: () => void; title?: string }) {
+  const ref = useRef<HTMLInputElement>(null);
+  useEffect(() => { if (ref.current) ref.current.indeterminate = !!indeterminate && !checked; }, [indeterminate, checked]);
+  return (
+    <input
+      ref={ref} type="checkbox" checked={checked} title={title}
+      onClick={e => e.stopPropagation()}
+      onChange={onChange}
+      style={{ accentColor: "#F5C518", cursor: "pointer", width: 15, height: 15, flexShrink: 0 }}
+    />
+  );
+}
+
 const card: React.CSSProperties = { border: "1px solid var(--border)", borderRadius: 12, background: "var(--bg-base)", overflow: "hidden" };
 const rowBase: React.CSSProperties = { display: "grid", gap: 12, alignItems: "center", padding: "11px 14px", borderBottom: "1px solid var(--border)" };
 const selectStyle: React.CSSProperties = { padding: "6px 10px", borderRadius: 7, fontSize: 11, fontWeight: 600, background: "var(--bg-elevated)", border: "1px solid var(--border)", color: "var(--text)", cursor: "pointer", outline: "none" };
 const inputStyle: React.CSSProperties = { padding: "6px 10px", borderRadius: 7, fontSize: 11, fontWeight: 600, background: "var(--bg-elevated)", border: "1px solid var(--border)", color: "var(--text)", outline: "none", colorScheme: "dark" };
 
 type SortKey = "age" | "amount" | "room";
+type ViewMode = "grouped" | "flat";
 
 export default function PaymentsClient({
-  pending, overdue, paid, totals, rooms, graceDays,
-  markPaidAction, unlockAction,
+  pending, pendingGroups, overdue, overdueGroups, paid, totals, rooms, graceDays,
+  markPaidAction, markPaidBulkAction, unlockAction,
 }: {
   pending: HubSettlement[];
+  pendingGroups: PlayerPendingGroup[];
   overdue: OverdueBucket[];
+  overdueGroups: PlayerOverdueGroup[];
   paid: HubSettlement[];
   totals: PaymentsTotals;
   rooms: string[];
   graceDays: number;
   markPaidAction: (settlementId: number, txHash?: string, paidDate?: string) => Promise<{ ok: boolean; error?: string }>;
+  markPaidBulkAction: (settlementIds: number[], txHash?: string, paidDate?: string) => Promise<{ paid: number; failures: { id: number; error: string }[] }>;
   unlockAction: (settlementId: number) => Promise<{ ok: boolean; error?: string }>;
 }) {
   const router = useRouter();
 
+  const [view, setView] = useState<ViewMode>("grouped");
   const [sort, setSort] = useState<SortKey>("age");
   const [payTarget, setPayTarget] = useState<HubSettlement | null>(null);
   const [payDate, setPayDate] = useState(today());
   const [payHash, setPayHash] = useState("");
   const [busy, setBusy] = useState(false);
   const [rowBusy, setRowBusy] = useState<number | null>(null);
+
+  // Dépli — les groupes sont repliés par défaut : c'est tout l'intérêt du regroupement.
+  const [openPlayers, setOpenPlayers] = useState<Set<number>>(new Set());
+  const [openOverdue, setOpenOverdue] = useState<Set<string>>(new Set());
+
+  // Multi-select : des settlement_id réels, jamais un agrégat.
+  const [selected, setSelected] = useState<Set<number>>(new Set());
+  const [bulkOpen, setBulkOpen] = useState(false);
+  const [bulkDate, setBulkDate] = useState(today());
+  const [bulkHash, setBulkHash] = useState("");
 
   // Filtres historique
   const [fRoom, setFRoom] = useState("");
@@ -154,6 +199,22 @@ export default function PaymentsClient({
     return rows;
   }, [pending, sort]);
 
+  // Même critère de tri appliqué au niveau groupe (le moteur les rend déjà triés par ancienneté).
+  const sortedGroups = useMemo(() => {
+    const gs = [...pendingGroups];
+    if (sort === "amount") gs.sort((a, b) => Math.abs(b.net_usdt) - Math.abs(a.net_usdt));
+    else if (sort === "room") gs.sort((a, b) => (a.rooms[0]?.label ?? "").localeCompare(b.rooms[0]?.label ?? "") || b.oldest_age_days - a.oldest_age_days);
+    else gs.sort((a, b) => b.oldest_age_days - a.oldest_age_days);
+    return gs;
+  }, [pendingGroups, sort]);
+
+  /** Joueurs ayant AUSSI des semaines jamais réglées : leur net compensé est incomplet. */
+  const playersWithOverdue = useMemo(() => {
+    const m = new Map<number, number>();
+    for (const g of overdueGroups) m.set(g.player_id, (m.get(g.player_id) ?? 0) + g.weeks_count);
+    return m;
+  }, [overdueGroups]);
+
   const paidPlayers = useMemo(() => {
     const m = new Map<number, string>();
     for (const s of paid) m.set(s.player_id, s.player_name);
@@ -168,6 +229,53 @@ export default function PaymentsClient({
   ), [paid, fRoom, fPlayer, fFrom, fTo]);
 
   const paidTotal = useMemo(() => filteredPaid.reduce((acc, s) => acc + s.amount_due_usdt, 0), [filteredPaid]);
+
+  /**
+   * Récap de la sélection. Le net seul ne suffit pas : sélectionner +500 et −500 afficherait
+   * « 0 » et se lirait « rien à payer ». Les deux sous-totaux sont donc toujours montrés.
+   */
+  const selection = useMemo(() => {
+    const rows = pending.filter(s => selected.has(s.id));
+    let net = 0, out = 0, inc = 0;
+    for (const s of rows) {
+      net += s.amount_due_usdt;
+      if (s.amount_due_usdt > 0) out += s.amount_due_usdt;
+      else if (s.amount_due_usdt < 0) inc += -s.amount_due_usdt;
+    }
+    return { rows, net, out, inc, count: rows.length };
+  }, [pending, selected]);
+
+  // Une ligne réglée ailleurs (ou délockée) disparaît de `pending` au refresh : on purge la
+  // sélection des ids qui n'existent plus, sinon la barre annoncerait un total fantôme.
+  useEffect(() => {
+    setSelected(prev => {
+      const live = new Set(pending.map(s => s.id));
+      const next = new Set([...prev].filter(id => live.has(id)));
+      return next.size === prev.size ? prev : next;
+    });
+  }, [pending]);
+
+  function toggleOne(id: number) {
+    setSelected(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  }
+  function toggleMany(ids: number[]) {
+    setSelected(prev => {
+      const next = new Set(prev);
+      const allIn = ids.every(id => next.has(id));
+      for (const id of ids) { if (allIn) next.delete(id); else next.add(id); }
+      return next;
+    });
+  }
+  function togglePlayer(id: number) {
+    setOpenPlayers(prev => { const n = new Set(prev); if (n.has(id)) n.delete(id); else n.add(id); return n; });
+  }
+  function toggleOverdueGroup(key: string) {
+    setOpenOverdue(prev => { const n = new Set(prev); if (n.has(key)) n.delete(key); else n.add(key); return n; });
+  }
 
   function openPay(s: HubSettlement) {
     setPayTarget(s);
@@ -186,6 +294,30 @@ export default function PaymentsClient({
     } finally { setBusy(false); }
   }
 
+  async function confirmBulk() {
+    const ids = selection.rows.map(s => s.id);
+    if (ids.length === 0) return;
+    setBusy(true);
+    try {
+      const res = await markPaidBulkAction(ids, bulkHash.trim() || undefined, bulkDate);
+      // Échecs rapportés un par un : un « ok » global masquerait un refus (double paiement,
+      // règlement délocké entre-temps) et ferait croire que tout est soldé.
+      if (res.failures.length > 0) {
+        const byId = new Map(selection.rows.map(s => [s.id, s]));
+        const detail = res.failures
+          .map(f => {
+            const s = byId.get(f.id);
+            return `· ${s ? `${s.player_name} — ${s.room_label} ${s.week_label ?? ""}` : `#${f.id}`} : ${f.error}`;
+          })
+          .join("\n");
+        alert(`${res.paid} règlement(s) marqué(s) payé(s).\n\n${res.failures.length} refusé(s) :\n${detail}`);
+      }
+      setBulkOpen(false);
+      setSelected(new Set());
+      router.refresh();
+    } finally { setBusy(false); }
+  }
+
   async function unlock(s: HubSettlement) {
     if (!confirm(`Délock le règlement de ${s.player_name} (${s.room_label}) ?\nSes ${s.tx_count} transactions redeviennent sélectionnables dans la room.`)) return;
     setRowBusy(s.id);
@@ -196,8 +328,60 @@ export default function PaymentsClient({
     } finally { setRowBusy(null); }
   }
 
+  /** Ligne d'un règlement réel — partagée par la vue plate et le dépli des groupes. */
+  function PendingRow({ s, inset }: { s: HubSettlement; inset?: boolean }) {
+    const dir = direction(s.amount_due_usdt);
+    const Icon = dir.icon;
+    const isSel = selected.has(s.id);
+    return (
+      <div style={{
+        ...rowBase,
+        gridTemplateColumns: "20px 88px minmax(110px,1fr) 130px 128px 150px auto",
+        background: isSel ? "rgba(245,197,24,0.06)" : inset ? "var(--bg-elevated)" : undefined,
+        paddingLeft: inset ? 26 : 14,
+      }}>
+        <TriCheckbox checked={isSel} onChange={() => toggleOne(s.id)} title="Sélectionner pour un règlement groupé" />
+
+        <RoomBadge label={s.room_label} color={s.room_color} />
+
+        <a href={`${s.room_base_path}?player=${s.player_id}`} title="Ouvrir le joueur dans sa room"
+          style={{ fontSize: 13, fontWeight: 600, color: "var(--text)", textDecoration: "none" }}>
+          {s.player_name}
+        </a>
+
+        <span style={{ display: "inline-flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+          <WeekChip label={s.week_label} />
+          <span style={{ fontSize: 11, color: "var(--text-dim)" }}>{s.tx_count} tx</span>
+        </span>
+
+        <span style={{ fontSize: 11, color: "var(--text-dim)" }}>
+          {fmtDate(s.period_start)} → {fmtDate(s.period_end)}
+        </span>
+
+        <span style={{ display: "inline-flex", alignItems: "center", gap: 7 }}>
+          {Icon && <Icon size={14} color={dir.color} />}
+          <span style={{ fontSize: 14, fontWeight: 700, color: dir.color, fontVariantNumeric: "tabular-nums" }}>{fmt(s.amount_due_usdt)}</span>
+          <span style={{ fontSize: 10, color: dir.color, opacity: 0.85 }}>{dir.label}</span>
+        </span>
+
+        <span style={{ display: "inline-flex", alignItems: "center", gap: 8, justifyContent: "flex-end" }}>
+          <AgeBadge days={s.age_days} />
+          <button onClick={() => openPay(s)} disabled={rowBusy === s.id} style={{
+            display: "inline-flex", alignItems: "center", gap: 5, padding: "6px 11px", borderRadius: 7,
+            fontSize: 11, fontWeight: 600, background: "rgba(34,197,94,0.12)", color: "var(--green)",
+            border: "1px solid rgba(34,197,94,0.3)", cursor: "pointer", whiteSpace: "nowrap",
+          }}><BadgeCheck size={12} /> Marquer payé</button>
+          <button onClick={() => unlock(s)} disabled={rowBusy === s.id} title="Délock — les tx redeviennent sélectionnables"
+            style={{ display: "inline-flex", alignItems: "center", padding: "6px 8px", borderRadius: 7, background: "var(--bg-elevated)", color: "var(--text-muted)", border: "1px solid var(--border)", cursor: "pointer" }}>
+            <Unlock size={12} />
+          </button>
+        </span>
+      </div>
+    );
+  }
+
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 26 }}>
+    <div style={{ display: "flex", flexDirection: "column", gap: 26, paddingBottom: selection.count > 0 ? 76 : 0 }}>
 
       {/* ── En-tête : totaux ─────────────────────────────── */}
       <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
@@ -222,7 +406,7 @@ export default function PaymentsClient({
         <Tile
           label="Impayés en retard"
           value={String(totals.overdue_count)}
-          sub={totals.overdue_count > 0 ? "semaines jamais réglées" : "rien d'oublié ✓"}
+          sub={totals.overdue_count > 0 ? `${overdueGroups.length} joueur·room concerné${overdueGroups.length > 1 ? "s" : ""}` : "rien d'oublié ✓"}
           color={totals.overdue_count > 0 ? "#EF4444" : "var(--text)"}
           alert={totals.overdue_count > 0}
         />
@@ -248,6 +432,16 @@ export default function PaymentsClient({
         <div style={{ display: "flex", alignItems: "center", flexWrap: "wrap", gap: 10 }}>
           <SectionTitle icon={<Banknote size={14} color="#F5C518" />} title="À régler" count={pending.length} />
           <div style={{ flex: 1 }} />
+          <div style={{ display: "flex", gap: 6, marginBottom: 12 }}>
+            {(["grouped", "flat"] as const).map(v => (
+              <button key={v} onClick={() => setView(v)} style={{
+                ...selectStyle,
+                border: view === v ? "1px solid rgba(245,197,24,0.45)" : "1px solid var(--border)",
+                background: view === v ? "rgba(245,197,24,0.12)" : "var(--bg-elevated)",
+                color: view === v ? "#F5C518" : "var(--text-muted)",
+              }}>{v === "grouped" ? "Par joueur" : "Détaillé"}</button>
+            ))}
+          </div>
           <label style={{ fontSize: 11, color: "var(--text-muted)", display: "inline-flex", alignItems: "center", gap: 6, marginBottom: 12 }}>
             Trier par
             <select value={sort} onChange={e => setSort(e.target.value as SortKey)} style={selectStyle}>
@@ -258,49 +452,106 @@ export default function PaymentsClient({
           </label>
         </div>
 
-        {sortedPending.length === 0 ? (
+        {pending.length === 0 ? (
           <EmptyState>Aucun règlement en attente — tout est payé ✓</EmptyState>
+        ) : view === "flat" ? (
+          <div style={card}>
+            {sortedPending.map(s => <PendingRow key={s.id} s={s} />)}
+          </div>
         ) : (
           <div style={card}>
-            {sortedPending.map(s => {
-              const dir = direction(s.amount_due_usdt);
-              const Icon = dir.icon;
+            {sortedGroups.map(g => {
+              // Un seul règlement : la ligne réelle suffit, son montant EST le net.
+              if (g.count === 1) return <PendingRow key={`solo-${g.player_id}`} s={g.settlements[0]} />;
+
+              const ids = g.settlements.map(s => s.id);
+              const allSel = ids.every(id => selected.has(id));
+              const someSel = ids.some(id => selected.has(id));
+              const nd = netDirection(g.net_usdt);
+              const isOpen = openPlayers.has(g.player_id);
+              const overdueWeeks = playersWithOverdue.get(g.player_id) ?? 0;
+              const compensated = g.owed_to_player > ZERO && g.owed_by_player > ZERO;
+
               return (
-                <div key={s.id} style={{ ...rowBase, gridTemplateColumns: "88px minmax(120px,1fr) 130px 128px 150px auto" }}>
-                  <RoomBadge label={s.room_label} color={s.room_color} />
+                <div key={g.player_id} style={{ borderBottom: "1px solid var(--border)" }}>
+                  {/* En-tête de groupe : le net global sert à décider du virement */}
+                  <div
+                    onClick={() => togglePlayer(g.player_id)}
+                    style={{
+                      display: "grid", gridTemplateColumns: "20px 18px minmax(120px,1fr) auto auto",
+                      gap: 12, alignItems: "center", padding: "12px 14px", cursor: "pointer",
+                      background: someSel ? "rgba(245,197,24,0.05)" : "var(--bg-base)",
+                    }}
+                  >
+                    <TriCheckbox checked={allSel} indeterminate={someSel} onChange={() => toggleMany(ids)}
+                      title={`Sélectionner les ${g.count} règlements de ${g.player_name}`} />
 
-                  <a href={`${s.room_base_path}?player=${s.player_id}`} title="Ouvrir le joueur dans sa room"
-                    style={{ fontSize: 13, fontWeight: 600, color: "var(--text)", textDecoration: "none" }}>
-                    {s.player_name}
-                  </a>
+                    <span style={{ color: "var(--text-dim)", display: "inline-flex" }}>
+                      {isOpen ? <ChevronDown size={15} /> : <ChevronRight size={15} />}
+                    </span>
 
-                  <span style={{ display: "inline-flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
-                    <WeekChip label={s.week_label} />
-                    <span style={{ fontSize: 11, color: "var(--text-dim)" }}>{s.tx_count} tx</span>
-                  </span>
+                    <span style={{ display: "inline-flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                      <span style={{ fontSize: 13, fontWeight: 700, color: "var(--text)" }}>{g.player_name}</span>
+                      {g.rooms.map(r => <RoomBadge key={r.label} label={r.label} color={r.color} />)}
+                      <span style={{ fontSize: 11, color: "var(--text-dim)" }}>
+                        {g.count} règlements
+                      </span>
+                      {overdueWeeks > 0 && (
+                        <span title="Ce joueur a aussi des semaines jamais réglées : le net ci-contre ne couvre que ses règlements lockés, ce n'est pas son solde réel"
+                          style={{ fontSize: 9, fontWeight: 700, padding: "1px 6px", borderRadius: 4, background: "rgba(239,68,68,0.14)", color: "#EF4444", border: "1px solid rgba(239,68,68,0.3)" }}>
+                          NET INCOMPLET · +{overdueWeeks} sem. non réglée{overdueWeeks > 1 ? "s" : ""}
+                        </span>
+                      )}
+                    </span>
 
-                  <span style={{ fontSize: 11, color: "var(--text-dim)" }}>
-                    {fmtDate(s.period_start)} → {fmtDate(s.period_end)}
-                  </span>
+                    {/* Net compensé toutes rooms — Σ signée de montants déjà figés */}
+                    <span style={{ display: "inline-flex", flexDirection: "column", alignItems: "flex-end", gap: 1 }}
+                      title="Solde net toutes rooms compensées, sur les règlements lockés non payés">
+                      <span style={{ fontSize: 15, fontWeight: 700, color: nd.color, fontVariantNumeric: "tabular-nums" }}>
+                        {Math.abs(g.net_usdt) < ZERO ? "0,00" : fmt(g.net_usdt)} USDT
+                      </span>
+                      <span style={{ fontSize: 10, color: nd.color, opacity: 0.85 }}>
+                        net compensé · {nd.label}
+                      </span>
+                    </span>
 
-                  <span style={{ display: "inline-flex", alignItems: "center", gap: 7 }}>
-                    {Icon && <Icon size={14} color={dir.color} />}
-                    <span style={{ fontSize: 14, fontWeight: 700, color: dir.color, fontVariantNumeric: "tabular-nums" }}>{fmt(s.amount_due_usdt)}</span>
-                    <span style={{ fontSize: 10, color: dir.color, opacity: 0.85 }}>{dir.label}</span>
-                  </span>
+                    <span style={{ display: "inline-flex", alignItems: "center", gap: 8, justifyContent: "flex-end" }}>
+                      {compensated && (
+                        <span style={{ fontSize: 10, color: "var(--text-dim)", whiteSpace: "nowrap" }}
+                          title="Décomposition avant compensation">
+                          <span style={{ color: "#EF4444" }}>↑ {fmt(g.owed_to_player)}</span>
+                          {" / "}
+                          <span style={{ color: "#10B981" }}>↓ {fmt(g.owed_by_player)}</span>
+                        </span>
+                      )}
+                      <AgeBadge days={g.oldest_age_days} />
+                    </span>
+                  </div>
 
-                  <span style={{ display: "inline-flex", alignItems: "center", gap: 8, justifyContent: "flex-end" }}>
-                    <AgeBadge days={s.age_days} />
-                    <button onClick={() => openPay(s)} disabled={rowBusy === s.id} style={{
-                      display: "inline-flex", alignItems: "center", gap: 5, padding: "6px 11px", borderRadius: 7,
-                      fontSize: 11, fontWeight: 600, background: "rgba(34,197,94,0.12)", color: "var(--green)",
-                      border: "1px solid rgba(34,197,94,0.3)", cursor: "pointer", whiteSpace: "nowrap",
-                    }}><BadgeCheck size={12} /> Marquer payé</button>
-                    <button onClick={() => unlock(s)} disabled={rowBusy === s.id} title="Délock — les tx redeviennent sélectionnables"
-                      style={{ display: "inline-flex", alignItems: "center", padding: "6px 8px", borderRadius: 7, background: "var(--bg-elevated)", color: "var(--text-muted)", border: "1px solid var(--border)", cursor: "pointer" }}>
-                      <Unlock size={12} />
-                    </button>
-                  </span>
+                  {isOpen && (
+                    <div>
+                      {/* Détail par room — ce qui justifie le net global */}
+                      <div style={{
+                        display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap",
+                        padding: "9px 14px 9px 26px", background: "var(--bg-elevated)",
+                        borderTop: "1px solid var(--border)", borderBottom: "1px solid var(--border)", fontSize: 11,
+                      }}>
+                        <span style={{ color: "var(--text-muted)", fontWeight: 600 }}>Par room :</span>
+                        {g.rooms.map(r => {
+                          const rd = direction(r.net_usdt);
+                          return (
+                            <span key={r.label} style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
+                              <RoomBadge label={r.label} color={r.color} />
+                              <span style={{ fontWeight: 700, color: rd.color, fontVariantNumeric: "tabular-nums" }}>{fmt(r.net_usdt)}</span>
+                              <span style={{ color: rd.color, opacity: 0.8 }}>{rd.label.toLowerCase()}</span>
+                              <span style={{ color: "var(--text-dim)" }}>({r.count})</span>
+                            </span>
+                          );
+                        })}
+                      </div>
+                      {g.settlements.map(s => <PendingRow key={s.id} s={s} inset />)}
+                    </div>
+                  )}
                 </div>
               );
             })}
@@ -311,69 +562,113 @@ export default function PaymentsClient({
       {/* ── 2. Impayés / en retard ───────────────────────── */}
       <section>
         <SectionTitle
-          icon={<AlertTriangle size={14} color={overdue.length > 0 ? "#EF4444" : "var(--text-muted)"} />}
+          icon={<AlertTriangle size={14} color={overdueGroups.length > 0 ? "#EF4444" : "var(--text-muted)"} />}
           title="Impayés / en retard"
-          count={overdue.length}
-          tone={overdue.length > 0 ? "#EF4444" : "var(--text)"}
+          count={overdueGroups.length}
+          tone={overdueGroups.length > 0 ? "#EF4444" : "var(--text)"}
         />
 
-        {overdue.length === 0 ? (
+        {overdueGroups.length === 0 ? (
           <EmptyState>Aucune semaine passée laissée de côté — rien d&apos;oublié ✓</EmptyState>
         ) : (
           <>
             <div style={card}>
-              {overdue.map(b => {
-                const critical = b.severity === "critical";
+              {overdueGroups.map(g => {
+                const key = `${g.player_id}|${g.room_label}`;
+                const critical = g.severity === "critical";
                 const accent = critical ? "#EF4444" : "#F59E0B";
+                const isOpen = openOverdue.has(key);
+                const multi = g.weeks_count > 1;
+
                 return (
-                  <div key={`${b.player_id}-${b.room_label}-${b.week_monday}`}
-                    style={{ ...rowBase, gridTemplateColumns: "88px minmax(120px,1fr) 96px 120px 150px auto", borderLeft: `3px solid ${accent}` }}>
-                    <RoomBadge label={b.room_label} color={b.room_color} />
-
-                    <span style={{ display: "inline-flex", alignItems: "center", gap: 7, flexWrap: "wrap" }}>
-                      <span style={{ fontSize: 13, fontWeight: 600, color: "var(--text)" }}>{b.player_name}</span>
-                      {b.never_settled && (
-                        <span title="Ce joueur n'a JAMAIS été réglé dans cette room" style={{
-                          fontSize: 9, fontWeight: 700, padding: "1px 6px", borderRadius: 4,
-                          background: "rgba(239,68,68,0.14)", color: "#EF4444", border: "1px solid rgba(239,68,68,0.3)",
-                        }}>JAMAIS RÉGLÉ</span>
-                      )}
-                    </span>
-
-                    <WeekChip label={b.week_label} />
-
-                    <span style={{ fontSize: 11, fontWeight: 700, color: accent }}>
-                      {critical ? "🔴" : "🟠"} {b.weeks_late} sem. de retard
-                    </span>
-
-                    {/* Net JOUEUR brut — pas un montant dû : aucun action_pct n'est encore
-                        appliqué. Rendu en neutre pour ne jamais se lire comme une dette. */}
-                    <span style={{ display: "inline-flex", alignItems: "center", gap: 7 }}
-                      title="Net joueur brut (retraits − dépôts) — le montant dû ne sera connu qu'au règlement, après application de l'action %">
-                      <span style={{ fontSize: 13, fontWeight: 700, color: "var(--text)", fontVariantNumeric: "tabular-nums" }}>
-                        {b.net_usdt >= 0 ? "+" : "−"}{fmt(b.net_usdt)}
+                  <div key={key} style={{ borderBottom: "1px solid var(--border)", borderLeft: `3px solid ${accent}` }}>
+                    <div
+                      onClick={() => multi && toggleOverdueGroup(key)}
+                      style={{
+                        display: "grid", gridTemplateColumns: "18px 88px minmax(120px,1fr) 150px 170px auto",
+                        gap: 12, alignItems: "center", padding: "12px 14px", cursor: multi ? "pointer" : "default",
+                      }}
+                    >
+                      <span style={{ color: "var(--text-dim)", display: "inline-flex" }}>
+                        {multi ? (isOpen ? <ChevronDown size={15} /> : <ChevronRight size={15} />) : null}
                       </span>
-                      <span style={{ fontSize: 10, color: "var(--text-dim)" }}>net brut · {b.tx_count} tx</span>
-                    </span>
 
-                    <span style={{ display: "inline-flex", alignItems: "center", gap: 8, justifyContent: "flex-end" }}>
-                      {b.unconvertible > 0 && (
-                        <span title={`${b.unconvertible} tx sans taux de change — exclues du net affiché`}
-                          style={{ fontSize: 10, fontWeight: 700, color: "#F59E0B" }}>⚠ {b.unconvertible}</span>
-                      )}
-                      <a href={`${b.room_base_path}?player=${b.player_id}`} style={{
-                        display: "inline-flex", alignItems: "center", gap: 5, padding: "6px 11px", borderRadius: 7,
-                        fontSize: 11, fontWeight: 600, background: `${accent}1A`, color: accent,
-                        border: `1px solid ${accent}55`, textDecoration: "none", whiteSpace: "nowrap",
-                      }}>Aller régler <ExternalLink size={11} /></a>
-                    </span>
+                      <RoomBadge label={g.room_label} color={g.room_color} />
+
+                      <span style={{ display: "inline-flex", alignItems: "center", gap: 7, flexWrap: "wrap" }}>
+                        <span style={{ fontSize: 13, fontWeight: 700, color: "var(--text)" }}>{g.player_name}</span>
+                        {g.never_settled && (
+                          <span title="Ce joueur n'a JAMAIS été réglé dans cette room" style={{
+                            fontSize: 9, fontWeight: 700, padding: "1px 6px", borderRadius: 4,
+                            background: "rgba(239,68,68,0.14)", color: "#EF4444", border: "1px solid rgba(239,68,68,0.3)",
+                          }}>JAMAIS RÉGLÉ</span>
+                        )}
+                      </span>
+
+                      <span style={{ fontSize: 11, fontWeight: 700, color: accent }}>
+                        {critical ? "🔴" : "🟠"} {g.weeks_count} semaine{g.weeks_count > 1 ? "s" : ""} en retard
+                      </span>
+
+                      {/* Net JOUEUR brut cumulé — PAS un montant dû : aucun action_pct appliqué.
+                          Rendu neutre pour ne jamais se lire comme une dette. */}
+                      <span style={{ display: "inline-flex", flexDirection: "column", gap: 1 }}
+                        title="Somme des nets joueur bruts (retraits − dépôts) des semaines non réglées — le montant dû ne sera connu qu'au règlement, après application de l'action %">
+                        <span style={{ fontSize: 13, fontWeight: 700, color: "var(--text)", fontVariantNumeric: "tabular-nums" }}>
+                          {g.net_brut_usdt >= 0 ? "+" : "−"}{fmt(g.net_brut_usdt)}
+                        </span>
+                        <span style={{ fontSize: 10, color: "var(--text-dim)" }}>
+                          net brut cumulé · {g.tx_count} tx · plus ancienne : {g.oldest_week_label} ({g.max_weeks_late} sem.)
+                        </span>
+                      </span>
+
+                      <span style={{ display: "inline-flex", alignItems: "center", gap: 8, justifyContent: "flex-end" }}>
+                        {g.unconvertible > 0 && (
+                          <span title={`${g.unconvertible} tx sans taux de change — exclues du net affiché`}
+                            style={{ fontSize: 10, fontWeight: 700, color: "#F59E0B" }}>⚠ {g.unconvertible}</span>
+                        )}
+                        <a href={`${g.room_base_path}?player=${g.player_id}`} onClick={e => e.stopPropagation()} style={{
+                          display: "inline-flex", alignItems: "center", gap: 5, padding: "6px 11px", borderRadius: 7,
+                          fontSize: 11, fontWeight: 600, background: `${accent}1A`, color: accent,
+                          border: `1px solid ${accent}55`, textDecoration: "none", whiteSpace: "nowrap",
+                        }}>Aller régler <ExternalLink size={11} /></a>
+                      </span>
+                    </div>
+
+                    {multi && isOpen && (
+                      <div style={{ background: "var(--bg-elevated)", borderTop: "1px solid var(--border)" }}>
+                        {g.buckets.map(b => (
+                          <div key={b.week_monday} style={{
+                            ...rowBase, paddingLeft: 30,
+                            gridTemplateColumns: "96px 130px minmax(120px,1fr) auto",
+                            borderBottom: "1px solid var(--border)",
+                          }}>
+                            <WeekChip label={b.week_label} />
+                            <span style={{ fontSize: 11, fontWeight: 600, color: b.severity === "critical" ? "#EF4444" : "#F59E0B" }}>
+                              {b.weeks_late} sem. de retard
+                            </span>
+                            <span style={{ display: "inline-flex", alignItems: "center", gap: 7 }}
+                              title="Net joueur brut de cette semaine (retraits − dépôts), sans action %">
+                              <span style={{ fontSize: 12, fontWeight: 700, color: "var(--text)", fontVariantNumeric: "tabular-nums" }}>
+                                {b.net_usdt >= 0 ? "+" : "−"}{fmt(b.net_usdt)}
+                              </span>
+                              <span style={{ fontSize: 10, color: "var(--text-dim)" }}>net brut · {b.tx_count} tx</span>
+                            </span>
+                            <span style={{ fontSize: 10, color: "var(--text-dim)", justifySelf: "end" }}>
+                              semaine du {fmtDate(b.week_monday)}
+                              {b.unconvertible > 0 && <span style={{ color: "#F59E0B", fontWeight: 700 }}> · ⚠ {b.unconvertible}</span>}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
                   </div>
                 );
               })}
             </div>
             <div style={{ fontSize: 10, color: "var(--text-dim)", marginTop: 8 }}>
               Une semaine n&apos;apparaît ici qu&apos;après {graceDays} jours de délai de grâce — tu as le lundi et le mardi
-              pour régler le week-end sans qu&apos;elle passe au rouge.
+              pour régler le week-end sans qu&apos;elle passe au rouge. Le net affiché est un net joueur <b>brut</b> :
+              le montant dû n&apos;existe qu&apos;après règlement dans la room, action % appliqué.
             </div>
           </>
         )}
@@ -442,13 +737,48 @@ export default function PaymentsClient({
             <div style={{ display: "flex", gap: 14, padding: "10px 14px", fontSize: 11, color: "var(--text-muted)" }}>
               <span>{filteredPaid.length} règlement{filteredPaid.length > 1 ? "s" : ""}</span>
               <span>·</span>
-              <span>Net cumulé : <b style={{ color: Math.abs(paidTotal) < 0.005 ? "var(--text-muted)" : paidTotal > 0 ? "#EF4444" : "#10B981" }}>{fmt(paidTotal)} USDT</b> {Math.abs(paidTotal) < 0.005 ? "" : paidTotal > 0 ? "sortis" : "rentrés"}</span>
+              <span>Net cumulé : <b style={{ color: Math.abs(paidTotal) < ZERO ? "var(--text-muted)" : paidTotal > 0 ? "#EF4444" : "#10B981" }}>{fmt(paidTotal)} USDT</b> {Math.abs(paidTotal) < ZERO ? "" : paidTotal > 0 ? "sortis" : "rentrés"}</span>
             </div>
           </>
         )}
       </section>
 
-      {/* ── Modale « marquer payé » ──────────────────────── */}
+      {/* ── Barre de sélection ───────────────────────────── */}
+      {selection.count > 0 && (
+        <div style={{
+          position: "fixed", left: 0, right: 0, bottom: 0, zIndex: 60,
+          display: "flex", alignItems: "center", gap: 14, flexWrap: "wrap",
+          padding: "12px 22px", background: "var(--bg-elevated)",
+          borderTop: "1px solid rgba(245,197,24,0.35)", boxShadow: "0 -8px 30px rgba(0,0,0,0.45)",
+        }}>
+          <span style={{ fontSize: 13, fontWeight: 700, color: "#F5C518" }}>
+            {selection.count} sélectionné{selection.count > 1 ? "s" : ""}
+          </span>
+          <span style={{ fontSize: 12, color: "var(--text-muted)" }}>
+            net{" "}
+            <b style={{ color: netDirection(selection.net).color, fontVariantNumeric: "tabular-nums" }}>
+              {Math.abs(selection.net) < ZERO ? "0,00" : fmt(selection.net)} USDT
+            </b>
+            {" — dont "}
+            <b style={{ color: "#EF4444" }}>{fmt(selection.out)} sortants</b>
+            {" / "}
+            <b style={{ color: "#10B981" }}>{fmt(selection.inc)} entrants</b>
+          </span>
+          <div style={{ flex: 1 }} />
+          <button onClick={() => setSelected(new Set())} style={{
+            display: "inline-flex", alignItems: "center", gap: 5, padding: "7px 12px", borderRadius: 7,
+            fontSize: 12, fontWeight: 600, background: "none", border: "1px solid var(--border)",
+            color: "var(--text-muted)", cursor: "pointer",
+          }}><X size={13} /> Vider</button>
+          <button onClick={() => { setBulkDate(today()); setBulkHash(""); setBulkOpen(true); }} style={{
+            display: "inline-flex", alignItems: "center", gap: 6, padding: "8px 16px", borderRadius: 8,
+            fontSize: 13, fontWeight: 700, background: "rgba(34,197,94,0.16)", color: "var(--green)",
+            border: "1px solid rgba(34,197,94,0.4)", cursor: "pointer",
+          }}><BadgeCheck size={14} /> Marquer payé ({selection.count})</button>
+        </div>
+      )}
+
+      {/* ── Modale « marquer payé » (unitaire) ───────────── */}
       <Modal open={!!payTarget} onClose={() => setPayTarget(null)} title="Marquer ce règlement payé">
         {payTarget && (() => {
           const dir = direction(payTarget.amount_due_usdt);
@@ -494,6 +824,61 @@ export default function PaymentsClient({
             </div>
           );
         })()}
+      </Modal>
+
+      {/* ── Modale « marquer payé » (groupée) ────────────── */}
+      <Modal open={bulkOpen} onClose={() => setBulkOpen(false)} title={`Marquer ${selection.count} règlement${selection.count > 1 ? "s" : ""} payé${selection.count > 1 ? "s" : ""}`} width={560}>
+        <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+          <div style={{ padding: 14, borderRadius: 8, background: "var(--bg-base)", border: "1px solid var(--border)" }}>
+            <div style={{ fontSize: 11, color: "var(--text-muted)", marginBottom: 6 }}>Net de la sélection</div>
+            <div style={{ fontSize: 20, fontWeight: 700, color: netDirection(selection.net).color, fontVariantNumeric: "tabular-nums" }}>
+              {Math.abs(selection.net) < ZERO ? "0,00" : fmt(selection.net)} USDT
+              <span style={{ fontSize: 12, fontWeight: 600, opacity: 0.85 }}> · {netDirection(selection.net).label}</span>
+            </div>
+            <div style={{ fontSize: 11, color: "var(--text-dim)", marginTop: 6 }}>
+              dont <b style={{ color: "#EF4444" }}>{fmt(selection.out)} sortants</b> et <b style={{ color: "#10B981" }}>{fmt(selection.inc)} entrants</b> —
+              chaque règlement est marqué payé <b>individuellement</b>, le net n&apos;est qu&apos;un récapitulatif.
+            </div>
+          </div>
+
+          <div style={{ maxHeight: 190, overflowY: "auto", border: "1px solid var(--border)", borderRadius: 8 }}>
+            {selection.rows.map(s => {
+              const dir = direction(s.amount_due_usdt);
+              return (
+                <div key={s.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "7px 11px", borderBottom: "1px solid var(--border)", fontSize: 12 }}>
+                  <RoomBadge label={s.room_label} color={s.room_color} />
+                  <span style={{ color: "var(--text)", fontWeight: 600 }}>{s.player_name}</span>
+                  <WeekChip label={s.week_label} />
+                  <span style={{ marginLeft: "auto", fontWeight: 700, color: dir.color, fontVariantNumeric: "tabular-nums" }}>{fmt(s.amount_due_usdt)}</span>
+                  <span style={{ fontSize: 10, color: dir.color, opacity: 0.8 }}>{dir.label}</span>
+                </div>
+              );
+            })}
+          </div>
+
+          <label style={{ display: "flex", flexDirection: "column", gap: 5 }}>
+            <span style={{ fontSize: 11, fontWeight: 600, color: "var(--text-muted)" }}>Date du paiement (appliquée à toute la sélection)</span>
+            <input type="date" value={bulkDate} onChange={e => setBulkDate(e.target.value)} style={{ ...inputStyle, fontSize: 13, padding: "9px 12px" }} />
+          </label>
+
+          <label style={{ display: "flex", flexDirection: "column", gap: 5 }}>
+            <span style={{ fontSize: 11, fontWeight: 600, color: "var(--text-muted)" }}>Hash de la transaction (optionnel, appliqué à toute la sélection)</span>
+            <input value={bulkHash} onChange={e => setBulkHash(e.target.value)} placeholder="tx_hash TRON — un seul virement qui solde plusieurs semaines" spellCheck={false}
+              style={{ ...inputStyle, fontSize: 12, padding: "9px 12px", fontFamily: "monospace" }} />
+          </label>
+
+          <div style={{ fontSize: 11, color: "var(--text-dim)" }}>
+            Les règlements passent en « réglé » ici <b>et</b> dans leurs rooms — ce sont les mêmes lignes.
+            Un refus (déjà payé, délocké entre-temps) n&apos;annule pas les autres : le détail te sera listé.
+          </div>
+
+          <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 2 }}>
+            <Btn variant="secondary" onClick={() => setBulkOpen(false)}>Annuler</Btn>
+            <Btn variant="primary" onClick={confirmBulk} disabled={busy || selection.count === 0 || !/^\d{4}-\d{2}-\d{2}$/.test(bulkDate)}>
+              <BadgeCheck size={14} /> {busy ? "…" : `Confirmer (${selection.count})`}
+            </Btn>
+          </div>
+        </div>
       </Modal>
     </div>
   );

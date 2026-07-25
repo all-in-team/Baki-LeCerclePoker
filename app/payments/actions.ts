@@ -18,6 +18,36 @@ export async function markPaidAction(settlementId: number, txHash?: string, paid
   return markPaid(settlementId, txHash, paidDate);
 }
 
+/**
+ * Marquage payé en lot — boucle sur le MÊME markPaid() unitaire, un règlement à la fois.
+ *
+ * Pas de nouvelle primitive moteur, pas de transaction englobante : chaque règlement garde son
+ * état propre, et markPaid() porte déjà ses gardes (UPDATE ... WHERE status='locked', refus du
+ * double paiement, validation stricte de la date). Une sélection n'est donc jamais réglée « en
+ * bloc » : c'est N règlements réels réglés individuellement.
+ *
+ * Volontairement PAS atomique : si le 3e échoue, les 2 premiers restent payés — c'est de
+ * l'argent réellement sorti, un rollback le rendrait invisible. Les échecs sont renvoyés
+ * ligne par ligne pour être affichés tels quels, jamais agrégés en un « ok » global.
+ *
+ * txHash est appliqué à tous les règlements de la sélection : cas d'usage = un seul virement
+ * qui solde plusieurs semaines.
+ */
+export async function markPaidBulkAction(
+  settlementIds: number[],
+  txHash?: string,
+  paidDate?: string,
+): Promise<{ paid: number; failures: { id: number; error: string }[] }> {
+  const failures: { id: number; error: string }[] = [];
+  let paid = 0;
+  for (const id of settlementIds) {
+    const res = markPaid(id, txHash, paidDate);
+    if (res.ok) paid++;
+    else failures.push({ id, error: res.error ?? "Erreur inconnue" });
+  }
+  return { paid, failures };
+}
+
 export async function unlockAction(settlementId: number) {
   return unlockSettlement(settlementId);
 }
