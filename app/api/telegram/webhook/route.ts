@@ -325,14 +325,23 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ ok: true });
   }
 
-  // New members
+  // New members. `markGroupJoined` horodate le join dans `group_creations` (Hugo
+  // 2026-07-25) : sans ça, aucune trace de « a rejoint » et le job 24 h ne peut pas
+  // distinguer un groupe vivant d'un groupe fantôme. Appelé APRÈS handleNewMembers,
+  // qui crée la ligne `players` et branche telegram_group_id.
   if (msg?.new_chat_members) {
     await handleNewMembers(msg.new_chat_members, msg.chat?.title ?? "", chatId);
+    const { markGroupJoined } = await import("@/lib/group-lifecycle");
+    for (const m of msg.new_chat_members) {
+      if (!m?.is_bot) markGroupJoined(chatId, m?.id);
+    }
     return NextResponse.json({ ok: true });
   }
   const cm = update.chat_member;
   if (cm?.new_chat_member?.status === "member" && !cm.new_chat_member.user?.is_bot) {
     await handleNewMembers([cm.new_chat_member.user], cm.chat?.title ?? "", cm.chat?.id);
+    const { markGroupJoined } = await import("@/lib/group-lifecycle");
+    markGroupJoined(cm.chat?.id, cm.new_chat_member.user?.id);
     return NextResponse.json({ ok: true });
   }
 

@@ -1709,6 +1709,21 @@ function initSchema(db: Database.Database) {
     console.error(`[MIGRATION:add_manual_settlements_v1] FAILED:`, err.message);
   }
 
+  // 2-bis) Explicit payment DATE (YYYY-MM-DD) — distinct from paid_at.
+  //   paid_at   = audit timestamp of the click (datetime('now'), never backdated)
+  //   paid_date = the day the money actually moved, as declared by Baki on the
+  //               /payments hub. Nullable; readers fall back to date(paid_at).
+  //   Additive only (invariant #6) — no backfill, no rewrite of existing rows.
+  try {
+    const fix = db.prepare(`INSERT OR IGNORE INTO _applied_fixes (name) VALUES (?)`).run("manual_settlements_paid_date_v1");
+    if (fix.changes > 0) {
+      try { db.exec(`ALTER TABLE manual_settlements ADD COLUMN paid_date TEXT`); } catch {}
+      console.log("[MIGRATION] manual_settlements_paid_date_v1 applied");
+    }
+  } catch (err: any) {
+    console.error(`[MIGRATION:manual_settlements_paid_date_v1] FAILED:`, err.message);
+  }
+
   // 3) QQPK manual rakeback — owner-only revenue the Cercle earns from the room per player,
   //    per rolling cycle. INVISIBLE to the player: NOT in the 70/30 deal, NOT in the staking
   //    engine, NOT in settlements/lock, NOT in any Telegram message. Display-only additive
@@ -2265,5 +2280,64 @@ function initSchema(db: Database.Database) {
     }
   } catch (err: any) {
     console.error(`[MIGRATION:add_nexa_group_claim_v1] FAILED:`, err.message);
+  }
+
+  // Cycle de vie des groupes d'onboarding (audit Hugo 2026-07-25).
+  //
+  // Problème 1 — DOUBLONS : la création de groupe (userbot) n'était tracée NULLE PART
+  // avant que le joueur rejoigne (la ligne `players` naît au join). Deux /start, ou un
+  // webhook rejoué par Telegram parce que createPlayerGroup dépasse son délai, créaient
+  // donc deux groupes (constaté : M K tg 7041662947 → 2 groupes la même minute).
+  // Problème 2 — FANTÔMES : un groupe jamais rejoint restait à vie (15 des 16 groupes
+  // morts trouvés à l'audit étaient même protégés du purge hebdo par le keep-guard,
+  // puisque `players.telegram_group_id` était renseigné).
+  //
+  //   • group_creations : LE registre — une ligne dès la création, bien avant le join.
+  //     C'est lui qui rend la création idempotente (clé = owner_key = tg_user_id) et qui
+  //     alimente le job de nettoyage 24h (joined_at IS NULL AND cleaned_at IS NULL).
+  //   • *_joined_at   : horodatage du join, posé depuis l'event Telegram `chat_member`.
+  //   • *_not_joined  : flag « groupe non rejoint » → le lead est relançable au lieu
+  //     d'être perdu, et le lien mort disparaît de la vue CRM.
+  //   • onboarding_leads.group_* : le verrou de création du funnel joueur vit ici, car
+  //     c'est la seule table qui a une ligne AVANT le join (upsert au /start).
+  try {
+    const fix = db.prepare(`INSERT OR IGNORE INTO _applied_fixes (name) VALUES (?)`).run("add_group_lifecycle_v1");
+    if (fix.changes > 0) {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS group_creations (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          chat_id TEXT NOT NULL UNIQUE,
+          owner_kind TEXT NOT NULL CHECK(owner_kind IN ('player','nexa_lead')),
+          owner_key INTEGER NOT NULL,
+          owner_label TEXT,
+          title TEXT,
+          invite_link TEXT,
+          topic_ids TEXT,
+          created_at TEXT NOT NULL DEFAULT (datetime('now')),
+          joined_at TEXT,
+          joined_by INTEGER,
+          cleaned_at TEXT,
+          cleanup_reason TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_group_creations_owner ON group_creations(owner_kind, owner_key);
+        CREATE INDEX IF NOT EXISTS idx_group_creations_pending ON group_creations(joined_at, cleaned_at, created_at);
+      `);
+      for (const sql of [
+        `ALTER TABLE players ADD COLUMN group_joined_at TEXT`,
+        `ALTER TABLE players ADD COLUMN group_not_joined INTEGER NOT NULL DEFAULT 0`,
+        `ALTER TABLE nexa_leads ADD COLUMN group_joined_at TEXT`,
+        `ALTER TABLE nexa_leads ADD COLUMN group_not_joined INTEGER NOT NULL DEFAULT 0`,
+        `ALTER TABLE onboarding_leads ADD COLUMN group_chat_id TEXT`,
+        `ALTER TABLE onboarding_leads ADD COLUMN group_invite_link TEXT`,
+        `ALTER TABLE onboarding_leads ADD COLUMN group_claimed_at TEXT`,
+        `ALTER TABLE onboarding_leads ADD COLUMN group_joined_at TEXT`,
+        `ALTER TABLE onboarding_leads ADD COLUMN group_not_joined INTEGER NOT NULL DEFAULT 0`,
+      ]) {
+        try { db.exec(sql); } catch { /* colonne déjà là */ }
+      }
+      console.log("[MIGRATION] add_group_lifecycle_v1 applied");
+    }
+  } catch (err: any) {
+    console.error(`[MIGRATION:add_group_lifecycle_v1] FAILED:`, err.message);
   }
 }

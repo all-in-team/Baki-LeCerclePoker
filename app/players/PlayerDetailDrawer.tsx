@@ -1,21 +1,9 @@
 "use client";
 
 import { useEffect } from "react";
+import Link from "next/link";
 import { X, Pencil } from "lucide-react";
-
-const GAME_BADGES: Record<string, { short: string; bg: string; color: string }> = {
-  TELE:    { short: "AK", bg: "rgba(212,175,55,0.15)", color: "#D4AF37" },
-  KKPOKER: { short: "KK", bg: "rgba(59,130,246,0.15)", color: "#3B82F6" },
-  A5POKER: { short: "A5", bg: "rgba(245,158,11,0.15)", color: "#F59E0B" },
-  Wepoker: { short: "WE", bg: "rgba(139,92,246,0.15)", color: "#8B5CF6" },
-  Xpoker:  { short: "XP", bg: "rgba(236,72,153,0.15)", color: "#EC4899" },
-  ClubGG:  { short: "CG", bg: "rgba(234,179,8,0.15)",  color: "#EAB308" },
-};
-const BADGE_FALLBACK = { short: "??", bg: "rgba(156,163,175,0.15)", color: "#9CA3AF" };
-
-interface Player { id: number; name: string; telegram_handle: string | null; status: string; tier: string | null; }
-interface Deal { deal_id: number; player_id: number; game_id: number; action_pct: number; rakeback_pct: number; start_date: string | null; end_date: string | null; }
-interface Game { id: number; name: string; default_action_pct: number | null; status: string; }
+import { badgeFor, isActiveStatus, type Deal, type Game, type Player } from "./shared";
 
 interface Props {
   player: Player;
@@ -27,15 +15,11 @@ interface Props {
   onEdit: () => void;
 }
 
-function fmtAmt(n: number): string {
-  return `${n >= 0 ? "+" : ""}${n.toLocaleString("fr-FR", { maximumFractionDigits: 0 })}`;
-}
-
 function fmtAmt2(n: number): string {
   return `${n >= 0 ? "+" : ""}${n.toLocaleString("fr-FR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
 
-export default function PlayerDetailDrawer({ player, deals, pnlByPlayerGame, activeGames, agencyTotal, onClose, onEdit }: Props) {
+export default function PlayerDetailDrawer({ player, deals, pnlByPlayerGame, activeGames, onClose, onEdit }: Props) {
   useEffect(() => {
     const handler = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
     document.addEventListener("keydown", handler);
@@ -85,8 +69,8 @@ export default function PlayerDetailDrawer({ player, deals, pnlByPlayerGame, act
             <div style={{ display: "flex", gap: 6, marginTop: 6 }}>
               <span style={{
                 padding: "2px 8px", borderRadius: 4, fontSize: 10, fontWeight: 600,
-                background: player.status === "active" ? "rgba(16,185,129,0.15)" : "rgba(156,163,175,0.15)",
-                color: player.status === "active" ? "#10B981" : "var(--text-muted)",
+                background: isActiveStatus(player.status) ? "rgba(16,185,129,0.15)" : "rgba(156,163,175,0.15)",
+                color: isActiveStatus(player.status) ? "#10B981" : "var(--text-muted)",
               }}>{player.status}</span>
               {player.tier && <span style={{ padding: "2px 8px", borderRadius: 4, fontSize: 10, fontWeight: 600, background: "rgba(212,175,55,0.15)", color: "#D4AF37" }}>Tier {player.tier}</span>}
             </div>
@@ -122,7 +106,7 @@ export default function PlayerDetailDrawer({ player, deals, pnlByPlayerGame, act
               </thead>
               <tbody>
                 {rows.map(({ deal, gameName, playerNet, agencyPnl }) => {
-                  const badge = GAME_BADGES[gameName] ?? BADGE_FALLBACK;
+                  const badge = badgeFor(gameName);
                   return (
                     <tr key={deal.deal_id} style={{ borderBottom: "1px solid var(--border)" }}>
                       <td style={{ padding: "8px" }}>
@@ -164,7 +148,7 @@ export default function PlayerDetailDrawer({ player, deals, pnlByPlayerGame, act
               {archivedDeals.map(deal => {
                 const game = gameMap.get(deal.game_id);
                 const gameName = game?.name ?? `Game #${deal.game_id}`;
-                const badge = GAME_BADGES[gameName] ?? BADGE_FALLBACK;
+                const badge = badgeFor(gameName);
                 return (
                   <div key={deal.deal_id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 8px", opacity: 0.5, fontSize: 12 }}>
                     <span style={{ background: badge.bg, color: badge.color, padding: "2px 6px", borderRadius: 4, fontSize: 10, fontWeight: 700 }}>{badge.short}</span>
@@ -179,17 +163,17 @@ export default function PlayerDetailDrawer({ player, deals, pnlByPlayerGame, act
 
         {/* Footer */}
         <div style={{ padding: "16px 20px", borderTop: "1px solid var(--border)", display: "flex", gap: 10 }}>
-          <button onClick={onEdit} style={{
-            flex: 1, padding: "10px 0", borderRadius: 8, fontSize: 13, fontWeight: 600, cursor: "pointer",
+          <Link href={`/crm/${player.id}`} style={{
+            flex: 1, padding: "10px 0", borderRadius: 8, fontSize: 13, fontWeight: 600, textAlign: "center", textDecoration: "none",
             background: "rgba(34,197,94,0.12)", border: "1px solid rgba(34,197,94,0.3)", color: "#22C55E",
           }}>
-            Edit deals
-          </button>
-          <button onClick={onClose} style={{
-            padding: "10px 20px", borderRadius: 8, fontSize: 13, cursor: "pointer",
+            Ouvrir la fiche
+          </Link>
+          <button onClick={onEdit} style={{
+            padding: "10px 16px", borderRadius: 8, fontSize: 13, cursor: "pointer",
             background: "none", border: "1px solid var(--border)", color: "var(--text-muted)",
           }}>
-            Fermer
+            Edit deals
           </button>
         </div>
       </div>

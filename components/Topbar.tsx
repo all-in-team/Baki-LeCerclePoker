@@ -7,7 +7,7 @@ import { Calendar } from "lucide-react";
 const TITLES: [string, string][] = [
   ["/crm/affiliates", "Affiliates"],
   ["/crm/games", "Games & Deals"],
-  ["/crm", "CRM Joueurs"],
+  ["/crm", "Joueurs"],
   ["/players", "Joueurs"],
   ["/settings", "Settings"],
   ["/kkpoker/pnl", "KKPOKER — P&L"],

@@ -4,9 +4,9 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useState, useEffect } from "react";
 import {
-  X, LogOut, LayoutDashboard, ContactRound, Users, Network,
+  X, LogOut, LayoutDashboard, Users, Network,
   Sliders, Settings, Wallet, Scale, BarChart3, FileText,
-  TrendingUp, ChevronDown, ChevronRight, CalendarDays, Rocket,
+  TrendingUp, ChevronDown, ChevronRight, CalendarDays, Rocket, Banknote,
 } from "lucide-react";
 
 type NavItem = { href: string; label: string; icon: React.ComponentType<{ size?: number; strokeWidth?: number }> };
@@ -14,8 +14,9 @@ type NavGroup = { label: string; archived?: boolean; items: NavItem[] };
 
 const MAIN: NavItem[] = [
   { href: "/", label: "Dashboard", icon: LayoutDashboard },
-  { href: "/crm", label: "CRM Joueurs", icon: ContactRound },
+  // /crm et /players ont fusionné en une seule page Joueurs (/crm redirige).
   { href: "/players", label: "Joueurs", icon: Users },
+  { href: "/payments", label: "Paiements", icon: Banknote },
   { href: "/crm/affiliates", label: "Affiliates", icon: Network },
   { href: "/qqpk-funnel", label: "QQPK Funnel", icon: Rocket },
   { href: "/crm/games", label: "Games & Deals", icon: Sliders },
@@ -88,6 +89,20 @@ export default function Sidebar({ isOpen, onClose }: SidebarProps) {
     if (g) setOpen(o => (o[g.label] ? o : { ...o, [g.label]: true }));
   }, [path]);
 
+  // Anti-oubli — pastille "Paiements" visible depuis n'importe quelle page.
+  // Rouge = semaines jamais réglées (un joueur zappé), jaune = règlements lockés
+  // en attente de paiement. Refetch à chaque navigation pour rester à jour après
+  // un paiement. Silencieux en cas d'erreur : la pastille disparaît, rien ne casse.
+  const [payAlerts, setPayAlerts] = useState<{ pending: number; overdue: number }>({ pending: 0, overdue: 0 });
+  useEffect(() => {
+    let cancelled = false;
+    fetch("/api/payments/alerts")
+      .then(r => r.json())
+      .then(d => { if (!cancelled) setPayAlerts({ pending: d.pending ?? 0, overdue: d.overdue ?? 0 }); })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [path]);
+
   async function handleLogout() {
     await fetch("/api/logout", { method: "POST" });
     router.push("/login");
@@ -153,10 +168,24 @@ export default function Sidebar({ isOpen, onClose }: SidebarProps) {
             .sort((a, b) => b.href.length - a.href.length)[0]?.href;
           return MAIN.map(({ href, label, icon: Icon }) => {
           const active = href === bestMain;
+          const badge = href === "/payments"
+            ? (payAlerts.overdue > 0
+                ? { n: payAlerts.overdue, color: "#EF4444", title: `${payAlerts.overdue} semaine(s) jamais réglée(s)` }
+                : payAlerts.pending > 0
+                  ? { n: payAlerts.pending, color: "#F5C518", title: `${payAlerts.pending} règlement(s) à payer` }
+                  : null)
+            : null;
           return (
             <Link key={href} href={href} className={active ? "nav-active" : undefined} style={itemStyle(active)}>
               <Icon size={16} strokeWidth={active ? 2.2 : 1.8} />
               {label}
+              {badge && (
+                <span title={badge.title} style={{
+                  marginLeft: "auto", minWidth: 18, textAlign: "center",
+                  fontSize: 10, fontWeight: 700, padding: "1px 6px", borderRadius: 999,
+                  background: `${badge.color}22`, color: badge.color, border: `1px solid ${badge.color}55`,
+                }}>{badge.n}</span>
+              )}
             </Link>
           );
           });

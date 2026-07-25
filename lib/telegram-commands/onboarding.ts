@@ -1,6 +1,10 @@
 import { getDb } from "@/lib/db";
 import { sendMsg, AGENT_CHAT_ID } from "./helpers";
 import { isUserbotConfigured, createPlayerGroup } from "@/lib/telegram-userbot";
+import {
+  findExistingGroupForTgUser, ensureInviteLink, claimPlayerGroupCreation,
+  releasePlayerGroupClaim, bindPlayerGroupToLead, recordGroupCreation,
+} from "@/lib/group-lifecycle";
 
 // Temporary map: telegram_id → group data, consumed by handleNewMembers when the player joins
 const pendingGroupData = new Map<number, {
@@ -9,6 +13,13 @@ const pendingGroupData = new Map<number, {
   liveplayTopicId: number | null;
   gameName?: string;
 }>();
+
+export function armPendingGroupData(
+  telegramId: number,
+  data: { groupId: number; alertesTopicId: number | null; liveplayTopicId: number | null; gameName?: string },
+) {
+  pendingGroupData.set(telegramId, data);
+}
 
 export function consumePendingGroupData(telegramId: number) {
   const data = pendingGroupData.get(telegramId);
@@ -127,6 +138,45 @@ export async function handleOnboardingDirect(
     }
   }
 
+  // ── IDEMPOTENCE (Hugo 2026-07-25) : un seul groupe par lead ──
+  // Le garde-fou d'avant était `existingPlayer`, or la ligne `players` ne naît qu'AU join :
+  // un 2ᵉ /start avant le join — ou un webhook rejoué par Telegram, createPlayerGroup
+  // dépassant largement son délai — créait un second groupe (cas M K, 2 groupes la même
+  // minute). Le registre `group_creations` connaît le groupe dès sa création, donc ici on
+  // renvoie TOUJOURS le lien existant au lieu d'en fabriquer un autre.
+  const existingGroup = findExistingGroupForTgUser(from.id);
+  if (existingGroup) {
+    const link = await ensureInviteLink(existingGroup.chatId, existingGroup.inviteLink);
+
+    // Un clic ne doit jamais se perdre : on ré-arme la liaison + l'intention de pitch pour
+    // que le join branche bien le groupe et déclenche le pitch du game demandé.
+    pendingGroupData.set(from.id, {
+      groupId: Number(existingGroup.chatId),
+      alertesTopicId: existingGroup.topicIds?.alertes ?? null,
+      liveplayTopicId: existingGroup.topicIds?.liveplay ?? null,
+      gameName,
+    });
+    try {
+      const { AUTO_PITCH_GAMES, armPendingGamePitch } = await import("./pending-game-pitch");
+      if (gameName && AUTO_PITCH_GAMES.has(gameName)) {
+        armPendingGamePitch(from.id, gameName, existingGroup.chatId);
+      }
+    } catch (e: any) {
+      console.warn("[ONBOARDING] re-arm pending pitch failed:", e?.message ?? e);
+    }
+
+    console.log(`[ONBOARDING] group already exists for tg ${from.id} (${existingGroup.source}) → reuse ${existingGroup.chatId}`);
+    if (link) {
+      await sendMsg(chatId,
+        `✅ <b>Ton groupe privé existe déjà</b> — pas besoin d'en créer un autre.\n\n` +
+        `👉 <b>Clique ici pour le rejoindre :</b>\n${link}`
+      );
+    } else {
+      await sendMsg(chatId, `✅ Tu es déjà inscrit ! Ton groupe privé est prêt.\n\nQuestions ? → @baki77777`);
+    }
+    return;
+  }
+
   if (existingPlayer && !gameName) {
     await sendMsg(chatId, `✅ Tu es déjà inscrit ! Ton groupe est prêt.\n\nQuestions ? → @baki77777`);
     return;
@@ -147,6 +197,15 @@ export async function handleOnboardingDirect(
     // ref_ leads (no kickoff_group_id) continue to group creation below
   }
 
+  // VERROU ATOMIQUE : une seule exécution crée le groupe. Un webhook rejoué (ou un double
+  // tap) perd la course et ne crée rien. Le verrou expire après 5 min pour ne pas bloquer
+  // un retry après un vrai crash. Même mécanique que `ensureNexaGroup`.
+  if (!claimPlayerGroupCreation(from.id)) {
+    console.log(`[ONBOARDING] group creation already in flight for tg ${from.id} — skip (anti-doublon)`);
+    await sendMsg(chatId, `⏳ Ton groupe privé est en cours de création — ton lien arrive dans quelques secondes 🤙`);
+    return;
+  }
+
   await sendMsg(chatId,
     `🃏 <b>Bienvenue sur Le Cercle !</b>\n\n` +
     `On crée ton groupe privé avec ton support dédié — ` +
@@ -162,6 +221,19 @@ export async function handleOnboardingDirect(
       const result = await createPlayerGroup(from.id, fullName, botToken, username ?? undefined);
       if (result) {
         groupCreated = true;
+
+        // Registre : écrit AVANT tout join possible → c'est lui qui rend un 2ᵉ clic
+        // inoffensif et qui arme le nettoyage 24 h si le joueur ne rejoint jamais.
+        recordGroupCreation({
+          chatId: result.chatId,
+          ownerKind: "player",
+          ownerKey: from.id,
+          ownerLabel: fullName,
+          title: `${fullName} x LeCercle`,
+          inviteLink: result.inviteLink ?? null,
+          topicIds: result.topicIds,
+        });
+        bindPlayerGroupToLead(from.id, result.chatId, result.inviteLink ?? null);
 
         pendingGroupData.set(from.id, {
           groupId: result.chatId,
@@ -245,6 +317,8 @@ export async function handleOnboardingDirect(
 
   // Fallback: notify admins to create group manually
   if (!groupCreated) {
+    // Verrou relâché : la création a échoué, un prochain /start doit pouvoir réessayer.
+    releasePlayerGroupClaim(from.id);
     await sendMsg(chatId,
       `✅ <b>Tu es inscrit !</b>\n\n` +
       `On prépare ton groupe privé. Tu recevras une invitation très bientôt.\n\n` +

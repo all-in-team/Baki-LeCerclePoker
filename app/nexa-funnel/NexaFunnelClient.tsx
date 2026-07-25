@@ -136,8 +136,17 @@ function LeadRow({ lead, weekly, events, isOpen, onToggle, onChanged }: {
         <td style={{ ...td, color: "#8888A0" }}>{lead.os ? (OS_LABEL[lead.os] ?? lead.os) : "—"}</td>
         <td style={td}>
           {lead.group_invite_link
-            ? <a href={lead.group_invite_link} target="_blank" rel="noreferrer" style={{ color: "#34D399", fontSize: 11 }}>🔐 groupe</a>
-            : <span style={{ color: "#555568" }}>—</span>}
+            ? (
+              <>
+                <a href={lead.group_invite_link} target="_blank" rel="noreferrer" style={{ color: "#34D399", fontSize: 11 }}>🔐 groupe</a>
+                {!lead.group_joined_at && (
+                  <span style={{ marginLeft: 6, fontSize: 10, color: "#F0B90B" }} title="Groupe créé, le lead ne l'a pas encore rejoint">⏳</span>
+                )}
+              </>
+            )
+            : lead.group_not_joined === 1
+              ? <span style={{ fontSize: 10, padding: "2px 6px", borderRadius: 4, background: "rgba(240,185,11,0.12)", color: "#F0B90B", fontWeight: 700 }} title="Groupe créé mais jamais rejoint dans les 24 h — il a été nettoyé, le lead est à relancer">⚠️ non rejoint</span>
+              : <span style={{ color: "#555568" }}>—</span>}
         </td>
         <td style={{ ...td, color: "#8888A0" }}>{fmtDateTime(lead.created_at)}</td>
         <td style={{ ...td, color: lead.deposit_at ? "#34D399" : "#555568" }}>{fmtDateTime(lead.deposit_at)}</td>

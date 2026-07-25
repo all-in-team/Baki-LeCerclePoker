@@ -43,6 +43,9 @@ export type NexaLead = {
   /** Verrou de création (anti double-groupe) et garde d'annonce (anti double-message). */
   group_claimed_at: string | null;
   group_announced_at: string | null;
+  /** Join constaté via l'event Telegram `chat_member` ; flag posé si le groupe est nettoyé faute de join. */
+  group_joined_at: string | null;
+  group_not_joined: number;
   relances_count: number;
   last_reminder_at: string | null;
   last_interaction_at: string | null;
@@ -477,6 +480,31 @@ export async function ensureNexaGroup(
   if (!lead) return { ok: false, error: "Lead introuvable" };
   if (lead.group_invite_link) return { ok: true, link: lead.group_invite_link };
 
+  // DOUBLON INTER-FUNNEL (audit Hugo 2026-07-25) : ce lead peut déjà avoir un groupe
+  // LeCercle créé par le funnel joueur — Hakim AMIRUL et Phua avaient chacun 2 groupes
+  // vivants pour cette raison. On réutilise le groupe existant (mêmes 5 topics, dont
+  // Dépôt) plutôt que d'en créer un second. Pas de re-seed des topics, pas d'écriture
+  // dans `group_creations` : ce groupe est déjà suivi côté joueur.
+  const { findExistingGroupForTgUser, ensureInviteLink } = await import("@/lib/group-lifecycle");
+  const already = findExistingGroupForTgUser(lead.tg_user_id);
+  if (already) {
+    const link = await ensureInviteLink(already.chatId, already.inviteLink);
+    if (link) {
+      getDb().prepare(
+        `UPDATE nexa_leads SET group_chat_id = ?, group_invite_link = ?, updated_at = datetime('now') WHERE id = ?`
+      ).run(already.chatId, link, lead.id);
+      logNexaEvent(lead.id, "group_created", {
+        stage: lead.stage, actor,
+        payload: `réutilisation du groupe existant ${already.chatId} (source ${already.source}) — pas de doublon`,
+      });
+      await sendMsg(AGENT_CHAT_ID,
+        `♻️ <b>Nexa Funnel</b> — <b>${leadName(lead)}</b> avait déjà un groupe LeCercle : on le réutilise ` +
+        `(<code>${already.chatId}</code>), aucun second groupe créé.`
+      ).catch(() => {});
+      return { ok: true, link };
+    }
+  }
+
   // VERROU ATOMIQUE : une seule exécution crée le groupe. Un webhook rejoué (ou un
   // double clic) perd la course et repart en `pending` sans rien envoyer ni créer.
   // Le verrou expire après 5 min pour ne pas bloquer un retry après un vrai crash.
@@ -509,6 +537,18 @@ export async function ensureNexaGroup(
       `UPDATE nexa_leads SET group_chat_id = ?, group_invite_link = ?, updated_at = datetime('now') WHERE id = ?`
     ).run(String(res.chatId), res.inviteLink, lead.id);
     logNexaEvent(lead.id, "group_created", { stage: lead.stage, actor, payload: String(res.chatId) });
+
+    // Registre partagé : arme le nettoyage 24 h si le lead ne rejoint jamais son canal.
+    const { recordGroupCreation } = await import("@/lib/group-lifecycle");
+    recordGroupCreation({
+      chatId: res.chatId,
+      ownerKind: "nexa_lead",
+      ownerKey: lead.tg_user_id,
+      ownerLabel: leadName(lead),
+      title: `${display} x LeCercle`,
+      inviteLink: res.inviteLink,
+      topicIds: res.topicIds,
+    });
 
     // Seed des topics — mêmes templates que les groupes existants (TOPIC_MESSAGES),
     // notamment le topic Dépôt avec les coordonnées bancaires/crypto. Le bot est

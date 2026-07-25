@@ -3,16 +3,16 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import Modal from "@/components/Modal";
+import { isActiveStatus, type Game } from "./shared";
 
-interface Player { id: number; name: string; telegram_handle: string | null; status: string; }
-interface Game { id: number; name: string; default_action_pct: number | null; status: string; }
+interface Candidate { id: number; name: string; telegram_handle: string | null; status: string }
 
 interface Props {
   open: boolean;
   onClose: () => void;
   game: Game;
   existingPlayerIds: Set<number>;
-  allPlayers: Player[];
+  allPlayers: Candidate[];
 }
 
 export default function AddPlayerToGameModal({ open, onClose, game, existingPlayerIds, allPlayers }: Props) {
@@ -24,7 +24,7 @@ export default function AddPlayerToGameModal({ open, onClose, game, existingPlay
   const [saving, setSaving] = useState(false);
 
   const candidates = allPlayers
-    .filter(p => !existingPlayerIds.has(p.id) && (p.status === "active" || p.status === "signed"))
+    .filter(p => !existingPlayerIds.has(p.id) && isActiveStatus(p.status))
     .filter(p => !search || p.name.toLowerCase().includes(search.toLowerCase()) || (p.telegram_handle ?? "").toLowerCase().includes(search.toLowerCase()));
 
   async function handleSave() {

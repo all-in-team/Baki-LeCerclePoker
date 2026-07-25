@@ -50,6 +50,30 @@ export function initCronJobs() {
     console.log("[CRON] shell-purge DISABLED");
   }
 
+  // Groupes non rejoints — toutes les heures à :40 (Hugo 2026-07-25).
+  // Un groupe créé sans join depuis plus de 24 h est supprimé (kick équipe + sortie du
+  // userbot) ou tagué « abandonné » si le kick échoue, et son lead repasse à l'étape
+  // précédente avec le flag « groupe non rejoint » pour rester relançable.
+  // Le job ne voit QUE les groupes tracés dans `group_creations` (donc créés après ce
+  // déploiement) : rayon d'action borné par construction.
+  if (process.env.GROUP_CLEANUP_ENABLED !== "false") {
+    cron.schedule("40 * * * *", async () => {
+      try {
+        const { runGhostGroupCleanup, reportGhostCleanup } = await import("./group-lifecycle");
+        const result = await runGhostGroupCleanup();
+        if (result.scanned > 0 || !result.ok) {
+          console.log(`[CRON] ghost-group-cleanup: purged=${result.purged.length} tagged=${result.tagged.length} healed=${result.self_healed.length} skipped=${result.skipped.length}`);
+        }
+        await reportGhostCleanup(result);
+      } catch (e: any) {
+        console.error("[CRON] ghost-group-cleanup failed:", e);
+      }
+    }, opts);
+    console.log("[CRON] ghost-group-cleanup registered (toutes les heures à :40)");
+  } else {
+    console.log("[CRON] ghost-group-cleanup DISABLED");
+  }
+
   // Snapshot quotidien de trésorerie — 23h50 Paris (graph "Trésorerie · évolution").
   if (process.env.TREASURY_SNAPSHOT_ENABLED !== "false") {
     cron.schedule("50 23 * * *", async () => {

@@ -6,6 +6,7 @@ import { getDb } from "@/lib/db";
 import Link from "next/link";
 import PageHeader from "@/components/PageHeader";
 import NetPnlChart from "@/app/akpoker/pnl/NetPnlChart";
+import PlayerDangerZone from "./PlayerDangerZone";
 
 function daysAgo(n: number): string {
   const d = new Date(); d.setDate(d.getDate() - n);
@@ -60,6 +61,14 @@ export default async function CrmPlayerPage({ params, searchParams }: { params: 
   const cnyRate = getCnyRate();
   const cashoutWallets = db.prepare(`SELECT address, label FROM player_wallet_cashouts WHERE player_id = ?`).all(playerId) as { address: string; label: string | null }[];
 
+  // Bloc identité : ce que la liste n'affiche plus en colonne depuis la fusion /crm + /players
+  // (tier, apps actives, dernière note, date d'inscription, Telegram complet).
+  const appStats = db.prepare(`
+    SELECT COUNT(*) AS app_count, SUM(CASE WHEN status='active' THEN 1 ELSE 0 END) AS active_apps
+    FROM player_app_assignments WHERE player_id = ?
+  `).get(playerId) as { app_count: number; active_apps: number | null };
+  const lastNote = notes[0] as { content: string; created_at: string } | undefined;
+
   const accent = (label: string) => GAME_COLOR[label] ?? "#9CA3AF";
 
   return (
@@ -83,6 +92,53 @@ export default async function CrmPlayerPage({ params, searchParams }: { params: 
           </span>
         </div>
       )}
+
+      {/* Identité — repris de la liste après la fusion /crm + /players */}
+      <div style={{ background: "var(--bg-raised)", border: "1px solid var(--border)", borderRadius: 12, padding: 20, marginBottom: 16 }}>
+        <div style={{ fontSize: 11, fontWeight: 600, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.07em", marginBottom: 12 }}>Identité</div>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: "10px 20px", fontSize: 13 }}>
+          <div>
+            <div style={{ fontSize: 11, color: "var(--text-dim)" }}>Tier</div>
+            <div style={{ color: "var(--text)", fontWeight: 600 }}>{player.tier ?? "—"}</div>
+          </div>
+          <div>
+            <div style={{ fontSize: 11, color: "var(--text-dim)" }}>Apps</div>
+            <div style={{ color: "var(--text)", fontWeight: 600 }}>
+              <span style={{ color: (appStats?.active_apps ?? 0) > 0 ? "var(--green)" : "var(--text-dim)" }}>{appStats?.active_apps ?? 0} active</span>
+              <span style={{ color: "var(--text-dim)", fontWeight: 400 }}> / {appStats?.app_count ?? 0}</span>
+            </div>
+          </div>
+          <div>
+            <div style={{ fontSize: 11, color: "var(--text-dim)" }}>Inscrit le</div>
+            <div style={{ color: "var(--text)", fontWeight: 600 }}>{player.created_at ? String(player.created_at).slice(0, 10) : "—"}</div>
+          </div>
+          <div>
+            <div style={{ fontSize: 11, color: "var(--text-dim)" }}>Source</div>
+            <div style={{ color: "var(--text)", fontWeight: 600 }}>{player.joined_via ?? "— (avant tracking)"}</div>
+          </div>
+          <div>
+            <div style={{ fontSize: 11, color: "var(--text-dim)" }}>Telegram</div>
+            <div style={{ color: "var(--text)" }}>
+              {player.telegram_handle ? `@${String(player.telegram_handle).replace(/^@/, "")}` : "—"}
+              {player.telegram_phone ? ` · ${player.telegram_phone}` : ""}
+              {player.telegram_id ? <span style={{ color: "var(--text-dim)", fontFamily: "monospace", fontSize: 11 }}> · ID {player.telegram_id}</span> : null}
+            </div>
+          </div>
+          <div>
+            <div style={{ fontSize: 11, color: "var(--text-dim)" }}>Dernière note</div>
+            <div style={{ color: "var(--text)" }}>
+              {lastNote
+                ? <>{(lastNote.created_at ?? "").slice(0, 10)} — <span style={{ color: "var(--text-muted)" }}>{lastNote.content.length > 60 ? lastNote.content.slice(0, 60) + "…" : lastNote.content}</span></>
+                : "—"}
+            </div>
+          </div>
+        </div>
+        {player.notes && (
+          <div style={{ marginTop: 12, paddingTop: 12, borderTop: "1px solid var(--border)", fontSize: 12, color: "var(--text-muted)" }}>
+            <span style={{ color: "var(--text-dim)" }}>Notes fiche : </span>{player.notes}
+          </div>
+        )}
+      </div>
 
       {/* Total agence — toutes games confondues (cohérent avec Top Contributors / net worth) */}
       <div style={{ background: "var(--bg-raised)", border: "1px solid var(--border)", borderRadius: 12, padding: 20, marginBottom: 16 }}>
@@ -235,8 +291,10 @@ export default async function CrmPlayerPage({ params, searchParams }: { params: 
         </div>
       )}
 
+      <PlayerDangerZone playerId={playerId} playerName={player.name} status={player.status} />
+
       <div style={{ marginTop: 16 }}>
-        <Link href="/crm" style={{ fontSize: 12, color: "var(--text-muted)", textDecoration: "none" }}>← Retour au CRM</Link>
+        <Link href="/players" style={{ fontSize: 12, color: "var(--text-muted)", textDecoration: "none" }}>← Retour aux joueurs</Link>
       </div>
     </div>
   );
