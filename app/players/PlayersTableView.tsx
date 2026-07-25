@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { Pencil, Archive, RotateCcw, ChevronUp, ChevronDown } from "lucide-react";
+import { Pencil, Archive, RotateCcw, ChevronUp, ChevronDown, EyeOff } from "lucide-react";
 import { badgeFor, fmtAmt, isActiveStatus, type Deal, type Player } from "./shared";
 
 type SortKey = "name" | "games" | "agency" | "status";
@@ -43,6 +43,24 @@ export default function PlayersTableView({ players, gamesByPlayer, agencyByPlaye
       }
     }
   });
+
+  // Soft-delete : sort la ligne de la liste par défaut (toggle « Archivés » pour la revoir),
+  // orthogonal au status active/inactive du bouton d'à côté. Jamais de suppression.
+  async function setArchived(p: Player, archived: boolean) {
+    setArchiving(p.id);
+    try {
+      await fetch(`/api/players/${p.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ archived, archive_reason: archived ? "retiré à la main" : null }),
+      });
+      router.refresh();
+    } catch (e: any) {
+      alert("Erreur: " + (e.message ?? e));
+    } finally {
+      setArchiving(null);
+    }
+  }
 
   async function toggleArchive(p: Player) {
     setArchiving(p.id);
@@ -113,25 +131,48 @@ export default function PlayersTableView({ players, gamesByPlayer, agencyByPlaye
                   {agency30 !== 0 ? `${fmtAmt(agency30)} USDT` : "—"}
                 </td>
                 <td style={{ textAlign: "center", padding: "10px 8px" }}>
-                  <span style={{
-                    padding: "2px 8px", borderRadius: 4, fontSize: 10, fontWeight: 600,
-                    background: isActiveStatus(p.status) ? "rgba(16,185,129,0.15)" : "rgba(156,163,175,0.15)",
-                    color: isActiveStatus(p.status) ? "#10B981" : "var(--text-muted)",
-                  }}>{p.status}</span>
+                  {p.archived_at
+                    ? <span title={p.archive_reason ?? "archivé"} style={{ padding: "2px 8px", borderRadius: 4, fontSize: 10, fontWeight: 600, background: "rgba(240,185,11,0.15)", color: "#F0B90B" }}>archivé</span>
+                    : <span style={{
+                        padding: "2px 8px", borderRadius: 4, fontSize: 10, fontWeight: 600,
+                        background: isActiveStatus(p.status) ? "rgba(16,185,129,0.15)" : "rgba(156,163,175,0.15)",
+                        color: isActiveStatus(p.status) ? "#10B981" : "var(--text-muted)",
+                      }}>{p.status}</span>}
                 </td>
                 <td style={{ textAlign: "center", padding: "10px 8px" }} onClick={e => e.stopPropagation()}>
                   <div style={{ display: "flex", justifyContent: "center", gap: 6 }}>
                     <button onClick={() => onEdit(p)} title="Edit" style={{ background: "none", border: "1px solid var(--border)", borderRadius: 6, cursor: "pointer", padding: "4px 6px", color: "var(--text-muted)", display: "flex", alignItems: "center" }}>
                       <Pencil size={13} />
                     </button>
-                    <button
-                      onClick={() => toggleArchive(p)}
-                      disabled={archiving === p.id}
-                      title={isActiveStatus(p.status) ? "Archiver" : "Réactiver"}
-                      style={{ background: "none", border: "1px solid var(--border)", borderRadius: 6, cursor: "pointer", padding: "4px 6px", color: "var(--text-muted)", display: "flex", alignItems: "center", opacity: archiving === p.id ? 0.4 : 1 }}
-                    >
-                      {isActiveStatus(p.status) ? <Archive size={13} /> : <RotateCcw size={13} />}
-                    </button>
+                    {p.archived_at ? (
+                      <button
+                        onClick={() => setArchived(p, false)}
+                        disabled={archiving === p.id}
+                        title="Restaurer dans la liste"
+                        style={{ background: "none", border: "1px solid rgba(240,185,11,0.4)", borderRadius: 6, cursor: "pointer", padding: "4px 6px", color: "#F0B90B", display: "flex", alignItems: "center", opacity: archiving === p.id ? 0.4 : 1 }}
+                      >
+                        <RotateCcw size={13} />
+                      </button>
+                    ) : (
+                      <>
+                        <button
+                          onClick={() => toggleArchive(p)}
+                          disabled={archiving === p.id}
+                          title={isActiveStatus(p.status) ? "Passer en inactive" : "Réactiver"}
+                          style={{ background: "none", border: "1px solid var(--border)", borderRadius: 6, cursor: "pointer", padding: "4px 6px", color: "var(--text-muted)", display: "flex", alignItems: "center", opacity: archiving === p.id ? 0.4 : 1 }}
+                        >
+                          {isActiveStatus(p.status) ? <Archive size={13} /> : <RotateCcw size={13} />}
+                        </button>
+                        <button
+                          onClick={() => setArchived(p, true)}
+                          disabled={archiving === p.id}
+                          title="Retirer de la liste (archiver, réversible)"
+                          style={{ background: "none", border: "1px solid var(--border)", borderRadius: 6, cursor: "pointer", padding: "4px 6px", color: "var(--text-muted)", display: "flex", alignItems: "center", opacity: archiving === p.id ? 0.4 : 1 }}
+                        >
+                          <EyeOff size={13} />
+                        </button>
+                      </>
+                    )}
                   </div>
                 </td>
               </tr>

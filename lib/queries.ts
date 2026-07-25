@@ -3,6 +3,10 @@ import { toParisDate, toUTCISO, parisLocalToUTC, addMonthsParis } from "./date-u
 import { computeStakingBlock, projectStakingBlock, operatorPnlFromReglement } from "./qqpk-staking-engine";
 
 // ── Players ──────────────────────────────────────────────
+// Les lignes archivées (soft-delete, audit 2026-07-25) sont exclues : cette fonction
+// alimente les sélecteurs de joueurs (ledgers, PnL, /api/players), et une ligne archivée
+// n'a par construction aucune activité — donc rien d'historique à afficher. La page
+// Joueurs, elle, lit `players` directement pour pouvoir proposer son toggle « Archivés ».
 export function getPlayers() {
   const db = getDb();
   return db.prepare(`
@@ -11,6 +15,7 @@ export function getPlayers() {
       SUM(CASE WHEN paa.status='active' THEN 1 ELSE 0 END) AS active_apps
     FROM players p
     LEFT JOIN player_app_assignments paa ON paa.player_id = p.id
+    WHERE p.archived_at IS NULL
     GROUP BY p.id
     ORDER BY p.name
   `).all();
@@ -19,6 +24,102 @@ export function getPlayers() {
 export function getPlayerById(id: number) {
   const db = getDb();
   return db.prepare(`SELECT * FROM players WHERE id = ?`).get(id);
+}
+
+// ── Archivage de la liste Joueurs (soft-delete) ───────────
+// Audit Hugo 2026-07-25 : 142 des 237 lignes `players` n'ont jamais été des joueurs — le
+// bot est membre d'un groupe communautaire hors poker et `handleNewMembers` créait une
+// ligne à chaque join. Archiver = les sortir de la liste par défaut, JAMAIS les supprimer
+// (aucun hard delete : `deletePlayer` et ses garde-fous restent intouchés).
+
+/** Toute activité qui interdit l'archivage automatique. Un seul de ces signaux ⇒ on garde. */
+const NEVER_PLAYER_KEEP_SQL = `
+  -- game / room assignée (colonne GAMES de la page + assignations legacy)
+  EXISTS(SELECT 1 FROM player_game_deals x WHERE x.player_id = p.id)
+  OR EXISTS(SELECT 1 FROM player_app_assignments x WHERE x.player_id = p.id)
+  OR p.tron_app_id IS NOT NULL
+  -- member_id / ID de room (saisi ou vu dans un import)
+  OR EXISTS(SELECT 1 FROM player_game_ids x WHERE x.player_id = p.id)
+  OR EXISTS(SELECT 1 FROM player_alias_members x WHERE x.player_id = p.id)
+  -- argent : transactions, rakeback, settlements, agency cut, qqpk, grindhouse, deals
+  OR EXISTS(SELECT 1 FROM wallet_transactions x WHERE x.player_id = p.id)
+  OR EXISTS(SELECT 1 FROM telegram_transactions x WHERE x.player_id = p.id)
+  OR EXISTS(SELECT 1 FROM rakeback_entries x WHERE x.player_id = p.id)
+  OR EXISTS(SELECT 1 FROM accounting_entries x WHERE x.player_id = p.id)
+  OR EXISTS(SELECT 1 FROM weekly_settlements x WHERE x.player_id = p.id)
+  OR EXISTS(SELECT 1 FROM manual_settlements x WHERE x.player_id = p.id)
+  OR EXISTS(SELECT 1 FROM weekly_cashout_state x WHERE x.player_id = p.id)
+  OR EXISTS(SELECT 1 FROM cashout_requests x WHERE x.player_id = p.id)
+  OR EXISTS(SELECT 1 FROM qqpk_entry_log x WHERE x.player_id = p.id)
+  OR EXISTS(SELECT 1 FROM qqpk_staking_blocks x WHERE x.player_id = p.id)
+  OR EXISTS(SELECT 1 FROM qqpk_cycle_rakeback x WHERE x.player_id = p.id)
+  OR EXISTS(SELECT 1 FROM grindhouse_grinders x WHERE x.player_id = p.id)
+  OR EXISTS(SELECT 1 FROM grindhouse_sessions x WHERE x.player_id = p.id)
+  OR EXISTS(SELECT 1 FROM grindhouse_settlements x WHERE x.player_id = p.id)
+  OR EXISTS(SELECT 1 FROM grindhouse_expenses x WHERE x.player_id = p.id)
+  OR EXISTS(SELECT 1 FROM deal_acceptances x WHERE x.player_id = p.id)
+  -- wallets renseignés (legacy ou par game) = joueur réellement setupé
+  OR EXISTS(SELECT 1 FROM player_wallet_games x WHERE x.player_id = p.id)
+  OR EXISTS(SELECT 1 FROM player_wallet_cashouts x WHERE x.player_id = p.id)
+  OR COALESCE(p.tron_address, '') != ''
+  OR COALESCE(p.tele_wallet_perso, '') != ''
+  OR COALESCE(p.tele_wallet_cashout, '') != ''
+  -- groupe privé créé (y compris ceux déliés par la purge des fantômes)
+  OR COALESCE(p.telegram_group_id, '') != ''
+  OR p.group_not_joined = 1
+  OR (p.telegram_id IS NOT NULL AND EXISTS(SELECT 1 FROM group_creations x WHERE x.owner_key = p.telegram_id))
+  OR (p.telegram_id IS NOT NULL AND EXISTS(SELECT 1 FROM onboarding_leads x WHERE x.telegram_id = p.telegram_id AND COALESCE(x.group_chat_id,'') != ''))
+  -- trace d'un groupe LeCercle dans le journal CRM : rattrape les liaisons perdues
+  -- (Thibaud) et les agents qui rejoignent le groupe d'un filleul (Maxime ☀️)
+  OR EXISTS(SELECT 1 FROM crm_notes n WHERE n.player_id = p.id
+              AND (n.content LIKE '%x LeCercle%' OR n.content LIKE '%Créé via affiliation%'))
+  -- tag Aff / Ref : affiliés et référents volontaires
+  OR EXISTS(SELECT 1 FROM affiliate_relationships x WHERE x.affiliate_player_id = p.id OR x.referred_player_id = p.id)
+  OR EXISTS(SELECT 1 FROM affiliate_profiles x WHERE x.affiliate_player_id = p.id)
+  OR EXISTS(SELECT 1 FROM affiliate_leads x WHERE x.affiliate_player_id = p.id OR x.converted_player_id = p.id)
+  -- présent dans un funnel = lead volontaire, pas un ping
+  OR (p.telegram_id IS NOT NULL AND (
+       EXISTS(SELECT 1 FROM nexa_leads x WHERE x.tg_user_id = p.telegram_id)
+       OR EXISTS(SELECT 1 FROM qqpk_funnel_leads x WHERE x.telegram_id = p.telegram_id)
+       OR EXISTS(SELECT 1 FROM pending_game_pitches x WHERE x.player_telegram_id = p.telegram_id)))
+  -- statut déjà travaillé à la main + création manuelle (roster initial / modale Ajouter)
+  OR p.status != 'active'
+  OR p.joined_via IS NULL
+`;
+
+export type NeverPlayerRow = {
+  id: number; name: string; telegram_handle: string | null; telegram_id: number | null;
+  telegram_chat_id: string | null; joined_via: string | null; created_at: string | null;
+};
+
+/** Le bucket « jamais joueur » : aucun des signaux ci-dessus, et pas déjà archivé. */
+export function getNeverPlayerBucket(): NeverPlayerRow[] {
+  return getDb().prepare(`
+    SELECT p.id, p.name, p.telegram_handle, p.telegram_id, p.telegram_chat_id, p.joined_via, p.created_at
+    FROM players p
+    WHERE p.archived_at IS NULL AND NOT (${NEVER_PLAYER_KEEP_SQL})
+    ORDER BY p.created_at DESC
+  `).all() as NeverPlayerRow[];
+}
+
+/** Archive / restaure un joueur. `archived = false` ⇒ retour dans la liste par défaut. */
+export function setPlayerArchived(id: number, archived: boolean, reason?: string | null): void {
+  getDb().prepare(
+    `UPDATE players SET archived_at = ?, archive_reason = ? WHERE id = ?`
+  ).run(archived ? new Date().toISOString().replace("T", " ").slice(0, 19) : null, archived ? (reason ?? null) : null, id);
+}
+
+/** Archivage en masse d'une liste d'ids explicite (jamais un WHERE ouvert). */
+export function archivePlayers(ids: number[], reason: string): number {
+  if (ids.length === 0) return 0;
+  const db = getDb();
+  const stmt = db.prepare(`UPDATE players SET archived_at = datetime('now'), archive_reason = ? WHERE id = ? AND archived_at IS NULL`);
+  const tx = db.transaction(() => {
+    let n = 0;
+    for (const id of ids) n += stmt.run(reason, id).changes;
+    return n;
+  });
+  return tx();
 }
 
 export function getPlayerAssignments(playerId: number) {

@@ -17,6 +17,7 @@ export default function PlayersViewToggle(props: PlayersViewProps) {
   const [search, setSearch] = useState("");
   const [editPlayer, setEditPlayer] = useState<Player | null>(null);
   const [addOpen, setAddOpen] = useState(false);
+  const [showArchived, setShowArchived] = useState(false);
 
   useEffect(() => {
     // Reprend la préférence de l'ancienne clé CRM pour ne pas repartir de zéro.
@@ -29,10 +30,15 @@ export default function PlayersViewToggle(props: PlayersViewProps) {
     localStorage.setItem("players_view", v);
   }
 
+  // Archivés masqués par défaut (soft-delete) : le toggle « Archivés » les fait réapparaître
+  // pour restauration. Aucune ligne n'est jamais supprimée.
+  const archivedCount = players.filter(p => p.archived_at).length;
+  const visible = showArchived ? players.filter(p => p.archived_at) : players.filter(p => !p.archived_at);
+
   const q = search.trim().toLowerCase();
   const filtered = q
-    ? players.filter(p => p.name.toLowerCase().includes(q) || (p.telegram_handle ?? "").toLowerCase().includes(q) || (p.telegram_phone ?? "").toLowerCase().includes(q))
-    : players;
+    ? visible.filter(p => p.name.toLowerCase().includes(q) || (p.telegram_handle ?? "").toLowerCase().includes(q) || (p.telegram_phone ?? "").toLowerCase().includes(q))
+    : visible;
 
   return (
     <>
@@ -61,6 +67,20 @@ export default function PlayersViewToggle(props: PlayersViewProps) {
         </div>
 
         <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 12 }}>
+          {(archivedCount > 0 || showArchived) && (
+            <button
+              onClick={() => setShowArchived(v => !v)}
+              title="Lignes archivées : jamais supprimées, restaurables d'un clic"
+              style={{
+                padding: "6px 12px", borderRadius: 7, fontSize: 12, fontWeight: 600, cursor: "pointer",
+                border: showArchived ? "1px solid rgba(240,185,11,0.4)" : "1px solid var(--border)",
+                background: showArchived ? "rgba(240,185,11,0.12)" : "var(--bg-surface)",
+                color: showArchived ? "#F0B90B" : "var(--text-muted)",
+              }}
+            >
+              {showArchived ? `← Retour à la liste` : `Archivés (${archivedCount})`}
+            </button>
+          )}
           <span style={{ fontSize: 11, color: "var(--text-dim)" }}>
             {filtered.length} joueur{filtered.length > 1 ? "s" : ""}
           </span>

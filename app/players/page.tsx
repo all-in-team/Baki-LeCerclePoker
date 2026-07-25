@@ -20,9 +20,12 @@ export default function PlayersPage() {
   // Pas de whitelist de status : l'ancienne page /players affichait TOUS les joueurs alors
   // que le CRM filtrait 4 status. Sans ce SELECT ouvert, un joueur avec un status hors liste
   // deviendrait invisible partout.
+  // `archived_at` remonte ici : la liste masque les archivés par défaut côté client, avec
+  // un toggle « Archivés » pour les récupérer (soft-delete réversible, audit 2026-07-25).
   const allPlayers = db.prepare(`
     SELECT p.id, p.name, p.telegram_handle, p.telegram_phone, p.status, p.tier, p.notes,
       p.tron_address, p.tron_app_id, p.telegram_id, p.created_at, p.joined_via,
+      p.archived_at, p.archive_reason,
       (SELECT MAX(created_at) FROM crm_notes WHERE player_id = p.id) AS last_note_at,
       EXISTS(SELECT 1 FROM affiliate_relationships WHERE affiliate_player_id = p.id AND status='active') AS is_affiliate,
       EXISTS(SELECT 1 FROM affiliate_relationships WHERE referred_player_id = p.id AND status='active') AS is_referred

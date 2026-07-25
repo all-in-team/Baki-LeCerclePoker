@@ -32,6 +32,9 @@ export interface Player {
   joined_via: string | null;
   is_affiliate: number;
   is_referred: number;
+  /** Soft-delete : non-null ⇒ masqué de la liste par défaut, restaurable via le toggle. */
+  archived_at: string | null;
+  archive_reason: string | null;
 }
 
 export interface Deal {

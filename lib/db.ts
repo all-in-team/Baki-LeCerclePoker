@@ -2346,4 +2346,25 @@ function initSchema(db: Database.Database) {
   } catch (err: any) {
     console.error(`[MIGRATION:add_group_lifecycle_v1] FAILED:`, err.message);
   }
+
+  // Archivage (soft-delete) de la liste Joueurs — audit Hugo 2026-07-25.
+  // 142 des 237 lignes `players` n'ont JAMAIS été des joueurs : le bot est membre d'un
+  // groupe communautaire sans rapport avec le poker (`𓂃🌿 نَفَحَاتٌ إِيمَانِيَّةٌ 🌿𓂃`,
+  // chat -1004358906632) et `handleNewMembers` créait une ligne à chaque personne qui
+  // rejoignait, sans vérifier que le chat était un groupe d'onboarding LeCercle.
+  //
+  // Colonne dédiée plutôt qu'une 4ᵉ valeur de `status` : `status` pilote déjà le bouton
+  // Archiver (active↔inactive), des filtres et des KPIs — y injecter 'archived' aurait
+  // changé silencieusement ces comportements. Ici l'archivage est orthogonal et
+  // réversible : `archived_at = NULL` restaure.
+  try {
+    const fix = db.prepare(`INSERT OR IGNORE INTO _applied_fixes (name) VALUES (?)`).run("add_player_archive_v1");
+    if (fix.changes > 0) {
+      try { db.exec(`ALTER TABLE players ADD COLUMN archived_at TEXT`); } catch {}
+      try { db.exec(`ALTER TABLE players ADD COLUMN archive_reason TEXT`); } catch {}
+      console.log("[MIGRATION] add_player_archive_v1 applied");
+    }
+  } catch (err: any) {
+    console.error(`[MIGRATION:add_player_archive_v1] FAILED:`, err.message);
+  }
 }
