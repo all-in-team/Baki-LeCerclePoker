@@ -16,7 +16,7 @@
 //   • Tout est journalisé dans nexa_lead_events (transitions, relances, questions,
 //     groupe, actions admin) avec son déclencheur (bot / import / admin).
 import { getDb } from "@/lib/db";
-import { sendMsg, sendMsgKeyboard, answerCbQuery, AGENT_CHAT_ID } from "@/lib/telegram-commands/helpers";
+import { sendMsg, sendMsgKeyboard, sendForceReply, answerCbQuery, AGENT_CHAT_ID } from "@/lib/telegram-commands/helpers";
 import {
   NEXA_ROOM_LABEL, NEXA_BONUS_CODE, NEXA_DOWNLOADS, NEXA_MEMBER_ID_RE, NEXA_MEMBER_ID_HINT,
   NEXA_STAGE_ORDER, NEXA_REMINDER_THRESHOLDS_H, NEXA_MAX_REMINDERS, NEXA_REMINDER_MIN_GAP_H,
@@ -129,10 +129,14 @@ function leadName(lead: Pick<NexaLead, "tg_username" | "first_name" | "tg_user_i
 // Le bouton « ❓ J'ai une question » est présent à CHAQUE étape (§2 du brief) :
 // il notifie l'admin et logge l'étape où le lead a bloqué.
 const QUESTION_BTN = { text: "❓ J'ai une question", callback_data: "nf_q" };
+const MY_ID_BTN = { text: "📝 Mon ID Player", callback_data: "nf_myid" };
 
 function withQuestion(rows: any[][]): any[][] {
   return [...rows, [QUESTION_BTN]];
 }
+
+// Clavier de l'étape 2 : « Mon ID Player » (ForceReply) + « J'ai une question ».
+const SIGNUP_KEYBOARD: any[][] = [[MY_ID_BTN], [QUESTION_BTN]];
 
 async function sendWelcome(chatId: number) {
   await sendMsgKeyboard(chatId,
@@ -200,7 +204,7 @@ function downloadHead(os: NexaOs | null): string {
 }
 
 async function sendDownloadAndSignup(chatId: number, os: NexaOs | null) {
-  await sendMsgKeyboard(chatId, downloadHead(os) + signupBlock(), [[QUESTION_BTN]]);
+  await sendMsgKeyboard(chatId, downloadHead(os) + signupBlock(), SIGNUP_KEYBOARD);
 }
 
 async function sendDepositStep(chatId: number) {
@@ -324,6 +328,15 @@ export async function handleNexaFunnelCallback(callbackId: string, data: string,
     logNexaEvent(lead.id, "question", { stage: lead.stage, actor: "bot", payload: "deal" });
     touchInteraction(lead.id);
     await sendDealExplainer(chatId);
+    return;
+  }
+
+  // 📝 « Mon ID Player » — ouvre le champ de réponse du lead via ForceReply. La
+  // capture de l'ID passe par le même chemin que la saisie libre (handleNexaFunnelDm) :
+  // les deux marchent, validation 7 chiffres inchangée.
+  if (data === "nf_myid") {
+    touchInteraction(lead.id);
+    await sendForceReply(chatId, `Vas-y, envoie ton ID ici 👇 (${NEXA_MEMBER_ID_HINT}, visible dans ton profil)`);
     return;
   }
 
@@ -605,7 +618,7 @@ function reminderContent(lead: NexaLead): { text: string; keyboard?: any[][] } {
     return {
       text: `👋 Il ne manque plus que ton compte !\n\n` +
         downloadHead((lead.os as NexaOs | null) ?? null) + signupBlock(),
-      keyboard: [[QUESTION_BTN]],
+      keyboard: SIGNUP_KEYBOARD,
     };
   }
   return {
