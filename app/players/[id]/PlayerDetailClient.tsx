@@ -374,16 +374,18 @@ export default function PlayerDetailClient({ player, transactions, gameDeals: in
                     <td style={{ padding: "11px 16px" }}>
                       <span style={{ fontSize: 11, fontWeight: 700, color: gc, background: gc + "18", padding: "2px 7px", borderRadius: 4 }}>{tx.game_name}</span>
                     </td>
+                    {/* Sens agence (règle universelle, Baki 2026-07-25) : un dépôt arrive
+                        chez nous → vert + · un retrait part de la wallet mère → rouge −. */}
                     <td style={{ padding: "11px 16px" }}>
                       <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                        {isOut ? <ArrowUpRight size={14} color="var(--green)" /> : <ArrowDownLeft size={14} color="#f87171" />}
-                        <span style={{ fontSize: 12, fontWeight: 600, color: isOut ? "var(--green)" : "#f87171" }}>
+                        {isOut ? <ArrowUpRight size={14} color="#f87171" /> : <ArrowDownLeft size={14} color="var(--green)" />}
+                        <span style={{ fontSize: 12, fontWeight: 600, color: isOut ? "#f87171" : "var(--green)" }}>
                           {isOut ? "Retrait" : "Dépôt"}
                         </span>
                       </div>
                     </td>
-                    <td style={{ padding: "11px 16px", fontSize: 13, fontWeight: 700, color: isOut ? "var(--green)" : "#f87171", whiteSpace: "nowrap" }}>
-                      {isOut ? "+" : "−"}{tx.amount.toLocaleString("fr-FR", { minimumFractionDigits: 2 })} {tx.currency}
+                    <td style={{ padding: "11px 16px", fontSize: 13, fontWeight: 700, color: isOut ? "#f87171" : "var(--green)", whiteSpace: "nowrap" }}>
+                      {isOut ? "−" : "+"}{tx.amount.toLocaleString("fr-FR", { minimumFractionDigits: 2 })} {tx.currency}
                     </td>
                     <td style={{ padding: "11px 16px", fontSize: 12, color: "var(--text-muted)" }}>
                       {tx.note ?? <span style={{ color: "var(--text-dim)" }}>—</span>}

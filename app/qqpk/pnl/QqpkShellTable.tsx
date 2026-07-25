@@ -690,12 +690,14 @@ function CycleTxList({ txs, resultat, onClose }: { txs: CycleTx[]; resultat: num
           return (
             <div key={t.id} style={{ display: "flex", alignItems: "center", gap: 12, padding: "7px 12px", borderTop: i > 0 ? "1px solid var(--border)" : "none", fontSize: 12 }}>
               <span style={{ color: "var(--text-muted)", fontVariantNumeric: "tabular-nums", width: 78 }}>{fmtTxDate(t)}</span>
-              <span style={{ display: "inline-flex", alignItems: "center", gap: 5, width: 76, color: isDeposit ? "#EF4444" : "#10B981", fontWeight: 600 }}>
+              {/* Sens agence (règle universelle, Baki 2026-07-25) : dépôt = on reçoit → vert + ·
+                  retrait = ça sort de la wallet mère → rouge −. */}
+              <span style={{ display: "inline-flex", alignItems: "center", gap: 5, width: 76, color: isDeposit ? "#10B981" : "#EF4444", fontWeight: 600 }}>
                 {isDeposit ? <ArrowDownLeft size={12} /> : <ArrowUpRight size={12} />}
                 {isDeposit ? "Dépôt" : "Retrait"}
               </span>
-              <span style={{ fontVariantNumeric: "tabular-nums", fontWeight: 600, color: isDeposit ? "#EF4444" : "#10B981", width: 120, textAlign: "right" }}>
-                {isDeposit ? "−" : "+"}{fmt(t.amount)} USDT
+              <span style={{ fontVariantNumeric: "tabular-nums", fontWeight: 600, color: isDeposit ? "#10B981" : "#EF4444", width: 120, textAlign: "right" }}>
+                {isDeposit ? "+" : "−"}{fmt(t.amount)} USDT
               </span>
               {t.source === "manual" && (
                 <span style={{ fontSize: 9, fontWeight: 700, padding: "1px 6px", borderRadius: 4, background: "rgba(136,136,160,0.15)", color: "var(--text-muted)" }}>manuel</span>
