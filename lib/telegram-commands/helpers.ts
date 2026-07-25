@@ -41,6 +41,24 @@ export async function sendMsgKeyboard(chatId: number | string, text: string, key
   if (!res.ok) console.error("[TG sendMsgKeyboard]", chatId, res.status, await res.text());
 }
 
+// ForceReply : ouvre directement le champ de réponse du user (clavier + focus).
+// `selective` cible le user visé dans un groupe ; en DM c'est sans effet.
+export async function sendForceReply(chatId: number | string, text: string, messageThreadId?: number) {
+  const token = process.env.TELEGRAM_BOT_TOKEN;
+  if (!token) return;
+  const body: Record<string, any> = {
+    chat_id: chatId, text, parse_mode: "HTML",
+    reply_markup: JSON.stringify({ force_reply: true, selective: true }),
+  };
+  if (messageThreadId) body.message_thread_id = messageThreadId;
+  const res = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) console.error("[TG sendForceReply]", chatId, res.status, await res.text());
+}
+
 export async function sendPhoto(chatId: number | string, photoPath: string, caption: string, messageThreadId?: number) {
   const token = process.env.TELEGRAM_BOT_TOKEN;
   if (!token) return;
