@@ -70,6 +70,46 @@ export async function sendDailySummary(): Promise<void> {
     FROM agent_usage WHERE date(created_at) = ?
   `).get(yesterdayStr) as { cost: number; calls: number };
 
+  // Règlements — rappel anti-oubli (couche 2 du cockpit /payments). Réutilise l'engine
+  // partagé : aucune math dupliquée ici, les mêmes chiffres que la page.
+  // Isolé dans son propre try/catch : ce bloc ne doit JAMAIS pouvoir emporter le résumé
+  // entier (KPIs, cashout, ops) si l'engine lève.
+  const paymentLines: string[] = [];
+  try {
+    const { getPendingSettlements, getOverdueBuckets, getPaymentsTotals } = await import("./manual-settlement-engine");
+    const pendingSettlements = getPendingSettlements();
+    const overdueBuckets = getOverdueBuckets();
+    const payTotals = getPaymentsTotals(pendingSettlements, overdueBuckets);
+
+    if (payTotals.pending_count > 0 || payTotals.overdue_count > 0 || payTotals.unassigned_tx > 0) {
+      paymentLines.push(``, `<b>Règlements</b>`);
+      if (payTotals.pending_count > 0) {
+        const oldest = payTotals.oldest_pending_days >= 7 ? ` · le plus vieux : ${payTotals.oldest_pending_days}j` : "";
+        paymentLines.push(
+          `⏳ ${payTotals.pending_count} à payer (${payTotals.owed_to_players.toFixed(0)} à sortir · ${payTotals.owed_by_players.toFixed(0)} à rentrer)${oldest}`
+        );
+      }
+      // Les 5 plus urgents seulement — le reste est sur la page (pas de troncature silencieuse).
+      // net = net JOUEUR brut, pas un montant dû : aucun action_pct n'est encore figé.
+      for (const b of overdueBuckets.slice(0, 5)) {
+        const flag = b.severity === "critical" ? "🔴" : "🟠";
+        const never = b.never_settled ? " — JAMAIS réglé" : "";
+        paymentLines.push(
+          `${flag} ${b.player_name} (${b.room_label}) — ${b.week_label} non réglée, ${b.tx_count} tx, net brut ${b.net_usdt >= 0 ? "+" : ""}${b.net_usdt.toFixed(0)} USDT${never}`
+        );
+      }
+      if (overdueBuckets.length > 5) {
+        paymentLines.push(`… et ${overdueBuckets.length - 5} autre(s) — voir /payments`);
+      }
+      if (payTotals.unassigned_tx > 0) {
+        paymentLines.push(`⚠️ ${payTotals.unassigned_tx} tx sans game — non réglables, à réattribuer`);
+      }
+    }
+  } catch (e: any) {
+    console.error("[daily-summary] bloc règlements failed:", e?.message);
+    paymentLines.push(``, `<b>Règlements</b>`, `⚠️ compteurs indisponibles — vérifie /payments`);
+  }
+
   const lines = [
     `📊 <b>Résumé quotidien — ${yesterdayStr}</b>`,
     ``,
@@ -83,6 +123,7 @@ export async function sendDailySummary(): Promise<void> {
     ``,
     `<b>Cashout</b>`,
     `✅ ${cashoutStatus.confirmed} · ⏸️ ${cashoutStatus.not_played} · ⏳ ${cashoutStatus.pending}`,
+    ...paymentLines,
     ``,
     `<b>Ops</b>`,
     `👥 ${activeCount} joueurs actifs · 🆕 ${recentLeads} leads (7j) · 🤖 Claude hier: $${yesterdayCost.cost.toFixed(3)}`,

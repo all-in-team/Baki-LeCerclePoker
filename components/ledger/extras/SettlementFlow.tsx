@@ -31,6 +31,9 @@ export interface SettlementRow {
   id: number; player_id: number; player_name: string; net_selected_usdt: number;
   action_pct_applied: number; amount_due_usdt: number; status: "locked" | "paid";
   tx_hash: string | null; notes: string | null; locked_at: string; paid_at: string | null;
+  /** Jour de paiement déclaré depuis /payments — prioritaire sur paid_at (horodatage du
+   *  clic) pour qu'un paiement antidaté affiche la MÊME date ici et dans le cockpit. */
+  paid_date?: string | null;
   created_at: string; tx_count: number;
 }
 export interface SettlementPreview {
@@ -311,7 +314,7 @@ export default function SettlementFlow({
             return (
               <div key={s.id} style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", padding: "8px 10px", borderRadius: 6, marginBottom: 6, background: "var(--bg-base)", border: `1px solid ${isLocked ? "rgba(245,197,24,0.25)" : "var(--border)"}` }}>
                 <span style={{ display: "inline-flex", alignItems: "center", gap: 5, fontSize: 11, fontWeight: 700, color: isLocked ? "#F5C518" : "#10B981" }}>{isLocked ? <Lock size={12} /> : <BadgeCheck size={12} />}{isLocked ? "Locked" : "Réglé"}</span>
-                <span style={{ fontSize: 11, color: "var(--text-muted)" }}>{s.tx_count} tx · {fmtDate(isLocked ? s.locked_at : s.paid_at)}</span>
+                <span style={{ fontSize: 11, color: "var(--text-muted)" }}>{s.tx_count} tx · {fmtDate(isLocked ? s.locked_at : (s.paid_date ?? s.paid_at))}</span>
                 <span title={reg.hint} style={{ fontSize: 12, fontWeight: 600, color: reg.color, cursor: "help" }}>{reg.text}</span>
                 <div style={{ flex: 1 }} />
                 {isLocked ? (

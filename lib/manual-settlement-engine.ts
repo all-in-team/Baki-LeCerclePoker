@@ -67,6 +67,9 @@ export interface ManualSettlementRow {
   notes: string | null;
   locked_at: string;
   paid_at: string | null;
+  /** Declared payment day (set from /payments). Rooms display it in preference to paid_at
+   *  so a back-dated payment shows the SAME date on both screens. */
+  paid_date: string | null;
   created_at: string;
   tx_count: number;
 }
@@ -320,18 +323,32 @@ export function lockSettlement(
 // ── 4) markPaid ──────────────────────────────────────────
 // No double payment: refuse if already paid.
 
-export function markPaid(settlementId: number, txHash?: string): { ok: boolean; error?: string } {
+export function markPaid(settlementId: number, txHash?: string, paidDate?: string): { ok: boolean; error?: string } {
   const db = getDb();
   const row = db.prepare(`SELECT id, status FROM manual_settlements WHERE id = ?`).get(settlementId) as { id: number; status: string } | undefined;
   if (!row) return { ok: false, error: "Règlement introuvable" };
   if (row.status === "paid") return { ok: false, error: "Déjà payé — double-paiement refusé" };
 
+  // paid_date = the day the money actually moved (declared on /payments). paid_at stays the
+  // untouched audit timestamp of the click. Omitted → NULL, readers fall back to date(paid_at),
+  // which is exactly the pre-existing behaviour for every room-side call.
+  // Strict calendar validation (not just the shape): server actions are HTTP-callable, and a
+  // bogus far-future date would sort out of every history filter and vanish from the ledger.
+  if (paidDate !== undefined) {
+    if (!isValidISODate(paidDate)) {
+      return { ok: false, error: `Date de paiement invalide (${paidDate}) — format attendu YYYY-MM-DD` };
+    }
+    if (paidDate > todayUTC()) {
+      return { ok: false, error: `Date de paiement dans le futur (${paidDate}) — refusé` };
+    }
+  }
+
   // WHERE status='locked' is the authoritative guard: if a concurrent caller already paid,
   // this flips 0 rows → report failure instead of a spurious ok (belt-and-suspenders).
   const upd = db.prepare(`
-    UPDATE manual_settlements SET status = 'paid', paid_at = datetime('now'), tx_hash = ?
+    UPDATE manual_settlements SET status = 'paid', paid_at = datetime('now'), tx_hash = ?, paid_date = ?
     WHERE id = ? AND status = 'locked'
-  `).run(txHash ?? null, settlementId);
+  `).run(txHash ?? null, paidDate ?? null, settlementId);
   if (upd.changes !== 1) return { ok: false, error: "Déjà payé — double-paiement refusé" };
   return { ok: true };
 }
@@ -366,6 +383,373 @@ export function unlockSettlement(settlementId: number): { ok: boolean; error?: s
 // All settlements (locked + paid) for a game scope, newest first, with their tx count.
 // Merged views pass both game_ids so past settlements of EITHER game count in the history/dû.
 
+// ═════════════════════════════════════════════════════════
+// PAYMENTS HUB — cross-room aggregated read layer (/payments)
+// ═════════════════════════════════════════════════════════
+//
+// Pure READS over the SAME manual_settlements table the rooms write to. No parallel state,
+// no mirror table: a settlement paid from /payments IS the row the room displays, and vice
+// versa. The only writer this hub uses is markPaid()/unlockSettlement() above — unchanged
+// semantics, unchanged guards.
+//
+// Scope: wallet-based action games only. Deliberately EXCLUDED:
+//   - QQPK   → monthly staking cycle (qqpk_staking_blocks), never writes manual_settlements
+//   - TELE   → archived AKPOKER, carries ~417 fossil settled=0 rows that would drown §Impayés
+//   - Wepoker/Xpoker/ClubGG/AAPKMY/India/TW72 → no settle flow at all
+
+export interface SettleRoom {
+  label: string;      // badge shown in the hub
+  games: string[];    // games.name members of the settle bucket (ids resolved at runtime)
+  basePath: string;   // room page the "aller régler" link points to
+  color: string;      // badge accent
+}
+
+// Buckets mirror the room pages' settle scopes exactly (see app/*/pnl/actions.ts).
+// WN is its OWN bucket even though it lives on the A5NUTS page: its action_pct is
+// independent, so its settlements are separate rows — the badge must say so.
+export const SETTLE_ROOMS: SettleRoom[] = [
+  { label: "KKPOKER", games: ["KKPOKER"],            basePath: "/kkpoker/pnl", color: "#38BDF8" },
+  { label: "A5NUTS",  games: ["A5POKER", "NUTSPK"],  basePath: "/a5nuts/pnl",  color: "#10B981" },
+  { label: "WN",      games: ["WN"],                 basePath: "/a5nuts/pnl",  color: "#A855F7" },
+  { label: "AKS/OK",  games: ["AKS", "OKPOKER"],     basePath: "/aks/pnl",     color: "#F5C518" },
+  { label: "JVIP",    games: ["JVIP"],               basePath: "/jvip/pnl",    color: "#F97316" },
+  { label: "TTPOKER", games: ["TTPOKER"],            basePath: "/ttpoker/pnl", color: "#EC4899" },
+];
+
+// games.name → room, resolved once per call. A game absent from SETTLE_ROOMS returns null
+// and is skipped: adding a new room = one line in SETTLE_ROOMS, nothing else.
+function roomByGameName(): Map<string, SettleRoom> {
+  const m = new Map<string, SettleRoom>();
+  for (const r of SETTLE_ROOMS) for (const g of r.games) m.set(g, r);
+  return m;
+}
+
+function scopedGameIds(db: ReturnType<typeof getDb>): { ids: number[]; byId: Map<number, SettleRoom> } {
+  const byName = roomByGameName();
+  const names = [...byName.keys()];
+  const placeholders = names.map(() => "?").join(", ");
+  const rows = db.prepare(`SELECT id, name FROM games WHERE name IN (${placeholders})`).all(...names) as { id: number; name: string }[];
+  const byId = new Map<number, SettleRoom>();
+  for (const r of rows) { const room = byName.get(r.name); if (room) byId.set(r.id, room); }
+  return { ids: rows.map(r => r.id), byId };
+}
+
+// ── ISO week helpers (UTC, Monday-anchored) ──────────────
+// Mirrors weekInfo() in components/ledger/extras/SettlementFlow.tsx so a settlement labelled
+// "W30" here is the SAME W30 Baki sees on the room page. Operates on YYYY-MM-DD prefixes.
+
+// Returns null on a malformed stamp instead of throwing. A single bad tx_date must never be
+// able to take down the overdue detector — an anti-oubli feature that crashes reads as
+// "rien à faire", which is the exact failure it exists to prevent.
+function mondayOf(dateStr: string | null | undefined): string | null {
+  if (!dateStr) return null;
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(dateStr);
+  if (!m) return null;
+  const [y, mo, d] = [Number(m[1]), Number(m[2]), Number(m[3])];
+  const dt = new Date(Date.UTC(y, mo - 1, d));
+  if (Number.isNaN(dt.getTime())) return null;
+  // Reject overflow dates (2026-13-45 would silently roll into the next year).
+  if (dt.getUTCFullYear() !== y || dt.getUTCMonth() !== mo - 1 || dt.getUTCDate() !== d) return null;
+  const dow = dt.getUTCDay() || 7;
+  dt.setUTCDate(dt.getUTCDate() - (dow - 1));
+  return dt.toISOString().slice(0, 10);
+}
+
+/** Strict YYYY-MM-DD calendar check — the regex alone accepts 2026-13-45. */
+export function isValidISODate(s: string): boolean {
+  return mondayOf(s) !== null;
+}
+
+function isoWeekLabel(mondayStr: string): string {
+  const monday = new Date(mondayStr + "T00:00:00Z");
+  const thu = new Date(monday); thu.setUTCDate(monday.getUTCDate() + 3);
+  const firstThu = new Date(Date.UTC(thu.getUTCFullYear(), 0, 4));
+  const firstThuDow = firstThu.getUTCDay() || 7;
+  const week1Mon = new Date(firstThu); week1Mon.setUTCDate(firstThu.getUTCDate() - (firstThuDow - 1));
+  const weekNum = Math.round((monday.getTime() - week1Mon.getTime()) / (7 * 86400000)) + 1;
+  return `W${weekNum}`;
+}
+
+function todayUTC(): string { return new Date().toISOString().slice(0, 10); }
+function daysBetween(fromDate: string, toDate: string): number {
+  return Math.round((new Date(toDate + "T00:00:00Z").getTime() - new Date(fromDate + "T00:00:00Z").getTime()) / 86400000);
+}
+
+/**
+ * Grace period before an unsettled past week is called "en retard".
+ * A week runs Mon→Sun; +3 days means it only turns red on the WEDNESDAY after it closed,
+ * so Monday/Tuesday settling of the weekend produces zero false alarms (decision Hugo,
+ * "fais au mieux pour que ce soit smooth").
+ */
+export const OVERDUE_GRACE_DAYS = 3;
+
+// ── Pending settlements (§"À régler") ────────────────────
+
+export interface HubSettlement {
+  id: number;
+  game_id: number;
+  game_name: string;
+  room_label: string;
+  room_color: string;
+  room_base_path: string;
+  player_id: number;
+  player_name: string;
+  net_selected_usdt: number;
+  action_pct_applied: number;
+  amount_due_usdt: number;      // >0 = le Cercle paie le joueur · <0 = le joueur paie le Cercle
+  status: "locked" | "paid";
+  tx_hash: string | null;
+  notes: string | null;
+  locked_at: string;
+  paid_at: string | null;
+  paid_date: string | null;     // declared payment day; falls back to date(paid_at) in `paid_on`
+  paid_on: string | null;       // resolved YYYY-MM-DD actually used for display/filtering
+  tx_count: number;
+  period_start: string | null;  // derived MIN(tx_datetime) of the settled txs
+  period_end: string | null;    // derived MAX(tx_datetime)
+  week_label: string | null;    // "W30" from period_end
+  age_days: number;             // days since lock (pending) — drives the ancienneté badge
+}
+
+// period_start/period_end are DERIVED from the back-linked wallet_transactions rather than
+// stored: the link (settlement_id) is already authoritative, so a stored copy could only
+// drift. Same reason week_label is computed, never persisted.
+const HUB_SELECT = `
+  SELECT ms.id, ms.game_id, g.name AS game_name, ms.player_id, p.name AS player_name,
+         ms.net_selected_usdt, ms.action_pct_applied, ms.amount_due_usdt,
+         ms.status, ms.tx_hash, ms.notes, ms.locked_at, ms.paid_at, ms.paid_date,
+         (SELECT COUNT(*) FROM wallet_transactions wt WHERE wt.settlement_id = ms.id) AS tx_count,
+         (SELECT MIN(COALESCE(wt.tx_datetime, wt.tx_date)) FROM wallet_transactions wt WHERE wt.settlement_id = ms.id) AS period_start,
+         (SELECT MAX(COALESCE(wt.tx_datetime, wt.tx_date)) FROM wallet_transactions wt WHERE wt.settlement_id = ms.id) AS period_end
+  FROM manual_settlements ms
+  JOIN games g ON g.id = ms.game_id
+  JOIN players p ON p.id = ms.player_id
+`;
+
+function hydrate(row: any, byId: Map<number, SettleRoom>): HubSettlement | null {
+  const room = byId.get(row.game_id);
+  if (!room) return null;   // game outside the settle scope (QQPK/TELE/…) — not a payment
+  const today = todayUTC();
+  const paidOn: string | null = row.paid_date ?? (row.paid_at ? String(row.paid_at).slice(0, 10) : null);
+  const weekMonday = mondayOf(row.period_end);
+  const lockedDay = mondayOf(row.locked_at) !== null ? String(row.locked_at).slice(0, 10) : null;
+  return {
+    ...row,
+    room_label: room.label,
+    room_color: room.color,
+    room_base_path: room.basePath,
+    paid_on: paidOn,
+    week_label: weekMonday ? isoWeekLabel(weekMonday) : null,
+    age_days: lockedDay ? Math.max(0, daysBetween(lockedDay, today)) : 0,
+  };
+}
+
+/** All settlements awaiting payment, every room. Oldest lock first (= most urgent). */
+export function getPendingSettlements(): HubSettlement[] {
+  const db = getDb();
+  const { ids, byId } = scopedGameIds(db);
+  if (ids.length === 0) return [];
+  const rows = db.prepare(`
+    ${HUB_SELECT} WHERE ms.status = 'locked' AND ms.game_id IN (${ids.map(() => "?").join(", ")})
+    ORDER BY ms.locked_at ASC
+  `).all(...ids) as any[];
+  return rows.map(r => hydrate(r, byId)).filter((r): r is HubSettlement => r !== null);
+}
+
+export interface PaidFilters {
+  from?: string;        // YYYY-MM-DD on the resolved payment day (inclusive)
+  to?: string;          // YYYY-MM-DD (inclusive)
+  room?: string;        // SettleRoom.label
+  playerId?: number;
+  /**
+   * Omit for the full history — which is what the hub does. A LIMIT here combined with
+   * client-side filtering would make an old month render as "aucun règlement" instead of
+   * "tronqué", i.e. silently hide paid money. At ~10 settlements/week single-operator scale
+   * the unbounded read is a few hundred rows; correctness wins over a cap nobody needs.
+   */
+  limit?: number;
+}
+
+/** Settled + paid history, newest payment first. Filters are applied on the resolved paid day. */
+export function getPaidSettlements(f: PaidFilters = {}): HubSettlement[] {
+  const db = getDb();
+  const { ids, byId } = scopedGameIds(db);
+  if (ids.length === 0) return [];
+  // Scope filtered in SQL, not only after hydration: otherwise LIMIT would count rows that
+  // hydrate() then drops, silently shortening the history.
+  const where: string[] = [`ms.status = 'paid'`, `ms.game_id IN (${ids.map(() => "?").join(", ")})`];
+  const params: any[] = [...ids];
+  // COALESCE mirrors `paid_on`: rows predating the paid_date column filter on date(paid_at).
+  if (f.from) { where.push(`COALESCE(ms.paid_date, substr(ms.paid_at, 1, 10)) >= ?`); params.push(f.from); }
+  if (f.to)   { where.push(`COALESCE(ms.paid_date, substr(ms.paid_at, 1, 10)) <= ?`); params.push(f.to); }
+  if (f.playerId) { where.push(`ms.player_id = ?`); params.push(f.playerId); }
+  if (f.limit !== undefined) params.push(f.limit);
+  const rows = db.prepare(`
+    ${HUB_SELECT} WHERE ${where.join(" AND ")}
+    ORDER BY COALESCE(ms.paid_date, substr(ms.paid_at, 1, 10)) DESC, ms.paid_at DESC, ms.id DESC
+    ${f.limit !== undefined ? "LIMIT ?" : ""}
+  `).all(...params) as any[];
+  const hydrated = rows.map(r => hydrate(r, byId)).filter((r): r is HubSettlement => r !== null);
+  // Room filter applied post-hydration: a "room" is a bucket of game_ids, not a column.
+  // Safe with no LIMIT — with one it would drop rows the cap already counted.
+  return f.room ? hydrated.filter(r => r.room_label === f.room) : hydrated;
+}
+
+// ── Overdue buckets (§"Impayés / en retard") ─────────────
+
+export interface OverdueBucket {
+  player_id: number;
+  player_name: string;
+  room_label: string;
+  room_color: string;
+  room_base_path: string;
+  week_monday: string;     // YYYY-MM-DD
+  week_label: string;      // "W29"
+  tx_count: number;
+  /**
+   * Σ withdrawals − Σ deposits (USDT) of the unsettled txs — the PLAYER-side raw net,
+   * NOT an amount due: it has not been multiplied by action_pct (no settlement exists yet,
+   * so no pct is frozen). Display it as "net brut", never with the on-doit/il-nous-doit
+   * wording used for amount_due_usdt, or a 10 000 net at 20% reads as a 10 000 debt.
+   */
+  net_usdt: number;
+  weeks_late: number;      // 1 = last closed week, 2+ = piling up
+  severity: "late" | "critical";
+  never_settled: boolean;  // this player has NEVER been settled in this room
+  unconvertible: number;   // txs with no FX rate, excluded from net_usdt (should be 0)
+}
+
+/**
+ * Weeks a player has unsettled transactions in, that closed long enough ago to count as
+ * forgotten. This is the anti-oubli detector: it fires on transactions that never entered
+ * ANY settlement, so a player Baki simply never opened surfaces here without him having to
+ * visit the room.
+ *
+ * A bucket is overdue when its week's Sunday is at least OVERDUE_GRACE_DAYS in the past.
+ */
+export function getOverdueBuckets(): OverdueBucket[] {
+  const db = getDb();
+  const { ids, byId } = scopedGameIds(db);
+  if (ids.length === 0) return [];
+  const placeholders = ids.map(() => "?").join(", ");
+
+  const txs = db.prepare(`
+    SELECT wt.id, wt.player_id, p.name AS player_name, wt.game_id, wt.type, wt.amount, wt.currency,
+           COALESCE(wt.tx_datetime, wt.tx_date) AS stamp
+    FROM wallet_transactions wt
+    JOIN players p ON p.id = wt.player_id
+    WHERE wt.game_id IN (${placeholders})
+      AND wt.settled = 0
+      AND wt.source IN ('sync', 'manual')
+    ORDER BY stamp ASC
+  `).all(...ids) as { id: number; player_id: number; player_name: string; game_id: number; type: string; amount: number; currency: string; stamp: string }[];
+
+  const today = todayUTC();
+  const currentMonday = mondayOf(today) ?? today;
+  const buckets = new Map<string, OverdueBucket>();
+
+  for (const tx of txs) {
+    const room = byId.get(tx.game_id);
+    if (!room) continue;
+    const monday = mondayOf(tx.stamp);
+    if (monday === null) continue;   // malformed stamp — skipped, never fatal
+    // Sunday of that week + grace must be behind us.
+    if (daysBetween(monday, today) < 6 + OVERDUE_GRACE_DAYS) continue;
+
+    const key = `${tx.player_id}|${room.label}|${monday}`;
+    let b = buckets.get(key);
+    if (!b) {
+      const weeksLate = Math.max(1, Math.floor(daysBetween(monday, currentMonday) / 7));
+      b = {
+        player_id: tx.player_id, player_name: tx.player_name,
+        room_label: room.label, room_color: room.color, room_base_path: room.basePath,
+        week_monday: monday, week_label: isoWeekLabel(monday),
+        tx_count: 0, net_usdt: 0,
+        weeks_late: weeksLate,
+        severity: weeksLate >= 2 ? "critical" : "late",
+        never_settled: false, unconvertible: 0,
+      };
+      buckets.set(key, b);
+    }
+    b.tx_count++;
+    // Invariant #3: cross-currency amounts go through toUsdt. A missing rate makes toUsdt
+    // return 0, which would silently understate the net — count those instead of hiding them.
+    if (!tx.currency || getExchangeRate(tx.currency) === 0) { b.unconvertible++; continue; }
+    const usdt = toUsdt(tx.amount, tx.currency);
+    b.net_usdt += tx.type === "withdrawal" ? usdt : -usdt;
+  }
+
+  const out = [...buckets.values()];
+  if (out.length === 0) return out;
+
+  // "Jamais réglé" — the deepest miss: a player with activity in a room that has never had a
+  // single settlement there. Checked per (player, room bucket) against the room's game ids.
+  const settledPairs = new Set<string>();
+  const rows = db.prepare(`
+    SELECT DISTINCT ms.player_id, g.name AS game_name
+    FROM manual_settlements ms JOIN games g ON g.id = ms.game_id
+  `).all() as { player_id: number; game_name: string }[];
+  const byName = roomByGameName();
+  for (const r of rows) {
+    const room = byName.get(r.game_name);
+    if (room) settledPairs.add(`${r.player_id}|${room.label}`);
+  }
+  for (const b of out) b.never_settled = !settledPairs.has(`${b.player_id}|${b.room_label}`);
+
+  // Worst first: critical before late, then oldest week, then biggest absolute net.
+  out.sort((a, b) =>
+    (b.weeks_late - a.weeks_late) ||
+    a.week_monday.localeCompare(b.week_monday) ||
+    (Math.abs(b.net_usdt) - Math.abs(a.net_usdt))
+  );
+  return out;
+}
+
+// ── Header totals ────────────────────────────────────────
+
+export interface PaymentsTotals {
+  owed_to_players: number;   // Σ due of pending settlements where due > 0 (sorties à faire)
+  owed_by_players: number;   // Σ |due| of pending settlements where due < 0 (entrées attendues)
+  pending_count: number;
+  overdue_count: number;
+  oldest_pending_days: number;
+  /**
+   * Unsettled txs with game_id IS NULL (the column is ON DELETE SET NULL). They are
+   * unreachable from every settle flow — getAvailableTransactions filters on game_id — so
+   * they can never be settled and would otherwise be invisible here too. Surfaced as a count
+   * so forgotten money has somewhere to show up rather than nowhere.
+   */
+  unassigned_tx: number;
+}
+
+/** Unsettled, real-source transactions attached to no game — unsettleable by construction. */
+export function getUnassignedTxCount(): number {
+  const row = getDb().prepare(`
+    SELECT COUNT(*) AS n FROM wallet_transactions
+    WHERE game_id IS NULL AND settled = 0 AND source IN ('sync', 'manual')
+  `).get() as { n: number };
+  return row?.n ?? 0;
+}
+
+export function getPaymentsTotals(pending?: HubSettlement[], overdue?: OverdueBucket[]): PaymentsTotals {
+  const p = pending ?? getPendingSettlements();
+  const o = overdue ?? getOverdueBuckets();
+  let owedTo = 0, owedBy = 0, oldest = 0;
+  for (const s of p) {
+    if (s.amount_due_usdt > 0) owedTo += s.amount_due_usdt;
+    else if (s.amount_due_usdt < 0) owedBy += -s.amount_due_usdt;
+    if (s.age_days > oldest) oldest = s.age_days;
+  }
+  return {
+    owed_to_players: owedTo,
+    owed_by_players: owedBy,
+    pending_count: p.length,
+    overdue_count: o.length,
+    oldest_pending_days: oldest,
+    unassigned_tx: getUnassignedTxCount(),
+  };
+}
+
 export function getManualSettlementHistory(gameId: GameScope): ManualSettlementRow[] {
   const db = getDb();
   const ids = scopeIds(gameId);
@@ -373,7 +757,7 @@ export function getManualSettlementHistory(gameId: GameScope): ManualSettlementR
   return db.prepare(`
     SELECT ms.id, ms.game_id, ms.player_id, p.name AS player_name,
            ms.net_selected_usdt, ms.action_pct_applied, ms.amount_due_usdt,
-           ms.status, ms.tx_hash, ms.notes, ms.locked_at, ms.paid_at, ms.created_at,
+           ms.status, ms.tx_hash, ms.notes, ms.locked_at, ms.paid_at, ms.paid_date, ms.created_at,
            (SELECT COUNT(*) FROM wallet_transactions wt WHERE wt.settlement_id = ms.id) AS tx_count
     FROM manual_settlements ms
     JOIN players p ON p.id = ms.player_id

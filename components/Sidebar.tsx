@@ -93,13 +93,15 @@ export default function Sidebar({ isOpen, onClose }: SidebarProps) {
   // Rouge = semaines jamais réglées (un joueur zappé), jaune = règlements lockés
   // en attente de paiement. Refetch à chaque navigation pour rester à jour après
   // un paiement. Silencieux en cas d'erreur : la pastille disparaît, rien ne casse.
-  const [payAlerts, setPayAlerts] = useState<{ pending: number; overdue: number }>({ pending: 0, overdue: 0 });
+  // Une panne ne fait PAS disparaître la pastille (ce serait lu comme "rien à faire") :
+  // elle affiche un "!" gris qui renvoie quand même vers la page.
+  const [payAlerts, setPayAlerts] = useState<{ pending: number; overdue: number; failed: boolean }>({ pending: 0, overdue: 0, failed: false });
   useEffect(() => {
     let cancelled = false;
     fetch("/api/payments/alerts")
       .then(r => r.json())
-      .then(d => { if (!cancelled) setPayAlerts({ pending: d.pending ?? 0, overdue: d.overdue ?? 0 }); })
-      .catch(() => {});
+      .then(d => { if (!cancelled) setPayAlerts({ pending: d.pending ?? 0, overdue: d.overdue ?? 0, failed: !!d.failed }); })
+      .catch(() => { if (!cancelled) setPayAlerts({ pending: 0, overdue: 0, failed: true }); });
     return () => { cancelled = true; };
   }, [path]);
 
@@ -168,13 +170,14 @@ export default function Sidebar({ isOpen, onClose }: SidebarProps) {
             .sort((a, b) => b.href.length - a.href.length)[0]?.href;
           return MAIN.map(({ href, label, icon: Icon }) => {
           const active = href === bestMain;
-          const badge = href === "/payments"
-            ? (payAlerts.overdue > 0
-                ? { n: payAlerts.overdue, color: "#EF4444", title: `${payAlerts.overdue} semaine(s) jamais réglée(s)` }
+          const badge = href !== "/payments" ? null
+            : payAlerts.failed
+              ? { n: "!", color: "#8888A0", title: "Compteurs indisponibles — ouvre la page pour vérifier" }
+              : payAlerts.overdue > 0
+                ? { n: String(payAlerts.overdue), color: "#EF4444", title: `${payAlerts.overdue} semaine(s) jamais réglée(s)` }
                 : payAlerts.pending > 0
-                  ? { n: payAlerts.pending, color: "#F5C518", title: `${payAlerts.pending} règlement(s) à payer` }
-                  : null)
-            : null;
+                  ? { n: String(payAlerts.pending), color: "#F5C518", title: `${payAlerts.pending} règlement(s) à payer` }
+                  : null;
           return (
             <Link key={href} href={href} className={active ? "nav-active" : undefined} style={itemStyle(active)}>
               <Icon size={16} strokeWidth={active ? 2.2 : 1.8} />

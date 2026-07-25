@@ -1714,12 +1714,18 @@ function initSchema(db: Database.Database) {
   //   paid_date = the day the money actually moved, as declared by Baki on the
   //               /payments hub. Nullable; readers fall back to date(paid_at).
   //   Additive only (invariant #6) — no backfill, no rewrite of existing rows.
+  //   markPaid() references paid_date UNCONDITIONALLY, so a one-shot ALTER failure would
+  //   break payment marking on every room page, not just the hub. The _applied_fixes flag is
+  //   therefore only a log marker: the ALTER runs on EVERY boot and is idempotent (it throws
+  //   "duplicate column name" once applied, which we swallow). Self-healing by construction.
   try {
     const fix = db.prepare(`INSERT OR IGNORE INTO _applied_fixes (name) VALUES (?)`).run("manual_settlements_paid_date_v1");
-    if (fix.changes > 0) {
-      try { db.exec(`ALTER TABLE manual_settlements ADD COLUMN paid_date TEXT`); } catch {}
-      console.log("[MIGRATION] manual_settlements_paid_date_v1 applied");
-    }
+    let added = false;
+    try { db.exec(`ALTER TABLE manual_settlements ADD COLUMN paid_date TEXT`); added = true; } catch {}
+    if (fix.changes > 0 || added) console.log(`[MIGRATION] manual_settlements_paid_date_v1 (column added: ${added})`);
+    const hasCol = (db.prepare(`PRAGMA table_info(manual_settlements)`).all() as { name: string }[])
+      .some(c => c.name === "paid_date");
+    if (!hasCol) console.error(`[MIGRATION:manual_settlements_paid_date_v1] paid_date MISSING after ALTER — markPaid will fail`);
   } catch (err: any) {
     console.error(`[MIGRATION:manual_settlements_paid_date_v1] FAILED:`, err.message);
   }
