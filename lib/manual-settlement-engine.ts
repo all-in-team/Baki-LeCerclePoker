@@ -213,7 +213,12 @@ function computeTotals(rows: TxRecord[], actionPct: number) {
     if (periodEnd === null || stamp > periodEnd) periodEnd = stamp;
   }
   const net = withdrawn - deposited;               // symmetric: wins (+) and losses (−)
-  const due = net * actionPct / 100;               // positive = operator owes player
+  // SENS (corrigé 2026-07-25) : positif = le JOUEUR doit au Cercle. Formule identique à
+  // `my_pnl` / `agency_cut_usdt` (lib/queries.ts l.587 & 1517), qui se lit partout dans l'app
+  // « positif = ce que le joueur rapporte ». L'ancien commentaire disait l'inverse
+  // ("positive = operator owes player") et c'est ce qui a fait colorer /paiements à l'envers.
+  // La VALEUR n'a jamais changé, seule sa lecture est corrigée.
+  const due = net * actionPct / 100;               // positive = player owes the Cercle
   return { deposited, withdrawn, net, due, periodStart, periodEnd };
 }
 
@@ -496,7 +501,7 @@ export interface HubSettlement {
   player_name: string;
   net_selected_usdt: number;
   action_pct_applied: number;
-  amount_due_usdt: number;      // >0 = le Cercle paie le joueur · <0 = le joueur paie le Cercle
+  amount_due_usdt: number;      // >0 = le joueur doit au Cercle (ça rentre) · <0 = on doit au joueur (ça sort)
   status: "locked" | "paid";
   tx_hash: string | null;
   notes: string | null;
@@ -721,14 +726,14 @@ export interface PlayerPendingGroup {
   count: number;
   /**
    * Σ amount_due_usdt SIGNÉE, toutes rooms confondues. Les sens opposés se compensent
-   * d'eux-mêmes puisque le signe porte déjà l'information (>0 sortie / <0 entrée) :
-   * −300 (il nous doit sur KKPOKER) + 500 (on lui doit sur A5NUTS) = +200 → on lui doit 200.
+   * d'eux-mêmes puisque le signe porte déjà l'information (>0 ça rentre / <0 ça sort) :
+   * +300 (il nous doit sur KKPOKER) − 500 (on lui doit sur A5NUTS) = −200 → on lui doit 200.
    * Sert à décider du virement final ; le détail par room reste dans `rooms` + `settlements`
    * pour la traçabilité. Jamais persisté.
    */
   net_usdt: number;
-  owed_to_player: number;   // Σ des règlements > 0 — la partie sortante avant compensation
-  owed_by_player: number;   // Σ |règlements < 0| — la partie entrante
+  incoming_usdt: number;   // Σ des règlements > 0 — ce qui rentre, avant compensation
+  outgoing_usdt: number;   // Σ |règlements < 0| — ce qui sort
   /** Détail par room : ce qui justifie le net global. */
   rooms: { label: string; color: string; base_path: string; net_usdt: number; count: number }[];
   oldest_age_days: number;
@@ -747,7 +752,7 @@ export function groupPendingByPlayer(pending: HubSettlement[]): PlayerPendingGro
       g = {
         player_id: s.player_id, player_name: s.player_name,
         settlements: [], count: 0,
-        net_usdt: 0, owed_to_player: 0, owed_by_player: 0,
+        net_usdt: 0, incoming_usdt: 0, outgoing_usdt: 0,
         rooms: [], oldest_age_days: 0,
       };
       byPlayer.set(s.player_id, g);
@@ -755,8 +760,8 @@ export function groupPendingByPlayer(pending: HubSettlement[]): PlayerPendingGro
     g.settlements.push(s);
     g.count++;
     g.net_usdt += s.amount_due_usdt;
-    if (s.amount_due_usdt > 0) g.owed_to_player += s.amount_due_usdt;
-    else if (s.amount_due_usdt < 0) g.owed_by_player += -s.amount_due_usdt;
+    if (s.amount_due_usdt > 0) g.incoming_usdt += s.amount_due_usdt;
+    else if (s.amount_due_usdt < 0) g.outgoing_usdt += -s.amount_due_usdt;
     if (s.age_days > g.oldest_age_days) g.oldest_age_days = s.age_days;
 
     const room = g.rooms.find(r => r.label === s.room_label);
@@ -843,8 +848,11 @@ export function groupOverdueByPlayer(buckets: OverdueBucket[]): PlayerOverdueGro
 // ── Header totals ────────────────────────────────────────
 
 export interface PaymentsTotals {
-  owed_to_players: number;   // Σ due of pending settlements where due > 0 (sorties à faire)
-  owed_by_players: number;   // Σ |due| of pending settlements where due < 0 (entrées attendues)
+  // Renommés 2026-07-25 : les anciens noms (owed_to_players / owed_by_players) affirmaient le
+  // sens INVERSE de la réalité et ont fait afficher les totaux à l'envers dans le hub ET dans
+  // le résumé Telegram quotidien. due > 0 = le joueur doit au Cercle, cf. computeTotals().
+  incoming_usdt: number;   // Σ due des règlements en attente où due > 0 — entrées attendues
+  outgoing_usdt: number;   // Σ |due| des règlements en attente où due < 0 — sorties à faire
   pending_count: number;
   overdue_count: number;
   oldest_pending_days: number;
@@ -869,15 +877,15 @@ export function getUnassignedTxCount(): number {
 export function getPaymentsTotals(pending?: HubSettlement[], overdue?: OverdueBucket[]): PaymentsTotals {
   const p = pending ?? getPendingSettlements();
   const o = overdue ?? getOverdueBuckets();
-  let owedTo = 0, owedBy = 0, oldest = 0;
+  let incoming = 0, outgoing = 0, oldest = 0;
   for (const s of p) {
-    if (s.amount_due_usdt > 0) owedTo += s.amount_due_usdt;
-    else if (s.amount_due_usdt < 0) owedBy += -s.amount_due_usdt;
+    if (s.amount_due_usdt > 0) incoming += s.amount_due_usdt;
+    else if (s.amount_due_usdt < 0) outgoing += -s.amount_due_usdt;
     if (s.age_days > oldest) oldest = s.age_days;
   }
   return {
-    owed_to_players: owedTo,
-    owed_by_players: owedBy,
+    incoming_usdt: incoming,
+    outgoing_usdt: outgoing,
     pending_count: p.length,
     overdue_count: o.length,
     oldest_pending_days: oldest,

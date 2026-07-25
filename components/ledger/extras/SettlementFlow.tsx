@@ -52,19 +52,22 @@ function fmtDM(d: Date): string { return d.toLocaleDateString("fr-FR", { day: "n
  * (Baki: crée du flou; tooltips resurfaced it on hover). The payment direction
  * stays in `hint` (tooltip) and as a discreet arrow in the recap.
  *
- * SIGNE AFFICHÉ = SENS POUR L'AGENCE (règle universelle, décision Baki 2026-07-25) :
- *   + vert  → ça rentre, le joueur nous doit
- *   − rouge → ça sort, on doit au joueur (ce qu'on perd)
+ * CONVENTION UNIQUE DE L'APP (décision Baki 2026-07-25) : + vert = ça rentre · − rouge = ça sort.
  *
- * La convention EN BASE reste inverse et intouchée (`amount_due_usdt` > 0 = le Cercle
- * paie le joueur) : on n'inverse QUE le signe affiché, via signed(-due). Aucun montant,
- * aucun calcul, aucune écriture n'est modifié — |montant| et la couleur sont identiques
- * à avant, seul le caractère + / − change. Même règle appliquée sur /paiements.
+ * `amount_due_usdt` = (retraits − dépôts) × action%, soit la MÊME formule que `my_pnl` /
+ * `agency_cut_usdt` (lib/queries.ts l.587 & 1517) que toute l'app lit « positif = ce que le
+ * joueur rapporte ». Ce helper prenait le sens inverse — un même nombre s'affichait doré
+ * ailleurs et rouge « on lui doit » ici. Aligné :
+ *
+ *   due > 0  →  + vert  · entrée, le joueur paie le Cercle
+ *   due < 0  →  − rouge · sortie, le Cercle paie le joueur
+ *
+ * Affichage seul : aucune valeur, aucun calcul, aucune écriture modifiés.
  */
 export function dueLabel(due: number): { text: string; color: string; hint: string } {
   if (Math.abs(due) < 0.005) return { text: "0,00 USDT", color: "var(--text-dim)", hint: "Solde nul — rien à payer" };
-  if (due > 0) return { text: `${signed(-due)} USDT`, color: "#EF4444", hint: "Sortie — le Cercle paie le joueur" };
-  return { text: `${signed(-due)} USDT`, color: "#10B981", hint: "Entrée — le joueur paie le Cercle" };
+  if (due > 0) return { text: `${signed(due)} USDT`, color: "#10B981", hint: "Entrée — le joueur paie le Cercle" };
+  return { text: `${signed(due)} USDT`, color: "#EF4444", hint: "Sortie — le Cercle paie le joueur" };
 }
 
 // ISO week (Monday-anchored, UTC) info for a YYYY-MM-DD(...) timestamp. Display-only grouping.
@@ -363,9 +366,10 @@ export default function SettlementFlow({
                 <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, fontSize: 12 }}>
                   <RecapLine label="Total dépôts" value={`${fmt(recap.preview.total_deposited_usdt)} USDT`} />
                   <RecapLine label="Total retraits" value={`${fmt(recap.preview.total_withdrawn_usdt)} USDT`} />
-                  {/* Énoncé dans le sens agence (dépôts − retraits) : le libellé reste
-                      littéralement vrai ET le signe suit la règle universelle (+ = rentré). */}
-                  <RecapLine label="Net trésorerie (dépôts − retraits)" value={`${signed(-recap.preview.net_selected_usdt)} USDT`} />
+                  {/* Net JOUEUR, pas de la trésorerie : c'est le nombre qui entre dans le calcul
+                      juste en dessous (net × action% = montant dû). Même signe que le montant dû
+                      pour que la chaîne de calcul se lise d'un coup d'œil. */}
+                  <RecapLine label="Net joueur (retraits − dépôts)" value={`${signed(recap.preview.net_selected_usdt)} USDT`} />
                   <RecapLine label="Action %" value={`${recap.preview.action_pct}%`} />
                 </div>
                 <div style={{ padding: 14, borderRadius: 8, background: "var(--bg-base)", border: "1px solid var(--border)" }}>
@@ -375,10 +379,10 @@ export default function SettlementFlow({
                     const reg = dueLabel(due);
                     return (
                       // Money-critical: the payment direction must stay readable before
-                      // Lock without the sentence — discreet arrow (↗ = sortie du Cercle,
-                      // ↘ = entrée) + tooltip carry it alongside the color.
+                      // Lock without the sentence — discreet arrow (↘ = entrée, le joueur
+                      // paie · ↗ = sortie du Cercle) + tooltip carry it alongside the color.
                       <div title={reg.hint} style={{ fontSize: 18, fontWeight: 700, color: reg.color, display: "inline-flex", alignItems: "center", gap: 6, cursor: "help" }}>
-                        {Math.abs(due) >= 0.005 && (due > 0 ? <ArrowUpRight size={15} /> : <ArrowDownLeft size={15} />)}
+                        {Math.abs(due) >= 0.005 && (due > 0 ? <ArrowDownLeft size={15} /> : <ArrowUpRight size={15} />)}
                         {reg.text}
                       </div>
                     );

@@ -86,7 +86,9 @@ export async function sendDailySummary(): Promise<void> {
       if (payTotals.pending_count > 0) {
         const oldest = payTotals.oldest_pending_days >= 7 ? ` · le plus vieux : ${payTotals.oldest_pending_days}j` : "";
         paymentLines.push(
-          `⏳ ${payTotals.pending_count} à payer (${payTotals.owed_to_players.toFixed(0)} à sortir · ${payTotals.owed_by_players.toFixed(0)} à rentrer)${oldest}`
+          // Les deux montants étaient intervertis : les anciens champs affirmaient le sens
+          // inverse du calcul (cf. computeTotals / PaymentsTotals, corrigé 2026-07-25).
+          `⏳ ${payTotals.pending_count} à payer (${payTotals.outgoing_usdt.toFixed(0)} à sortir · ${payTotals.incoming_usdt.toFixed(0)} à rentrer)${oldest}`
         );
       }
       // Les 5 plus urgents seulement — le reste est sur la page (pas de troncature silencieuse).

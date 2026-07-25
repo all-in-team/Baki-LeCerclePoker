@@ -47,32 +47,38 @@ function today(): string { return new Date().toISOString().slice(0, 10); }
 const ZERO = 0.005;
 
 /**
- * SIGNE AFFICHÉ = SENS POUR L'AGENCE (règle universelle, décision Baki 2026-07-25) :
- *   + vert  → ça rentre, le joueur nous doit
- *   − rouge → ça sort, on doit au joueur (ce qu'on perd)
+ * CONVENTION UNIQUE DE L'APP (décision Baki 2026-07-25) : + vert = ça rentre · − rouge = ça sort.
  *
- * La convention EN BASE est l'inverse et reste intouchée (`amount_due_usdt` > 0 = le Cercle
- * paie le joueur), d'où la négation ici : on inverse le SIGNE AFFICHÉ, jamais la valeur.
- * Aucun montant ni calcul n'est modifié — |montant| est identique à avant, seul le
- * caractère + / − change. Même règle dans dueLabel() des pages room.
+ * `amount_due_usdt` = (retraits − dépôts) × action% — exactement la MÊME formule que `my_pnl`
+ * dans lib/queries.ts (l.587), lui-même aliasé en `agency_cut_usdt` (l.1517) : c'est le chiffre
+ * doré « Agency cut » du dashboard, de Top Contributors, de la liste Joueurs et de la fiche.
+ * Partout ailleurs il se lit donc « positif = ce que le joueur te rapporte ». Cette page était
+ * le seul endroit à prendre le sens inverse (rouge « on lui doit » sur un positif) — d'où deux
+ * couleurs pour un seul et même nombre. Elle est désormais alignée sur le reste :
+ *
+ *   due > 0  →  + vert  · « Il nous doit »   (ça rentre)
+ *   due < 0  →  − rouge · « On lui doit »    (ça sort)
+ *
+ * Affichage uniquement : aucun montant, aucun calcul, aucune écriture n'a changé. Le
+ * commentaire `// positive = operator owes player` de computeTotals() était la source de
+ * l'erreur de lecture, il est corrigé là-bas.
  */
 function agencySigned(due: number): string {
-  const shown = -due;
-  return (shown >= 0 ? "+" : "−") + fmt(shown);
+  return (due >= 0 ? "+" : "−") + fmt(due);
 }
 
 /** Sens du règlement — la formulation demandée par Baki, explicite dans la colonne. */
 function direction(due: number): { label: string; color: string; icon: typeof ArrowUpRight | null } {
   if (Math.abs(due) < ZERO) return { label: "Rien à payer", color: "var(--text-dim)", icon: null };
-  if (due > 0) return { label: "On lui doit", color: "#EF4444", icon: ArrowUpRight };
-  return { label: "Il nous doit", color: "#10B981", icon: ArrowDownLeft };
+  if (due > 0) return { label: "Il nous doit", color: "#10B981", icon: ArrowDownLeft };
+  return { label: "On lui doit", color: "#EF4444", icon: ArrowUpRight };
 }
 
 /** Sens d'un solde net compensé — un net à zéro n'est PAS « rien à faire ». */
 function netDirection(net: number): { label: string; color: string } {
   if (Math.abs(net) < ZERO) return { label: "équilibré après compensation", color: "var(--text-muted)" };
-  if (net > 0) return { label: "on lui doit", color: "#EF4444" };
-  return { label: "il nous doit", color: "#10B981" };
+  if (net > 0) return { label: "il nous doit", color: "#10B981" };
+  return { label: "on lui doit", color: "#EF4444" };
 }
 
 // ── Petits blocs de présentation ─────────────────────────
@@ -254,8 +260,9 @@ export default function PaymentsClient({
     let net = 0, out = 0, inc = 0;
     for (const s of rows) {
       net += s.amount_due_usdt;
-      if (s.amount_due_usdt > 0) out += s.amount_due_usdt;
-      else if (s.amount_due_usdt < 0) inc += -s.amount_due_usdt;
+      // due > 0 = le joueur nous doit → ça rentre. Inverse de ce que ce bloc supposait avant.
+      if (s.amount_due_usdt > 0) inc += s.amount_due_usdt;
+      else if (s.amount_due_usdt < 0) out += -s.amount_due_usdt;
     }
     return { rows, net, out, inc, count: rows.length };
   }, [pending, selected]);
@@ -400,18 +407,17 @@ export default function PaymentsClient({
 
       {/* ── En-tête : totaux ─────────────────────────────── */}
       <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
-        {/* Signes conformes à la règle universelle : ce qui sort est négatif (rouge),
-            ce qui rentre est positif (vert). Ce sont des sommes de valeurs absolues,
-            leur sens est porté par la tuile — seul le signe affiché est ajouté. */}
+        {/* Ce qui sort est négatif (rouge), ce qui rentre est positif (vert). Les deux tuiles
+            lisaient les champs inversés avant la correction du sens (cf. PaymentsTotals). */}
         <Tile
           label="On doit (total)"
-          value={`${totals.owed_to_players < ZERO ? "" : "−"}${fmt(totals.owed_to_players)} USDT`}
+          value={`${totals.outgoing_usdt < ZERO ? "" : "−"}${fmt(totals.outgoing_usdt)} USDT`}
           sub="sorties à faire, toutes rooms"
           color="#EF4444"
         />
         <Tile
           label="On nous doit"
-          value={`${totals.owed_by_players < ZERO ? "" : "+"}${fmt(totals.owed_by_players)} USDT`}
+          value={`${totals.incoming_usdt < ZERO ? "" : "+"}${fmt(totals.incoming_usdt)} USDT`}
           sub="entrées attendues"
           color="#10B981"
         />
@@ -488,7 +494,7 @@ export default function PaymentsClient({
               const nd = netDirection(g.net_usdt);
               const isOpen = openPlayers.has(g.player_id);
               const overdueWeeks = playersWithOverdue.get(g.player_id) ?? 0;
-              const compensated = g.owed_to_player > ZERO && g.owed_by_player > ZERO;
+              const compensated = g.incoming_usdt > ZERO && g.outgoing_usdt > ZERO;
 
               return (
                 <div key={g.player_id} style={{ borderBottom: "1px solid var(--border)" }}>
@@ -537,9 +543,9 @@ export default function PaymentsClient({
                       {compensated && (
                         <span style={{ fontSize: 10, color: "var(--text-dim)", whiteSpace: "nowrap" }}
                           title="Décomposition avant compensation — ce qui sort / ce qui rentre">
-                          <span style={{ color: "#EF4444" }}>−{fmt(g.owed_to_player)}</span>
+                          <span style={{ color: "#10B981" }}>+{fmt(g.incoming_usdt)}</span>
                           {" / "}
-                          <span style={{ color: "#10B981" }}>+{fmt(g.owed_by_player)}</span>
+                          <span style={{ color: "#EF4444" }}>−{fmt(g.outgoing_usdt)}</span>
                         </span>
                       )}
                       <AgeBadge days={g.oldest_age_days} />
@@ -630,12 +636,12 @@ export default function PaymentsClient({
                       {/* Net JOUEUR brut cumulé — PAS un montant dû : aucun action_pct appliqué.
                           Rendu neutre pour ne jamais se lire comme une dette. */}
                       <span style={{ display: "inline-flex", flexDirection: "column", gap: 1 }}
-                        title="Somme des nets joueur bruts des semaines non réglées, exprimée dans le sens agence (− = ce qui sortirait, + = ce qui rentrerait). Reste NEUTRE en couleur : action % pas encore appliqué, le montant dû ne sera connu qu'au règlement.">
+                        title="Somme des nets joueur bruts (retraits − dépôts) des semaines non réglées, même sens que le montant dû. Reste NEUTRE en couleur : action % pas encore appliqué, le montant dû ne sera connu qu'au règlement.">
                         <span style={{ fontSize: 13, fontWeight: 700, color: "var(--text)", fontVariantNumeric: "tabular-nums" }}>
                           {agencySigned(g.net_brut_usdt)}
                         </span>
                         <span style={{ fontSize: 10, color: "var(--text-dim)" }}>
-                          net brut cumulé · sens agence · {g.tx_count} tx · plus ancienne : {g.oldest_week_label} ({g.max_weeks_late} sem.)
+                          net joueur brut · {g.tx_count} tx · plus ancienne : {g.oldest_week_label} ({g.max_weeks_late} sem.)
                         </span>
                       </span>
 
@@ -665,7 +671,7 @@ export default function PaymentsClient({
                               {b.weeks_late} sem. de retard
                             </span>
                             <span style={{ display: "inline-flex", alignItems: "center", gap: 7 }}
-                              title="Net joueur brut de cette semaine, sens agence (− = ce qui sortirait, + = ce qui rentrerait), sans action %">
+                              title="Net joueur brut de cette semaine (retraits − dépôts), sans action %">
                               <span style={{ fontSize: 12, fontWeight: 700, color: "var(--text)", fontVariantNumeric: "tabular-nums" }}>
                                 {agencySigned(b.net_usdt)}
                               </span>
@@ -685,9 +691,9 @@ export default function PaymentsClient({
             </div>
             <div style={{ fontSize: 10, color: "var(--text-dim)", marginTop: 8 }}>
               Une semaine n&apos;apparaît ici qu&apos;après {graceDays} jours de délai de grâce — tu as le lundi et le mardi
-              pour régler le week-end sans qu&apos;elle passe au rouge. Le net affiché est un net joueur <b>brut</b>,
-              signé dans le sens agence (<b>−</b> ce qui sortirait, <b>+</b> ce qui rentrerait) et laissé en gris
-              volontairement : le montant dû n&apos;existe qu&apos;après règlement dans la room, action % appliqué.
+              pour régler le week-end sans qu&apos;elle passe au rouge. Le net affiché est un net joueur <b>brut</b>
+              (retraits − dépôts), laissé en gris volontairement : le montant dû n&apos;existe qu&apos;après
+              règlement dans la room, action % appliqué.
             </div>
           </>
         )}
