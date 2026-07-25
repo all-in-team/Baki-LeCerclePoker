@@ -51,12 +51,20 @@ function fmtDM(d: Date): string { return d.toLocaleDateString("fr-FR", { day: "n
  * dois) — the word "verse" is banned from ALL renderings including tooltips
  * (Baki: crée du flou; tooltips resurfaced it on hover). The payment direction
  * stays in `hint` (tooltip) and as a discreet arrow in the recap.
- * Sign convention unchanged: positive = sortie, le Cercle paie le joueur.
+ *
+ * SIGNE AFFICHÉ = SENS POUR L'AGENCE (règle universelle, décision Baki 2026-07-25) :
+ *   + vert  → ça rentre, le joueur nous doit
+ *   − rouge → ça sort, on doit au joueur (ce qu'on perd)
+ *
+ * La convention EN BASE reste inverse et intouchée (`amount_due_usdt` > 0 = le Cercle
+ * paie le joueur) : on n'inverse QUE le signe affiché, via signed(-due). Aucun montant,
+ * aucun calcul, aucune écriture n'est modifié — |montant| et la couleur sont identiques
+ * à avant, seul le caractère + / − change. Même règle appliquée sur /paiements.
  */
 export function dueLabel(due: number): { text: string; color: string; hint: string } {
   if (Math.abs(due) < 0.005) return { text: "0,00 USDT", color: "var(--text-dim)", hint: "Solde nul — rien à payer" };
-  if (due > 0) return { text: `${signed(due)} USDT`, color: "#EF4444", hint: "Sortie — le Cercle paie le joueur" };
-  return { text: `${signed(due)} USDT`, color: "#10B981", hint: "Entrée — le joueur paie le Cercle" };
+  if (due > 0) return { text: `${signed(-due)} USDT`, color: "#EF4444", hint: "Sortie — le Cercle paie le joueur" };
+  return { text: `${signed(-due)} USDT`, color: "#10B981", hint: "Entrée — le joueur paie le Cercle" };
 }
 
 // ISO week (Monday-anchored, UTC) info for a YYYY-MM-DD(...) timestamp. Display-only grouping.

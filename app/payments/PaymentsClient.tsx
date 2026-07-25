@@ -46,6 +46,21 @@ function today(): string { return new Date().toISOString().slice(0, 10); }
 /** Seuil de présentation — jamais `=== 0` sur un flottant (invariant #9). */
 const ZERO = 0.005;
 
+/**
+ * SIGNE AFFICHÉ = SENS POUR L'AGENCE (règle universelle, décision Baki 2026-07-25) :
+ *   + vert  → ça rentre, le joueur nous doit
+ *   − rouge → ça sort, on doit au joueur (ce qu'on perd)
+ *
+ * La convention EN BASE est l'inverse et reste intouchée (`amount_due_usdt` > 0 = le Cercle
+ * paie le joueur), d'où la négation ici : on inverse le SIGNE AFFICHÉ, jamais la valeur.
+ * Aucun montant ni calcul n'est modifié — |montant| est identique à avant, seul le
+ * caractère + / − change. Même règle dans dueLabel() des pages room.
+ */
+function agencySigned(due: number): string {
+  const shown = -due;
+  return (shown >= 0 ? "+" : "−") + fmt(shown);
+}
+
 /** Sens du règlement — la formulation demandée par Baki, explicite dans la colonne. */
 function direction(due: number): { label: string; color: string; icon: typeof ArrowUpRight | null } {
   if (Math.abs(due) < ZERO) return { label: "Rien à payer", color: "var(--text-dim)", icon: null };
@@ -360,7 +375,7 @@ export default function PaymentsClient({
 
         <span style={{ display: "inline-flex", alignItems: "center", gap: 7 }}>
           {Icon && <Icon size={14} color={dir.color} />}
-          <span style={{ fontSize: 14, fontWeight: 700, color: dir.color, fontVariantNumeric: "tabular-nums" }}>{fmt(s.amount_due_usdt)}</span>
+          <span style={{ fontSize: 14, fontWeight: 700, color: dir.color, fontVariantNumeric: "tabular-nums" }}>{agencySigned(s.amount_due_usdt)}</span>
           <span style={{ fontSize: 10, color: dir.color, opacity: 0.85 }}>{dir.label}</span>
         </span>
 
@@ -385,15 +400,18 @@ export default function PaymentsClient({
 
       {/* ── En-tête : totaux ─────────────────────────────── */}
       <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
+        {/* Signes conformes à la règle universelle : ce qui sort est négatif (rouge),
+            ce qui rentre est positif (vert). Ce sont des sommes de valeurs absolues,
+            leur sens est porté par la tuile — seul le signe affiché est ajouté. */}
         <Tile
           label="On doit (total)"
-          value={`${fmt(totals.owed_to_players)} USDT`}
+          value={`${totals.owed_to_players < ZERO ? "" : "−"}${fmt(totals.owed_to_players)} USDT`}
           sub="sorties à faire, toutes rooms"
           color="#EF4444"
         />
         <Tile
           label="On nous doit"
-          value={`${fmt(totals.owed_by_players)} USDT`}
+          value={`${totals.owed_by_players < ZERO ? "" : "+"}${fmt(totals.owed_by_players)} USDT`}
           sub="entrées attendues"
           color="#10B981"
         />
@@ -508,7 +526,7 @@ export default function PaymentsClient({
                     <span style={{ display: "inline-flex", flexDirection: "column", alignItems: "flex-end", gap: 1 }}
                       title="Solde net toutes rooms compensées, sur les règlements lockés non payés">
                       <span style={{ fontSize: 15, fontWeight: 700, color: nd.color, fontVariantNumeric: "tabular-nums" }}>
-                        {Math.abs(g.net_usdt) < ZERO ? "0,00" : fmt(g.net_usdt)} USDT
+                        {Math.abs(g.net_usdt) < ZERO ? "0,00" : agencySigned(g.net_usdt)} USDT
                       </span>
                       <span style={{ fontSize: 10, color: nd.color, opacity: 0.85 }}>
                         net compensé · {nd.label}
@@ -518,10 +536,10 @@ export default function PaymentsClient({
                     <span style={{ display: "inline-flex", alignItems: "center", gap: 8, justifyContent: "flex-end" }}>
                       {compensated && (
                         <span style={{ fontSize: 10, color: "var(--text-dim)", whiteSpace: "nowrap" }}
-                          title="Décomposition avant compensation">
-                          <span style={{ color: "#EF4444" }}>↑ {fmt(g.owed_to_player)}</span>
+                          title="Décomposition avant compensation — ce qui sort / ce qui rentre">
+                          <span style={{ color: "#EF4444" }}>−{fmt(g.owed_to_player)}</span>
                           {" / "}
-                          <span style={{ color: "#10B981" }}>↓ {fmt(g.owed_by_player)}</span>
+                          <span style={{ color: "#10B981" }}>+{fmt(g.owed_by_player)}</span>
                         </span>
                       )}
                       <AgeBadge days={g.oldest_age_days} />
@@ -542,7 +560,7 @@ export default function PaymentsClient({
                           return (
                             <span key={r.label} style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
                               <RoomBadge label={r.label} color={r.color} />
-                              <span style={{ fontWeight: 700, color: rd.color, fontVariantNumeric: "tabular-nums" }}>{fmt(r.net_usdt)}</span>
+                              <span style={{ fontWeight: 700, color: rd.color, fontVariantNumeric: "tabular-nums" }}>{agencySigned(r.net_usdt)}</span>
                               <span style={{ color: rd.color, opacity: 0.8 }}>{rd.label.toLowerCase()}</span>
                               <span style={{ color: "var(--text-dim)" }}>({r.count})</span>
                             </span>
@@ -612,12 +630,12 @@ export default function PaymentsClient({
                       {/* Net JOUEUR brut cumulé — PAS un montant dû : aucun action_pct appliqué.
                           Rendu neutre pour ne jamais se lire comme une dette. */}
                       <span style={{ display: "inline-flex", flexDirection: "column", gap: 1 }}
-                        title="Somme des nets joueur bruts (retraits − dépôts) des semaines non réglées — le montant dû ne sera connu qu'au règlement, après application de l'action %">
+                        title="Somme des nets joueur bruts des semaines non réglées, exprimée dans le sens agence (− = ce qui sortirait, + = ce qui rentrerait). Reste NEUTRE en couleur : action % pas encore appliqué, le montant dû ne sera connu qu'au règlement.">
                         <span style={{ fontSize: 13, fontWeight: 700, color: "var(--text)", fontVariantNumeric: "tabular-nums" }}>
-                          {g.net_brut_usdt >= 0 ? "+" : "−"}{fmt(g.net_brut_usdt)}
+                          {agencySigned(g.net_brut_usdt)}
                         </span>
                         <span style={{ fontSize: 10, color: "var(--text-dim)" }}>
-                          net brut cumulé · {g.tx_count} tx · plus ancienne : {g.oldest_week_label} ({g.max_weeks_late} sem.)
+                          net brut cumulé · sens agence · {g.tx_count} tx · plus ancienne : {g.oldest_week_label} ({g.max_weeks_late} sem.)
                         </span>
                       </span>
 
@@ -647,9 +665,9 @@ export default function PaymentsClient({
                               {b.weeks_late} sem. de retard
                             </span>
                             <span style={{ display: "inline-flex", alignItems: "center", gap: 7 }}
-                              title="Net joueur brut de cette semaine (retraits − dépôts), sans action %">
+                              title="Net joueur brut de cette semaine, sens agence (− = ce qui sortirait, + = ce qui rentrerait), sans action %">
                               <span style={{ fontSize: 12, fontWeight: 700, color: "var(--text)", fontVariantNumeric: "tabular-nums" }}>
-                                {b.net_usdt >= 0 ? "+" : "−"}{fmt(b.net_usdt)}
+                                {agencySigned(b.net_usdt)}
                               </span>
                               <span style={{ fontSize: 10, color: "var(--text-dim)" }}>net brut · {b.tx_count} tx</span>
                             </span>
@@ -667,8 +685,9 @@ export default function PaymentsClient({
             </div>
             <div style={{ fontSize: 10, color: "var(--text-dim)", marginTop: 8 }}>
               Une semaine n&apos;apparaît ici qu&apos;après {graceDays} jours de délai de grâce — tu as le lundi et le mardi
-              pour régler le week-end sans qu&apos;elle passe au rouge. Le net affiché est un net joueur <b>brut</b> :
-              le montant dû n&apos;existe qu&apos;après règlement dans la room, action % appliqué.
+              pour régler le week-end sans qu&apos;elle passe au rouge. Le net affiché est un net joueur <b>brut</b>,
+              signé dans le sens agence (<b>−</b> ce qui sortirait, <b>+</b> ce qui rentrerait) et laissé en gris
+              volontairement : le montant dû n&apos;existe qu&apos;après règlement dans la room, action % appliqué.
             </div>
           </>
         )}
@@ -719,7 +738,7 @@ export default function PaymentsClient({
                       {fmtDate(s.paid_on)}
                     </span>
                     <span style={{ display: "inline-flex", alignItems: "center", gap: 7 }}>
-                      <span style={{ fontSize: 13, fontWeight: 700, color: dir.color, fontVariantNumeric: "tabular-nums" }}>{fmt(s.amount_due_usdt)}</span>
+                      <span style={{ fontSize: 13, fontWeight: 700, color: dir.color, fontVariantNumeric: "tabular-nums" }}>{agencySigned(s.amount_due_usdt)}</span>
                       <span style={{ fontSize: 10, color: dir.color, opacity: 0.8 }}>{dir.label}</span>
                     </span>
                     <span style={{ display: "inline-flex", alignItems: "center", gap: 8, justifyContent: "flex-end" }}>
@@ -737,7 +756,7 @@ export default function PaymentsClient({
             <div style={{ display: "flex", gap: 14, padding: "10px 14px", fontSize: 11, color: "var(--text-muted)" }}>
               <span>{filteredPaid.length} règlement{filteredPaid.length > 1 ? "s" : ""}</span>
               <span>·</span>
-              <span>Net cumulé : <b style={{ color: Math.abs(paidTotal) < ZERO ? "var(--text-muted)" : paidTotal > 0 ? "#EF4444" : "#10B981" }}>{fmt(paidTotal)} USDT</b> {Math.abs(paidTotal) < ZERO ? "" : paidTotal > 0 ? "sortis" : "rentrés"}</span>
+              <span>Net cumulé : <b style={{ color: Math.abs(paidTotal) < ZERO ? "var(--text-muted)" : paidTotal > 0 ? "#EF4444" : "#10B981" }}>{Math.abs(paidTotal) < ZERO ? "0,00" : agencySigned(paidTotal)} USDT</b> {Math.abs(paidTotal) < ZERO ? "" : paidTotal > 0 ? "sortis" : "rentrés"}</span>
             </div>
           </>
         )}
@@ -757,12 +776,12 @@ export default function PaymentsClient({
           <span style={{ fontSize: 12, color: "var(--text-muted)" }}>
             net{" "}
             <b style={{ color: netDirection(selection.net).color, fontVariantNumeric: "tabular-nums" }}>
-              {Math.abs(selection.net) < ZERO ? "0,00" : fmt(selection.net)} USDT
+              {Math.abs(selection.net) < ZERO ? "0,00" : agencySigned(selection.net)} USDT
             </b>
             {" — dont "}
-            <b style={{ color: "#EF4444" }}>{fmt(selection.out)} sortants</b>
+            <b style={{ color: "#EF4444" }}>−{fmt(selection.out)} sortants</b>
             {" / "}
-            <b style={{ color: "#10B981" }}>{fmt(selection.inc)} entrants</b>
+            <b style={{ color: "#10B981" }}>+{fmt(selection.inc)} entrants</b>
           </span>
           <div style={{ flex: 1 }} />
           <button onClick={() => setSelected(new Set())} style={{
@@ -795,7 +814,7 @@ export default function PaymentsClient({
                 <div style={{ fontSize: 11, color: "var(--text-muted)", marginBottom: 4 }}>Montant du règlement</div>
                 <div style={{ fontSize: 20, fontWeight: 700, color: dir.color, display: "inline-flex", alignItems: "center", gap: 7 }}>
                   {dir.icon && <dir.icon size={17} />}
-                  {fmt(payTarget.amount_due_usdt)} USDT
+                  {agencySigned(payTarget.amount_due_usdt)} USDT
                   <span style={{ fontSize: 12, fontWeight: 600, opacity: 0.85 }}>· {dir.label}</span>
                 </div>
               </div>
@@ -832,11 +851,11 @@ export default function PaymentsClient({
           <div style={{ padding: 14, borderRadius: 8, background: "var(--bg-base)", border: "1px solid var(--border)" }}>
             <div style={{ fontSize: 11, color: "var(--text-muted)", marginBottom: 6 }}>Net de la sélection</div>
             <div style={{ fontSize: 20, fontWeight: 700, color: netDirection(selection.net).color, fontVariantNumeric: "tabular-nums" }}>
-              {Math.abs(selection.net) < ZERO ? "0,00" : fmt(selection.net)} USDT
+              {Math.abs(selection.net) < ZERO ? "0,00" : agencySigned(selection.net)} USDT
               <span style={{ fontSize: 12, fontWeight: 600, opacity: 0.85 }}> · {netDirection(selection.net).label}</span>
             </div>
             <div style={{ fontSize: 11, color: "var(--text-dim)", marginTop: 6 }}>
-              dont <b style={{ color: "#EF4444" }}>{fmt(selection.out)} sortants</b> et <b style={{ color: "#10B981" }}>{fmt(selection.inc)} entrants</b> —
+              dont <b style={{ color: "#EF4444" }}>−{fmt(selection.out)} sortants</b> et <b style={{ color: "#10B981" }}>+{fmt(selection.inc)} entrants</b> —
               chaque règlement est marqué payé <b>individuellement</b>, le net n&apos;est qu&apos;un récapitulatif.
             </div>
           </div>
@@ -849,7 +868,7 @@ export default function PaymentsClient({
                   <RoomBadge label={s.room_label} color={s.room_color} />
                   <span style={{ color: "var(--text)", fontWeight: 600 }}>{s.player_name}</span>
                   <WeekChip label={s.week_label} />
-                  <span style={{ marginLeft: "auto", fontWeight: 700, color: dir.color, fontVariantNumeric: "tabular-nums" }}>{fmt(s.amount_due_usdt)}</span>
+                  <span style={{ marginLeft: "auto", fontWeight: 700, color: dir.color, fontVariantNumeric: "tabular-nums" }}>{agencySigned(s.amount_due_usdt)}</span>
                   <span style={{ fontSize: 10, color: dir.color, opacity: 0.8 }}>{dir.label}</span>
                 </div>
               );
