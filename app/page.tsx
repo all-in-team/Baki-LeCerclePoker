@@ -228,7 +228,7 @@ export default function DashboardPage() {
                 color: i === 0 ? "#F5C518" : "#555568",
                 marginRight: 12, flexShrink: 0,
               }}>{i + 1}</span>
-              <Link href={`/crm/${c.player_id}`} style={{
+              <Link href={`/players/${c.player_id}`} style={{
                 flex: 1, fontSize: 13, fontWeight: 500, color: "#E8E8EE", textDecoration: "none",
               }}>
                 {c.player_name}
@@ -241,7 +241,7 @@ export default function DashboardPage() {
               </span>
             </div>
           ))}
-          <Link href="/crm" style={{
+          <Link href="/players" style={{
             display: "block", marginTop: 14, fontSize: 12, color: "#10B981",
             textDecoration: "none", fontWeight: 500,
           }}>

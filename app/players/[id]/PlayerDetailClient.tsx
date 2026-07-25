@@ -1,10 +1,8 @@
 "use client";
 
 import { useState } from "react";
-import Link from "next/link";
-import { ArrowLeft, ArrowDownLeft, ArrowUpRight, Trash2, Plus, X } from "lucide-react";
+import { ArrowDownLeft, ArrowUpRight, Trash2, Plus, X } from "lucide-react";
 import StatCard from "@/components/StatCard";
-import Badge from "@/components/Badge";
 import Btn from "@/components/Btn";
 import Modal from "@/components/Modal";
 import WalletChartsWrapper from "@/app/akpoker/pnl/WalletChartsWrapper";
@@ -38,10 +36,6 @@ function fmt(n: number) {
   const s = abs >= 1000 ? (abs / 1000).toFixed(2) + "k" : abs.toFixed(2);
   return (n < 0 ? "−" : n > 0 ? "+" : "") + s;
 }
-
-const STATUS_COLOR: Record<string, "green" | "gray" | "red"> = {
-  active: "green", inactive: "gray", churned: "red",
-};
 
 const DEAL_DEFAULTS = { action_pct: "50", rakeback_pct: "0", start_date: "" };
 
@@ -148,29 +142,32 @@ export default function PlayerDetailClient({ player, transactions, gameDeals: in
 
   return (
     <>
-      {/* Back + meta */}
-      <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 24 }}>
-        <Link href="/players" style={{ display: "flex", alignItems: "center", gap: 6, color: "var(--text-muted)", fontSize: 13, textDecoration: "none" }}>
-          <ArrowLeft size={14} /> Retour
-        </Link>
-        <div style={{ width: 1, height: 16, background: "var(--border)" }} />
-        <Badge label={player.status} color={STATUS_COLOR[player.status] ?? "gray"} />
-        {player.telegram_handle && (
-          <span style={{ fontSize: 12, color: "var(--text-dim)" }}>@{player.telegram_handle.replace(/^@/, "")}</span>
-        )}
+      {/* Flux wallet — lifetime, toutes games. L'en-tête d'identité et le total agence
+          faisant référence sont au-dessus (rendus par la page). */}
+      <div style={{ display: "flex", alignItems: "baseline", gap: 10, marginTop: 28, marginBottom: 12 }}>
+        <span style={{ fontSize: 11, fontWeight: 600, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.07em" }}>
+          Flux wallet · lifetime
+        </span>
         {avgActionPct !== null && (
           <span style={{ fontSize: 12, color: "var(--text-dim)", marginLeft: "auto" }}>
             Action moy. : <strong style={{ color: "var(--gold)" }}>{avgActionPct}%</strong>
           </span>
         )}
       </div>
-
-      {/* KPIs */}
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 16, marginBottom: 28 }}>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 16, marginBottom: 10 }}>
         <StatCard label="Total Déposé" value={fmt(stats.deposited) + " USDT"} sub="Envoyé au poker app" accent="neutral" icon={<ArrowDownLeft size={18} />} />
         <StatCard label="Total Retiré" value={fmt(stats.withdrawn) + " USDT"} sub="Encaissé" accent="gold" icon={<ArrowUpRight size={18} />} />
         <StatCard label="Net P&L Joueur" value={fmt(stats.net) + " USDT"} sub="Retraits − Dépôts" accent={netAccent} />
-        <StatCard label="Mon P&L" value={fmt(stats.my_pnl) + " USDT"} sub="Ma part selon le deal" accent={myAccent} />
+      </div>
+      {/* my_pnl vient de getPlayerWalletStats : action appliquée aux SEULS mouvements wallet
+          (ni rakeback, ni reports, ni grindhouse). Le chiffre de référence est l'Agency cut
+          plus haut (getPlayerPnLAllGames) — d'où la ligne discrète plutôt qu'une 4e carte. */}
+      <div style={{ fontSize: 11, color: "var(--text-dim)", marginBottom: 28 }}>
+        Part action sur ces flux wallet :{" "}
+        <strong style={{ color: myAccent === "green" ? "var(--green)" : myAccent === "red" ? "#EF4444" : "var(--text-muted)" }}>
+          {fmt(stats.my_pnl)} USDT
+        </strong>
+        {" — "}hors rakeback / reports / grindhouse. Référence : Agency cut ci-dessus.
       </div>
 
       {/* Games section */}

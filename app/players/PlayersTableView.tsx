@@ -89,7 +89,7 @@ export default function PlayersTableView({ players, gamesByPlayer, agencyByPlaye
             return (
               <tr
                 key={p.id}
-                onClick={() => router.push(`/crm/${p.id}`)}
+                onClick={() => router.push(`/players/${p.id}`)}
                 style={{ borderBottom: "1px solid var(--border)", cursor: "pointer", opacity: isActiveStatus(p.status) ? 1 : 0.6 }}
               >
                 <td style={{ padding: "10px 8px" }}>

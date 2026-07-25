@@ -163,7 +163,7 @@ export default function PlayerDetailDrawer({ player, deals, pnlByPlayerGame, act
 
         {/* Footer */}
         <div style={{ padding: "16px 20px", borderTop: "1px solid var(--border)", display: "flex", gap: 10 }}>
-          <Link href={`/crm/${player.id}`} style={{
+          <Link href={`/players/${player.id}`} style={{
             flex: 1, padding: "10px 0", borderRadius: 8, fontSize: 13, fontWeight: 600, textAlign: "center", textDecoration: "none",
             background: "rgba(34,197,94,0.12)", border: "1px solid rgba(34,197,94,0.3)", color: "#22C55E",
           }}>
