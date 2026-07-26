@@ -267,7 +267,7 @@ export default function SettlementFlow({
                         un retrait part de la wallet mère → ça sort → rouge −.
                         (Avant : point de vue joueur, retrait en vert — l'inverse.) */}
                     <span style={{ display: "inline-flex", alignItems: "center", gap: 5, color: isDep ? "var(--green)" : "#f87171", fontWeight: 600, fontSize: 12 }}>{isDep ? <ArrowDownLeft size={13} /> : <ArrowUpRight size={13} />}{isDep ? "Dépôt" : "Retrait"}{wnGameId != null && tx.game_id === wnGameId && (<span style={{ fontSize: 9, fontWeight: 700, padding: "1px 6px", borderRadius: 4, background: "rgba(168,85,247,0.15)", color: "#A855F7" }}>WN</span>)}</span>
-                    <span style={{ fontSize: 13, fontWeight: 700, color: isDep ? "var(--green)" : "#f87171" }}>{isDep ? "+" : "−"}{fmt(tx.amount)} {tx.currency}</span>
+                    <span style={{ fontSize: 13, fontWeight: 700, color: isDep ? "#f87171" : "var(--green)" }}>{isDep ? "+" : "−"}{fmt(tx.amount)} {tx.currency}</span>
                     <span style={{ textAlign: "center", fontSize: 13 }}>
                       {tx.source === "sync" && tx.tron_tx_hash ? (
                         // Link to the on-chain transfer — stopPropagation so the click
