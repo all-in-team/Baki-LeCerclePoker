@@ -18,7 +18,7 @@ const MAIN: NavItem[] = [
   { href: "/players", label: "Joueurs", icon: Users },
   { href: "/payments", label: "Paiements", icon: Banknote },
   { href: "/crm/affiliates", label: "Affiliates", icon: Network },
-  { href: "/qqpk-funnel", label: "QQPK Funnel", icon: Rocket },
+  // QQPK Funnel a rejoint le groupe FUNNEL plus bas (avec NEXAPOKER).
   { href: "/crm/games", label: "Games & Deals", icon: Sliders },
   { href: "/settings", label: "Settings", icon: Settings },
 ];
@@ -39,32 +39,40 @@ const GROUPS: NavGroup[] = [
     { href: "/aks/pnl", label: "P&L", icon: Wallet },
     { href: "/aks/settlements", label: "Settlements", icon: Scale },
   ]},
-  { label: "QQPK", items: [
-    { href: "/qqpk/pnl", label: "P&L", icon: Wallet },
-  ]},
-  // NEXAPOKER : room d'acquisition pure (funnel bot + report hebdo), pas de P&L
-  // staking — les leads ne sont pas des players.
-  { label: "NEXAPOKER", items: [
-    { href: "/nexa-funnel", label: "Nexa Funnel", icon: Rocket },
-  ]},
-  { label: "JVIP", items: [
-    { href: "/jvip/pnl", label: "P&L", icon: Wallet },
-  ]},
-  { label: "TTPOKER", items: [
-    { href: "/ttpoker/pnl", label: "P&L", icon: Wallet },
-  ]},
-  { label: "WEPOKER", items: [
-    { href: "/wepoker/pnl", label: "P&L", icon: BarChart3 },
-    { href: "/wepoker/settlements", label: "Settlements", icon: FileText },
-  ]},
-  { label: "AKPOKER", archived: true, items: [
-    { href: "/akpoker/pnl", label: "P&L", icon: Wallet },
-    { href: "/akpoker/settlements", label: "Settlements", icon: Scale },
+  // FUNNEL : rooms d'acquisition pure (funnel bot + report hebdo), pas de P&L
+  // staking — les leads ne sont pas des players. Regroupées ici plutôt que
+  // dispersées entre MAIN et la liste des rooms (Baki 2026-07-26).
+  // À ne pas confondre avec la room QQPK (/qqpk/pnl), archivée plus bas.
+  { label: "FUNNEL", items: [
+    { href: "/nexa-funnel", label: "NEXAPOKER", icon: Rocket },
+    { href: "/qqpk-funnel", label: "QQPK", icon: Rocket },
   ]},
   { label: "GRINDHOUSE", items: [
     // Sessions / Frais / Settlements stay reachable by direct URL — just not in the nav
     { href: "/grindhouse/weekly", label: "Week results", icon: CalendarDays },
     { href: "/grindhouse/dashboard", label: "Dashboard", icon: TrendingUp },
+  ]},
+
+  // ── Rooms archivées (bas de nav, grisées, badge ARCHIVED) ──
+  // `archived` est PUREMENT VISUEL : il ne touche pas `games.status` en base.
+  // Le sync wallets, les données et les règlements de ces rooms restent actifs.
+  // Pour un archivage fonctionnel, passer par le toggle /crm/games.
+  { label: "QQPK", archived: true, items: [
+    { href: "/qqpk/pnl", label: "P&L", icon: Wallet },
+  ]},
+  { label: "WEPOKER", archived: true, items: [
+    { href: "/wepoker/pnl", label: "P&L", icon: BarChart3 },
+    { href: "/wepoker/settlements", label: "Settlements", icon: FileText },
+  ]},
+  { label: "JVIP", archived: true, items: [
+    { href: "/jvip/pnl", label: "P&L", icon: Wallet },
+  ]},
+  { label: "TTPOKER", archived: true, items: [
+    { href: "/ttpoker/pnl", label: "P&L", icon: Wallet },
+  ]},
+  { label: "AKPOKER", archived: true, items: [
+    { href: "/akpoker/pnl", label: "P&L", icon: Wallet },
+    { href: "/akpoker/settlements", label: "Settlements", icon: Scale },
   ]},
 ];
 
