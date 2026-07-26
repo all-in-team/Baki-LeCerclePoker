@@ -5,12 +5,12 @@ import { usePathname, useRouter } from "next/navigation";
 import { useState, useEffect } from "react";
 import {
   X, LogOut, LayoutDashboard, Users, Network,
-  Sliders, Settings, Wallet, Scale, BarChart3, FileText,
+  Sliders, Settings, Wallet, BarChart3,
   TrendingUp, ChevronDown, ChevronRight, CalendarDays, Rocket, Banknote,
 } from "lucide-react";
 
 type NavItem = { href: string; label: string; icon: React.ComponentType<{ size?: number; strokeWidth?: number }> };
-type NavGroup = { label: string; archived?: boolean; items: NavItem[] };
+type NavGroup = { label: string; items: NavItem[] };
 
 const MAIN: NavItem[] = [
   { href: "/", label: "Dashboard", icon: LayoutDashboard },
@@ -23,26 +23,24 @@ const MAIN: NavItem[] = [
   { href: "/settings", label: "Settings", icon: Settings },
 ];
 
+// Rooms actives — une seule page utile (P&L), donc lien DIRECT, pas d'accordéon
+// (Baki 2026-07-26). Les vues hebdo legacy /xxx/settlements existent toujours et
+// restent joignables par URL directe : elles sont juste sorties de la nav. Le flow
+// de règlement (preview → lock → payé) vit de toute façon dans LedgerTable, rendu
+// sur la page P&L elle-même.
+//   A5NUTS  = fusion A5POKER + NUTSPK (même owner, mêmes wallets).
+//   AKS/OK POKER = fusion AKS + OKPOKER (même club, même wallet mère,
+//                  deux skins d'onboarding) ; /okpoker/pnl redirige vers /aks/pnl.
+const ROOMS: NavItem[] = [
+  { href: "/kkpoker/pnl", label: "KKPOKER", icon: Wallet },
+  { href: "/a5nuts/pnl", label: "A5NUTS", icon: Wallet },
+  { href: "/aks/pnl", label: "AKS/OK POKER", icon: Wallet },
+];
+
 const GROUPS: NavGroup[] = [
-  { label: "KKPOKER", items: [
-    { href: "/kkpoker/pnl", label: "P&L", icon: Wallet },
-    { href: "/kkpoker/settlements", label: "Settlements", icon: Scale },
-  ]},
-  // A5NUTS = merged A5POKER + NUTSPK dashboard (same owner, same wallets).
-  // Old weekly /a5poker/settlements and /nutspk/settlements stay reachable by direct URL.
-  { label: "A5NUTS", items: [
-    { href: "/a5nuts/pnl", label: "P&L", icon: Wallet },
-  ]},
-  // AKS/OK POKER = merged AKS + OKPOKER dashboard (same club, same wallet mère,
-  // two onboarding skins). /okpoker/pnl redirects to /aks/pnl.
-  { label: "AKS/OK POKER", items: [
-    { href: "/aks/pnl", label: "P&L", icon: Wallet },
-    { href: "/aks/settlements", label: "Settlements", icon: Scale },
-  ]},
   // FUNNEL : rooms d'acquisition pure (funnel bot + report hebdo), pas de P&L
-  // staking — les leads ne sont pas des players. Regroupées ici plutôt que
-  // dispersées entre MAIN et la liste des rooms (Baki 2026-07-26).
-  // À ne pas confondre avec la room QQPK (/qqpk/pnl), archivée plus bas.
+  // staking — les leads ne sont pas des players.
+  // À ne pas confondre avec la room QQPK (/qqpk/pnl), rangée dans ARCHIVE.
   { label: "FUNNEL", items: [
     { href: "/nexa-funnel", label: "NEXAPOKER", icon: Rocket },
     { href: "/qqpk-funnel", label: "QQPK", icon: Rocket },
@@ -52,27 +50,16 @@ const GROUPS: NavGroup[] = [
     { href: "/grindhouse/weekly", label: "Week results", icon: CalendarDays },
     { href: "/grindhouse/dashboard", label: "Dashboard", icon: TrendingUp },
   ]},
-
-  // ── Rooms archivées (bas de nav, grisées, badge ARCHIVED) ──
-  // `archived` est PUREMENT VISUEL : il ne touche pas `games.status` en base.
-  // Le sync wallets, les données et les règlements de ces rooms restent actifs.
-  // Pour un archivage fonctionnel, passer par le toggle /crm/games.
-  { label: "QQPK", archived: true, items: [
-    { href: "/qqpk/pnl", label: "P&L", icon: Wallet },
-  ]},
-  { label: "WEPOKER", archived: true, items: [
-    { href: "/wepoker/pnl", label: "P&L", icon: BarChart3 },
-    { href: "/wepoker/settlements", label: "Settlements", icon: FileText },
-  ]},
-  { label: "JVIP", archived: true, items: [
-    { href: "/jvip/pnl", label: "P&L", icon: Wallet },
-  ]},
-  { label: "TTPOKER", archived: true, items: [
-    { href: "/ttpoker/pnl", label: "P&L", icon: Wallet },
-  ]},
-  { label: "AKPOKER", archived: true, items: [
-    { href: "/akpoker/pnl", label: "P&L", icon: Wallet },
-    { href: "/akpoker/settlements", label: "Settlements", icon: Scale },
+  // ARCHIVE : dossier replié par défaut, comme tout groupe (cf. `open` plus bas).
+  // Rangement PUREMENT VISUEL : `games.status` n'est pas touché en base, le sync
+  // wallets et les règlements de ces rooms tournent toujours. Pour un archivage
+  // fonctionnel, passer par le toggle /crm/games.
+  { label: "ARCHIVE", items: [
+    { href: "/wepoker/pnl", label: "WEPOKER", icon: BarChart3 },
+    { href: "/qqpk/pnl", label: "QQPK", icon: Wallet },
+    { href: "/jvip/pnl", label: "JVIP", icon: Wallet },
+    { href: "/ttpoker/pnl", label: "TTPOKER", icon: Wallet },
+    { href: "/akpoker/pnl", label: "AKPOKER", icon: Wallet },
   ]},
 ];
 
@@ -129,6 +116,15 @@ export default function Sidebar({ isOpen, onClose }: SidebarProps) {
     transition: "background 0.15s, color 0.15s",
     background: active ? "rgba(16,185,129,0.10)" : "transparent",
     color: active ? "#10B981" : "#8888A0",
+  });
+
+  // Les rooms sont des liens directs, mais gardent une identité de "section" :
+  // majuscule légèrement espacée, un cran plus dense que les entrées MAIN.
+  const roomStyle = (active: boolean): React.CSSProperties => ({
+    ...itemStyle(active),
+    fontSize: 12,
+    fontWeight: active ? 700 : 600,
+    letterSpacing: "0.06em",
   });
 
   return (
@@ -204,11 +200,23 @@ export default function Sidebar({ isOpen, onClose }: SidebarProps) {
 
         <div style={{ height: 10 }} />
 
+        {ROOMS.map(({ href, label, icon: Icon }) => {
+          const active = (path ?? "").startsWith(href);
+          return (
+            <Link key={href} href={href} className={active ? "nav-active" : undefined} style={roomStyle(active)}>
+              <Icon size={15} strokeWidth={active ? 2.2 : 1.8} />
+              {label}
+            </Link>
+          );
+        })}
+
+        <div style={{ height: 6, marginTop: 6, borderTop: "1px solid rgba(255,255,255,0.05)" }} />
+
         {GROUPS.map(group => {
           const isOpenGroup = open[group.label] ?? false;
           const hasActive = groupContains(group, path ?? "");
           return (
-            <div key={group.label} style={{ opacity: group.archived && !hasActive ? 0.55 : 1, marginBottom: 2 }}>
+            <div key={group.label} style={{ marginBottom: 2 }}>
               <button
                 onClick={() => setOpen(o => ({ ...o, [group.label]: !isOpenGroup }))}
                 style={{
@@ -222,15 +230,6 @@ export default function Sidebar({ isOpen, onClose }: SidebarProps) {
               >
                 <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
                   {group.label}
-                  {group.archived && (
-                    <span style={{
-                      fontSize: 8, padding: "1px 5px", borderRadius: 3,
-                      background: "rgba(255,255,255,0.05)", color: "#555568",
-                      fontWeight: 600, letterSpacing: "0.04em",
-                    }}>
-                      ARCHIVED
-                    </span>
-                  )}
                 </span>
                 {isOpenGroup ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
               </button>
