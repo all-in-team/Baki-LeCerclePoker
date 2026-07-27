@@ -2,6 +2,7 @@ export const dynamic = "force-dynamic";
 import { getAllSettings } from "@/lib/queries";
 import PageHeader from "@/components/PageHeader";
 import SettingsClient from "./SettingsClient";
+import AgentActionLog from "./AgentActionLog";
 
 export default function SettingsPage() {
   const settings = getAllSettings();
@@ -12,6 +13,7 @@ export default function SettingsPage() {
         subtitle="Configuration globale — wallets TELE, clés API, paramètres sync"
       />
       <SettingsClient initialSettings={settings} />
+      <AgentActionLog />
     </>
   );
 }

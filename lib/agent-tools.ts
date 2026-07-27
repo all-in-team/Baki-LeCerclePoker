@@ -6,6 +6,7 @@ import { getCurrentWeekStart } from "./telegram-commands/cashout-reminder";
 import { getWeekBounds, toUTCISO, toParisDate } from "./date-utils";
 import { getLockAwareSummaryByPlayer, getLockAwareKPIs, getWalletSummaryByPlayer, getAkpokerPnL, getKkpokerPnL, getA5pokerPnL, getAksPnL, getNutspkPnL, getWepokerPnL, getAgencyTotalPnL, getTopContributors, getActivePlayersCount, getPlayerPnLAllGames, type Period } from "./queries";
 import { checkUserbotHealth, listGroups } from "./telegram-userbot";
+import { isActionTool, createPendingAction } from "./agent-actions";
 
 // ────────────────────────────────────────────────────────────
 // Period parsing — accepts: today | yesterday | week | month |
@@ -232,6 +233,42 @@ export const TOOLS: Anthropic.Tool[] = [
     input_schema: { type: "object", properties: {}, required: [] },
   },
   {
+    name: "create_note",
+    description: "ACTION — Crée une note CRM sur un joueur. N'exécute RIEN immédiatement : met l'action en attente et l'opérateur doit cliquer [Confirmer]. Ne prétends jamais que la note est créée avant d'avoir vu une confirmation.",
+    input_schema: {
+      type: "object",
+      properties: {
+        player: { type: "string", description: "Nom exact ou id du joueur." },
+        content: { type: "string", description: "Contenu de la note." },
+        type: { type: "string", enum: ["note", "call", "payment", "alert", "message"], description: "Type de note. Défaut: note." },
+      },
+      required: ["player", "content"],
+    },
+  },
+  {
+    name: "add_todo",
+    description: "ACTION — Ajoute une entrée à l'inbox de l'agent (todo repris par le run planifié du lendemain). N'exécute RIEN immédiatement : met l'action en attente, l'opérateur doit cliquer [Confirmer].",
+    input_schema: {
+      type: "object",
+      properties: {
+        message: { type: "string", description: "Le todo à retenir." },
+      },
+      required: ["message"],
+    },
+  },
+  {
+    name: "relance_lead",
+    description: "ACTION — Envoie une relance manuelle à un lead NEXAPOKER (seul funnel avec relance par lead ; QQPK n'a qu'une relance de masse planifiée). N'exécute RIEN immédiatement : met l'action en attente, l'opérateur doit cliquer [Confirmer].",
+    input_schema: {
+      type: "object",
+      properties: {
+        lead: { type: "string", description: "id, member_id, @username ou tg_user_id du lead." },
+        funnel: { type: "string", enum: ["nexa"], description: "Funnel. Seul 'nexa' est supporté." },
+      },
+      required: ["lead"],
+    },
+  },
+  {
     name: "get_funnel_status",
     description: "État des funnels d'acquisition NEXAPOKER (table nexa_leads) et QQPK (table qqpk_funnel_leads) : nombre de leads par étape, plus les compteurs de relances, de leads froids et de doublons côté Nexa. C'est l'outil à appeler pour toute question sur « le funnel Nexa » ou « le funnel QQPK ».",
     input_schema: {
@@ -384,10 +421,34 @@ function runReadonlyQuery(rawSql: string): string {
   return out;
 }
 
-export async function executeTool(name: string, input: any): Promise<string> {
+/** Contexte de la conversation, requis pour toute ACTION (jamais pour la lecture). */
+export interface ToolContext {
+  chatId: string;
+  /** Telegram user id de l'opérateur. Absent sur un run automatique (cron). */
+  userId?: number;
+}
+
+export async function executeTool(name: string, input: any, ctx?: ToolContext): Promise<string> {
   const db = getDb();
 
   try {
+    // ── ACTIONS ─────────────────────────────────────────
+    // Rien n'est exécuté ici. On enregistre une intention et on rend la main.
+    // L'exécution part uniquement du clic [Confirmer] (cf. lib/agent-actions.ts).
+    if (isActionTool(name)) {
+      if (!ctx?.userId) {
+        return `❌ Action impossible : pas de contexte utilisateur (run automatique). Les actions ne peuvent être déclenchées que depuis une conversation avec un opérateur.`;
+      }
+      const r = await createPendingAction({ chatId: ctx.chatId, userId: ctx.userId, tool: name, params: input });
+      if (!r.ok) return `❌ Action non mise en attente : ${r.error}`;
+      return [
+        `⏸ Action #${r.id} EN ATTENTE DE CONFIRMATION — rien n'a été exécuté.`,
+        r.preview.replace(/<[^>]+>/g, ""),
+        `L'opérateur doit cliquer [Confirmer] ou [Annuler] sous le message qui va suivre.`,
+        `Annonce-lui simplement que tu attends sa confirmation. N'affirme JAMAIS que l'action est faite, et ne rappelle pas cet outil pour la même action.`,
+      ].join("\n");
+    }
+
     if (name === "db_schema") {
       const ro = getReadonlyDb();
       const table = input?.table ? String(input.table).trim() : null;

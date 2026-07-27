@@ -2367,4 +2367,65 @@ function initSchema(db: Database.Database) {
   } catch (err: any) {
     console.error(`[MIGRATION:add_player_archive_v1] FAILED:`, err.message);
   }
+
+  // Confirmation à deux étapes pour les actions de l'agent Telegram (Baki 2026-07-27).
+  //
+  // agent_pending_actions = l'INTENTION. L'outil appelé par Claude écrit une ligne ici
+  // et s'arrête : il n'exécute rien. Seul un clic sur [Confirmer] déclenche l'exécution.
+  // C'est ce qui garantit qu'aucun chemin ne va du texte du modèle à une écriture.
+  //   • status : pending → confirmed | cancelled | expired | failed (jamais réouvert)
+  //   • expires_at : une intention non confirmée meurt (TTL court) — pas de bouton
+  //     oublié qui déclenche une action une semaine plus tard
+  //   • requested_by : le confirmeur DOIT être le demandeur (vérifié à l'exécution),
+  //     en plus du contrôle OWNER_IDS côté webhook
+  //
+  // agent_action_log = le JOURNAL. Une ligne par exécution tentée, avec l'état
+  // avant/après sérialisé, pour que tout soit réversible à la main et auditable
+  // depuis le back-office. Append-only : on n'édite jamais une ligne de log.
+  try {
+    const fix = db.prepare(`INSERT OR IGNORE INTO _applied_fixes (name) VALUES (?)`).run("add_agent_actions_v1");
+    if (fix.changes > 0) {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS agent_pending_actions (
+          id           INTEGER PRIMARY KEY AUTOINCREMENT,
+          chat_id      TEXT NOT NULL,
+          requested_by INTEGER NOT NULL,
+          tool         TEXT NOT NULL,
+          level        TEXT NOT NULL CHECK(level IN ('simple','sensitive')),
+          params_json  TEXT NOT NULL,
+          preview      TEXT NOT NULL,
+          status       TEXT NOT NULL DEFAULT 'pending'
+            CHECK(status IN ('pending','confirmed','cancelled','expired','failed')),
+          created_at   TEXT NOT NULL DEFAULT (datetime('now')),
+          expires_at   TEXT NOT NULL,
+          notified_at  TEXT,
+          resolved_at  TEXT,
+          resolved_by  INTEGER,
+          result_text  TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_agent_pending_open
+          ON agent_pending_actions(chat_id, status) WHERE status = 'pending';
+
+        CREATE TABLE IF NOT EXISTS agent_action_log (
+          id          INTEGER PRIMARY KEY AUTOINCREMENT,
+          pending_id  INTEGER REFERENCES agent_pending_actions(id) ON DELETE SET NULL,
+          tool        TEXT NOT NULL,
+          level       TEXT NOT NULL,
+          params_json TEXT NOT NULL,
+          actor       INTEGER NOT NULL,
+          chat_id     TEXT NOT NULL,
+          ok          INTEGER NOT NULL,
+          error       TEXT,
+          before_json TEXT,
+          after_json  TEXT,
+          summary     TEXT,
+          executed_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+        CREATE INDEX IF NOT EXISTS idx_agent_action_log_time ON agent_action_log(executed_at DESC);
+      `);
+      console.log("[MIGRATION] add_agent_actions_v1 applied");
+    }
+  } catch (err: any) {
+    console.error(`[MIGRATION:add_agent_actions_v1] FAILED:`, err.message);
+  }
 }

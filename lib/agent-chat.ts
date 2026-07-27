@@ -14,6 +14,8 @@ Tu parles français, ton direct et concret comme un dev senior. Tu connais le pr
 
 Tu as accès à des outils pour interroger la base de données en temps réel : P&L par période, profils joueurs, transactions, inbox, apps, cashout status, règlements en attente et semaines jamais réglées (get_unpaid_settlements), funnels d'acquisition NEXAPOKER et QQPK (get_funnel_status), funnel onboarding générique, top winners/losers, santé du bot, groupes orphelins. Utilise-les quand l'opérateur pose une question sur un chiffre, un joueur, ou un état du système. Ne devine jamais — appelle l'outil.
 
+ACTIONS (create_note, add_todo, relance_lead) — règle absolue : ces outils N'EXÉCUTENT RIEN. Ils mettent une action en attente et l'opérateur doit cliquer [Confirmer] sur un message à boutons. Quand un de ces outils te répond "EN ATTENTE DE CONFIRMATION", dis simplement que tu attends sa validation. N'écris JAMAIS "c'est fait", "note créée", "lead relancé" — rien n'est fait tant qu'il n'a pas cliqué, et tu ne verras pas son clic dans cette conversation. Ne rappelle pas l'outil pour la même action : ça créerait un doublon en attente.
+
 Pour toute question à laquelle aucun outil métier ne répond (affiliés, leads, staking QQPK, extras, historique fin, comptages...), tu as db_schema (pour voir les tables) et query_db (SELECT en lecture seule). Ordre de préférence : outil métier d'abord (math canonique), query_db en fallback. Ne réponds JAMAIS "je n'ai pas accès à cette donnée" sans avoir essayé db_schema + query_db.
 
 Format des réponses chiffrées (money questions) — OBLIGATOIRE :
@@ -149,11 +151,19 @@ export function stripMention(text: string): string {
 interface RunChatArgs {
   chatId: number | string;
   userText: string;
+  /**
+   * Telegram user id de l'opérateur. OBLIGATOIRE pour que les outils d'ACTION
+   * soient utilisables : sans lui, une action ne peut être ni attribuée ni
+   * confirmée, donc executeTool la refuse. Absent sur les runs automatiques
+   * (morning-checkin) — volontaire : un cron ne doit pas mettre d'action en
+   * attente que personne ne verra.
+   */
+  userId?: number;
 }
 
 const MAX_TOOL_ITERATIONS = 8;
 
-export async function runChat({ chatId, userText }: RunChatArgs): Promise<string> {
+export async function runChat({ chatId, userText, userId }: RunChatArgs): Promise<string> {
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) throw new Error("ANTHROPIC_API_KEY not set");
 
@@ -228,7 +238,7 @@ export async function runChat({ chatId, userText }: RunChatArgs): Promise<string
         toolUses.map(async t => ({
           type: "tool_result" as const,
           tool_use_id: t.id,
-          content: await executeTool(t.name, t.input),
+          content: await executeTool(t.name, t.input, { chatId: cid, userId }),
         }))
       );
       messages.push({ role: "user", content: toolResults });

@@ -37,6 +37,7 @@ import {
   sendMsg, answerCbQuery, getSession, handleRawMessage, registerCommandHandlers,
   OWNER_IDS, AGENT_CHAT_ID,
 } from "@/lib/telegram-commands";
+import { sendMsgKeyboard, editMessageReplyMarkup } from "@/lib/telegram-commands/helpers";
 // Register command handlers for the raw-message flow (breaks circular dep)
 registerCommandHandlers({
   handleDeal,
@@ -117,6 +118,30 @@ export async function POST(req: NextRequest) {
       await handleCashoutSkippedCallback(cb.id, cbData, cbChatId, cb.message?.message_id, cbThreadId);
     } else if (cbData.startsWith("bc_")) {
       await handleBroadcastCallback(cb.id, cbData, cb.message);
+    } else if (cbData.startsWith("agentact:")) {
+      // Seul chemin d'exécution d'une action de l'agent.
+      // Double verrou : OWNER_IDS ici (le bouton vit dans un groupe, n'importe
+      // quel membre peut cliquer), puis "le confirmeur est le demandeur" dans
+      // executeAction(). Le clavier est retiré dans tous les cas pour qu'un
+      // bouton mort ne traîne pas.
+      const [, verb, rawId] = cbData.split(":");
+      const actionId = Number(rawId);
+      if (!OWNER_IDS.has(cb.from?.id)) {
+        console.warn(`[TG AGENTACT] non-owner refusé: user_id=${cb.from?.id} action=${actionId}`);
+        await answerCbQuery(cb.id, "⛔ Réservé à l'opérateur.");
+      } else if (!Number.isInteger(actionId)) {
+        await answerCbQuery(cb.id, "Action illisible.");
+      } else {
+        const { executeAction, cancelAction } = await import("@/lib/agent-actions");
+        const res = verb === "ok"
+          ? await executeAction(actionId, cb.from.id)
+          : cancelAction(actionId, cb.from.id);
+        await answerCbQuery(cb.id, res.ok ? "OK" : "Refusé");
+        if (cbChatId && cb.message?.message_id) {
+          await editMessageReplyMarkup(cbChatId, cb.message.message_id);
+        }
+        if (cbChatId) await sendMsg(cbChatId, res.text, cbThreadId);
+      }
     } else {
       await answerCbQuery(cb.id);
     }
@@ -153,8 +178,24 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ ok: true });
     }
     try {
-      const reply = await runChat({ chatId, userText: msg.text });
+      const reply = await runChat({ chatId, userText: msg.text, userId: msg.from?.id });
       await sendMsg(chatId, reply);
+
+      // Une action mise en attente pendant ce tour n'existe qu'en base : c'est
+      // ICI qu'elle devient cliquable. Tant que l'opérateur n'a pas cliqué,
+      // rien n'a été exécuté (cf. lib/agent-actions.ts).
+      const { listUnnotifiedActions, markNotified } = await import("@/lib/agent-actions");
+      for (const p of listUnnotifiedActions(String(chatId))) {
+        await sendMsgKeyboard(
+          chatId,
+          `⏸ <b>Confirmation requise</b> · action #${p.id}${p.level === "sensitive" ? " · ⚠️ SENSIBLE" : ""}\n\n${p.preview}\n\n<i>Expire dans 10 min. Rien n'est exécuté sans ton clic.</i>`,
+          [[
+            { text: "✅ Confirmer", callback_data: `agentact:ok:${p.id}` },
+            { text: "❌ Annuler", callback_data: `agentact:no:${p.id}` },
+          ]],
+        );
+        markNotified(p.id);
+      }
     } catch (e: any) {
       console.error("[TG AGENT CHAT]", e);
       await sendMsg(chatId, `❌ Erreur agent : ${e.message ?? String(e)}`);
