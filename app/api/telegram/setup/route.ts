@@ -1,6 +1,30 @@
 import { NextRequest, NextResponse } from "next/server";
 
+// ⚠️ Cette route est HORS du middleware d'auth (cf. le matcher de middleware.ts,
+// qui exclut `api/telegram` pour laisser passer le webhook Telegram). Elle doit
+// donc se protéger elle-même, comme les routes api/admin.
+//
+// Sans ce garde, l'endpoint était public et permettait à n'importe qui de :
+//   - POST  → réenregistrer le webhook vers une URL arbitraire (détournement de
+//             tout le trafic du bot) ;
+//   - GET ?test_chat=<id> → faire envoyer un message arbitraire par le bot.
+//
+// Même convention que les 26 routes api/admin : header `x-admin-token` comparé à
+// ADMIN_RECONCILE_TOKEN, et fail-closed (503) si la variable n'est pas définie —
+// une variable manquante ne doit jamais rouvrir l'accès.
+function guard(req: NextRequest): NextResponse | null {
+  const adminToken = process.env.ADMIN_RECONCILE_TOKEN;
+  if (!adminToken) return NextResponse.json({ error: "ADMIN_RECONCILE_TOKEN not set" }, { status: 503 });
+  if (req.headers.get("x-admin-token") !== adminToken) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+  return null;
+}
+
 export async function POST(req: NextRequest) {
+  const denied = guard(req);
+  if (denied) return denied;
+
   const token = process.env.TELEGRAM_BOT_TOKEN;
   const secret = process.env.TELEGRAM_WEBHOOK_SECRET;
   if (!token) return NextResponse.json({ error: "TELEGRAM_BOT_TOKEN not set in .env.local" }, { status: 500 });
@@ -31,6 +55,9 @@ export async function POST(req: NextRequest) {
 }
 
 export async function GET(req: NextRequest) {
+  const denied = guard(req);
+  if (denied) return denied;
+
   const token = process.env.TELEGRAM_BOT_TOKEN;
   if (!token) return NextResponse.json({ error: "TELEGRAM_BOT_TOKEN not set" }, { status: 500 });
 
