@@ -134,12 +134,24 @@ export async function POST(req: NextRequest) {
 
   // Agent chat: in the dedicated agent group, route ALL non-command text
   // messages to Claude.
+  //
+  // ⚠️ OWNER_IDS est OBLIGATOIRE ici, en plus du filtre sur le groupe (Baki 2026-07-27).
+  // L'agent lit toute la base via ses outils (P&L, wallets, joueurs, query_db en
+  // lecture seule) : l'appartenance au groupe ne peut pas être la seule barrière —
+  // ajouter quelqu'un au groupe lui donnerait l'accès complet. Fail-closed :
+  // `from.id` absent → `OWNER_IDS.has(undefined)` est faux → pas de routage.
+  // Un non-owner est ignoré en silence (pas de réponse : ne pas confirmer la
+  // présence de l'agent, ne pas brûler de tokens).
   if (
     msg?.text &&
     String(chatId) === AGENT_CHAT_ID &&
     !msg.from?.is_bot &&
     !msg.text.startsWith("/")
   ) {
+    if (!OWNER_IDS.has(msg.from?.id)) {
+      console.warn(`[TG AGENT CHAT] non-owner ignoré: user_id=${msg.from?.id} username=@${msg.from?.username ?? "none"}`);
+      return NextResponse.json({ ok: true });
+    }
     try {
       const reply = await runChat({ chatId, userText: msg.text });
       await sendMsg(chatId, reply);

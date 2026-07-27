@@ -223,19 +223,24 @@ export const TOOLS: Anthropic.Tool[] = [
   },
   {
     name: "get_unpaid_settlements",
-    description: "Liste les settlements non payés pour une semaine donnée : joueur, montant dû, wallet cashout. Défaut: semaine en cours.",
-    input_schema: {
-      type: "object",
-      properties: {
-        week_offset: { type: "integer", description: "0 = semaine en cours, -1 = semaine dernière. Défaut 0." },
-      },
-      required: [],
-    },
+    description: "Qui doit payer / qui attend d'être payé. Deux blocs, lus sur le système ACTUEL (manual_settlements via manual-settlement-engine, la même source que la page Paiements) : (1) règlements lockés en attente de paiement, avec le montant dû signé et l'ancienneté depuis le lock ; (2) semaines jamais réglées (anti-oubli), avec le net brut joueur. ATTENTION : le net brut du bloc 2 n'est PAS un montant dû (l'action_pct n'a pas encore été appliqué) — ne jamais le présenter avec « on doit » / « il nous doit ».",
+    input_schema: { type: "object", properties: {}, required: [] },
   },
   {
     name: "onboarding_funnel",
-    description: "Comptage du funnel : leads par stage (welcome/discovered/joined) + joueurs par status (active/inactive/churned).",
+    description: "Comptage du funnel GÉNÉRIQUE : leads par stage (welcome/discovered/joined) dans onboarding_leads + joueurs par status (active/inactive/churned). Ne couvre PAS les funnels d'acquisition NEXAPOKER et QQPK — pour ceux-là, utiliser get_funnel_status.",
     input_schema: { type: "object", properties: {}, required: [] },
+  },
+  {
+    name: "get_funnel_status",
+    description: "État des funnels d'acquisition NEXAPOKER (table nexa_leads) et QQPK (table qqpk_funnel_leads) : nombre de leads par étape, plus les compteurs de relances, de leads froids et de doublons côté Nexa. C'est l'outil à appeler pour toute question sur « le funnel Nexa » ou « le funnel QQPK ».",
+    input_schema: {
+      type: "object",
+      properties: {
+        funnel: { type: "string", enum: ["nexa", "qqpk", "all"], description: "Quel funnel. Défaut: all." },
+      },
+      required: [],
+    },
   },
   {
     name: "pending_cashouts_now",
@@ -705,25 +710,45 @@ export async function executeTool(name: string, input: any): Promise<string> {
       return `Groupes orphelins (${orphans.length}):\n${orphans.map(g => `• ${g.title} (${g.chat_id}, ${g.member_count} membres)`).join("\n")}`;
     }
 
+    // Lit le système ACTUEL (manual_settlements) via le moteur, pas le legacy
+    // weekly_settlements : c'est la même source que la page Paiements, donc une
+    // seule vérité. Aucun calcul ici — le moteur porte la math (Baki 2026-07-27).
     if (name === "get_unpaid_settlements") {
-      const offset = input?.week_offset ?? 0;
-      const { start, end } = getWeekBounds(offset);
-      const weekStart = toParisDate(toUTCISO(start));
-      const rows = db.prepare(`
-        SELECT ws.id, ws.pnl_player, ws.pnl_operator, ws.action_pct_snapshot,
-               p.name, p.tele_wallet_cashout
-        FROM weekly_settlements ws
-        JOIN players p ON p.id = ws.player_id
-        WHERE ws.week_start = ? AND ws.payment_received = 0
-          AND ws.status IN ('settled', 'auto_settled')
-        ORDER BY p.name
-      `).all(weekStart) as any[];
-      if (rows.length === 0) return `Aucun settlement non payé pour la semaine du ${weekStart}.`;
-      const total = rows.reduce((s: number, r: any) => s + Math.abs(r.pnl_player ?? 0), 0);
-      const lines = rows.map((r: any) =>
-        `• ${r.name}: ${fmtAmount(r.pnl_player ?? 0)} USDT (action ${r.action_pct_snapshot}%) · wallet: ${r.tele_wallet_cashout ? r.tele_wallet_cashout.slice(0, 8) + "..." : "non configuré"}`
-      );
-      return `Non payés (${rows.length}) — semaine ${weekStart}:\n${lines.join("\n")}\nTotal: ${total.toFixed(0)} USDT`;
+      const { getPendingSettlements, getOverdueBuckets } = await import("./manual-settlement-engine");
+      const pending = getPendingSettlements();
+      const overdue = getOverdueBuckets();
+
+      const out: string[] = [];
+
+      if (pending.length === 0) {
+        out.push("Règlements lockés en attente de paiement : aucun.");
+      } else {
+        const totalDue = pending.reduce((s, p) => s + p.amount_due_usdt, 0);
+        out.push(`Règlements lockés en attente de paiement (${pending.length}) — le plus ancien d'abord :`);
+        out.push(...pending.map(p =>
+          `• ${p.player_name} · ${p.room_label} · ${fmtAmount(p.amount_due_usdt)} USDT ` +
+          `(net ${fmtAmount(p.net_selected_usdt)} × action ${p.action_pct_applied}%) · ` +
+          `locké depuis ${p.age_days}j · ${p.week_label ?? "semaine ?"} · ${p.tx_count} tx`
+        ));
+        out.push(`Net des montants dus : ${fmtAmount(totalDue)} USDT (positif = ça rentre, le joueur doit au Cercle ; négatif = ça sort, le Cercle doit au joueur).`);
+      }
+
+      out.push("");
+
+      if (overdue.length === 0) {
+        out.push("Semaines jamais réglées : aucune.");
+      } else {
+        out.push(`Semaines jamais réglées (${overdue.length}) — anti-oubli, tx qui ne sont entrées dans AUCUN règlement :`);
+        out.push(...overdue.map(b =>
+          `• ${b.player_name} · ${b.room_label} · ${b.week_label} (${b.week_monday}) · ` +
+          `net brut ${fmtAmount(b.net_usdt)} USDT · ${b.tx_count} tx · ${b.weeks_late} sem. de retard` +
+          `${b.severity === "critical" ? " · CRITIQUE" : ""}${b.never_settled ? " · jamais réglé dans cette room" : ""}` +
+          `${b.unconvertible > 0 ? ` · ⚠️ ${b.unconvertible} tx sans taux de change, exclues du net` : ""}`
+        ));
+        out.push("⚠️ Le « net brut » ci-dessus est le net JOUEUR (retraits − dépôts). Ce n'est PAS un montant dû : l'action_pct n'a pas encore été appliqué car aucun règlement n'existe. Ne jamais le présenter avec « on doit » ou « il nous doit ».");
+      }
+
+      return out.join("\n");
     }
 
     if (name === "onboarding_funnel") {
@@ -741,6 +766,50 @@ export async function executeTool(name: string, input: any): Promise<string> {
         `  inactive: ${playerMap.inactive ?? 0}`,
         `  churned: ${playerMap.churned ?? 0}`,
       ].join("\n");
+    }
+
+    // Funnels d'acquisition NEXAPOKER et QQPK — tables dédiées, invisibles pour
+    // onboarding_funnel qui ne lit que onboarding_leads (Baki 2026-07-27).
+    // Les libellés d'étapes viennent des configs de funnel : une seule source.
+    if (name === "get_funnel_status") {
+      const which = String(input?.funnel ?? "all");
+      const out: string[] = [];
+
+      if (which === "nexa" || which === "all") {
+        const { NEXA_STAGES } = await import("./funnels/nexa/config");
+        const rows = db.prepare(`SELECT stage, COUNT(*) AS n FROM nexa_leads GROUP BY stage`).all() as { stage: string; n: number }[];
+        const byStage = new Map(rows.map(r => [r.stage, r.n]));
+        const total = rows.reduce((s, r) => s + r.n, 0);
+        const extra = db.prepare(
+          `SELECT COUNT(*) AS total,
+                  SUM(CASE WHEN cold = 1 THEN 1 ELSE 0 END) AS cold,
+                  SUM(CASE WHEN duplicate_id = 1 THEN 1 ELSE 0 END) AS dupes,
+                  SUM(relances_count) AS relances
+           FROM nexa_leads`
+        ).get() as { total: number; cold: number | null; dupes: number | null; relances: number | null };
+        out.push(`NEXAPOKER — ${total} lead(s) :`);
+        out.push(...NEXA_STAGES.map(s => `  ${s.label} : ${byStage.get(s.key) ?? 0}`));
+        out.push(`  froids : ${extra.cold ?? 0} · doublons d'ID : ${extra.dupes ?? 0} · relances envoyées : ${extra.relances ?? 0}`);
+      }
+
+      if (which === "all") out.push("");
+
+      if (which === "qqpk" || which === "all") {
+        const { QQPK_STAGES } = await import("./funnels/qqpk/config");
+        const rows = db.prepare(`SELECT stage, COUNT(*) AS n FROM qqpk_funnel_leads GROUP BY stage`).all() as { stage: number; n: number }[];
+        const byStage = new Map(rows.map(r => [r.stage, r.n]));
+        const total = rows.reduce((s, r) => s + r.n, 0);
+        const extra = db.prepare(
+          `SELECT SUM(CASE WHEN blocked = 1 THEN 1 ELSE 0 END) AS blocked,
+                  SUM(reminders_sent) AS relances
+           FROM qqpk_funnel_leads`
+        ).get() as { blocked: number | null; relances: number | null };
+        out.push(`QQPK — ${total} lead(s) :`);
+        out.push(...QQPK_STAGES.map(s => `  ${s.label} : ${byStage.get(s.key) ?? 0}`));
+        out.push(`  bloqués : ${extra.blocked ?? 0} · relances envoyées : ${extra.relances ?? 0}`);
+      }
+
+      return out.join("\n");
     }
 
     if (name === "pending_cashouts_now") {
