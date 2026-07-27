@@ -170,7 +170,10 @@ export async function POST(req: NextRequest) {
         handle: a.telegram_handle,
         joined_at: a.joined_at?.slice(0, 10) ?? null,
         filleuls_count: ac.filleuls.length,
-        summary: { lifetime: ac.earned, paid: ac.paid, pending: ac.due_now },
+        // `cumul` = solde agence signé, AFFICHAGE OWNER UNIQUEMENT (peut être négatif).
+        // Ne jamais confondre avec la commission payable : celle-ci reste `pending`/`lifetime`,
+        // toujours issues de max(0, cumul) × 50% dans computeAgentCommission. Aucun calcul modifié ici.
+        summary: { lifetime: ac.earned, paid: ac.paid, pending: ac.due_now, cumul: ac.cumul_agence_eligible },
       };
     });
 

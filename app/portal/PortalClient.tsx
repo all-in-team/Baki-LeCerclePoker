@@ -19,7 +19,8 @@ declare global {
 interface AgentSummary {
   player_id: number; name: string; handle: string | null; joined_at: string | null;
   filleuls_count: number;
-  summary: { lifetime: number; paid: number; pending: number };
+  // pending = commission payable (jamais négative). cumul = solde agence signé, affichage owner only.
+  summary: { lifetime: number; paid: number; pending: number; cumul?: number };
 }
 
 interface OwnerData {
@@ -196,6 +197,11 @@ export default function PortalClient() {
               <div style={{ textAlign: "right", flexShrink: 0 }}>
                 <div style={{ fontWeight: 700, fontSize: 14, color: num(a.summary?.pending) > 0 ? accent : "var(--tg-theme-text-color, #fff)" }}>{fmt(a.summary?.pending)}</div>
                 <div style={{ ...hintStyle, fontSize: 10 }}>USDT dû</div>
+                {/* Solde agence réel (signé) — AFFICHAGE SEUL, vue owner. Le montant payable
+                    au-dessus reste max(0, cumul) × 50% − payé : jamais négatif. */}
+                <div style={{ fontSize: 10, fontWeight: 600, marginTop: 2, color: signedColor(num(a.summary?.cumul)) }}>
+                  solde {signedText(num(a.summary?.cumul))}
+                </div>
               </div>
             </div>
           ))}
