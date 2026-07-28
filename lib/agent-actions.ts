@@ -48,10 +48,30 @@ interface ActionDef {
   execute(params: any, actor: number, chatId: string): Promise<ActionOutcome>;
 }
 
-/** Échappe le HTML : le récap part en parse_mode HTML vers Telegram. */
-function esc(v: unknown): string {
-  return String(v ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+/**
+ * Échappe une valeur interpolée dans un message Telegram en parse_mode HTML.
+ *
+ * Les sauts de ligne sont neutralisés en plus de `& < >` : le récap est
+ * orienté-lignes et se lit comme un formulaire, donc un `tx_hash` contenant
+ * "\n\nMontant : +1,00 USDT" y ajouterait des lignes crédibles sans toucher au
+ * balisage. Or ce récap est le seul garde-fou humain avant un mouvement
+ * d'argent — une valeur interpolée ne doit jamais pouvoir créer de ligne.
+ */
+export function escapeHtml(v: unknown): string {
+  return String(v ?? "")
+    .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+    // Pas seulement \r\n : U+2028/U+2029 (LINE/PARAGRAPH SEPARATOR), U+0085 (NEL),
+    // \v et \f sont aussi des séparateurs de ligne au sens Unicode et coupent la
+    // ligne dans les clients Telegram natifs. Ils passent JSON.stringify sans être
+    // échappés, donc filtrer \n seul laissait le récap maquillable.
+    // Vaut aussi pour players.name : il vient du first_name Telegram du JOUEUR,
+    // donc d'un tiers, pas seulement du modèle.
+    .replace(/[\p{Zl}\p{Zp}\r\n\v\f\u0085]+/gu, " ");
 }
+const esc = escapeHtml;
+
+/** Borne les chaînes libres venues du modèle (longueur Telegram + lisibilité du récap). */
+const MAX_FREE_TEXT = 128;
 
 /** Durée de vie d'une intention non confirmée. Court volontairement. */
 const TTL_MINUTES = 10;
@@ -238,7 +258,10 @@ export const ACTIONS: Record<string, ActionDef> = {
     // C'est ce qui garantit que le clic paie EXACTEMENT le règlement affiché.
     async pin(p) {
       const s = await resolveLockedSettlement(p);
-      return { ...p, settlement_id: s.id, player: undefined, room: undefined };
+      // tx_hash est borné ICI et nulle part ailleurs : c'est la seule façon de
+      // garantir que la valeur prévisualisée et la valeur écrite sont la même.
+      const txHash = p?.tx_hash ? String(p.tx_hash).trim().slice(0, MAX_FREE_TEXT) : undefined;
+      return { ...p, settlement_id: s.id, tx_hash: txHash, player: undefined, room: undefined };
     },
     async preview(p) {
       const s = await resolveLockedSettlement(p);
@@ -318,6 +341,7 @@ export interface PendingRow {
   preview: string;
   status: string;
   expires_at: string;
+  result_text: string | null;
 }
 
 export function isActionTool(name: string): boolean {
@@ -389,9 +413,13 @@ export function cancelAction(id: number, actor: number): { ok: boolean; text: st
   const row = loadOpen(id);
   if (!row) return { ok: false, text: `Action #${id} introuvable.` };
   if (row.status !== "pending") return { ok: false, text: `Action #${id} déjà ${row.status}.` };
-  getDb().prepare(
-    `UPDATE agent_pending_actions SET status = 'cancelled', resolved_at = datetime('now'), resolved_by = ? WHERE id = ?`
+  // AND status='pending' : sans ça, une annulation concurrente pourrait écraser
+  // une réservation déjà prise par executeAction et faire mentir la ligne.
+  const upd = getDb().prepare(
+    `UPDATE agent_pending_actions SET status = 'cancelled', resolved_at = datetime('now'), resolved_by = ?
+     WHERE id = ? AND status = 'pending'`
   ).run(actor, id);
+  if (upd.changes !== 1) return { ok: false, text: `Action #${id} déjà prise en charge — annulation sans effet.` };
   return { ok: true, text: `❌ Action #${id} annulée. Rien n'a été exécuté.` };
 }
 
@@ -399,15 +427,27 @@ export function cancelAction(id: number, actor: number): { ok: boolean; text: st
  * Exécute une intention confirmée. **Appelée uniquement depuis le handler de
  * callback**, jamais depuis un outil.
  *
- * Trois verrous avant d'écrire quoi que ce soit : l'intention est encore
- * `pending`, elle n'a pas expiré, et le confirmeur est bien le demandeur.
+ * Quatre verrous avant d'écrire quoi que ce soit : l'intention est encore
+ * `pending`, elle n'a pas expiré, le confirmeur est bien le demandeur, et
+ * l'intention est RÉSERVÉE atomiquement avant l'exécution.
  * Le contrôle OWNER_IDS est fait en amont par le webhook — celui-ci s'ajoute,
  * il ne le remplace pas.
  */
 export async function executeAction(id: number, actor: number): Promise<{ ok: boolean; text: string }> {
   const row = loadOpen(id);
   if (!row) return { ok: false, text: `Action #${id} introuvable.` };
-  if (row.status !== "pending") return { ok: false, text: `Action #${id} déjà ${row.status} — rien de refait.` };
+  if (row.status !== "pending") {
+    // 'confirmed' + result_text NULL = la ligne a été réservée mais le résultat
+    // n'a jamais été écrit : le process est mort pendant l'exécution. On ne sait
+    // donc PAS si l'argent est parti. Dire « déjà confirmé » ici ferait croire à
+    // un paiement abouti — exactement le mensonge symétrique de celui qu'on
+    // corrige. Le grand livre, lui, est intact : le règlement est resté locked
+    // et réapparaît sur /payments.
+    if (row.status === "confirmed" && !row.result_text) {
+      return { ok: false, text: `⚠️ Action #${id} : état indéterminé (interrompue en cours d'exécution). Vérifie sur /payments si le règlement est passé en payé AVANT de refaire quoi que ce soit.` };
+    }
+    return { ok: false, text: `Action #${id} déjà ${row.status} — rien de refait.` };
+  }
   if (expireIfNeeded(row)) return { ok: false, text: `⏱ Action #${id} expirée (${TTL_MINUTES} min). Redemande-la si tu la veux toujours.` };
   if (row.requested_by !== actor) {
     return { ok: false, text: `⛔ Action #${id} demandée par un autre compte (${row.requested_by}) — seul le demandeur peut confirmer.` };
@@ -419,6 +459,29 @@ export async function executeAction(id: number, actor: number): Promise<{ ok: bo
   const params = JSON.parse(row.params_json);
   const db = getDb();
 
+  // RÉSERVATION ATOMIQUE, avant tout `await`.
+  //
+  // Les contrôles ci-dessus lisent, puis on cède la main (await) avant d'écrire :
+  // deux clics rapprochés — ou une redélivrance d'update par Telegram — les
+  // passaient tous les deux. L'argent ne bougeait qu'une fois (markPaid a son
+  // propre WHERE status='locked'), mais le second passage réécrivait le statut
+  // en 'failed' et annonçait « échec : déjà payé » à l'opérateur, qui pouvait en
+  // conclure que le virement n'était pas passé et le refaire à la main.
+  //
+  // Ce UPDATE conditionnel réserve la ligne : le perdant voit changes = 0 et
+  // s'arrête sans rien écrire. Contrepartie assumée : si le process meurt entre
+  // la réservation et le log, la ligne reste 'confirmed' sans entrée de journal.
+  // Cet état n'est PAS affiché dans /settings (AgentActionLog ne lit que
+  // agent_action_log) : il est détecté au re-clic, qui répond « état indéterminé »
+  // au lieu de « déjà confirmé » — cf. le garde en tête de cette fonction.
+  const claim = db.prepare(
+    `UPDATE agent_pending_actions SET status = 'confirmed', resolved_at = datetime('now'), resolved_by = ?
+     WHERE id = ? AND status = 'pending'`
+  ).run(actor, id);
+  if (claim.changes !== 1) {
+    return { ok: false, text: `Action #${id} déjà prise en charge — rien de refait.` };
+  }
+
   try {
     const outcome = await def.execute(params, actor, row.chat_id);
     db.prepare(
@@ -426,9 +489,7 @@ export async function executeAction(id: number, actor: number): Promise<{ ok: bo
        VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, ?)`
     ).run(id, row.tool, row.level, row.params_json, actor, row.chat_id,
           JSON.stringify(outcome.before ?? null), JSON.stringify(outcome.after ?? null), outcome.summary);
-    db.prepare(
-      `UPDATE agent_pending_actions SET status = 'confirmed', resolved_at = datetime('now'), resolved_by = ?, result_text = ? WHERE id = ?`
-    ).run(actor, outcome.summary, id);
+    db.prepare(`UPDATE agent_pending_actions SET result_text = ? WHERE id = ? AND status = 'confirmed'`).run(outcome.summary, id);
     return { ok: true, text: `✅ Action #${id} exécutée. ${outcome.summary}` };
   } catch (e: any) {
     const msg = e?.message ?? String(e);

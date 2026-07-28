@@ -132,7 +132,7 @@ export async function POST(req: NextRequest) {
       } else if (!Number.isInteger(actionId)) {
         await answerCbQuery(cb.id, "Action illisible.");
       } else {
-        const { executeAction, cancelAction } = await import("@/lib/agent-actions");
+        const { executeAction, cancelAction, escapeHtml } = await import("@/lib/agent-actions");
         const res = verb === "ok"
           ? await executeAction(actionId, cb.from.id)
           : cancelAction(actionId, cb.from.id);
@@ -140,7 +140,12 @@ export async function POST(req: NextRequest) {
         if (cbChatId && cb.message?.message_id) {
           await editMessageReplyMarkup(cbChatId, cb.message.message_id);
         }
-        if (cbChatId) await sendMsg(cbChatId, res.text, cbThreadId);
+        // res.text ne contient aucun balisage voulu, mais il interpole des noms
+        // venus de la base (players.name vient de Telegram) et des messages
+        // d'erreur. sendMsg force parse_mode HTML et avale l'échec d'envoi en le
+        // loggant : un seul "<" dans un nom ferait donc disparaître la
+        // confirmation d'un paiement déjà exécuté. On échappe tout le message.
+        if (cbChatId) await sendMsg(cbChatId, escapeHtml(res.text), cbThreadId);
       }
     } else {
       await answerCbQuery(cb.id);
