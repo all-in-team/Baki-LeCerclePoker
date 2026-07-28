@@ -2428,4 +2428,32 @@ function initSchema(db: Database.Database) {
   } catch (err: any) {
     console.error(`[MIGRATION:add_agent_actions_v1] FAILED:`, err.message);
   }
+
+  // Langue du funnel Nexa (Hugo 2026-07-28) — le lead choisit FR ou EN au /start,
+  // tout le funnel suit. Copy dans lib/funnels/nexa/copy.ts, socle lib/i18n/.
+  //
+  // DEUX colonnes, parce qu'elles répondent à deux questions différentes :
+  //   • `lang`           → dans quelle langue on parle. Jamais NULL, défaut 'fr'.
+  //   • `lang_chosen_at` → faut-il afficher le sélecteur ? NULL = jamais demandé.
+  // Sans la seconde, impossible de distinguer « a choisi FR » de « lead créé avant
+  // la feature » : tous les leads existants reverraient le sélecteur en pleine
+  // séquence. Ici ils restent en français et ne le voient jamais.
+  //
+  // Pas de CHECK sur `lang` : ajouter une langue (ES…) ne doit toucher que
+  // lib/i18n/index.ts. La validation est faite par `coerceLang()` à la lecture,
+  // qui retombe sur DEFAULT_LANG pour toute valeur inconnue.
+  try {
+    const fix = db.prepare(`INSERT OR IGNORE INTO _applied_fixes (name) VALUES (?)`).run("add_nexa_lead_lang_v1");
+    if (fix.changes > 0) {
+      for (const sql of [
+        `ALTER TABLE nexa_leads ADD COLUMN lang TEXT NOT NULL DEFAULT 'fr'`,
+        `ALTER TABLE nexa_leads ADD COLUMN lang_chosen_at TEXT`,
+      ]) {
+        try { db.exec(sql); } catch { /* colonne déjà là */ }
+      }
+      console.log("[MIGRATION] add_nexa_lead_lang_v1 applied");
+    }
+  } catch (err: any) {
+    console.error(`[MIGRATION:add_nexa_lead_lang_v1] FAILED:`, err.message);
+  }
 }

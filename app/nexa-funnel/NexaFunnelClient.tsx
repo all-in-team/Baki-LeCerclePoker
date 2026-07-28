@@ -11,7 +11,7 @@ import {
 import ConversionCards from "@/components/funnel/ConversionCards";
 import WeeklyImportPanel from "@/components/funnel/WeeklyImportPanel";
 import WeeklyEvolutionTable, { type WeeklyColumn } from "@/components/funnel/WeeklyEvolutionTable";
-import { VerifiedBadge, PlayedBadge, BlockedBadge } from "@/components/funnel/Badges";
+import { VerifiedBadge, PlayedBadge, BlockedBadge, LangBadge } from "@/components/funnel/Badges";
 import { SignedAmount } from "@/components/funnel/Amounts";
 import { FUNNEL_CARD } from "@/components/funnel/styles";
 import { markDepositAction, relanceAction, createGroupAction, saveNotesAction } from "./actions";
@@ -120,6 +120,7 @@ function LeadRow({ lead, weekly, events, isOpen, onToggle, onChanged }: {
           {lead.source !== "direct" && (
             <span style={{ marginLeft: 6, fontSize: 10, padding: "2px 6px", borderRadius: 4, background: "rgba(96,165,250,0.12)", color: "#60A5FA", fontWeight: 600 }}>{lead.source}</span>
           )}
+          <LangBadge lang={lead.lang} chosenAt={lead.lang_chosen_at} />
           {lead.blocked === 1 && <BlockedBadge />}
           {lead.cold === 1 && <span style={{ marginLeft: 6, fontSize: 10, color: "#8888A0" }}>🧊 cold</span>}
           {hasPlayed(lead) && <PlayedBadge />}

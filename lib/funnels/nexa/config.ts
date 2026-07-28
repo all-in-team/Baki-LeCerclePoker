@@ -25,7 +25,8 @@ export type NexaOs = keyof typeof NEXA_DOWNLOADS;
 // exemple), passer NEXA_MEMBER_ID_DIGITS à { min, max } ici et rien ailleurs.
 export const NEXA_MEMBER_ID_DIGITS = 7;
 export const NEXA_MEMBER_ID_RE = new RegExp(`^\\d{${NEXA_MEMBER_ID_DIGITS}}$`);
-export const NEXA_MEMBER_ID_HINT = `${NEXA_MEMBER_ID_DIGITS} chiffres`;
+// La FORMULATION du hint (« 7 chiffres » / « 7 digits ») est du copy, pas de la
+// config : elle vit dans ./copy.ts (`memberIdHint`), le nombre reste ici.
 
 /** Relances J+1 / J+3 / J+7 après la dernière interaction, puis flag `cold`. */
 export const NEXA_REMINDER_THRESHOLDS_H = [24, 72, 168];

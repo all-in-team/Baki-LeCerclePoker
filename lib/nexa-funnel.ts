@@ -18,10 +18,12 @@
 import { getDb } from "@/lib/db";
 import { sendMsg, sendMsgKeyboard, sendForceReply, answerCbQuery, AGENT_CHAT_ID } from "@/lib/telegram-commands/helpers";
 import {
-  NEXA_ROOM_LABEL, NEXA_BONUS_CODE, NEXA_DOWNLOADS, NEXA_MEMBER_ID_RE, NEXA_MEMBER_ID_HINT,
+  NEXA_ROOM_LABEL, NEXA_BONUS_CODE, NEXA_DOWNLOADS, NEXA_MEMBER_ID_RE, NEXA_MEMBER_ID_DIGITS,
   NEXA_STAGE_ORDER, NEXA_REMINDER_THRESHOLDS_H, NEXA_MAX_REMINDERS, NEXA_REMINDER_MIN_GAP_H,
   type NexaStage, type NexaOs,
 } from "@/lib/funnels/nexa/config";
+import { nexaCopy, NEXA_LANG_CB_PREFIX, type NexaCopy } from "@/lib/funnels/nexa/copy";
+import { coerceLang, langKeyboard, langPromptText, parseLangCallback, type Lang } from "@/lib/i18n";
 
 export type NexaLead = {
   id: number;
@@ -46,6 +48,9 @@ export type NexaLead = {
   /** Join constaté via l'event Telegram `chat_member` ; flag posé si le groupe est nettoyé faute de join. */
   group_joined_at: string | null;
   group_not_joined: number;
+  /** Langue du funnel — 'fr' par défaut ; `lang_chosen_at` NULL = sélecteur jamais posé. */
+  lang: string;
+  lang_chosen_at: string | null;
   relances_count: number;
   last_reminder_at: string | null;
   last_interaction_at: string | null;
@@ -129,53 +134,71 @@ function leadName(lead: Pick<NexaLead, "tg_username" | "first_name" | "tg_user_i
 }
 
 // ── Messages du flow ──────────────────────────────────────
-// Le bouton « ❓ J'ai une question » est présent à CHAQUE étape (§2 du brief) :
-// il notifie l'admin et logge l'étape où le lead a bloqué.
-const QUESTION_BTN = { text: "❓ J'ai une question", callback_data: "nf_q" };
-const MY_ID_BTN = { text: "📝 Mon ID Player", callback_data: "nf_myid" };
+// TOUT le texte vu par un lead vient de lib/funnels/nexa/copy.ts, par langue.
+// Aucun littéral destiné au lead ne doit réapparaître dans ce fichier ; les notifs
+// AGENT_CHAT_ID, elles, restent en français (c'est Baki qui les lit).
+//
+// Convention : chaque helper d'envoi prend la langue en premier argument, obtenue
+// par `leadLang(lead)`. Le copy est résolu une fois en tête de fonction (`c`).
 
-function withQuestion(rows: any[][]): any[][] {
-  return [...rows, [QUESTION_BTN]];
+/** Langue d'un lead — repli 'fr' pour toute valeur absente ou inconnue. */
+function leadLang(lead: Pick<NexaLead, "lang">): Lang {
+  return coerceLang(lead.lang);
 }
 
-// Clavier de l'étape 2 : « Mon ID Player » (ForceReply) + « J'ai une question ».
-const SIGNUP_KEYBOARD: any[][] = [[MY_ID_BTN], [QUESTION_BTN]];
+/** Hint du Member ID (« 7 chiffres » / « 7 digits ») — nombre en config, formulation en copy. */
+function memberIdHint(c: NexaCopy): string {
+  return c.memberIdHint(NEXA_MEMBER_ID_DIGITS);
+}
 
-async function sendWelcome(chatId: number) {
+// Le bouton « ❓ J'ai une question » est présent à CHAQUE étape (§2 du brief) :
+// il notifie l'admin et logge l'étape où le lead a bloqué.
+function questionBtn(c: NexaCopy) {
+  return { text: c.btn.question, callback_data: "nf_q" };
+}
+
+function withQuestion(c: NexaCopy, rows: any[][]): any[][] {
+  return [...rows, [questionBtn(c)]];
+}
+
+/** Clavier de l'étape 2 : « Mon ID Player » (ForceReply) + « J'ai une question ». */
+function signupKeyboard(c: NexaCopy): any[][] {
+  return [[{ text: c.btn.myId, callback_data: "nf_myid" }], [questionBtn(c)]];
+}
+
+/**
+ * Sélecteur de langue — posé AVANT le message d'accueil, tant que le lead n'a
+ * jamais choisi (`lang_chosen_at` NULL). Le texte est multilingue : à cet instant
+ * précis on ne sait justement pas quelle langue il parle.
+ */
+async function sendLangPicker(chatId: number) {
+  await sendMsgKeyboard(chatId, langPromptText(), langKeyboard(NEXA_LANG_CB_PREFIX));
+}
+
+async function sendWelcome(chatId: number, lang: Lang) {
+  const c = nexaCopy(lang);
   await sendMsgKeyboard(chatId,
-    `🃏 <b>Bienvenue au Cercle — Onboarding ${NEXA_ROOM_LABEL}</b>\n\n` +
-    `On t'accompagne de A à Z. Voici les 3 étapes :\n\n` +
-    `<b>1</b> — 📲 Tu télécharges l'app (30 sec)\n` +
-    `<b>2</b> — 📝 Tu crées ton compte avec le code 🎁 <b>${NEXA_BONUS_CODE}</b> et tu m'envoies ton ID\n` +
-    `<b>3</b> — 🤝 On crée ton groupe privé avec Hugo &amp; Baki : dépôts et retraits en direct ⚡, suivi perso, et accès à d'autres games qui peuvent te correspondre\n\n` +
-    `En bonus : accès au <b>PokerDex</b> 🧠 — notre data AI sur le field pour jouer avec un coup d'avance.\n\n` +
-    `Ça prend 5 minutes, on y va 👇`,
-    withQuestion([
-      [{ text: "C'est parti →", callback_data: "nf_go" }],
-      [{ text: "💡 C'est quoi le deal ?", callback_data: "nf_deal" }],
+    c.welcome({ room: NEXA_ROOM_LABEL, code: NEXA_BONUS_CODE }),
+    withQuestion(c, [
+      [{ text: c.btn.go, callback_data: "nf_go" }],
+      [{ text: c.btn.deal, callback_data: "nf_deal" }],
     ])
   );
 }
 
 /** Transparence business — le lead reste à `started` tant qu'il n'a pas cliqué « C'est parti ». */
-async function sendDealExplainer(chatId: number) {
-  await sendMsgKeyboard(chatId,
-    `💡 <b>Comment on gagne de l'argent ?</b>\n\n` +
-    `La room nous reverse une part du rake que tu génères — c'est elle qui nous paye, pas toi. ` +
-    `Jouer via nous te coûte <b>0</b> et te rapporte le bonus + l'accompagnement.\n\n` +
-    `Et si un jour ton niveau fait que la room te tag « pro » et coupe le RB, on te proposera un ` +
-    `deal d'action ensemble — on investit sur toi, on gagne quand tu gagnes… et on perd quand tu perds, ` +
-    `mais j'espère plutôt que tu nous rendras riche lol 🤝\n\n` +
-    `Bref : nos intérêts sont alignés avec les tiens dès le jour 1.`,
-    withQuestion([[{ text: "C'est parti →", callback_data: "nf_go" }]])
+async function sendDealExplainer(chatId: number, lang: Lang) {
+  const c = nexaCopy(lang);
+  await sendMsgKeyboard(chatId, c.dealExplainer,
+    withQuestion(c, [[{ text: c.btn.go, callback_data: "nf_go" }]])
   );
 }
 
-async function sendDownloadStep(chatId: number) {
-  await sendMsgKeyboard(chatId,
-    `<b>Étape 1/3 — Télécharge l'app</b>\n\n` +
-    `Sur quoi tu joues ? Choisis ta plateforme 👇`,
-    withQuestion([
+async function sendDownloadStep(chatId: number, lang: Lang) {
+  const c = nexaCopy(lang);
+  // Les labels d'OS (🪟 Windows…) sont neutres : identiques dans toutes les langues.
+  await sendMsgKeyboard(chatId, c.downloadStep,
+    withQuestion(c, [
       [{ text: NEXA_DOWNLOADS.windows.label, callback_data: "nf_os:windows" }],
       [{ text: NEXA_DOWNLOADS.android.label, callback_data: "nf_os:android" }],
       [{ text: NEXA_DOWNLOADS.mac.label, callback_data: "nf_os:mac" }],
@@ -184,15 +207,8 @@ async function sendDownloadStep(chatId: number) {
 }
 
 /** Bloc « crée ton compte » — commun au message combiné et aux relances. */
-function signupBlock(): string {
-  return `<b>Étape 2/3 — Crée ton compte</b>\n\n` +
-    `Dans l'app, inscris-toi en entrant le code <b>${NEXA_BONUS_CODE}</b>.\n` +
-    `Sans ce code, l'agent ne peut pas créditer tes dépôts.\n\n` +
-    `📌 <b>Important</b> : Il faut mettre <b>Andorra</b> comme pays de résidence ` +
-    `(pas de justificatif de domicile demandé)\n\n` +
-    `Et ton Nom, Prénom et date de naissance doivent correspondre exactement à ton ID.\n\n` +
-    `Une fois ton compte créé, envoie-moi ton <b>ID joueur</b> (visible dans ton profil) 👇\n\n` +
-    `Envoie juste le numéro ici (${NEXA_MEMBER_ID_HINT}).`;
+function signupBlock(c: NexaCopy): string {
+  return c.signupBlock({ code: NEXA_BONUS_CODE, hint: memberIdHint(c) });
 }
 
 /**
@@ -201,30 +217,32 @@ function signupBlock(): string {
  * bouton « App installée ✅ ». Identique pour Windows / Android / Mac — seule la
  * première ligne change. `os` null (OS inconnu, vieux lead) → bloc compte seul.
  */
-function downloadHead(os: NexaOs | null): string {
+function downloadHead(c: NexaCopy, os: NexaOs | null): string {
   if (!os) return "";
-  return `${NEXA_DOWNLOADS[os].label} — voici ton lien de téléchargement 👇\n${NEXA_DOWNLOADS[os].url}\n\n`;
+  return c.downloadHead({ label: NEXA_DOWNLOADS[os].label, url: NEXA_DOWNLOADS[os].url });
 }
 
-async function sendDownloadAndSignup(chatId: number, os: NexaOs | null) {
-  await sendMsgKeyboard(chatId, downloadHead(os) + signupBlock(), SIGNUP_KEYBOARD);
+async function sendDownloadAndSignup(chatId: number, lang: Lang, os: NexaOs | null) {
+  const c = nexaCopy(lang);
+  await sendMsgKeyboard(chatId, downloadHead(c, os) + signupBlock(c), signupKeyboard(c));
 }
 
-async function sendDepositStep(chatId: number) {
-  await sendMsgKeyboard(chatId,
-    `<b>Étape 3/3 — Ton premier dépôt + ton groupe privé</b>\n\n` +
-    `${NEXA_ROOM_LABEL} fonctionne en <b>système d'agent</b> : tous les dépôts et retraits passent par nous.\n\n` +
-    `Clique ci-dessous : on ouvre ton canal privé avec Hugo &amp; Baki, et tu reçois ton accès <b>PokerDex</b> 🧠 pour la game 👇`,
-    withQuestion([[{ text: "💰 Faire mon premier dépôt", callback_data: "nf_deposit" }]])
+async function sendDepositStep(chatId: number, lang: Lang) {
+  const c = nexaCopy(lang);
+  await sendMsgKeyboard(chatId, c.depositStep({ room: NEXA_ROOM_LABEL }),
+    withQuestion(c, [[{ text: c.btn.deposit, callback_data: "nf_deposit" }]])
   );
 }
 
-async function sendGroupReady(chatId: number, link: string) {
-  await sendMsgKeyboard(chatId,
-    `🎉 <b>Bienvenue en direct avec nous</b>\n\n` +
-    `C'est ici que se passent <b>tes dépôts et tes retraits</b>. Rejoins le groupe et dis-nous combien tu veux déposer 👇`,
-    [[{ text: "🔐 Rejoindre mon canal privé", url: link }]]
-  );
+async function sendGroupReady(chatId: number, lang: Lang, link: string) {
+  const c = nexaCopy(lang);
+  await sendMsgKeyboard(chatId, c.groupReady, [[{ text: c.btn.joinGroup, url: link }]]);
+}
+
+/** Rappel du lien de groupe — message léger, sans le 🎉 d'accueil. */
+async function sendChannelLink(chatId: number, lang: Lang, link: string) {
+  const c = nexaCopy(lang);
+  await sendMsgKeyboard(chatId, c.hereIsChannel, [[{ text: c.btn.joinGroup, url: link }]]);
 }
 
 /**
@@ -232,33 +250,33 @@ async function sendGroupReady(chatId: number, link: string) {
  * La garde est un UPDATE conditionnel : deux exécutions concurrentes du même
  * callback (webhook rejoué par Telegram) ne peuvent pas toutes les deux gagner.
  */
-async function announceGroupOnce(leadId: number, chatId: number, link: string) {
+async function announceGroupOnce(leadId: number, chatId: number, lang: Lang, link: string) {
   const claimed = getDb().prepare(
     `UPDATE nexa_leads SET group_announced_at = datetime('now'), updated_at = datetime('now')
      WHERE id = ? AND group_announced_at IS NULL`
   ).run(leadId);
   if (claimed.changes === 0) return; // déjà annoncé → on ne renvoie rien
-  await sendGroupReady(chatId, link);
+  await sendGroupReady(chatId, lang, link);
 }
 
 /** Renvoie le prompt de l'étape courante (reprise après /start ou relance). */
 async function sendCurrentStep(chatId: number, lead: NexaLead) {
+  const lang = leadLang(lead);
   switch (lead.stage) {
     case "started":
-      await sendWelcome(chatId); return;
+      await sendWelcome(chatId, lang); return;
     case "app_installed":
-      await sendDownloadAndSignup(chatId, (lead.os as NexaOs | null) ?? null); return;
+      await sendDownloadAndSignup(chatId, lang, (lead.os as NexaOs | null) ?? null); return;
     case "account_created":
-      await sendDepositStep(chatId); return;
+      await sendDepositStep(chatId, lang); return;
     default:
       // Dépôt fait / vérifié / joue : plus rien à demander. Message léger — le 🎉
       // d'accueil du groupe ne part qu'une seule fois (announceGroupOnce).
       if (lead.group_invite_link) {
-        await sendMsgKeyboard(chatId, `Voici ton canal privé 👇`,
-          [[{ text: "🔐 Rejoindre mon canal privé", url: lead.group_invite_link }]]);
+        await sendChannelLink(chatId, lang, lead.group_invite_link);
         return;
       }
-      await sendMsg(chatId, `Tout est bon de ton côté 🃏\nUne question ? Écris-nous ici.`);
+      await sendMsg(chatId, nexaCopy(lang).allSet);
   }
 }
 
@@ -278,10 +296,20 @@ export async function handleNexaFunnelStart(chatId: number, from: any, payload?:
       `UPDATE nexa_leads SET tg_username = ?, first_name = ?, blocked = 0,
         last_interaction_at = datetime('now'), updated_at = datetime('now') WHERE tg_user_id = ?`
     ).run(username, firstName, tgId);
+    // Le sélecteur n'est reposé qu'à un lead qui n'a RIEN commencé : les leads
+    // créés avant la feature (lang_chosen_at NULL, déjà à mi-parcours) reprennent
+    // leur étape en français au lieu de se voir interrompus par une question.
+    if (!existing.lang_chosen_at && existing.stage === "started") {
+      await sendLangPicker(chatId);
+      return;
+    }
     await sendCurrentStep(chatId, existing);
     return;
   }
 
+  // La SOURCE est écrite ici, avant tout choix de langue : le callback nf_lang:*
+  // ne fait qu'un UPDATE de `lang`, il ne touche jamais `source`. Un lead venu de
+  // ?start=nexa_ig reste attribué à « ig » quelle que soit la langue choisie.
   const info = db.prepare(
     `INSERT INTO nexa_leads (tg_user_id, tg_username, first_name, source, stage, started_at, last_interaction_at)
      VALUES (?, ?, ?, ?, 'started', datetime('now'), datetime('now'))`
@@ -289,7 +317,9 @@ export async function handleNexaFunnelStart(chatId: number, from: any, payload?:
   const leadId = Number(info.lastInsertRowid);
   logNexaEvent(leadId, "stage_change", { stage: "started", actor: "bot", payload: `source=${source}` });
 
-  await sendWelcome(chatId);
+  // Sélecteur de langue AVANT le message d'accueil : le welcome part depuis le
+  // callback nf_lang:*, dans la langue choisie.
+  await sendLangPicker(chatId);
   await sendMsg(AGENT_CHAT_ID,
     `🚀 <b>Nexa Funnel</b> — nouveau lead : <b>${username ? `@${username}` : (firstName ?? `tg:${tgId}`)}</b> ` +
     `(tg_id <code>${tgId}</code> · source <code>${source}</code>)`
@@ -303,10 +333,29 @@ export async function handleNexaFunnelCallback(callbackId: string, data: string,
   const tgId: number = from?.id ?? chatId;
   const lead = getNexaLeadByTgId(tgId);
   if (!lead) {
-    await sendMsg(chatId, `Envoie /start pour commencer !`);
+    // Pas de lead → pas de langue connue. Repli DEFAULT_LANG assumé.
+    await sendMsg(chatId, nexaCopy(undefined).noLead);
     return;
   }
   const db = getDb();
+  const lang = leadLang(lead);
+  const c = nexaCopy(lang);
+
+  // 🌍 Choix de langue — pilote TOUT le reste du funnel. Traité en premier, et
+  // idempotent : re-cliquer réécrit la même langue et rejoue l'accueil.
+  const picked = parseLangCallback(data, NEXA_LANG_CB_PREFIX);
+  if (picked) {
+    db.prepare(
+      `UPDATE nexa_leads SET lang = ?, lang_chosen_at = datetime('now'),
+        last_interaction_at = datetime('now'), updated_at = datetime('now') WHERE id = ?`
+    ).run(picked, lead.id);
+    logNexaEvent(lead.id, "admin", { stage: lead.stage, actor: "bot", payload: `lang=${picked}` });
+    // Le sélecteur précède l'accueil pour un nouveau lead ; si un lead déjà avancé
+    // rechoisit sa langue, on lui rejoue son étape courante plutôt que l'accueil.
+    if (lead.stage === "started") await sendWelcome(chatId, picked);
+    else await sendCurrentStep(chatId, { ...lead, lang: picked });
+    return;
+  }
 
   // ❓ Question — loggée à chaque clic (compteur), notif admin une seule fois par étape.
   if (data === "nf_q") {
@@ -315,7 +364,7 @@ export async function handleNexaFunnelCallback(callbackId: string, data: string,
     ).get(lead.id, lead.stage);
     logNexaEvent(lead.id, "question", { stage: lead.stage, actor: "bot" });
     touchInteraction(lead.id);
-    await sendMsg(chatId, `👌 C'est noté — on revient vers toi très vite ici.`);
+    await sendMsg(chatId, c.questionAck);
     if (!already) {
       await sendMsg(AGENT_CHAT_ID,
         `❓ <b>Nexa Funnel</b> — <b>${leadName(lead)}</b> a une question\n` +
@@ -330,7 +379,7 @@ export async function handleNexaFunnelCallback(callbackId: string, data: string,
   if (data === "nf_deal") {
     logNexaEvent(lead.id, "question", { stage: lead.stage, actor: "bot", payload: "deal" });
     touchInteraction(lead.id);
-    await sendDealExplainer(chatId);
+    await sendDealExplainer(chatId, lang);
     return;
   }
 
@@ -339,13 +388,13 @@ export async function handleNexaFunnelCallback(callbackId: string, data: string,
   // les deux marchent, validation 7 chiffres inchangée.
   if (data === "nf_myid") {
     touchInteraction(lead.id);
-    await sendForceReply(chatId, `Vas-y, envoie ton ID ici 👇 (${NEXA_MEMBER_ID_HINT}, visible dans ton profil)`);
+    await sendForceReply(chatId, c.myIdPrompt({ hint: memberIdHint(c) }));
     return;
   }
 
   if (data === "nf_go") {
     touchInteraction(lead.id);
-    await sendDownloadStep(chatId);
+    await sendDownloadStep(chatId, lang);
     return;
   }
 
@@ -357,7 +406,7 @@ export async function handleNexaFunnelCallback(callbackId: string, data: string,
     const os = osMatch[1] as NexaOs;
     db.prepare(`UPDATE nexa_leads SET os = ?, updated_at = datetime('now') WHERE id = ?`).run(os, lead.id);
     recordMilestone(lead.id, "app_installed", "bot");
-    await sendDownloadAndSignup(chatId, os);
+    await sendDownloadAndSignup(chatId, lang, os);
     return;
   }
 
@@ -369,7 +418,7 @@ export async function handleNexaFunnelCallback(callbackId: string, data: string,
     if (fresh && NEXA_STAGE_ORDER[fresh.stage] > NEXA_STAGE_ORDER.app_installed) {
       await sendCurrentStep(chatId, fresh);
     } else {
-      await sendDownloadAndSignup(chatId, (fresh?.os as NexaOs | null) ?? null);
+      await sendDownloadAndSignup(chatId, lang, (fresh?.os as NexaOs | null) ?? null);
     }
     return;
   }
@@ -379,15 +428,11 @@ export async function handleNexaFunnelCallback(callbackId: string, data: string,
     // Groupe déjà là → on redonne juste le lien (message léger, pas le 🎉 d'accueil
     // qui, lui, ne part qu'une fois via announceGroupOnce).
     if (lead.group_invite_link) {
-      await sendMsgKeyboard(chatId, `Voici ton canal privé 👇`,
-        [[{ text: "🔐 Rejoindre mon canal privé", url: lead.group_invite_link }]]);
+      await sendChannelLink(chatId, lang, lead.group_invite_link);
       return;
     }
 
-    await sendMsg(chatId,
-      `⏳ Top ! Je te prépare ton canal privé avec Hugo &amp; Baki — ça prend jusqu'à 1 minute, ` +
-      `ton lien arrive juste en dessous, bouge pas 🤙`
-    );
+    await sendMsg(chatId, c.depositPreparing);
 
     // FIX du double message : la création (CreateChat + MigrateChat + 5 topics +
     // seed + invite) dépassait le délai du webhook, que Telegram rejouait ensuite.
@@ -395,9 +440,9 @@ export async function handleNexaFunnelCallback(callbackId: string, data: string,
     // ensureNexaGroup empêche de toute façon deux créations concurrentes.
     void ensureNexaGroup(lead.id, "bot")
       .then(async (res) => {
-        if (res.ok && res.link) await announceGroupOnce(lead.id, chatId, res.link);
+        if (res.ok && res.link) await announceGroupOnce(lead.id, chatId, lang, res.link);
         else if (!res.pending) {
-          await sendMsg(chatId, `On finalise ton accès — un membre de l'équipe te contacte dans la minute 👌`).catch(() => {});
+          await sendMsg(chatId, c.groupFailed).catch(() => {});
         }
       })
       .catch((e) => console.error(`[NEXA] group flow failed for lead ${lead.id}:`, e?.message ?? e));
@@ -412,6 +457,16 @@ export async function handleNexaFunnelCallback(callbackId: string, data: string,
 export async function handleNexaFunnelDm(chatId: number, fromId: number, text: string): Promise<boolean> {
   const lead = getNexaLeadByTgId(fromId);
   if (!lead) return false;
+  const lang = leadLang(lead);
+  const c = nexaCopy(lang);
+
+  // Pas encore de langue choisie et rien de commencé → on repose le sélecteur
+  // plutôt que d'entamer la séquence dans une langue qu'il n'a pas demandée.
+  if (!lead.lang_chosen_at && lead.stage === "started") {
+    await sendLangPicker(chatId);
+    touchInteraction(lead.id);
+    return true;
+  }
 
   // Avant l'étape ID, les boutons pilotent : on renvoie l'étape courante.
   if (NEXA_STAGE_ORDER[lead.stage] < NEXA_STAGE_ORDER.app_installed) {
@@ -421,16 +476,14 @@ export async function handleNexaFunnelDm(chatId: number, fromId: number, text: s
   }
   // ID déjà fourni : on ne parse plus rien, on route vers l'humain.
   if (lead.member_id) {
-    await sendMsg(chatId, `👌 On a bien ton ID. Une question ? On te répond ici.`);
+    await sendMsg(chatId, c.idAlreadyKnown);
     touchInteraction(lead.id);
     return true;
   }
 
   const candidate = text.trim();
   if (!NEXA_MEMBER_ID_RE.test(candidate)) {
-    await sendMsg(chatId,
-      `Hmm, ton ID doit faire ${NEXA_MEMBER_ID_HINT} — tu le trouves dans ton profil dans l'app 👀 Renvoie-le moi.`
-    );
+    await sendMsg(chatId, c.idBadFormat({ hint: memberIdHint(c) }));
     touchInteraction(lead.id);
     return true;
   }
@@ -441,7 +494,7 @@ export async function handleNexaFunnelDm(chatId: number, fromId: number, text: s
   if (owner) {
     db.prepare(`UPDATE nexa_leads SET duplicate_id = 1, last_interaction_at = datetime('now'), updated_at = datetime('now') WHERE id = ?`).run(lead.id);
     logNexaEvent(lead.id, "admin", { stage: lead.stage, actor: "bot", payload: `duplicate_id:${candidate} (lead #${owner.id})` });
-    await sendMsg(chatId, `⚠️ Cet ID est déjà enregistré chez nous. On vérifie ça et on revient vers toi tout de suite 👌`);
+    await sendMsg(chatId, c.idDuplicate);
     await sendMsg(AGENT_CHAT_ID,
       `⚠️ <b>Nexa Funnel</b> — ID en double\n` +
       `<b>${leadName(lead)}</b> (tg_id <code>${lead.tg_user_id}</code>) a envoyé l'ID <code>${candidate}</code>, ` +
@@ -453,11 +506,8 @@ export async function handleNexaFunnelDm(chatId: number, fromId: number, text: s
   db.prepare(`UPDATE nexa_leads SET member_id = ?, updated_at = datetime('now') WHERE id = ?`).run(candidate, lead.id);
   recordMilestone(lead.id, "account_created", "bot");
 
-  await sendMsg(chatId,
-    `✅ ID enregistré : <code>${candidate}</code>\n\n` +
-    `Compte créé, on passe à la suite 👇`
-  );
-  await sendDepositStep(chatId);
+  await sendMsg(chatId, c.idSaved({ id: candidate }));
+  await sendDepositStep(chatId, lang);
 
   await sendMsg(AGENT_CHAT_ID,
     `📝 <b>Nexa Funnel</b> — <b>${leadName(lead)}</b> a créé son compte\n` +
@@ -566,7 +616,7 @@ export async function ensureNexaGroup(
 
     // Retry lancé depuis le back-office : le lead n'a jamais reçu son lien → on le
     // lui envoie ici (le chemin bot, lui, annonce côté appelant).
-    if (actor === "admin") await announceGroupOnce(lead.id, lead.tg_user_id, res.inviteLink);
+    if (actor === "admin") await announceGroupOnce(lead.id, lead.tg_user_id, leadLang(lead), res.inviteLink);
 
     await sendMsg(AGENT_CHAT_ID,
       `🔐 <b>Nexa Funnel</b> — groupe dépôt créé pour <b>${leadName(lead)}</b>\n` +
@@ -615,11 +665,7 @@ export async function applyNexaImportPromotions(
 
     if (!wasVerified) {
       newlyVerified++;
-      await sendDmRaw(lead.tg_user_id,
-        `✅ <b>Compte confirmé côté room</b>\n\n` +
-        `On te suit maintenant automatiquement 🃏\n` +
-        `Pour tout dépôt ou retrait, on est là — GL aux tables 🃏`
-      ).catch(() => {});
+      await sendDmRaw(lead.tg_user_id, nexaCopy(lead.lang).roomConfirmed).catch(() => {});
     }
   }
 
@@ -645,26 +691,24 @@ async function sendDmRaw(tgId: number, text: string, keyboard?: any[][]): Promis
 }
 
 function reminderContent(lead: NexaLead): { text: string; keyboard?: any[][] } {
+  const c = nexaCopy(lead.lang);
   if (lead.stage === "started") {
     return {
-      text: `👋 Toujours partant pour ${NEXA_ROOM_LABEL} ?\n\n` +
-        `Il te reste juste à télécharger l'app — 2 minutes, et le code <b><code>${NEXA_BONUS_CODE}</code></b> t'attend.`,
-      keyboard: withQuestion([[{ text: "C'est parti →", callback_data: "nf_go" }]]),
+      text: c.reminderStarted({ room: NEXA_ROOM_LABEL, code: NEXA_BONUS_CODE }),
+      keyboard: withQuestion(c, [[{ text: c.btn.go, callback_data: "nf_go" }]]),
     };
   }
   // A choisi son OS mais n'a pas envoyé son ID → on rejoue le message combiné
   // (lien de SON OS + création de compte), précédé d'un nudge.
   if (lead.stage === "app_installed") {
     return {
-      text: `👋 Il ne manque plus que ton compte !\n\n` +
-        downloadHead((lead.os as NexaOs | null) ?? null) + signupBlock(),
-      keyboard: SIGNUP_KEYBOARD,
+      text: c.reminderInstalled + downloadHead(c, (lead.os as NexaOs | null) ?? null) + signupBlock(c),
+      keyboard: signupKeyboard(c),
     };
   }
   return {
-    text: `👋 On t'attend pour ton <b>premier dépôt</b> !\n\n` +
-      `Chez nous les dépôts et retraits se font en direct, dans ton canal privé. On l'ouvre quand tu veux 👇`,
-    keyboard: withQuestion([[{ text: "💰 Faire mon premier dépôt", callback_data: "nf_deposit" }]]),
+    text: c.reminderDeposit,
+    keyboard: withQuestion(c, [[{ text: c.btn.deposit, callback_data: "nf_deposit" }]]),
   };
 }
 
@@ -743,9 +787,7 @@ export async function markNexaDepositDone(leadId: number): Promise<{ ok: boolean
   if (!lead) return { ok: false, error: "Lead introuvable" };
   if (lead.deposit_at) return { ok: true }; // idempotent
   recordMilestone(leadId, "deposit_done", "admin");
-  await sendDmRaw(lead.tg_user_id,
-    `💰 <b>Dépôt confirmé</b> — tu es prêt à jouer !\n\nGL aux tables 🃏`
-  ).catch(() => {});
+  await sendDmRaw(lead.tg_user_id, nexaCopy(lead.lang).depositConfirmed).catch(() => {});
   return { ok: true };
 }
 
