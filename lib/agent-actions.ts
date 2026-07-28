@@ -32,8 +32,25 @@ export interface ActionOutcome {
 
 interface ActionDef {
   level: ActionLevel;
+  /**
+   * Fige les paramètres au moment de la mise en attente : résout les références
+   * floues ("Ali", "la semaine dernière") en identifiants stables, et c'est le
+   * résultat qui est stocké puis exécuté.
+   *
+   * Sans ça, `execute()` re-résoudrait les paramètres bruts au clic — et si
+   * l'état a changé entre-temps, la résolution peut désigner un AUTRE objet que
+   * celui prévisualisé. Sur un paiement, c'est payer le mauvais règlement avec
+   * l'accord de l'opérateur pour un autre. Ce que l'opérateur voit doit être
+   * exactement ce qui s'exécute.
+   */
+  pin?(params: any): Promise<any> | any;
   preview(params: any): Promise<string> | string;
   execute(params: any, actor: number, chatId: string): Promise<ActionOutcome>;
+}
+
+/** Échappe le HTML : le récap part en parse_mode HTML vers Telegram. */
+function esc(v: unknown): string {
+  return String(v ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
 
 /** Durée de vie d'une intention non confirmée. Court volontairement. */
@@ -77,6 +94,63 @@ function resolveNexaLead(ref: unknown): { id: number; label: string; stage: stri
   return { id: row.id, label, stage: row.stage, relances_count: row.relances_count, last_reminder_at: row.last_reminder_at };
 }
 
+/**
+ * Retrouve UN règlement locked, sans jamais deviner.
+ *
+ * La lecture passe par getPendingSettlements() — la même que la page Paiements —
+ * donc aucun SQL parallèle : ce que l'agent voit est ce que la page affiche.
+ * Ambiguïté = refus explicite avec la liste des candidats (règle validée par Baki) :
+ * marquer payé le mauvais règlement est irréversible dans l'app.
+ */
+async function resolveLockedSettlement(p: any) {
+  const { getPendingSettlements, getPaidSettlements } = await import("./manual-settlement-engine");
+  const pending = getPendingSettlements();
+
+  const rawId = p?.settlement_id;
+  if (rawId !== undefined && rawId !== null && String(rawId).trim() !== "") {
+    // Strict : `Number(true)` vaut 1 et `Number("0x0c")` vaut 12 — on n'accepte
+    // qu'un entier ou une chaîne de chiffres, jamais une coercition exotique.
+    const ok = typeof rawId === "number" ? Number.isInteger(rawId) : /^\d+$/.test(String(rawId).trim());
+    const id = Number(rawId);
+    if (!ok) throw new Error(`settlement_id invalide : ${JSON.stringify(rawId)}`);
+    const hit = pending.find(s => s.id === id);
+    if (hit) return hit;
+    // Message précis plutôt qu'un "introuvable" qui enverrait l'opérateur chercher.
+    const paid = getPaidSettlements({}).find(s => s.id === id);
+    if (paid) throw new Error(`règlement #${id} déjà payé le ${paid.paid_on ?? "?"} (${paid.player_name} · ${paid.room_label}) — double-paiement refusé`);
+    throw new Error(`règlement #${id} introuvable parmi les règlements en attente de paiement`);
+  }
+
+  const playerRef = String(p?.player ?? "").trim();
+  if (!playerRef) throw new Error("précise settlement_id, ou au minimum le joueur");
+  const roomRef = String(p?.room ?? "").trim().toLowerCase();
+
+  const needle = playerRef.toLowerCase();
+  // L'égalité exacte l'emporte : sans ça "Ali" tombe silencieusement sur
+  // "Alibaba" dès qu'Ali n'a aucun règlement en attente. Même règle que resolvePlayer().
+  const exact = pending.filter(s => s.player_name.toLowerCase() === needle);
+  let cands = exact.length > 0 ? exact : pending.filter(s => s.player_name.toLowerCase().includes(needle));
+  if (roomRef) cands = cands.filter(s => s.room_label.toLowerCase() === roomRef);
+
+  if (cands.length === 0) {
+    throw new Error(`aucun règlement en attente pour "${playerRef}"${roomRef ? ` sur ${p.room}` : ""}`);
+  }
+  if (cands.length > 1) {
+    const list = cands.map(s => `#${s.id} ${s.player_name} · ${s.room_label} · ${s.week_label ?? "?"} · ${s.amount_due_usdt.toFixed(2)} USDT`).join(" | ");
+    throw new Error(`ambigu — ${cands.length} règlements correspondent, donne le settlement_id : ${list}`);
+  }
+  return cands[0];
+}
+
+function sensLabel(due: number): string {
+  if (Math.abs(due) < 0.005) return "solde nul";
+  return due > 0 ? "il nous doit — ça rentre" : "on lui doit — ça sort";
+}
+
+function signed(n: number): string {
+  return `${n > 0 ? "+" : n < 0 ? "−" : ""}${Math.abs(n).toLocaleString("fr-FR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+}
+
 // ── Registre des actions ──────────────────────────────────
 
 export const ACTIONS: Record<string, ActionDef> = {
@@ -87,7 +161,7 @@ export const ACTIONS: Record<string, ActionDef> = {
       const content = String(p?.content ?? "").trim();
       if (!content) throw new Error("contenu de la note manquant");
       const type = String(p?.type ?? "note");
-      return `📝 <b>Créer une note CRM</b>\nJoueur : <b>${player.name}</b> (id ${player.id})\nType : ${type}\nContenu : ${content}`;
+      return `📝 <b>Créer une note CRM</b>\nJoueur : <b>${esc(player.name)}</b> (id ${player.id})\nType : ${esc(type)}\nContenu : ${esc(content)}`;
     },
     async execute(p) {
       const player = resolvePlayer(p?.player);
@@ -106,7 +180,7 @@ export const ACTIONS: Record<string, ActionDef> = {
     preview(p) {
       const message = String(p?.message ?? "").trim();
       if (!message) throw new Error("message manquant");
-      return `🗒 <b>Ajouter à l'inbox agent</b>\n${message}`;
+      return `🗒 <b>Ajouter à l'inbox agent</b>\n${esc(message)}`;
     },
     async execute(p, _actor, chatId) {
       const message = String(p?.message ?? "").trim();
@@ -128,7 +202,7 @@ export const ACTIONS: Record<string, ActionDef> = {
       if (funnel !== "nexa") throw new Error(`funnel "${funnel}" non supporté : seul Nexa a une relance par lead`);
       const lead = resolveNexaLead(p?.lead);
       const last = lead.last_reminder_at ? `dernière relance ${lead.last_reminder_at}` : "jamais relancé";
-      return `📨 <b>Relancer un lead NEXAPOKER</b>\nLead : <b>${lead.label}</b> (id ${lead.id})\nÉtape : ${lead.stage}\nRelances déjà envoyées : ${lead.relances_count} · ${last}`;
+      return `📨 <b>Relancer un lead NEXAPOKER</b>\nLead : <b>${esc(lead.label)}</b> (id ${lead.id})\nÉtape : ${esc(lead.stage)}\nRelances déjà envoyées : ${lead.relances_count} · ${esc(last)}`;
     },
     async execute(p) {
       const lead = resolveNexaLead(p?.lead);
@@ -139,6 +213,95 @@ export const ACTIONS: Record<string, ActionDef> = {
       if (!res.ok) throw new Error(res.error ?? "échec de la relance");
       const after = db.prepare(`SELECT id, stage, relances_count, last_reminder_at, cold FROM nexa_leads WHERE id = ?`).get(lead.id);
       return { before, after, summary: `Relance envoyée à ${lead.label}.` };
+    },
+  },
+
+  // ── SENSIBLE — de l'argent réel ───────────────────────────
+  //
+  // Passe par markPaid() du moteur, EXACTEMENT la fonction qu'appelle le bouton
+  // "Marquer payé" de /payments (app/payments/actions.ts:18) et celui de chaque
+  // page P&L de room. Pas d'écriture parallèle, pas de table miroir : le
+  // règlement payé depuis le bot EST la ligne que la page affiche.
+  //
+  // Aucune math ici. Tous les montants du récap sont lus tels quels sur
+  // HubSettlement ; le "sens" est le signe de amount_due_usdt, même convention
+  // que dueLabel côté UI.
+  //
+  // Irréversible dans l'app : il n'existe pas de "démarquer payé", et
+  // unlockSettlement refuse un règlement payé. before_json capture donc la ligne
+  // complète ET les tx rattachées — c'est le seul moyen de reconstruire à la main.
+  // unlock_settlement n'est délibérément PAS exposé au bot : c'est un DELETE
+  // (arbitrage Baki 2026-07-28, "aucune suppression via le bot").
+  mark_settlement_paid: {
+    level: "sensitive",
+    // Fige le règlement : à partir d'ici l'action ne parle plus que d'un id.
+    // C'est ce qui garantit que le clic paie EXACTEMENT le règlement affiché.
+    async pin(p) {
+      const s = await resolveLockedSettlement(p);
+      return { ...p, settlement_id: s.id, player: undefined, room: undefined };
+    },
+    async preview(p) {
+      const s = await resolveLockedSettlement(p);
+
+      const txHash = p?.tx_hash ? String(p.tx_hash).trim() : undefined;
+      const paidDate = p?.paid_date ? String(p.paid_date).trim() : undefined;
+      if (paidDate) {
+        const { isValidISODate } = await import("./manual-settlement-engine");
+        if (!isValidISODate(paidDate)) throw new Error(`date de paiement invalide (${paidDate}) — format attendu YYYY-MM-DD`);
+        if (paidDate > new Date().toISOString().slice(0, 10)) throw new Error(`date de paiement dans le futur (${paidDate}) — refusé`);
+      }
+
+      const periode = s.period_start && s.period_end
+        ? `${String(s.period_start).slice(0, 10)} → ${String(s.period_end).slice(0, 10)}`
+        : "période inconnue";
+
+      // Tout ce qui vient du modèle ou de la base est échappé : ce récap est le
+      // SEUL garde-fou humain avant un mouvement d'argent, il ne doit pas pouvoir
+      // être maquillé par du balisage dans un tx_hash ou un nom de joueur.
+      return [
+        `💸 <b>MARQUER UN RÈGLEMENT PAYÉ</b> · #${s.id}`,
+        `Joueur   : <b>${esc(s.player_name)}</b>`,
+        `Room     : ${esc(s.room_label)}`,
+        `Semaine  : ${esc(s.week_label ?? "?")} (${esc(periode)})`,
+        `Montant  : <b>${signed(s.amount_due_usdt)} USDT</b>`,
+        `Sens     : ${sensLabel(s.amount_due_usdt)}`,
+        `Détail   : net ${signed(s.net_selected_usdt)} × action ${s.action_pct_applied}%  ·  ${s.tx_count} tx`,
+        `État     : ${esc(s.status)} depuis ${s.age_days} j`,
+        `Hash     : ${txHash ? esc(txHash) : "(non fourni)"}   Date paiement : ${paidDate ? esc(paidDate) : "(aujourd'hui, par défaut)"}`,
+        ``,
+        `⚠️ Irréversible : il n'existe pas de « démarquer payé » dans l'app.`,
+      ].join("\n");
+    },
+    async execute(p) {
+      // `pin()` a figé settlement_id à la mise en attente : cette résolution ne
+      // peut donc emprunter que le chemin par id, jamais retomber sur un autre
+      // règlement. Elle sert à revalider l'état (toujours locked ?) — et si le
+      // règlement a été payé depuis la page entre-temps, elle jette ici ;
+      // markPaid() porte de toute façon sa propre garde WHERE status='locked'.
+      if (p?.settlement_id === undefined || p?.settlement_id === null) {
+        throw new Error("action non figée (settlement_id absent) — refus par sécurité");
+      }
+      const s = await resolveLockedSettlement(p);
+      const db = getDb();
+
+      const before = {
+        settlement: db.prepare(`SELECT * FROM manual_settlements WHERE id = ?`).get(s.id),
+        tx_ids: (db.prepare(`SELECT id FROM wallet_transactions WHERE settlement_id = ?`).all(s.id) as Array<{ id: number }>).map(r => r.id),
+      };
+
+      const { markPaid } = await import("./manual-settlement-engine");
+      const res = markPaid(
+        s.id,
+        p?.tx_hash ? String(p.tx_hash).trim() : undefined,
+        p?.paid_date ? String(p.paid_date).trim() : undefined,
+      );
+      if (!res.ok) throw new Error(res.error ?? "markPaid a échoué");
+
+      const after = { settlement: db.prepare(`SELECT * FROM manual_settlements WHERE id = ?`).get(s.id) };
+      return {
+        before, after,
+        summary: `Règlement #${s.id} (${s.player_name} · ${s.room_label} · ${signed(s.amount_due_usdt)} USDT) marqué payé.`,
+      };
     },
   },
 };
@@ -172,9 +335,15 @@ export async function createPendingAction(args: {
   const def = ACTIONS[args.tool];
   if (!def) return { ok: false, error: `action inconnue : ${args.tool}` };
 
+  // Ordre important : on FIGE d'abord, on prévisualise ensuite, et ce sont les
+  // paramètres figés qui sont stockés — donc exécutés. Prévisualiser des params
+  // bruts puis exécuter une re-résolution rouvrirait l'écart entre ce que
+  // l'opérateur a vu et ce qui part.
+  let pinned: any;
   let preview: string;
   try {
-    preview = await def.preview(args.params);
+    pinned = def.pin ? await def.pin(args.params ?? {}) : (args.params ?? {});
+    preview = await def.preview(pinned);
   } catch (e: any) {
     return { ok: false, error: e?.message ?? String(e) };
   }
@@ -183,7 +352,7 @@ export async function createPendingAction(args: {
   const r = db.prepare(
     `INSERT INTO agent_pending_actions (chat_id, requested_by, tool, level, params_json, preview, expires_at)
      VALUES (?, ?, ?, ?, ?, ?, datetime('now', '+${TTL_MINUTES} minutes'))`
-  ).run(args.chatId, args.userId, args.tool, def.level, JSON.stringify(args.params ?? {}), preview);
+  ).run(args.chatId, args.userId, args.tool, def.level, JSON.stringify(pinned), preview);
 
   return { ok: true, id: Number(r.lastInsertRowid), preview, level: def.level };
 }

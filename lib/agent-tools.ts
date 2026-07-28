@@ -269,6 +269,21 @@ export const TOOLS: Anthropic.Tool[] = [
     },
   },
   {
+    name: "mark_settlement_paid",
+    description: "ACTION SENSIBLE (argent réel) — Marque un règlement comme payé, via la même fonction que le bouton « Marquer payé » de la page Paiements. N'exécute RIEN immédiatement : met l'action en attente avec un récap complet, l'opérateur doit cliquer [Confirmer]. IRRÉVERSIBLE une fois confirmé : il n'existe pas de « démarquer payé ». Identifie le règlement par son settlement_id (tu l'obtiens avec get_unpaid_settlements) ; si tu ne donnes que le joueur et que plusieurs règlements correspondent, l'action est refusée avec la liste des candidats — redemande alors l'id exact à l'opérateur, ne choisis jamais à sa place. Le déblocage d'un règlement (unlock) n'est PAS disponible via le bot : c'est une suppression, elle se fait à la main sur la page Paiements.",
+    input_schema: {
+      type: "object",
+      properties: {
+        settlement_id: { type: "integer", description: "Id du règlement (voie recommandée)." },
+        player: { type: "string", description: "Nom du joueur, si l'id n'est pas connu. Refusé si ambigu." },
+        room: { type: "string", description: "Room, pour lever une ambiguïté (ex. KKPOKER)." },
+        tx_hash: { type: "string", description: "Hash de la transaction de paiement, si fourni par l'opérateur." },
+        paid_date: { type: "string", description: "Jour réel du paiement, YYYY-MM-DD. Omettre si c'est aujourd'hui." },
+      },
+      required: [],
+    },
+  },
+  {
     name: "get_funnel_status",
     description: "État des funnels d'acquisition NEXAPOKER (table nexa_leads) et QQPK (table qqpk_funnel_leads) : nombre de leads par étape, plus les compteurs de relances, de leads froids et de doublons côté Nexa. C'est l'outil à appeler pour toute question sur « le funnel Nexa » ou « le funnel QQPK ».",
     input_schema: {
@@ -787,11 +802,12 @@ export async function executeTool(name: string, input: any, ctx?: ToolContext): 
         const totalDue = pending.reduce((s, p) => s + p.amount_due_usdt, 0);
         out.push(`Règlements lockés en attente de paiement (${pending.length}) — le plus ancien d'abord :`);
         out.push(...pending.map(p =>
-          `• ${p.player_name} · ${p.room_label} · ${fmtAmount(p.amount_due_usdt)} USDT ` +
+          `• #${p.id} · ${p.player_name} · ${p.room_label} · ${fmtAmount(p.amount_due_usdt)} USDT ` +
           `(net ${fmtAmount(p.net_selected_usdt)} × action ${p.action_pct_applied}%) · ` +
           `locké depuis ${p.age_days}j · ${p.week_label ?? "semaine ?"} · ${p.tx_count} tx`
         ));
         out.push(`Net des montants dus : ${fmtAmount(totalDue)} USDT (positif = ça rentre, le joueur doit au Cercle ; négatif = ça sort, le Cercle doit au joueur).`);
+        out.push(`Le « #N » en tête de ligne est le settlement_id — c'est lui qu'attend mark_settlement_paid.`);
       }
 
       out.push("");
