@@ -67,6 +67,21 @@ export async function POST(req: NextRequest) {
 
   const db = getDb();
 
+  // Garde-fou de sens : le parrain DOIT être un agent actif. Sans ça, inverser les deux champs
+  // crée une relation valide en base mais invisible dans l'arbre (qui ne parcourt que les
+  // agents), et tague à tort le groupe Telegram du parrain réel. Défense en profondeur :
+  // l'UI restreint déjà le picker, ce contrôle protège les appels hors interface.
+  const affiliateIsAgent = db.prepare(
+    `SELECT 1 FROM affiliate_profiles WHERE affiliate_player_id = ? AND status = 'active'`
+  ).get(affiliate_player_id);
+  if (!affiliateIsAgent) {
+    const who = db.prepare(`SELECT name FROM players WHERE id = ?`).get(affiliate_player_id) as { name: string } | undefined;
+    return NextResponse.json({
+      error: `${who?.name ?? `#${affiliate_player_id}`} n'est pas un agent actif — il ne peut pas être parrain. `
+        + `Vérifie le sens : le filleul se rattache SOUS l'agent.`,
+    }, { status: 400 });
+  }
+
   if (origin_game_id) {
     const game = db.prepare(`SELECT id FROM games WHERE id = ? AND status = 'active'`).get(origin_game_id);
     if (!game) return NextResponse.json({ error: "Game introuvable ou archivée" }, { status: 400 });

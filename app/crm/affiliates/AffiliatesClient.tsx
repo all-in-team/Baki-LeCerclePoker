@@ -332,7 +332,11 @@ export default function AffiliatesClient({ agents, players, activeGames, existin
   const agentCandidates = players.filter(p => !agentIds.has(p.id) && (!searchAgent || p.name.toLowerCase().includes(searchAgent.toLowerCase()) || (p.telegram_handle ?? "").toLowerCase().includes(searchAgent.toLowerCase())));
   const selectedAgentPlayer = players.find(p => p.id === agentPlayerId) ?? null;
 
-  const filteredAff = players.filter(p => p.id !== form.referred_player_id && (!searchAff || p.name.toLowerCase().includes(searchAff.toLowerCase()) || (p.telegram_handle ?? "").toLowerCase().includes(searchAff.toLowerCase())));
+  // Le parrain ne peut être qu'un agent actif (`affiliate_profiles`). Sans ce filtre on pouvait
+  // désigner n'importe quel joueur comme parrain : la relation partait en base mais n'était
+  // affichée nulle part (l'arbre ne parcourt que les agents), et le groupe du "filleul" était
+  // tagué à tort. C'est ce qui a inversé Leo/Fabien le 2026-07-29.
+  const filteredAff = players.filter(p => agentIds.has(p.id) && p.id !== form.referred_player_id && (!searchAff || p.name.toLowerCase().includes(searchAff.toLowerCase()) || (p.telegram_handle ?? "").toLowerCase().includes(searchAff.toLowerCase())));
   const usedReferredIds = new Set(existingReferredIds);
   const filteredRef = players.filter(p => p.id !== form.affiliate_player_id && !usedReferredIds.has(p.id) && (!searchRef || p.name.toLowerCase().includes(searchRef.toLowerCase()) || (p.telegram_handle ?? "").toLowerCase().includes(searchRef.toLowerCase())));
 
@@ -374,8 +378,14 @@ export default function AffiliatesClient({ agents, players, activeGames, existin
   function renderFormFields(isEdit: boolean) {
     return (
       <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-        {renderPlayerPicker("Affiliate", form.affiliate_player_id, id => setForm({ ...form, affiliate_player_id: id }), searchAff, setSearchAff, filteredAff, isEdit)}
-        {renderPlayerPicker("Referred", form.referred_player_id, id => setForm({ ...form, referred_player_id: id }), searchRef, setSearchRef, filteredRef, isEdit)}
+        {!isEdit && (
+          <div style={{ padding: "8px 11px", borderRadius: 7, background: "rgba(59,130,246,0.08)", border: "1px solid rgba(59,130,246,0.25)", fontSize: 11, color: "var(--text-muted)", lineHeight: 1.5 }}>
+            Sens de la relation : le <b style={{ color: "var(--text)" }}>filleul</b> est rattaché <b style={{ color: "var(--text)" }}>sous</b> l&apos;agent.
+            L&apos;agent touche 50 % du cumul agence de ses filleuls, et le groupe Telegram du filleul est tagué <i>[nom de l&apos;agent]</i>.
+          </div>
+        )}
+        {renderPlayerPicker("Agent / parrain — touche la commission", form.affiliate_player_id, id => setForm({ ...form, affiliate_player_id: id }), searchAff, setSearchAff, filteredAff, isEdit)}
+        {renderPlayerPicker("Filleul — le joueur parrainé, rattaché sous l'agent", form.referred_player_id, id => setForm({ ...form, referred_player_id: id }), searchRef, setSearchRef, filteredRef, isEdit)}
         <div>
           <label style={{ fontSize: 11, fontWeight: 700, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.07em", display: "block", marginBottom: 6 }}>Start Date</label>
           <input type="date" value={form.start_date} onChange={e => setForm({ ...form, start_date: e.target.value })}
