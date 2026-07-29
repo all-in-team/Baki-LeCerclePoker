@@ -518,8 +518,13 @@ export async function runGhostGroupCleanup(opts?: {
 /** Rapport dans le chat agent — ne throw jamais (un échec de report ne casse pas le cron). */
 export async function reportGhostCleanup(r: GhostCleanupResult): Promise<void> {
   try {
-    if (r.ok && r.purged.length === 0 && r.tagged.length === 0 && r.self_healed.length === 0 && r.skipped.length === 0) {
-      return; // rien à dire — on ne spamme pas le chat agent chaque heure
+    // Notif SEULEMENT si le run a réellement agi : ≥1 supprimé, tagué ou réparé.
+    // `skipped` est volontairement exclu (Hugo 2026-07-29) : les groupes bloqués par
+    // businessGuard sont rescannés à chaque passage et restaient donc dans le rapport
+    // indéfiniment — c'était la cause du récap « 0 supprimé · 0 tagué » récurrent.
+    // Un échec (`!r.ok`, ex. userbot non connecté) reste notifié : c'est une panne, pas un no-op.
+    if (r.ok && r.purged.length === 0 && r.tagged.length === 0 && r.self_healed.length === 0) {
+      return; // rien à dire — on ne spamme pas le chat agent
     }
     const lines: string[] = [`🧹 <b>Groupes non rejoints (24 h)</b>${r.dry_run ? " — <i>dry-run</i>" : ""}`];
     if (!r.ok) {

@@ -50,14 +50,15 @@ export function initCronJobs() {
     console.log("[CRON] shell-purge DISABLED");
   }
 
-  // Groupes non rejoints — toutes les heures à :40 (Hugo 2026-07-25).
+  // Groupes non rejoints — 1×/jour à 5h40 Paris (Hugo 2026-07-29, avant : toutes les heures).
+  // Le seuil de nettoyage reste 24 h : c'est la latence de détection qui passe à 24-48 h.
   // Un groupe créé sans join depuis plus de 24 h est supprimé (kick équipe + sortie du
   // userbot) ou tagué « abandonné » si le kick échoue, et son lead repasse à l'étape
   // précédente avec le flag « groupe non rejoint » pour rester relançable.
   // Le job ne voit QUE les groupes tracés dans `group_creations` (donc créés après ce
   // déploiement) : rayon d'action borné par construction.
   if (process.env.GROUP_CLEANUP_ENABLED !== "false") {
-    cron.schedule("40 * * * *", async () => {
+    cron.schedule("40 5 * * *", async () => {
       try {
         const { runGhostGroupCleanup, reportGhostCleanup } = await import("./group-lifecycle");
         const result = await runGhostGroupCleanup();
@@ -69,7 +70,7 @@ export function initCronJobs() {
         console.error("[CRON] ghost-group-cleanup failed:", e);
       }
     }, opts);
-    console.log("[CRON] ghost-group-cleanup registered (toutes les heures à :40)");
+    console.log("[CRON] ghost-group-cleanup registered (tous les jours à 5h40 Paris)");
   } else {
     console.log("[CRON] ghost-group-cleanup DISABLED");
   }
