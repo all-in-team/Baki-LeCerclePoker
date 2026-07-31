@@ -40,9 +40,10 @@ export type NexaCopy = {
 
   /** Messages courts. */
   hereIsChannel: string;
-  allSet: string;
+  /** Le `handle` vient de SUPPORT_HANDLE (lib/funnels/shared.ts) — jamais en dur ici. */
+  allSet: (o: { handle: string }) => string;
   noLead: string;
-  questionAck: string;
+  questionAck: (o: { handle: string }) => string;
   myIdPrompt: (o: { hint: string }) => string;
   depositPreparing: string;
   groupFailed: string;
@@ -50,7 +51,7 @@ export type NexaCopy = {
   /** ID joueur. */
   idBadFormat: (o: { hint: string }) => string;
   idDuplicate: string;
-  idAlreadyKnown: string;
+  idAlreadyKnown: (o: { handle: string }) => string;
   idSaved: (o: { id: string }) => string;
 
   /** Confirmations. */
@@ -120,9 +121,10 @@ const FR: NexaCopy = {
     `C'est ici que se passent <b>tes dépôts et tes retraits</b>. Rejoins le groupe et dis-nous combien tu veux déposer 👇`,
 
   hereIsChannel: `Voici ton canal privé 👇`,
-  allSet: `Tout est bon de ton côté 🃏\nUne question ? Écris-nous ici.`,
+  allSet: ({ handle }) => `Tout est bon de ton côté 🃏\nUne question ? Écris directement à @${handle}.`,
   noLead: `Envoie /start pour commencer !`,
-  questionAck: `👌 C'est noté — on revient vers toi très vite ici.`,
+  questionAck: ({ handle }) =>
+    `👍 Pas de souci ! Écris directement à @${handle}, on te répond tout de suite.`,
   myIdPrompt: ({ hint }) => `Vas-y, envoie ton ID ici 👇 (${hint}, visible dans ton profil)`,
   depositPreparing:
     `⏳ Top ! Je te prépare ton canal privé avec Hugo &amp; Baki — ça prend jusqu'à 1 minute, ` +
@@ -132,7 +134,7 @@ const FR: NexaCopy = {
   idBadFormat: ({ hint }) =>
     `Hmm, ton ID doit faire ${hint} — tu le trouves dans ton profil dans l'app 👀 Renvoie-le moi.`,
   idDuplicate: `⚠️ Cet ID est déjà enregistré chez nous. On vérifie ça et on revient vers toi tout de suite 👌`,
-  idAlreadyKnown: `👌 On a bien ton ID. Une question ? On te répond ici.`,
+  idAlreadyKnown: ({ handle }) => `👌 On a bien ton ID. Une question ? Écris directement à @${handle}.`,
   idSaved: ({ id }) => `✅ ID enregistré : <code>${id}</code>\n\nCompte créé, on passe à la suite 👇`,
 
   roomConfirmed:
@@ -214,9 +216,10 @@ const EN: NexaCopy = {
     `This is where <b>your deposits and withdrawals</b> happen. Join the group and tell us how much you want to put in 👇`,
 
   hereIsChannel: `Here's your private channel 👇`,
-  allSet: `You're all set 🃏\nAnything you need? Just message us here.`,
+  allSet: ({ handle }) => `You're all set 🃏\nAnything you need? Message @${handle} directly.`,
   noLead: `Send /start to get going!`,
-  questionAck: `👌 Got it — we'll get back to you right here, very soon.`,
+  questionAck: ({ handle }) =>
+    `👍 No worries! Message @${handle} directly and we'll get right back to you.`,
   myIdPrompt: ({ hint }) => `Go ahead, drop your ID here 👇 (${hint}, it's in your profile)`,
   depositPreparing:
     `⏳ Nice! Setting up your private channel with Hugo &amp; Baki — takes up to a minute, ` +
@@ -226,7 +229,7 @@ const EN: NexaCopy = {
   idBadFormat: ({ hint }) =>
     `Hmm, your ID should be ${hint} — you'll find it in your profile in the app 👀 Send it again.`,
   idDuplicate: `⚠️ That ID is already registered on our side. We're checking it and coming right back to you 👌`,
-  idAlreadyKnown: `👌 We've got your ID. Any questions? We'll answer right here.`,
+  idAlreadyKnown: ({ handle }) => `👌 We've got your ID. Any questions? Message @${handle} directly.`,
   idSaved: ({ id }) => `✅ ID saved: <code>${id}</code>\n\nAccount's live — next step 👇`,
 
   roomConfirmed:
