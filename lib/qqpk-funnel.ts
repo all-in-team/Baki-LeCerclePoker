@@ -6,6 +6,7 @@
 // Les groupes se créent à la main plus tard, quand Hugo voit du volume (funnel normal).
 import { getDb } from "@/lib/db";
 import { sendMsg, sendMsgKeyboard, answerCbQuery, AGENT_CHAT_ID } from "@/lib/telegram-commands/helpers";
+import { SUPPORT_HANDLE, SUPPORT_HANDLE_QQPK } from "@/lib/funnels/shared";
 
 export const QQPK_FUNNEL_LOOM_APP = "https://www.loom.com/share/f84ddf126b0e4f0e8921f8f2a915467e";
 export const QQPK_FUNNEL_LOOM_DEPOSIT = "https://www.loom.com/share/e779faa631b54ef391d02fa53af03365";
@@ -88,7 +89,7 @@ async function sendStep4(chatId: number, memberId: string) {
     `📊 <b>Ranges Ante 0.2bb</b> : 🎥 vidéo à venir\n` +
     `🎰 <b>Mindmap Explo</b> : 🎥 vidéo à venir\n\n` +
     `🎁 <b>20% de rakeback</b> envoyé chaque lundi, automatique\n` +
-    `🧠 Une question poker ? → @LecercleSupportPK\n\n` +
+    `🧠 Une question poker ? → @${SUPPORT_HANDLE_QQPK}\n\n` +
     `GL aux tables 🃏`
   );
 }
@@ -183,7 +184,7 @@ export async function handleQqpkFunnelDm(chatId: number, fromId: number, text: s
 
   // Funnel terminé : on ne relance rien, on route vers Hugo.
   if (lead.stage >= 3) {
-    await sendMsg(chatId, `Des questions ? DM @hugoroine 👍`);
+    await sendMsg(chatId, `Des questions ? DM @${SUPPORT_HANDLE} 👍`);
     touch(fromId);
     return true;
   }

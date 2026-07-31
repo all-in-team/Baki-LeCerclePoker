@@ -8,6 +8,20 @@
 // (cards de conversion, badge de vérification, agrégats, formatage) est ici, une
 // seule fois, au lieu d'être recopié par room.
 
+// ── Handles support ───────────────────────────────────────
+// Les DEUX handles vers qui un lead est renvoyé vivent ici, et nulle part ailleurs :
+// changer de destinataire = éditer cette section, rien d'autre. Sans `@` — il est
+// ajouté par le copy, qui décide de la formulation.
+//
+// Pas d'env var volontairement : ce module est importé côté client, et une variable
+// non préfixée NEXT_PUBLIC_ y vaudrait `undefined` dans le bundle.
+
+/** Humain qui répond aux leads en DM (funnel Nexa + fin de funnel QQPK). */
+export const SUPPORT_HANDLE = "hugoroine";
+
+/** Canal support poker QQPK — destinataire distinct de SUPPORT_HANDLE, volontairement. */
+export const SUPPORT_HANDLE_QQPK = "LecercleSupportPK";
+
 // ── Stages ────────────────────────────────────────────────
 // Une room décrit ses étapes par ordre croissant. QQPK utilise un stage entier
 // (0-4), les funnels suivants un slug — d'où le champ générique `key`.

@@ -23,6 +23,7 @@ import {
   type NexaStage, type NexaOs,
 } from "@/lib/funnels/nexa/config";
 import { nexaCopy, NEXA_LANG_CB_PREFIX, type NexaCopy } from "@/lib/funnels/nexa/copy";
+import { SUPPORT_HANDLE } from "@/lib/funnels/shared";
 import { coerceLang, langKeyboard, langPromptText, parseLangCallback, type Lang } from "@/lib/i18n";
 
 export type NexaLead = {
@@ -276,7 +277,7 @@ async function sendCurrentStep(chatId: number, lead: NexaLead) {
         await sendChannelLink(chatId, lang, lead.group_invite_link);
         return;
       }
-      await sendMsg(chatId, nexaCopy(lang).allSet);
+      await sendMsg(chatId, nexaCopy(lang).allSet({ handle: SUPPORT_HANDLE }));
   }
 }
 
@@ -357,20 +358,20 @@ export async function handleNexaFunnelCallback(callbackId: string, data: string,
     return;
   }
 
-  // ❓ Question — loggée à chaque clic (compteur), notif admin une seule fois par étape.
+  // ❓ Question — le bot ne promet plus de répondre « ici » (personne ne voyait la
+  // question) : il renvoie le lead en DM vers SUPPORT_HANDLE. Le log reste identique
+  // (compteur par étape dans l'historique du lead), mais la notif admin part à CHAQUE
+  // clic et non plus une fois par étape : c'est le signal d'entrée d'Hugo, un DM raté
+  // est un lead perdu. Le coût d'une notif en double est nul comparé à celui d'un silence.
   if (data === "nf_q") {
-    const already = db.prepare(
-      `SELECT 1 FROM nexa_lead_events WHERE lead_id = ? AND kind = 'question' AND stage = ? LIMIT 1`
-    ).get(lead.id, lead.stage);
     logNexaEvent(lead.id, "question", { stage: lead.stage, actor: "bot" });
     touchInteraction(lead.id);
-    await sendMsg(chatId, c.questionAck);
-    if (!already) {
-      await sendMsg(AGENT_CHAT_ID,
-        `❓ <b>Nexa Funnel</b> — <b>${leadName(lead)}</b> a une question\n` +
-        `Étape : <code>${lead.stage}</code> · tg_id <code>${lead.tg_user_id}</code>`
-      ).catch(() => {});
-    }
+    await sendMsg(chatId, c.questionAck({ handle: SUPPORT_HANDLE }));
+    await sendMsg(AGENT_CHAT_ID,
+      `❓ <b>Nexa Funnel</b> — <b>${leadName(lead)}</b> a une question\n` +
+      `Étape : <code>${lead.stage}</code> · tg_id <code>${lead.tg_user_id}</code>\n` +
+      `→ redirigé vers @${SUPPORT_HANDLE}`
+    ).catch(() => {});
     return;
   }
 
@@ -476,7 +477,7 @@ export async function handleNexaFunnelDm(chatId: number, fromId: number, text: s
   }
   // ID déjà fourni : on ne parse plus rien, on route vers l'humain.
   if (lead.member_id) {
-    await sendMsg(chatId, c.idAlreadyKnown);
+    await sendMsg(chatId, c.idAlreadyKnown({ handle: SUPPORT_HANDLE }));
     touchInteraction(lead.id);
     return true;
   }
