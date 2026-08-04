@@ -75,6 +75,38 @@ export async function POST(req: NextRequest) {
       .run(JSON.stringify({ ts: new Date().toISOString(), type: updateType, chat: logChat, from: logFrom, text: logText, thread: update.message?.message_thread_id }));
   } catch {}
 
+  // ── Dernière activité joueur ────────────────────────────────────────────────────────────────
+  // Point d'écriture unique de `onboarding_leads.last_player_activity_at`, lue par les relances
+  // d'onboarding pour ne jamais relancer un joueur vivant (incident YuS du 30/07).
+  //
+  // Ici, `logFrom` vient de `update.*.from.id` : c'est le telegram_id donné par Telegram, pas une
+  // résolution depuis un chat_id. Combiné à l'UNIQUE sur `onboarding_leads.telegram_id`, l'UPDATE
+  // touche 0 ou 1 ligne — une attribution à un mauvais lead est structurellement impossible.
+  //
+  // Deux gardes : `OWNER_IDS` (tes propres messages ne sont pas de l'activité joueur) et le chat
+  // agent (flux opérateur). On ne retient que `message` et `callback` : des actions délibérées du
+  // joueur. Les événements d'appartenance (`chat_member`, `new_members`) sont écartés — leur
+  // `from.id` est l'auteur de l'action, pas nécessairement le joueur concerné.
+  if ((updateType === "message" || updateType === "callback")
+      && typeof logFrom === "number"
+      && !OWNER_IDS.has(logFrom)
+      && String(logChat) !== String(AGENT_CHAT_ID)) {
+    try {
+      const { getDb } = await import("@/lib/db");
+      const r = getDb().prepare(
+        `UPDATE onboarding_leads SET last_player_activity_at = datetime('now') WHERE telegram_id = ?`
+      ).run(logFrom);
+      // `changes === 0` = interaction non rattachable à un lead. C'est LE signal qui rendrait
+      // visible une régression de ce câblage : sans ce log, une écriture qui n'atteint jamais sa
+      // cible est parfaitement silencieuse, et les relances repartiraient sur des joueurs actifs.
+      if (r.changes === 0) {
+        console.log(`[ACTIVITY] aucun lead pour from=${logFrom} chat=${logChat} type=${updateType}`);
+      }
+    } catch (e: any) {
+      console.error(`[ACTIVITY] echec ecriture from=${logFrom}:`, e?.message ?? e);
+    }
+  }
+
   // Handle inline keyboard button clicks
   if (update.callback_query) {
     const cb = update.callback_query;
