@@ -19,7 +19,9 @@
 //   3. Si Topics n'est pas activé sur le chat, tout retombe sur le mode plat sans
 //      lever d'exception.
 import { getDb } from "@/lib/db";
-import { adminChatId, tg, tgRetrying, esc, sleep, makeSerialQueue, type TgResult } from "@/lib/funnels/telegram-api";
+import {
+  adminChatId, tg, tgRetrying, esc, sleep, makeSerialQueue, operatorUserIds, type TgResult,
+} from "@/lib/funnels/telegram-api";
 import { NEXA_STAGES } from "@/lib/funnels/nexa/config";
 
 const BASE_URL = process.env.NEXT_PUBLIC_BASE_URL?.trim() || "https://lecerclepoker-production.up.railway.app";
@@ -225,6 +227,51 @@ export function buildContextCard(lead: TopicLead): string {
     `🔗 <a href="${BASE_URL}/nexa-funnel?lead=${lead.id}">Fiche dans le back-office</a>`,
     `<i>Écris ici → le lead reçoit ta réponse du bot. /bot · /stop · /note</i>`,
   ].join("\n");
+}
+
+// ── Mentions opérateur ────────────────────────────────────
+
+type NameCache = { map: Map<number, string>; at: number };
+let opNames: NameCache | null = null;
+const OP_NAME_TTL_MS = 60 * 60_000;
+
+/**
+ * Prénoms des opérateurs, résolus une fois par heure via getChatMember.
+ *
+ * Nécessaire parce qu'une mention inline a besoin d'un LIBELLÉ : Telegram n'affiche
+ * pas de mention sur un texte vide, et les astuces à base de caractères invisibles
+ * ne notifient pas de façon fiable. Un prénom lisible est à la fois plus honnête et
+ * plus robuste. Repli « op » si l'appel échoue.
+ */
+async function operatorNames(chat: string, ids: number[]): Promise<Map<number, string>> {
+  const now = Date.now();
+  if (opNames && now - opNames.at < OP_NAME_TTL_MS) return opNames.map;
+  const map = new Map<number, string>();
+  for (const id of ids) {
+    const res = await tg<{ user?: { first_name?: string; username?: string } }>(
+      "getChatMember", { chat_id: chat, user_id: id });
+    map.set(id, res.result?.user?.first_name || res.result?.user?.username || "op");
+  }
+  opNames = { map, at: now };
+  return map;
+}
+
+/**
+ * Préfixe de mention à coller devant un post qui doit RÉVEILLER les opérateurs.
+ *
+ * Réservé au premier post d'une salve et aux rappels : le coller sur chaque message
+ * transformerait le sujet en machine à notifications. Chaîne vide si
+ * OPERATOR_USER_IDS n'est pas défini — la feature dégrade, elle ne casse pas.
+ */
+export async function mentionPrefix(): Promise<string> {
+  const ids = operatorUserIds();
+  if (ids.length === 0) return "";
+  const chat = adminChatId();
+  const names = await operatorNames(chat, ids).catch(() => new Map<number, string>());
+  const links = ids
+    .map(id => `<a href="tg://user?id=${id}">${esc(names.get(id) ?? "op")}</a>`)
+    .join(" · ");
+  return `🔔 ${links}\n`;
 }
 
 // ── Création du topic ─────────────────────────────────────

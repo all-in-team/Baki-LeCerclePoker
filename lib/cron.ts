@@ -207,8 +207,18 @@ export function initCronJobs() {
     } catch (e: any) {
       console.error("[CRON] awaiting-expiry failed:", e);
     }
+
+    // Rappels opérateur — 15 min puis 60 min, un seul par palier. Sans eux, un sujet
+    // se crée en silence et personne n'apprend qu'un lead attend.
+    try {
+      const { runQuestionNudges } = await import("./funnels/live-takeover");
+      const r = await runQuestionNudges();
+      if (r.nudged > 0) console.log(`[CRON] question-nudges: ${r.nudged} rappel(s), ${r.waiting} en attente`);
+    } catch (e: any) {
+      console.error("[CRON] question-nudges failed:", e);
+    }
   }, opts);
-  console.log("[CRON] relay-drain + awaiting-expiry registered (toutes les 5 min)");
+  console.log("[CRON] relay-drain + awaiting-expiry + question-nudges registered (toutes les 5 min)");
 
   if (process.env.CASHOUT_CRONS_ENABLED !== "true") {
     console.log("[CRON] cashout crons DISABLED (set CASHOUT_CRONS_ENABLED=true to enable)");

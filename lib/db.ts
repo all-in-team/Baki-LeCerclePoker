@@ -2791,4 +2791,25 @@ function initSchema(db: Database.Database) {
   } catch (err: any) {
     console.error(`[MIGRATION:add_nexa_awaiting_expiry_v1] FAILED:`, err.message);
   }
+
+  // Rappels opérateur sur les questions sans réponse (Hugo 2026-08-04, §5).
+  //
+  // Le sujet d'un lead se créait en silence : dans un groupe en mode Sujets,
+  // Telegram ne notifie pas les membres des nouveaux sujets. Personne n'était donc
+  // prévenu qu'un lead attendait — le relais fonctionnait, mais dans le vide.
+  //
+  // `question_nudge_level` est un COMPTEUR DE PALIER, pas un horodatage de dernier
+  // rappel : 0 = aucun, 1 = les 15 min sont passées, 2 = les 60 min aussi. Comparer
+  // un « last_nudge_at » à un intervalle aurait produit un rappel toutes les N
+  // minutes ; ici chaque palier ne peut être franchi qu'une fois, par construction.
+  // Remis à 0 en même temps que `question_open_since` (réponse d'opérateur ou /bot).
+  try {
+    const fix = db.prepare(`INSERT OR IGNORE INTO _applied_fixes (name) VALUES (?)`).run("add_nexa_question_nudge_v1");
+    if (fix.changes > 0) {
+      try { db.exec(`ALTER TABLE nexa_leads ADD COLUMN question_nudge_level INTEGER NOT NULL DEFAULT 0`); } catch { /* déjà là */ }
+      console.log("[MIGRATION] add_nexa_question_nudge_v1 applied");
+    }
+  } catch (err: any) {
+    console.error(`[MIGRATION:add_nexa_question_nudge_v1] FAILED:`, err.message);
+  }
 }

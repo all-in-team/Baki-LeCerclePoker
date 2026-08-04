@@ -476,7 +476,7 @@ export async function handleNexaFunnelCallback(callbackId: string, data: string,
     await postAnchoredNotice(lead.id,
       `🙋 <b>attend une réponse</b> — a cliqué « ${esc(c.btn.question)} »\n` +
       `<i>Le bot ne lui enverra plus rien d'automatique jusqu'à ta réponse (ou /bot).</i>`,
-      true,
+      true, true,
     ).catch(() => {});
     return;
   }
@@ -619,7 +619,7 @@ export async function handleNexaFunnelDm(chatId: number, fromId: number, text: s
       await postAnchoredNotice(lead.id,
         `🙋 <b>attend une réponse</b> — a écrit un message hors scénario\n` +
         `<i>Le bot ne lui enverra plus rien d'automatique jusqu'à ta réponse (ou /bot).</i>`,
-        true,
+        true, true,
       ).catch(() => {});
     }
     return true;

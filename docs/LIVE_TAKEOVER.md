@@ -128,6 +128,30 @@ Une commande non reconnue n'est **jamais** relayée au lead : le bot répond
 sujet de lead, y compris les commandes habituelles du bot (`/pnl`, `/solde`…) —
 tape-les ailleurs.
 
+### Être prévenu
+
+Dans un groupe en mode Sujets, **Telegram ne notifie personne** des nouveaux sujets :
+sans mention explicite, un lead pouvait attendre des heures en silence.
+
+- **Mention des opérateurs** (`OPERATOR_USER_IDS`, ids séparés par virgule) sur le
+  **premier post d'une salve** et sur les rappels — jamais sur les éditions qui
+  complètent une salve, sinon le sujet devient une machine à notifications.
+  Les prénoms sont résolus via `getChatMember` et mis en cache une heure.
+- **Rappels automatiques** dans le sujet, à **15 min** puis **60 min** sans réponse :
+  `⏳ sans réponse depuis X min`. **Un seul par palier** — le niveau franchi est
+  mémorisé, il n'y a jamais de rappel toutes les N minutes.
+- **Récapitulatif dans General** quand plus de 3 leads attendent — posté uniquement
+  quand un palier vient d'être franchi, pas à chaque passe.
+- Les rappels s'arrêtent dès qu'un opérateur répond ou lance `/bot`. La reprise du
+  bot à 90 min **ne les arrête pas** : le critère est la question, pas le silence.
+
+```bash
+railway variables --set "OPERATOR_USER_IDS=1486389037,1298290355"
+```
+
+Variable absente ⇒ aucune mention. Le relais continue de fonctionner, il ne fait
+simplement plus sonner les téléphones.
+
 ### General
 
 Le sujet **General** est réservé aux alertes système : échecs d'envoi, configuration
@@ -227,6 +251,13 @@ sujet reçoit une ligne discrète à chaque clic :
   effet sur `takeover_until`.
 - Boutons « 🤖 Rendre la main au bot » et « 🔕 Stop relances » = équivalents de
   `/bot` et `/stop`.
+- **Compteur temps réel** : l'onglet interroge `/api/nexa-funnel/pending` toutes les
+  30 s. Le nombre s'affiche dans le **titre de l'onglet** — « (3) Nexa Funnel » —
+  donc visible depuis n'importe quel autre onglet.
+- **Notification navigateur** au passage de 0 à >0. La permission se demande via le
+  bouton « 🔔 Activer les notifications », qui n'apparaît que tant qu'elle n'a pas
+  été accordée ou refusée : les navigateurs rejettent une demande sans clic, et une
+  demande refusée n'est plus rejouable.
 
 ---
 
@@ -278,6 +309,7 @@ Migrations `add_live_takeover_v1` et `add_live_takeover_topics_v1` (`lib/db.ts`)
 | `nexa_leads.awaiting_human_since`   | 🙋 silence scripté — expire à 90 min si aucun opérateur n'a répondu |
 | `nexa_leads.question_open_since`    | ❓ question sans réponse — n'expire pas, pilote « À répondre »   |
 | `nexa_leads.first_operator_reply_at`| Verrou : un humain a répondu ⇒ le bot ne reprend jamais la main seul |
+| `nexa_leads.question_nudge_level`   | Dernier palier de rappel franchi (0 · 15 min · 60 min)        |
 | `nexa_leads.relances_off`           | `/stop` — exclusion définitive des relances                   |
 | `nexa_leads.last_lead_msg_at`       | Horodatage affiché à côté de la pastille                      |
 | `nexa_leads.last_read_msg_id`       | Curseur de lecture du panneau conversation                    |
@@ -328,4 +360,6 @@ suspendu.
 | Un lead ne reçoit plus de relance             | `takeover_until` actif, `awaiting_human_since` non levé, ou `/stop` posé |
 | Le bot ne répond plus du tout à un lead       | Il est en 🙋 attente : réponds-lui, `/bot`, ou attends la reprise à 90 min |
 | Le bot a relancé un lead à qui je parlais     | Ne devrait pas arriver : la reprise s'interdit dès qu'un opérateur a répondu une fois. Vérifie `first_operator_reply_at` sur ce lead |
+| Aucune notification Telegram                  | `OPERATOR_USER_IDS` absent, ou l'opérateur n'est pas membre du groupe (une mention ne notifie qu'un membre) |
+| Pas de notification navigateur                | Permission jamais accordée (clique « 🔔 Activer ») ; elle ne se déclenche qu'au passage de 0 à >0 |
 | Le sujet d'un lead a disparu                  | Supprimé côté Telegram : il sera recréé à son prochain message |

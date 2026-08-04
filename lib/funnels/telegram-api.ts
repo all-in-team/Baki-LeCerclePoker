@@ -35,6 +35,22 @@ export function adminChatId(): string {
   return AGENT_CHAT_ID;
 }
 
+/**
+ * Opérateurs à mentionner pour déclencher une notification Telegram.
+ *
+ * Dans un groupe en mode Sujets, les nouveaux sujets ne notifient personne : sans
+ * mention explicite, un lead pouvait attendre des heures sans que le téléphone
+ * sonne. Ces ids servent uniquement à ça.
+ *
+ * Liste vide = pas de mention (le relais fonctionne, il ne notifie simplement pas).
+ */
+export function operatorUserIds(): number[] {
+  return (process.env.OPERATOR_USER_IDS ?? "")
+    .split(",")
+    .map(s => parseInt(s.trim(), 10))
+    .filter(n => Number.isInteger(n) && n > 0);
+}
+
 export type TgResult<T = any> = {
   ok: boolean;
   result?: T;

@@ -25,7 +25,7 @@ import {
   adminChatId, esc, isServiceMessage, tg, type TgResult,
 } from "@/lib/funnels/telegram-api";
 import {
-  ensureLeadTopic, resolveLeadIdFromThread, sendInTopic, touchTopic,
+  ensureLeadTopic, mentionPrefix, resolveLeadIdFromThread, sendInTopic, touchTopic,
 } from "@/lib/funnels/live-takeover-topics";
 
 export { adminChatId, esc };
@@ -49,6 +49,13 @@ const DRAIN_BATCH = 50;
  * là une vraie conversation est en cours et le bot ne doit pas s'y inviter.
  */
 export const AWAITING_EXPIRY_MINUTES = 90;
+/**
+ * Paliers de rappel opérateur, en minutes. UN rappel par palier, jamais un toutes
+ * les N minutes : `question_nudge_level` mémorise le dernier palier franchi.
+ */
+export const QUESTION_NUDGE_MINUTES = [15, 60];
+/** Au-delà, un récapitulatif est posté dans General en plus des rappels par sujet. */
+export const QUESTION_RECAP_THRESHOLD = 3;
 
 // ── Types ─────────────────────────────────────────────────
 
@@ -71,6 +78,8 @@ export type LeadLite = {
   question_open_since: string | null;
   /** Première réponse d'un opérateur — verrou anti-reprise du bot. */
   first_operator_reply_at: string | null;
+  /** Dernier palier de rappel franchi (0 = aucun, 1 = 15 min, 2 = 60 min). */
+  question_nudge_level: number;
   admin_topic_chat_id: string | null;
   admin_thread_id: number | null;
   last_relayed_msg_id: number;
@@ -92,7 +101,7 @@ export type BotMessage = {
 
 const LEAD_COLS = `id, tg_user_id, tg_username, first_name, source, stage, member_id,
   blocked, notes, takeover_until, takeover_by, relances_off, awaiting_human_since,
-  question_open_since, first_operator_reply_at,
+  question_open_since, first_operator_reply_at, question_nudge_level,
   admin_topic_chat_id, admin_thread_id, last_relayed_msg_id`;
 
 // ── Utilitaires ───────────────────────────────────────────
@@ -192,7 +201,7 @@ export function setAwaitingHuman(leadId: number): void {
 export function clearAwaitingHuman(leadId: number): void {
   getDb().prepare(
     `UPDATE nexa_leads SET awaiting_human_since = NULL, question_open_since = NULL,
-       updated_at = datetime('now')
+       question_nudge_level = 0, updated_at = datetime('now')
      WHERE id = ? AND (awaiting_human_since IS NOT NULL OR question_open_since IS NOT NULL)`
   ).run(leadId);
 }
@@ -607,9 +616,15 @@ async function relayPendingInner(leadId: number): Promise<RelayOutcome> {
 
   if (!ok) {
     const texts = pending.map(p => p.text ?? "").filter(Boolean);
+    // Mention des opérateurs sur le PREMIER post d'une salve seulement — jamais sur
+    // les éditions qui la complètent. C'est ce qui fait sonner le téléphone dans un
+    // groupe en mode Sujets, où un nouveau sujet ne notifie personne ; la coller sur
+    // chaque message transformerait le sujet en machine à notifications.
+    const mention = await mentionPrefix();
     const posted = await sendInTopic(leadId, "sendMessage", {
-      text: relayBody(lead, texts.length ? texts : ["[message vide]"], !inTopic),
+      text: mention + relayBody(lead, texts.length ? texts : ["[message vide]"], !inTopic),
       parse_mode: "HTML",
+      disable_notification: false,
     });
     if (posted.deferred) return { posted: 0, deferred: true };
     if (!posted.ok) {
@@ -703,9 +718,13 @@ export async function postSystemAlert(text: string): Promise<void> {
 }
 
 /** Message posté dans le topic du lead (ou à plat si les Sujets sont désactivés). */
-async function postForLead(leadId: number, text: string, replyTo?: number) {
+async function postForLead(leadId: number, text: string, replyTo?: number, notify = false) {
   return sendInTopic(leadId, "sendMessage", {
     text, parse_mode: "HTML",
+    // Explicite : dans un sujet, un post sans mention ET sans son passe totalement
+    // inaperçu. `false` est le défaut de l'API, on l'écrit quand même là où la
+    // notification EST l'objectif.
+    ...(notify ? { disable_notification: false } : {}),
     ...(replyTo ? { reply_parameters: { message_id: replyTo, allow_sending_without_reply: true } } : {}),
   });
 }
@@ -716,7 +735,9 @@ async function postForLead(leadId: number, text: string, replyTo?: number) {
  * les leads restés en mode plat, la ligne relay_map garde le « Répondre » utilisable.
  * `body` est du HTML Telegram déjà sûr — à l'appelant de l'échapper.
  */
-export async function postAnchoredNotice(leadId: number, body: string, withCta = false): Promise<void> {
+export async function postAnchoredNotice(
+  leadId: number, body: string, withCta = false, withMention = false,
+): Promise<void> {
   const lead = getLeadById(leadId);
   if (!lead) return;
   const inTopic = lead.admin_thread_id !== null;
@@ -727,7 +748,8 @@ export async function postAnchoredNotice(leadId: number, body: string, withCta =
     ? `\n<i>Écris ici → le lead reçoit ta réponse du bot.</i>`
     : `\n<i>Réponds à ce message → le lead reçoit ta réponse du bot.</i>`;
   const head = inTopic ? "" : `${relayHeader(lead)}\n———\n`;
-  const res = await postForLead(leadId, `${head}${body}${cta}`);
+  const mention = withMention ? await mentionPrefix() : "";
+  const res = await postForLead(leadId, `${mention}${head}${body}${cta}`, undefined, withMention);
   if (res.ok && res.result?.message_id) {
     mapAdminMessage(adminChatId(), res.result.message_id, leadId);
   }
@@ -893,6 +915,101 @@ export async function handleAdminChatMessage(msg: any): Promise<boolean> {
     );
   }
   return true;
+}
+
+// ── Entretien ─────────────────────────────────────────────
+
+// ── Rappels opérateur ─────────────────────────────────────
+
+export type PendingQuestion = {
+  id: number;
+  question_open_since: string;
+  question_nudge_level: number;
+  waited_min: number;
+  label: string;
+};
+
+/** Leads dont la question est ouverte, avec leur temps d'attente en minutes. */
+export function listOpenQuestions(): PendingQuestion[] {
+  const rows = getDb().prepare(`
+    SELECT id, question_open_since, question_nudge_level,
+           CAST((julianday('now') - julianday(question_open_since)) * 1440 AS INTEGER) AS waited_min,
+           tg_username, first_name, tg_user_id
+    FROM nexa_leads
+    WHERE question_open_since IS NOT NULL AND blocked = 0
+    ORDER BY question_open_since
+  `).all() as Array<PendingQuestion & { tg_username: string | null; first_name: string | null; tg_user_id: number }>;
+  return rows.map(r => ({ ...r, label: leadLabel(r) }));
+}
+
+function setNudgeLevel(leadId: number, level: number) {
+  getDb().prepare(
+    `UPDATE nexa_leads SET question_nudge_level = ?, updated_at = datetime('now')
+     WHERE id = ? AND question_nudge_level < ?`
+  ).run(level, leadId, level);
+}
+
+/**
+ * Rappelle à l'opérateur les questions restées sans réponse.
+ *
+ * Un rappel par PALIER (15 min puis 60 min), jamais un toutes les N minutes : le
+ * niveau franchi est mémorisé, donc une passe qui repasse sur le même lead ne
+ * reposte rien. La reprise du bot à 90 min ne ferme pas le rappel — le critère est
+ * `question_open_since`, qui n'expire pas : le scénario a beau avoir redémarré,
+ * personne n'a répondu au lead.
+ */
+export async function runQuestionNudges(): Promise<{ nudged: number; waiting: number }> {
+  const open = listOpenQuestions();
+  if (open.length === 0) return { nudged: 0, waiting: 0 };
+
+  let nudged = 0;
+  for (const q of open) {
+    // Palier atteint = le plus haut seuil franchi ; on ne notifie que s'il dépasse
+    // ce qui a déjà été envoyé.
+    let level = 0;
+    for (let i = 0; i < QUESTION_NUDGE_MINUTES.length; i++) {
+      if (q.waited_min >= QUESTION_NUDGE_MINUTES[i]) level = i + 1;
+    }
+    if (level <= q.question_nudge_level) continue;
+
+    setNudgeLevel(q.id, level);
+    await postAnchoredNotice(q.id,
+      `⏳ <b>sans réponse depuis ${q.waited_min} min</b>\n` +
+      `<i>Réponds ici, ou /bot pour rendre la main au scénario.</i>`,
+      false, true,
+    ).catch(() => {});
+    nudged++;
+    await new Promise(r => setTimeout(r, 150));
+  }
+
+  // Récapitulatif dans General — uniquement quand un palier vient d'être franchi.
+  // Le poster à chaque passe produirait un message toutes les 5 min tant qu'une file
+  // existe ; ici il ne sort que lorsqu'il s'est réellement passé quelque chose.
+  if (nudged > 0 && open.length > QUESTION_RECAP_THRESHOLD) {
+    const lines = open
+      .slice(0, 10)
+      .map(q => `• <b>${esc(q.label)}</b> — ${q.waited_min} min`)
+      .join("\n");
+    const extra = open.length > 10 ? `\n<i>…et ${open.length - 10} autre(s).</i>` : "";
+    await postSystemAlert(
+      `⏳ <b>${open.length} leads attendent une réponse</b>\n${lines}${extra}`
+    ).catch(() => {});
+  }
+
+  return { nudged, waiting: open.length };
+}
+
+/** Compteur « À répondre » du back-office — non lus OU questions ouvertes. */
+export function countNeedsReply(): number {
+  const row = getDb().prepare(`
+    SELECT COUNT(*) AS n
+    FROM nexa_leads l
+    LEFT JOIN (SELECT lead_id, MAX(CASE WHEN direction = 'in' THEN id END) AS last_in_id
+               FROM bot_messages GROUP BY lead_id) m ON m.lead_id = l.id
+    WHERE COALESCE(m.last_in_id, 0) > l.last_read_msg_id
+       OR l.question_open_since IS NOT NULL
+  `).get() as { n: number };
+  return row.n;
 }
 
 // ── Entretien ─────────────────────────────────────────────

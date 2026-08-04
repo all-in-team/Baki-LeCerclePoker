@@ -21,6 +21,7 @@ import WeeklyEvolutionTable, { type WeeklyColumn } from "@/components/funnel/Wee
 import { VerifiedBadge, PlayedBadge, BlockedBadge, LangBadge } from "@/components/funnel/Badges";
 import { SignedAmount } from "@/components/funnel/Amounts";
 import ConversationPanel from "@/components/funnel/ConversationPanel";
+import { usePendingCount } from "@/components/funnel/usePendingCount";
 import { FUNNEL_CARD } from "@/components/funnel/styles";
 import {
   markDepositAction, relanceAction, createGroupAction, saveNotesAction,
@@ -209,7 +210,11 @@ export default function NexaFunnelClient({ leads, stats, events }: {
     return () => document.removeEventListener("mousedown", onDown);
   }, [selected, close]);
 
-  const replyCount = useMemo(() => leads.filter(needsReply).length, [leads]);
+  const localReplyCount = useMemo(() => leads.filter(needsReply).length, [leads]);
+  // Le compteur du serveur (poll 30 s) prime sur celui calculé depuis les lignes
+  // rendues : la page peut rester ouverte des heures pendant que des leads arrivent.
+  const pending = usePendingCount(localReplyCount, "Nexa Funnel");
+  const replyCount = pending.count;
   const visibleLeads = useMemo(
     () => (onlyUnread ? leads.filter(needsReply) : leads),
     [leads, onlyUnread],
@@ -252,6 +257,12 @@ export default function NexaFunnelClient({ leads, stats, events }: {
           title="Affiche ou masque Σ Rake / Dépôts / Retraits / Win-Loss">
           Σ Colonnes chiffres
         </FilterChip>
+        {pending.permission === "default" && (
+          <FilterChip active={false} onClick={pending.requestPermission}
+            title="Recevoir une notification navigateur quand un lead se met à attendre">
+            🔔 Activer les notifications
+          </FilterChip>
+        )}
         <span style={{ fontSize: 11, color: "#3A3A48" }}>
           Clique une ligne pour ouvrir la conversation.
         </span>
