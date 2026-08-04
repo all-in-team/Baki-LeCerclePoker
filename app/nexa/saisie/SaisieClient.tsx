@@ -36,6 +36,25 @@ type RowState = {
   /** Clé côté serveur si la ligne vient de la base — sert à la suppression explicite. */
   storedKey: string | null;
   override: string;
+  /**
+   * Vrai tant que la ligne vient d'un screenshot et n'a pas été touchée. Retombe
+   * à faux à la première frappe : ce qui est marqué « extraite » est ce que tu
+   * n'as pas encore relu, pas ce qui vient d'une image.
+   */
+  fromScreenshot: boolean;
+};
+
+type Checksum = {
+  total_read: number | null; sum_rows: number; delta: number | null;
+  tolerance: number; ok: boolean; message: string | null;
+};
+type ExtractedRowOut = {
+  nickname: string; member_id: string | null; deal_text: string;
+  nlh: number; mtt: number; plo: number; spins: number; affiliate_payment: number;
+};
+type Extraction = {
+  week_start: string; week_end: string; rows: ExtractedRowOut[];
+  checksum: Checksum; rejected: { row: number | null; nickname: string | null; reason: string }[];
 };
 
 type RowFeedback = {
@@ -55,7 +74,13 @@ let UID = 1;
 const blank = (deal: string): RowState => ({
   uid: UID++, nickname: "", member_id: "", deal_text: deal,
   nlh: "", mtt: "", plo: "", spins: "", affiliate_payment: "", storedKey: null, override: "",
+  fromScreenshot: false,
 });
+/** Miroir de la colonne générée `row_key` : sert à apparier extraction et grille. */
+const keyOf = (memberId: string | null | undefined, nickname: string) => {
+  const id = String(memberId ?? "").trim();
+  return id !== "" ? id : `nick:${nickname.trim().toLowerCase()}`;
+};
 const num = (s: string) => { const n = parseFloat(String(s).replace(",", ".")); return Number.isFinite(n) ? n : NaN; };
 const payload = (r: RowState) => ({
   nickname: r.nickname.trim(), member_id: r.member_id.trim() || null, deal_text: r.deal_text,
@@ -73,7 +98,11 @@ export default function SaisieClient({ defaultDeal, initialWeek }: { defaultDeal
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [banner, setBanner] = useState<{ kind: "ok" | "err"; text: string } | null>(null);
+  const [extracting, setExtracting] = useState(false);
+  const [checksum, setChecksum] = useState<Checksum | null>(null);
+  const [extractRejects, setExtractRejects] = useState<Extraction["rejected"]>([]);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const shotRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     fetch("/api/nexa/affiliate/known-players")
@@ -81,24 +110,52 @@ export default function SaisieClient({ defaultDeal, initialWeek }: { defaultDeal
   }, []);
 
   // Charge la semaine : on ÉDITE ce qui existe, on ne retape pas.
-  const loadWeek = useCallback(async (w: string) => {
+  //
+  // `merge` = lignes issues d'un screenshot. Elles ne REMPLACENT pas la semaine :
+  // elles sont appariées par row_key aux lignes déjà en base et écrasent les seuls
+  // montants, en conservant la storedKey. Ce qui n'existait pas est ajouté. Rien
+  // n'est supprimé — la garde anti-omission du serveur reste seule maîtresse.
+  const loadWeek = useCallback(async (w: string, merge?: ExtractedRowOut[]) => {
     setLoading(true); setBanner(null); setDeletions([]); setDiff(null); setFeedback([]);
     try {
       const res = await fetch(`/api/nexa/affiliate/week?week_start=${encodeURIComponent(w)}`);
       const j = await res.json();
       if (!j.ok) { setBanner({ kind: "err", text: j.error }); setRows([blank(defaultDeal)]); return; }
-      setRows(j.rows.length
-        ? j.rows.map((s: any) => ({
-            uid: UID++, nickname: s.nickname, member_id: s.member_id ?? "", deal_text: s.deal_text,
-            nlh: String(s.nlh), mtt: String(s.mtt), plo: String(s.plo), spins: String(s.spins),
-            affiliate_payment: String(s.affiliate_payment),
-            storedKey: s.row_key, override: s.override_reason ?? "",
-          }))
-        : [blank(defaultDeal)]);
+
+      const existing: RowState[] = j.rows.map((s: any) => ({
+        uid: UID++, nickname: s.nickname, member_id: s.member_id ?? "", deal_text: s.deal_text,
+        nlh: String(s.nlh), mtt: String(s.mtt), plo: String(s.plo), spins: String(s.spins),
+        affiliate_payment: String(s.affiliate_payment),
+        storedKey: s.row_key, override: s.override_reason ?? "", fromScreenshot: false,
+      }));
+
+      if (!merge) { setRows(existing.length ? existing : [blank(defaultDeal)]); return; }
+
+      const byKey = new Map(existing.map(r => [keyOf(r.member_id, r.nickname), r]));
+      const merged: RowState[] = [...existing];
+      for (const x of merge) {
+        const k = keyOf(x.member_id, x.nickname);
+        const hit = byKey.get(k);
+        const cells = {
+          nickname: x.nickname, member_id: x.member_id ?? "", deal_text: x.deal_text,
+          nlh: String(x.nlh), mtt: String(x.mtt), plo: String(x.plo), spins: String(x.spins),
+          affiliate_payment: String(x.affiliate_payment), fromScreenshot: true,
+        };
+        if (hit) Object.assign(hit, cells);                       // correction d'une ligne existante
+        else merged.push({ uid: UID++, storedKey: null, override: "", ...cells });
+      }
+      setRows(merged);
     } finally { setLoading(false); }
   }, [defaultDeal]);
 
-  useEffect(() => { void loadWeek(week); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [week]);
+  // Une extraction en attente est appliquée par le chargement de sa semaine.
+  const pendingExtraction = useRef<ExtractedRowOut[] | null>(null);
+  useEffect(() => {
+    const merge = pendingExtraction.current;
+    pendingExtraction.current = null;
+    void loadWeek(week, merge ?? undefined);
+    /* eslint-disable-next-line react-hooks/exhaustive-deps */
+  }, [week]);
 
   // Contrôle serveur débouncé — c'est lui qui décide, pas le navigateur.
   const overrides = useMemo(() => {
@@ -127,8 +184,42 @@ export default function SaisieClient({ defaultDeal, initialWeek }: { defaultDeal
     return () => { if (timer.current) clearTimeout(timer.current); };
   }, [rows, week, overrides, deletions]);
 
+  // Toucher une cellule lève le marquage « extraite » : la ligne a été relue.
   const set = (uid: number, patch: Partial<RowState>) =>
-    setRows(rs => rs.map(r => (r.uid === uid ? { ...r, ...patch } : r)));
+    setRows(rs => rs.map(r => (r.uid === uid ? { ...r, ...patch, fromScreenshot: false } : r)));
+
+  // ── Extraction depuis un screenshot ──────────────────────────────────────
+  // NE FAIT QUE PRÉ-REMPLIR. Aucune écriture : le chemin reste extraction →
+  // grille → validate → ta relecture → Enregistrer.
+  async function extract(file: File) {
+    setExtracting(true); setBanner(null); setChecksum(null); setExtractRejects([]);
+    try {
+      const fd = new FormData();
+      fd.append("file", file);
+      const res = await fetch("/api/nexa/affiliate/extract", { method: "POST", body: fd });
+      const j = await res.json();
+      if (!j.ok) { setBanner({ kind: "err", text: j.error ?? `Extraction échouée (HTTP ${res.status}).` }); return; }
+
+      const x = j as Extraction;
+      setChecksum(x.checksum);
+      setExtractRejects(x.rejected);
+      if (x.week_start === week) {
+        await loadWeek(week, x.rows);           // même semaine : on recharge et on fusionne
+      } else {
+        pendingExtraction.current = x.rows;      // autre semaine : le changement déclenche le chargement
+        setWeek(x.week_start);
+      }
+      setBanner({
+        kind: x.checksum.ok && x.rejected.length === 0 ? "ok" : "err",
+        text: `Semaine du ${x.week_start} extraite — ${x.rows.length} ligne(s) pré-remplies. `
+          + (x.checksum.ok ? "Checksum OK. " : `⚠️ ${x.checksum.message} `)
+          + (x.rejected.length ? `⚠️ ${x.rejected.length} ligne(s) non extraites. ` : "")
+          + "Relis avant d'enregistrer — rien n'est écrit à ce stade.",
+      });
+    } catch (e: any) {
+      setBanner({ kind: "err", text: e.message ?? String(e) });
+    } finally { setExtracting(false); if (shotRef.current) shotRef.current.value = ""; }
+  }
 
   // Choisir un pseudo connu pré-remplit ID et dernier deal — jamais un rattachement.
   const onNickname = (uid: number, value: string) => {
@@ -182,6 +273,21 @@ export default function SaisieClient({ defaultDeal, initialWeek }: { defaultDeal
                    style={{ ...INPUT, width: "auto" }} />
           </label>
           {loading && <span style={{ fontSize: 12, color: "#8888A0" }}>chargement…</span>}
+
+          {/* Dépôt de screenshot : PRÉ-REMPLIT la grille, n'écrit jamais en base.
+              La semaine détectée est appliquée au sélecteur ci-contre, qui reste
+              modifiable — l'extraction propose, tu tranches. */}
+          <input ref={shotRef} type="file" accept="image/png,image/jpeg,image/webp,image/gif"
+                 style={{ display: "none" }}
+                 onChange={e => { const f = e.target.files?.[0]; if (f) void extract(f); }} />
+          <button onClick={() => shotRef.current?.click()} disabled={extracting || loading}
+                  title="Lit un screenshot du report NEXA et pré-remplit la grille. Rien n'est enregistré."
+                  style={{ padding: "8px 14px", borderRadius: 8, fontSize: 12, fontWeight: 600,
+                           border: "1px solid rgba(96,165,250,0.4)", background: "rgba(96,165,250,0.10)",
+                           color: "#60A5FA", cursor: extracting ? "wait" : "pointer" }}>
+            {extracting ? "Lecture du screenshot…" : "📷 Extraire d'un screenshot"}
+          </button>
+
           <div style={{ flex: 1 }} />
           <button onClick={save} disabled={saving || blocking > 0}
                   title={blocking > 0 ? "Corrige les lignes en erreur avant d'enregistrer" : undefined}
@@ -214,7 +320,14 @@ export default function SaisieClient({ defaultDeal, initialWeek }: { defaultDeal
                                          background: bad ? "rgba(239,68,68,0.06)" : undefined }}>
                   <td style={{ padding: 4, minWidth: 130 }}>
                     <input list="nexa-entrants" value={r.nickname} placeholder="pseudo"
-                           onChange={e => onNickname(r.uid, e.target.value)} style={INPUT} />
+                           onChange={e => onNickname(r.uid, e.target.value)}
+                           style={{ ...INPUT, ...(r.fromScreenshot ? { borderColor: "rgba(96,165,250,0.55)" } : {}) }} />
+                    {r.fromScreenshot && (
+                      <div style={{ fontSize: 10, color: "#60A5FA", marginTop: 2 }}
+                           title="Valeurs lues sur le screenshot, pas encore relues. Le marquage disparaît dès que tu touches la ligne.">
+                        📷 extraite du screenshot
+                      </div>
+                    )}
                   </td>
                   <td style={{ padding: 4, minWidth: 110 }}>
                     <input value={r.member_id} placeholder="(vide)" onChange={e => set(r.uid, { member_id: e.target.value })} style={INPUT} />
@@ -268,6 +381,32 @@ export default function SaisieClient({ defaultDeal, initialWeek }: { defaultDeal
           + ligne
         </button>
       </div>
+
+      {(checksum || extractRejects.length > 0) && (
+        <div style={CARD}>
+          <div style={{ fontSize: 12, color: "#E8E8EE", fontWeight: 600, marginBottom: 8 }}>
+            Contrôle du screenshot
+          </div>
+          {checksum && (
+            <div style={{ fontSize: 12, color: checksum.ok ? "#34D399" : "#F87171" }}>
+              {checksum.ok ? "✔" : "⚠️"} Σ des lignes {checksum.sum_rows.toFixed(2)} ·
+              {" "}total lu {checksum.total_read === null ? "illisible" : checksum.total_read.toFixed(2)}
+              {checksum.delta !== null && <> · écart {checksum.delta.toFixed(2)} (toléré {checksum.tolerance.toFixed(2)})</>}
+              {!checksum.ok && checksum.message && <div style={{ marginTop: 4 }}>{checksum.message}</div>}
+            </div>
+          )}
+          {extractRejects.length > 0 && (
+            <div style={{ marginTop: 10, fontSize: 12, color: "#F87171" }}>
+              {extractRejects.length} ligne(s) non extraites — à saisir à la main :
+              <ul style={{ margin: "6px 0 0 18px" }}>
+                {extractRejects.map((r, i) => (
+                  <li key={i}>{r.nickname ?? `ligne ${r.row}`} — {r.reason}</li>
+                ))}
+              </ul>
+            </div>
+          )}
+        </div>
+      )}
 
       {diff && (
         <div style={CARD}>
