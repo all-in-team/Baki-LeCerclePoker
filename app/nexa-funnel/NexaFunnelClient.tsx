@@ -28,12 +28,12 @@ import {
   handoverToBotAction, stopRelancesAction,
 } from "./actions";
 
-// NEXAPOKER n'a ni insurance ni rewards (pas de rakeback) — 4 colonnes seulement.
+// Le rake vient du report d'affiliation (nexa_affiliate_weeks), somme des 4
+// variantes. Dépôts / Retraits / Win-Loss ont été RETIRÉS : ce report ne les
+// contient pas. Les afficher à 0 aurait affirmé « aucun dépôt » là où la vérité
+// est « donnée absente » — inacceptable sur un écran qui sert à régler en USDT.
 const WEEKLY_COLUMNS: WeeklyColumn<NexaWeeklyStat>[] = [
   { label: "Rake", value: r => r.rake, tone: "bright" },
-  { label: "Dépôts", value: r => r.deposits },
-  { label: "Retraits", value: r => r.withdrawals },
-  { label: "Win/Loss", value: r => r.winloss, tone: "signed" },
 ];
 
 const OS_LABEL: Record<string, string> = { windows: "🪟", android: "🤖", mac: "🍎" };
@@ -72,9 +72,8 @@ const COLUMNS: Col[] = [
   { key: "questions", label: "❓" },
   { key: "weeks", label: "Semaines", align: "right" },
   { key: "rake", label: "Σ Rake", align: "right", numeric: true },
-  { key: "dep", label: "Σ Dépôts", align: "right", numeric: true },
-  { key: "wd", label: "Σ Retraits", align: "right", numeric: true },
-  { key: "wl", label: "Σ Win/Loss", align: "right", numeric: true },
+  // Σ Dépôts / Σ Retraits / Σ Win-Loss retirés avec la bascule sur le report
+  // d'affiliation, qui ne porte pas ces données. Voir WEEKLY_COLUMNS ci-dessus.
 ];
 
 /** Lien vers le sujet Telegram du lead — même construction que côté serveur. */
@@ -390,9 +389,6 @@ function LeadRow({ lead, cols, selected, onSelect }: {
       case "questions": return <span style={{ color: lead.questions_count > 0 ? "#F0B90B" : "#555568" }}>{lead.questions_count || "—"}</span>;
       case "weeks": return <span style={{ color: "#8888A0" }}>{lead.weeks_count || "—"}</span>;
       case "rake": return <span style={{ color: "#E8E8EE", fontWeight: 600 }}>{lead.weeks_count ? fmtAmount(lead.total_rake) : "—"}</span>;
-      case "dep": return <span style={{ color: "#8888A0" }}>{lead.weeks_count ? fmtAmount(lead.total_deposits) : "—"}</span>;
-      case "wd": return <span style={{ color: "#8888A0" }}>{lead.weeks_count ? fmtAmount(lead.total_withdrawals) : "—"}</span>;
-      case "wl": return lead.weeks_count ? <SignedAmount value={lead.total_winloss} /> : <span style={{ color: "#555568" }}>—</span>;
       default: return null;
     }
   };

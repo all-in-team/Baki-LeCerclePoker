@@ -1070,9 +1070,6 @@ export function saveNexaNotes(leadId: number, notes: string): { ok: boolean } {
 
 export type NexaLeadWithStats = NexaLead & {
   total_rake: number;
-  total_deposits: number;
-  total_withdrawals: number;
-  total_winloss: number;
   weeks_count: number;
   nickname: string | null;
   questions_count: number;
@@ -1091,9 +1088,6 @@ export function getNexaLeads(): NexaLeadWithStats[] {
   return getDb().prepare(`
     SELECT l.*,
       COALESCE(s.total_rake, 0) AS total_rake,
-      COALESCE(s.total_deposits, 0) AS total_deposits,
-      COALESCE(s.total_withdrawals, 0) AS total_withdrawals,
-      COALESCE(s.total_winloss, 0) AS total_winloss,
       COALESCE(s.weeks_count, 0) AS weeks_count,
       s.nickname AS nickname,
       COALESCE(q.n, 0) AS questions_count,
@@ -1112,15 +1106,20 @@ export function getNexaLeads(): NexaLeadWithStats[] {
              MAX(CASE WHEN direction = 'in' THEN id END) AS last_in_id
       FROM bot_messages GROUP BY lead_id
     ) m ON m.lead_id = l.id
+    -- Rake NEXA : UNE SEULE source de vérité, le report d'affiliation
+    -- (nexa_affiliate_weeks). Le rake d'une semaine est la somme des 4 variantes.
+    -- Dépôts / retraits / win-loss ont disparu de cet écran : le report ne les
+    -- contient pas, et afficher 0 aurait dit « aucun dépôt » là où la vérité est
+    -- « on n'a pas la donnée ». Sur un back-office qui sert à régler des joueurs
+    -- en USDT, une colonne fausse est pire qu'une colonne absente (décision Hugo).
     LEFT JOIN (
       SELECT member_id,
-        SUM(rake) AS total_rake,
-        SUM(deposits) AS total_deposits,
-        SUM(withdrawals) AS total_withdrawals,
-        SUM(winloss) AS total_winloss,
+        SUM(nlh + mtt + plo + spins) AS total_rake,
         COUNT(*) AS weeks_count,
         MAX(nickname) AS nickname
-      FROM nexa_weekly_stats GROUP BY member_id
+      FROM nexa_affiliate_weeks
+      WHERE member_id IS NOT NULL
+      GROUP BY member_id
     ) s ON s.member_id = l.member_id
     LEFT JOIN (
       SELECT lead_id, COUNT(*) AS n FROM nexa_lead_events WHERE kind = 'question' GROUP BY lead_id
@@ -1134,15 +1133,23 @@ export type NexaWeeklyStat = {
   week_start: string;
   nickname: string | null;
   rake: number;
-  deposits: number;
-  withdrawals: number;
-  winloss: number;
 };
 
+/**
+ * Rake hebdo par Member ID, lu depuis le report d'affiliation.
+ *
+ * Ne remonte que les lignes PORTANT un Member ID : cette vue est indexée par ID
+ * pour se raccorder aux leads du funnel. Les lignes du report sans ID (il y en a
+ * beaucoup) existent bien en base et comptent dans la comptabilité — elles sont
+ * simplement hors de portée de cet écran-ci, qui parle de leads.
+ */
 export function getNexaWeeklyStats(): NexaWeeklyStat[] {
   return getDb().prepare(`
-    SELECT member_id, week_start, nickname, rake, deposits, withdrawals, winloss
-    FROM nexa_weekly_stats ORDER BY member_id, week_start
+    SELECT member_id, week_start, nickname,
+           (nlh + mtt + plo + spins) AS rake
+    FROM nexa_affiliate_weeks
+    WHERE member_id IS NOT NULL
+    ORDER BY member_id, week_start
   `).all() as NexaWeeklyStat[];
 }
 
