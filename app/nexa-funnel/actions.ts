@@ -20,6 +20,16 @@ export async function createGroupAction(leadId: number) {
   return ensureNexaGroup(leadId, "admin");
 }
 
+/**
+ * Ce que ferait le bouton, sans rien faire — le dashboard l'affiche AVANT d'agir :
+ * « ce contact a déjà un groupe (créé le X) → le rattacher » vs « créer un nouveau
+ * groupe ». Aucune écriture, aucun appel Telegram de création.
+ */
+export async function previewGroupAction(leadId: number) {
+  const { previewNexaGroup } = await import("@/lib/nexa-funnel");
+  return previewNexaGroup(leadId);
+}
+
 export async function saveNotesAction(leadId: number, notes: string) {
   return saveNexaNotes(leadId, notes);
 }

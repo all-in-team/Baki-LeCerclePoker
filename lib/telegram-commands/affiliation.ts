@@ -3,7 +3,8 @@ import {
   sendMsg, setSession, clearSession, AGENT_CHAT_ID,
   type Step,
 } from "./helpers";
-import { isUserbotConfigured, createPlayerGroup, inviteUserToGroup } from "@/lib/telegram-userbot";
+import { isUserbotConfigured, inviteUserToGroup, resolveUsername } from "@/lib/telegram-userbot";
+import { provisionGroup } from "@/lib/group-provisioning";
 import { TOPIC_MESSAGES } from "./onboarding";
 
 const HANDLE_RE = /^[a-z0-9_]{5,32}$/;
@@ -110,18 +111,60 @@ export async function handleAffiliationRawMessage(
   const affiliate = db.prepare(`SELECT name FROM players WHERE id = ?`).get(session.player_id) as { name: string } | undefined;
   const affiliateName = affiliate?.name ?? "Affiliate";
 
-  const result = await createPlayerGroup(0, `@${handle}`, process.env.TELEGRAM_BOT_TOKEN, handle, affiliateName);
-  if (!result || result.status === "failed") {
+  // IDENTITÉ D'ABORD (incident Alexis 2026-08-04). Ce chemin créait le groupe avec
+  // `createPlayerGroup(0, …)` : un groupe sans propriétaire Telegram, invisible à toute
+  // vérification d'unicité — et un filleul déjà client ailleurs se retrouvait avec deux
+  // groupes. On résout d'abord le @handle en vrai tg_user_id ; sans identité résolue,
+  // on ne crée plus rien (un groupe créé 10 min en retard coûte moins cher qu'un doublon).
+  const referredTgId = await resolveUsername(handle).catch(() => null);
+
+  const out = await provisionGroup({
+    tgUserId: referredTgId,
+    handle,
+    displayName: `@${handle}`,
+    ownerKind: "player",
+    ownerLabel: `@${handle}`,
+    titleSuffix: affiliateName,
+    context: `affiliate:${handle}`,
+  });
+
+  if (out.status === "ambiguous") {
     await sendMsg(chatId,
-      `❌ Erreur création groupe. Réessaie dans quelques minutes.\n` +
-      (result?.errors?.length ? `<i>${result.errors[0]}</i>` : ""),
+      `⏳ <b>C'est noté pour</b> <i>@${handle}</i>.\n\n` +
+      (referredTgId
+        ? `Il a peut-être déjà un groupe chez nous — on vérifie avant d'en ouvrir un second, pour ne pas éclater ses conversations.\n\n`
+        : `Son compte Telegram n'a pas pu être identifié automatiquement (handle privé ou introuvable).\n\n`) +
+      `@baki77777 finalise à la main et tu reçois le lien juste après 👌`,
       messageThreadId
     );
     clearSession(chatId);
     return true;
   }
 
-  const inviteResult = await inviteUserToGroup(result.chatId, handle);
+  if (out.status === "pending") {
+    await sendMsg(chatId, `⏳ Un groupe est déjà en cours de création pour <i>@${handle}</i> — laisse-lui quelques secondes.`, messageThreadId);
+    clearSession(chatId);
+    return true;
+  }
+
+  if (out.status === "failed") {
+    await sendMsg(chatId,
+      `❌ Erreur création groupe. Réessaie dans quelques minutes.\n<i>${out.error}</i>`,
+      messageThreadId
+    );
+    clearSession(chatId);
+    return true;
+  }
+
+  // Groupe existant réutilisé : le filleul est déjà client. On rattache le parrainage au
+  // groupe qu'il connaît, on n'en ouvre pas un second.
+  const result = out.status === "created"
+    ? out.raw!
+    : { chatId: Number(out.chatId), inviteLink: out.inviteLink ?? "", topicIds: out.topicIds ?? {},
+        status: "full_success" as const, failedSteps: [], errors: [], botPromoted: true };
+  const reused = out.status === "reused";
+
+  const inviteResult = reused ? { ok: false, error: "groupe existant" } : await inviteUserToGroup(result.chatId, handle);
   const autoInvited = inviteResult.ok;
 
   try {
@@ -139,14 +182,26 @@ export async function handleAffiliationRawMessage(
     return true;
   }
 
-  for (const [key, msg] of Object.entries(TOPIC_MESSAGES)) {
-    const topicId = result.topicIds[key];
-    if (topicId) {
-      await sendMsg(result.chatId, msg, topicId);
+  // Pas de re-seed sur un groupe réutilisé : ses topics vivent déjà, les re-semer
+  // reposterait les coordonnées de dépôt par-dessus une conversation en cours.
+  if (!reused) {
+    for (const [key, msg] of Object.entries(TOPIC_MESSAGES)) {
+      const topicId = result.topicIds[key];
+      if (topicId) {
+        await sendMsg(result.chatId, msg, topicId);
+      }
     }
   }
 
-  if (autoInvited) {
+  if (reused) {
+    await sendMsg(chatId,
+      `✅ <b>C'est noté pour</b> <i>@${handle}</i> !\n\n` +
+      `Il a déjà son groupe LeCercle — je l'ai rattaché à ton parrainage plutôt que d'en ouvrir un second.\n\n` +
+      (result.inviteLink ? `👉 <b>Le groupe est ici</b> :\n${result.inviteLink}\n\n` : ``) +
+      `💰 <i>Rappel : tu touches 50% des profits agency sur ce joueur.</i>`,
+      messageThreadId
+    );
+  } else if (autoInvited) {
     await sendMsg(chatId,
       `✅ <b>C'est fait !</b>\n\n` +
       `J'ai créé le groupe <i>@${handle} x LeCercle (Agent : ${affiliateName})</i> et ajouté ton filleul dedans 🎉\n\n` +
@@ -169,8 +224,8 @@ export async function handleAffiliationRawMessage(
   await sendMsg(AGENT_CHAT_ID,
     `🤝 <b>Nouveau lead affiliate</b>\n` +
     `Affiliate : <b>${affiliateName}</b> (ID ${session.player_id})\n` +
-    `Filleul : <i>@${handle}</i>\n` +
-    `Groupe : <code>${result.chatId}</code>\n` +
+    `Filleul : <i>@${handle}</i> (tg <code>${referredTgId ?? "?"}</code>)\n` +
+    `Groupe : <code>${result.chatId}</code>${reused ? " — <b>existant, réutilisé</b>" : ""}\n` +
     `Auto-invite : ${autoInvited ? "✅" : `❌ ${inviteResult.error ?? ""}`}\n` +
     `Status : ${result.status} — ${Object.keys(result.topicIds).length} topics`
   );

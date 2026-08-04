@@ -662,120 +662,174 @@ export async function handleNexaFunnelDm(chatId: number, fromId: number, text: s
 
 // ── Groupe privé (userbot) ────────────────────────────────
 // L'API Bot ne peut pas créer de groupe ; le userbot GramJS du repo si (il le fait
-// déjà pour l'onboarding joueur). Idempotent : un lead qui a déjà un groupe ne peut
-// pas en déclencher un second. En cas d'échec (userbot HS, CHANNELS_TOO_MUCH…),
-// l'admin est notifié pour créer le groupe à la main — le lead n'est jamais bloqué.
+// déjà pour l'onboarding joueur). La décision « réutiliser / créer / ne rien faire »
+// ne vit PAS ici : elle est prise par `provisionGroup` (lib/group-provisioning.ts),
+// la porte unique que partagent les quatre chemins de création. Ce qui reste ici est
+// le branchement Nexa : lier le lead, semer les topics, annoncer, journaliser.
+//
+// Historique : cette fonction cherchait déjà le groupe existant, mais ne le réutilisait
+// que si elle obtenait un lien d'invitation — sinon elle retombait dans la création.
+// C'est ce qui a donné un second groupe à Alexis le 04/08. La réutilisation est
+// désormais inconditionnelle, côté porte.
 
-export async function ensureNexaGroup(
-  leadId: number, actor: Actor = "bot",
-): Promise<{ ok: boolean; link?: string; error?: string; pending?: boolean }> {
+export type NexaGroupResult = {
+  ok: boolean;
+  link?: string;
+  error?: string;
+  pending?: boolean;
+  /** Cas ambigu : rien n'a été créé, un arbitrage manuel attend dans le back-office. */
+  needsReview?: boolean;
+  caseId?: number | null;
+  /** true = groupe existant réutilisé (aucune création). */
+  reused?: boolean;
+};
+
+export async function ensureNexaGroup(leadId: number, actor: Actor = "bot"): Promise<NexaGroupResult> {
   const lead = getNexaLeadById(leadId);
   if (!lead) return { ok: false, error: "Lead introuvable" };
   if (lead.group_invite_link) return { ok: true, link: lead.group_invite_link };
 
-  // DOUBLON INTER-FUNNEL (audit Hugo 2026-07-25) : ce lead peut déjà avoir un groupe
-  // LeCercle créé par le funnel joueur — Hakim AMIRUL et Phua avaient chacun 2 groupes
-  // vivants pour cette raison. On réutilise le groupe existant (mêmes 5 topics, dont
-  // Dépôt) plutôt que d'en créer un second. Pas de re-seed des topics, pas d'écriture
-  // dans `group_creations` : ce groupe est déjà suivi côté joueur.
-  const { findExistingGroupForTgUser, ensureInviteLink } = await import("@/lib/group-lifecycle");
-  const already = findExistingGroupForTgUser(lead.tg_user_id);
-  if (already) {
-    const link = await ensureInviteLink(already.chatId, already.inviteLink);
-    if (link) {
-      getDb().prepare(
-        `UPDATE nexa_leads SET group_chat_id = ?, group_invite_link = ?, updated_at = datetime('now') WHERE id = ?`
-      ).run(already.chatId, link, lead.id);
-      logNexaEvent(lead.id, "group_created", {
-        stage: lead.stage, actor,
-        payload: `réutilisation du groupe existant ${already.chatId} (source ${already.source}) — pas de doublon`,
-      });
-      await sendMsg(AGENT_CHAT_ID,
-        `♻️ <b>Nexa Funnel</b> — <b>${leadName(lead)}</b> avait déjà un groupe LeCercle : on le réutilise ` +
-        `(<code>${already.chatId}</code>), aucun second groupe créé.`
-      ).catch(() => {});
-      return { ok: true, link };
-    }
+  const display = lead.first_name || lead.tg_username || `Lead ${lead.id}`;
+  const { provisionGroup } = await import("@/lib/group-provisioning");
+
+  const out = await provisionGroup({
+    tgUserId: lead.tg_user_id,
+    handle: lead.tg_username,
+    displayName: display,
+    ownerKind: "nexa_lead",
+    ownerLabel: leadName(lead),
+    context: `nexa_lead:${lead.id}`,
+    room: "nexa",
+    lang: lead.lang,
+  });
+
+  if (out.status === "pending") return { ok: false, pending: true, error: "Création déjà en cours" };
+
+  if (out.status === "ambiguous") {
+    // Rien créé, rien fusionné — et le lead n'est pas bloqué pour autant : il garde son
+    // étape, Hugo tranche puis relance depuis la fiche.
+    logNexaEvent(lead.id, "admin", {
+      stage: lead.stage, actor,
+      payload: `groupe NON créé — rapprochement ambigu, arbitrage manuel${out.caseId ? ` (cas #${out.caseId})` : ""}`,
+    });
+    return { ok: false, needsReview: true, caseId: out.caseId, error: out.reason };
   }
 
-  // VERROU ATOMIQUE : une seule exécution crée le groupe. Un webhook rejoué (ou un
-  // double clic) perd la course et repart en `pending` sans rien envoyer ni créer.
-  // Le verrou expire après 5 min pour ne pas bloquer un retry après un vrai crash.
-  const claim = getDb().prepare(`
-    UPDATE nexa_leads SET group_claimed_at = datetime('now'), updated_at = datetime('now')
-    WHERE id = ? AND group_chat_id IS NULL
-      AND (group_claimed_at IS NULL OR (julianday('now') - julianday(group_claimed_at)) * 1440 > 5)
-  `).run(leadId);
-  if (claim.changes === 0) return { ok: false, pending: true, error: "Création déjà en cours" };
+  if (out.status === "failed") {
+    await notifyGroupFailure(lead, out.error);
+    return { ok: false, error: out.error };
+  }
 
-  const display = lead.first_name || lead.tg_username || `Lead ${lead.id}`;
-  try {
-    const { createPlayerGroup } = await import("@/lib/telegram-userbot");
-    // Pas de suffixe d'agent : même format que les groupes existants « X x LeCercle ».
-    const res = await createPlayerGroup(
-      lead.tg_user_id,
-      display,
-      process.env.TELEGRAM_BOT_TOKEN,
-      lead.tg_username ?? undefined,
-    );
-    if (!res || !res.inviteLink) {
-      const err = res?.errors?.join("; ") || "userbot indisponible";
-      // Verrou relâché : l'admin peut relancer depuis la fiche lead.
-      getDb().prepare(`UPDATE nexa_leads SET group_claimed_at = NULL WHERE id = ?`).run(leadId);
-      await notifyGroupFailure(lead, err);
-      return { ok: false, error: err };
-    }
-
+  // ── Groupe existant réutilisé ──
+  // DOUBLON INTER-FUNNEL (audit Hugo 2026-07-25, ré-incident Alexis 2026-08-04) : le lead
+  // peut déjà avoir un groupe LeCercle créé par le funnel joueur ou un parrainage.
+  // On le rattache tel quel — mêmes topics, dont Dépôt — sans re-seed : ce groupe vit
+  // déjà. Le lien peut être null (userbot HS) : le rattachement compte, pas le lien.
+  if (out.status === "reused") {
     getDb().prepare(
       `UPDATE nexa_leads SET group_chat_id = ?, group_invite_link = ?, updated_at = datetime('now') WHERE id = ?`
-    ).run(String(res.chatId), res.inviteLink, lead.id);
-    logNexaEvent(lead.id, "group_created", { stage: lead.stage, actor, payload: String(res.chatId) });
-
-    // Registre partagé : arme le nettoyage 24 h si le lead ne rejoint jamais son canal.
-    const { recordGroupCreation } = await import("@/lib/group-lifecycle");
-    recordGroupCreation({
-      chatId: res.chatId,
-      ownerKind: "nexa_lead",
-      ownerKey: lead.tg_user_id,
-      ownerLabel: leadName(lead),
-      title: `${display} x LeCercle`,
-      inviteLink: res.inviteLink,
-      topicIds: res.topicIds,
+    ).run(out.chatId, out.inviteLink, lead.id);
+    logNexaEvent(lead.id, "group_created", {
+      stage: lead.stage, actor,
+      payload: `réutilisation du groupe existant ${out.chatId} (source ${out.source}) — pas de doublon`,
     });
-
-    // Seed des topics — mêmes templates que les groupes existants (TOPIC_MESSAGES),
-    // notamment le topic Dépôt avec les coordonnées bancaires/crypto. Le bot est
-    // promu admin avant la création des topics, donc il poste même dans les topics
-    // fermés en lecture seule.
-    try {
-      const { TOPIC_MESSAGES } = await import("@/lib/telegram-commands/onboarding");
-      for (const [key, msg] of Object.entries(TOPIC_MESSAGES)) {
-        const topicId = res.topicIds[key];
-        if (topicId) await sendMsg(res.chatId, msg, topicId);
-      }
-    } catch (e: any) {
-      console.error(`[NEXA] topic seeding failed for lead ${lead.id}:`, e?.message ?? e);
-    }
-
-    // Retry lancé depuis le back-office : le lead n'a jamais reçu son lien → on le
-    // lui envoie ici (le chemin bot, lui, annonce côté appelant).
-    if (actor === "admin") await announceGroupOnce(lead.id, lead.tg_user_id, leadLang(lead), res.inviteLink);
-
     await sendMsg(AGENT_CHAT_ID,
-      `🔐 <b>Nexa Funnel</b> — groupe dépôt créé pour <b>${leadName(lead)}</b>\n` +
-      `ID joueur : <code>${lead.member_id ?? "—"}</code>\n` +
-      `Groupe : ${res.inviteLink}` +
-      (res.status !== "full_success" ? `\n⚠️ statut userbot : ${res.status} (${res.failedSteps.join(", ")})` : "")
+      `♻️ <b>Nexa Funnel</b> — <b>${leadName(lead)}</b> avait déjà un groupe LeCercle : on le réutilise ` +
+      `(<code>${out.chatId}</code>, source ${out.source}), aucun second groupe créé.` +
+      (out.noticePosted ? `\nMessage « NEXA ajouté à ton suivi » posté dans le groupe.` : "") +
+      (out.inviteLink ? "" : `\n⚠️ Lien d'invitation indisponible — le lead est rattaché, mais ne recevra pas de lien.`)
     ).catch(() => {});
-
-    return { ok: true, link: res.inviteLink };
-  } catch (e: any) {
-    const err = e?.message ?? String(e);
-    console.error(`[NEXA] group creation failed for lead ${lead.id}:`, err);
-    getDb().prepare(`UPDATE nexa_leads SET group_claimed_at = NULL WHERE id = ?`).run(leadId);
-    await notifyGroupFailure(lead, err);
-    return { ok: false, error: err };
+    return out.inviteLink
+      ? { ok: true, link: out.inviteLink, reused: true }
+      : { ok: true, reused: true };
   }
+
+  // ── Groupe réellement créé ──
+  if (!out.inviteLink) {
+    // Groupe créé mais sans lien : le lead ne peut pas le rejoindre. On le rattache
+    // quand même (le groupe existe, il est au registre) et on alerte.
+    getDb().prepare(
+      `UPDATE nexa_leads SET group_chat_id = ?, updated_at = datetime('now') WHERE id = ?`
+    ).run(out.chatId, lead.id);
+    await notifyGroupFailure(lead, "groupe créé mais lien d'invitation introuvable");
+    return { ok: false, error: "lien d'invitation introuvable" };
+  }
+
+  getDb().prepare(
+    `UPDATE nexa_leads SET group_chat_id = ?, group_invite_link = ?, updated_at = datetime('now') WHERE id = ?`
+  ).run(out.chatId, out.inviteLink, lead.id);
+  logNexaEvent(lead.id, "group_created", { stage: lead.stage, actor, payload: out.chatId });
+
+  // Seed des topics — mêmes templates que les groupes existants (TOPIC_MESSAGES),
+  // notamment le topic Dépôt avec les coordonnées bancaires/crypto. Le bot est
+  // promu admin avant la création des topics, donc il poste même dans les topics
+  // fermés en lecture seule.
+  try {
+    const { TOPIC_MESSAGES } = await import("@/lib/telegram-commands/onboarding");
+    for (const [key, msg] of Object.entries(TOPIC_MESSAGES)) {
+      const topicId = out.topicIds[key];
+      if (topicId) await sendMsg(Number(out.chatId), msg, topicId);
+    }
+  } catch (e: any) {
+    console.error(`[NEXA] topic seeding failed for lead ${lead.id}:`, e?.message ?? e);
+  }
+
+  // Retry lancé depuis le back-office : le lead n'a jamais reçu son lien → on le
+  // lui envoie ici (le chemin bot, lui, annonce côté appelant).
+  if (actor === "admin") await announceGroupOnce(lead.id, lead.tg_user_id, leadLang(lead), out.inviteLink);
+
+  await sendMsg(AGENT_CHAT_ID,
+    `🔐 <b>Nexa Funnel</b> — groupe dépôt créé pour <b>${leadName(lead)}</b>\n` +
+    `ID joueur : <code>${lead.member_id ?? "—"}</code>\n` +
+    `Groupe : ${out.inviteLink}`
+  ).catch(() => {});
+
+  return { ok: true, link: out.inviteLink };
+}
+
+/**
+ * Aperçu de ce que ferait « Créer le groupe », SANS rien créer ni écrire — le bouton du
+ * back-office l'affiche avant d'agir (règle Hugo : mon choix explicite en cas de doute).
+ */
+export async function previewNexaGroup(leadId: number): Promise<{
+  action: "reuse" | "create" | "review" | "already_linked";
+  chatId?: string;
+  source?: string;
+  ownerLabel?: string | null;
+  createdAt?: string | null;
+  candidates?: { chatId: string; label: string }[];
+  reason?: string;
+}> {
+  const lead = getNexaLeadById(leadId);
+  if (!lead) return { action: "review", reason: "Lead introuvable" };
+  if (lead.group_chat_id) {
+    return { action: "already_linked", chatId: String(lead.group_chat_id) };
+  }
+
+  const { provisionGroup } = await import("@/lib/group-provisioning");
+  const out = await provisionGroup({
+    tgUserId: lead.tg_user_id,
+    handle: lead.tg_username,
+    displayName: lead.first_name || lead.tg_username || `Lead ${lead.id}`,
+    ownerKind: "nexa_lead",
+    context: `nexa_lead:${lead.id}`,
+    lang: lead.lang,
+    dryRun: true,
+  });
+
+  if (out.status === "reused") {
+    return {
+      action: "reuse", chatId: out.chatId, source: out.source,
+      ownerLabel: out.ownerLabel, createdAt: out.createdAt,
+    };
+  }
+  if (out.status === "ambiguous") {
+    return {
+      action: "review", reason: out.reason,
+      candidates: out.candidates.map((c) => ({ chatId: c.chatId, label: c.label })),
+    };
+  }
+  return { action: "create" };
 }
 
 async function notifyGroupFailure(lead: NexaLead, error: string) {

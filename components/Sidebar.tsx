@@ -6,7 +6,7 @@ import { useState, useEffect } from "react";
 import {
   X, LogOut, LayoutDashboard, Users, Network,
   Sliders, Settings, Wallet, BarChart3,
-  TrendingUp, ChevronDown, ChevronRight, CalendarDays, Rocket, Banknote,
+  TrendingUp, ChevronDown, ChevronRight, CalendarDays, Rocket, Banknote, GitMerge,
 } from "lucide-react";
 
 type NavItem = { href: string; label: string; icon: React.ComponentType<{ size?: number; strokeWidth?: number }> };
@@ -20,6 +20,9 @@ const MAIN: NavItem[] = [
   { href: "/crm/affiliates", label: "Affiliates", icon: Network },
   // QQPK Funnel a rejoint le groupe FUNNEL plus bas (avec NEXAPOKER).
   { href: "/crm/games", label: "Games & Deals", icon: Sliders },
+  // File d'arbitrage des groupes : les rapprochements que le système refuse de trancher
+  // seul (un @ ressemblant n'est pas une preuve d'identité). Vide la plupart du temps.
+  { href: "/group-cases", label: "Groupes à trancher", icon: GitMerge },
   { href: "/settings", label: "Settings", icon: Settings },
 ];
 

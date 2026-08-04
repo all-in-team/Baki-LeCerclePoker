@@ -97,54 +97,200 @@ export type ExistingGroup = {
   chatId: string;
   inviteLink: string | null;
   topicIds: Record<string, number> | null;
-  source: "registry" | "player" | "nexa_lead" | "onboarding_lead";
+  source: "registry" | "player" | "nexa_lead" | "onboarding_lead" | "affiliate_lead";
+  /** Label lisible du propriétaire trouvé — sert aux traces et à l'aperçu du bouton. */
+  ownerLabel: string | null;
+  /** Date de création connue, si la source la porte (registre / lead affilié). */
+  createdAt: string | null;
 };
 
 /**
  * Le groupe déjà existant pour ce tg_user_id, toutes provenances confondues — c'est LE
  * point d'idempotence : tant que ça renvoie quelque chose, on ne crée jamais de groupe.
  * Le registre passe en premier (il connaît le lien + les topics), puis les liaisons
- * historiques (players / nexa_leads / onboarding_leads) pour les groupes d'avant ce module.
+ * historiques (players / nexa_leads / onboarding_leads / affiliate_leads) pour les
+ * groupes d'avant ce module.
+ *
+ * TOUTES les branches exigent une correspondance sur l'IDENTITÉ TELEGRAM. Un groupe
+ * qu'on ne relie à ce tg_user_id que par un handle ou un nom n'est PAS retourné ici :
+ * c'est un cas ambigu, traité par `findAmbiguousGroupCandidates` (aucune fusion
+ * automatique par approximation).
  */
 export function findExistingGroupForTgUser(tgId: number): ExistingGroup | null {
   const db = getDb();
+  if (!tgId || tgId <= 0) return null; // pas d'identité fiable ⇒ jamais de match exact
 
   const reg = db.prepare(
-    `SELECT chat_id, invite_link, topic_ids FROM group_creations
+    `SELECT chat_id, invite_link, topic_ids, owner_label, created_at FROM group_creations
      WHERE owner_key = ? AND cleaned_at IS NULL ORDER BY id DESC LIMIT 1`
-  ).get(tgId) as { chat_id: string; invite_link: string | null; topic_ids: string | null } | undefined;
+  ).get(tgId) as {
+    chat_id: string; invite_link: string | null; topic_ids: string | null;
+    owner_label: string | null; created_at: string;
+  } | undefined;
   if (reg) {
     let topics: Record<string, number> | null = null;
     try { topics = reg.topic_ids ? JSON.parse(reg.topic_ids) : null; } catch { topics = null; }
-    return { chatId: reg.chat_id, inviteLink: reg.invite_link, topicIds: topics, source: "registry" };
+    return {
+      chatId: reg.chat_id, inviteLink: reg.invite_link, topicIds: topics,
+      source: "registry", ownerLabel: reg.owner_label, createdAt: reg.created_at,
+    };
   }
 
   const player = db.prepare(
-    `SELECT telegram_group_id, alertes_topic_id, liveplay_topic_id FROM players
+    `SELECT name, telegram_group_id, alertes_topic_id, liveplay_topic_id FROM players
      WHERE telegram_id = ? AND telegram_group_id IS NOT NULL AND telegram_group_id != ''`
-  ).get(tgId) as { telegram_group_id: string; alertes_topic_id: number | null; liveplay_topic_id: number | null } | undefined;
+  ).get(tgId) as {
+    name: string; telegram_group_id: string;
+    alertes_topic_id: number | null; liveplay_topic_id: number | null;
+  } | undefined;
   if (player) {
     const topics: Record<string, number> = {};
     if (player.alertes_topic_id) topics.alertes = player.alertes_topic_id;
     if (player.liveplay_topic_id) topics.liveplay = player.liveplay_topic_id;
-    return { chatId: String(player.telegram_group_id), inviteLink: null, topicIds: topics, source: "player" };
+    return {
+      chatId: String(player.telegram_group_id), inviteLink: null, topicIds: topics,
+      source: "player", ownerLabel: player.name, createdAt: null,
+    };
   }
 
   try {
     const nexa = db.prepare(
-      `SELECT group_chat_id, group_invite_link FROM nexa_leads
+      `SELECT group_chat_id, group_invite_link, COALESCE(first_name, tg_username) AS label, created_at
+       FROM nexa_leads
        WHERE tg_user_id = ? AND group_chat_id IS NOT NULL AND group_chat_id != ''`
-    ).get(tgId) as { group_chat_id: string; group_invite_link: string | null } | undefined;
-    if (nexa) return { chatId: String(nexa.group_chat_id), inviteLink: nexa.group_invite_link, topicIds: null, source: "nexa_lead" };
+    ).get(tgId) as {
+      group_chat_id: string; group_invite_link: string | null; label: string | null; created_at: string;
+    } | undefined;
+    if (nexa) {
+      return {
+        chatId: String(nexa.group_chat_id), inviteLink: nexa.group_invite_link, topicIds: null,
+        source: "nexa_lead", ownerLabel: nexa.label, createdAt: nexa.created_at,
+      };
+    }
   } catch { /* table absente (dev) */ }
 
   const lead = db.prepare(
-    `SELECT group_chat_id, group_invite_link FROM onboarding_leads
+    `SELECT group_chat_id, group_invite_link, COALESCE(first_name, telegram_username) AS label
+     FROM onboarding_leads
      WHERE telegram_id = ? AND group_chat_id IS NOT NULL AND group_chat_id != ''`
-  ).get(tgId) as { group_chat_id: string; group_invite_link: string | null } | undefined;
-  if (lead) return { chatId: String(lead.group_chat_id), inviteLink: lead.group_invite_link, topicIds: null, source: "onboarding_lead" };
+  ).get(tgId) as { group_chat_id: string; group_invite_link: string | null; label: string | null } | undefined;
+  if (lead) {
+    return {
+      chatId: String(lead.group_chat_id), inviteLink: lead.group_invite_link, topicIds: null,
+      source: "onboarding_lead", ownerLabel: lead.label, createdAt: null,
+    };
+  }
+
+  // Parrainage affilié : `affiliate_leads` ne porte AUCUN identifiant Telegram (clé =
+  // `referred_handle`, du texte). Le seul lien fiable vers une identité Telegram passe
+  // par le joueur converti. Sans conversion, le rapprochement ne peut se faire que par
+  // handle ⇒ cas ambigu, pas un match (cf. findAmbiguousGroupCandidates).
+  try {
+    const aff = db.prepare(
+      `SELECT al.kickoff_group_id AS chat_id, al.kickoff_invite_link AS invite_link,
+              al.referred_handle AS label, al.created_at
+       FROM affiliate_leads al
+       JOIN players p ON p.id = al.converted_player_id
+       WHERE p.telegram_id = ? AND al.kickoff_group_id IS NOT NULL AND al.kickoff_group_id != ''
+       ORDER BY al.id DESC LIMIT 1`
+    ).get(tgId) as { chat_id: string; invite_link: string | null; label: string; created_at: string } | undefined;
+    if (aff) {
+      return {
+        chatId: String(aff.chat_id), inviteLink: aff.invite_link, topicIds: null,
+        source: "affiliate_lead", ownerLabel: `@${aff.label}`, createdAt: aff.created_at,
+      };
+    }
+  } catch { /* table absente (dev) */ }
 
   return null;
+}
+
+export type AmbiguousCandidate = {
+  chatId: string;
+  source: "affiliate_lead" | "player_no_tg" | "registry_no_owner";
+  label: string;
+  matchedOn: "handle" | "name";
+  createdAt: string | null;
+};
+
+/**
+ * Les groupes qu'on ne rapproche de cette personne que par le HANDLE ou le NOM — donc
+ * sans preuve d'identité Telegram. Aucun de ces groupes n'est réutilisable
+ * automatiquement : deux `@alexis` différents existent, et fusionner à tort mélange les
+ * conversations de deux joueurs. Un résultat non vide ⇒ on ne crée rien et on remonte
+ * le cas (règle Hugo 2026-08-04 : jamais de fusion automatique par approximation).
+ *
+ * Les trois trous couverts ici sont exactement ceux de l'audit :
+ *   • `affiliate_leads` non converti (créé par /affi, clé handle, tg_user_id = 0) ;
+ *   • un joueur dont `telegram_id` est NULL (groupe lié à la main par /linkgroup) ;
+ *   • une ligne de registre sans propriétaire Telegram (owner_key = 0).
+ */
+export function findAmbiguousGroupCandidates(o: {
+  handle?: string | null;
+  displayName?: string | null;
+  excludeChatId?: string | null;
+}): AmbiguousCandidate[] {
+  const db = getDb();
+  const handle = (o.handle ?? "").trim().replace(/^@/, "").toLowerCase();
+  const name = (o.displayName ?? "").trim().toLowerCase();
+  const out: AmbiguousCandidate[] = [];
+  if (!handle && !name) return out;
+
+  const push = (c: AmbiguousCandidate) => {
+    if (!c.chatId) return;
+    if (o.excludeChatId && String(c.chatId) === String(o.excludeChatId)) return;
+    if (out.some((x) => String(x.chatId) === String(c.chatId))) return;
+    out.push(c);
+  };
+
+  if (handle) {
+    try {
+      const rows = db.prepare(
+        `SELECT kickoff_group_id AS chat_id, referred_handle, created_at, status
+         FROM affiliate_leads
+         WHERE LOWER(referred_handle) = ? AND kickoff_group_id IS NOT NULL AND kickoff_group_id != ''
+           AND status IN ('pending','converted')`
+      ).all(handle) as { chat_id: string; referred_handle: string; created_at: string }[];
+      for (const r of rows) {
+        push({
+          chatId: String(r.chat_id), source: "affiliate_lead",
+          label: `@${r.referred_handle} (parrainage)`, matchedOn: "handle", createdAt: r.created_at,
+        });
+      }
+    } catch { /* table absente (dev) */ }
+  }
+
+  // Joueur sans telegram_id : le groupe existe, l'identité Telegram manque.
+  // `telegram_handle` est stocké tantôt « @x » tantôt « x » selon l'époque de saisie —
+  // d'où le REPLACE, sans quoi la moitié des lignes échapperait au rapprochement.
+  const players = db.prepare(
+    `SELECT id, name, telegram_group_id FROM players
+     WHERE telegram_id IS NULL AND telegram_group_id IS NOT NULL AND telegram_group_id != ''
+       AND (( ? != '' AND LOWER(REPLACE(COALESCE(telegram_handle,''), '@', '')) = ? )
+         OR ( ? != '' AND LOWER(name) = ? ))`
+  ).all(handle, handle, name, name) as { id: number; name: string; telegram_group_id: string }[];
+  for (const p of players) {
+    push({
+      chatId: String(p.telegram_group_id), source: "player_no_tg",
+      label: `${p.name} (#${p.id}, sans telegram_id)`,
+      matchedOn: handle && name ? "handle" : (handle ? "handle" : "name"), createdAt: null,
+    });
+  }
+
+  const orphans = db.prepare(
+    `SELECT chat_id, COALESCE(owner_label, title) AS label, created_at FROM group_creations
+     WHERE owner_key = 0 AND cleaned_at IS NULL
+       AND (( ? != '' AND LOWER(COALESCE(owner_label,'')) LIKE '%' || ? || '%' )
+         OR ( ? != '' AND LOWER(COALESCE(title,'')) LIKE '%' || ? || '%' ))`
+  ).all(handle, handle, name, name) as { chat_id: string; label: string | null; createdAt?: string; created_at: string }[];
+  for (const r of orphans) {
+    push({
+      chatId: String(r.chat_id), source: "registry_no_owner",
+      label: r.label ?? String(r.chat_id), matchedOn: handle ? "handle" : "name", createdAt: r.created_at,
+    });
+  }
+
+  return out;
 }
 
 /** Lien d'invitation d'un groupe existant : cache du registre, sinon userbot (et on cache). */
@@ -162,22 +308,64 @@ export async function ensureInviteLink(chatId: string, known?: string | null): P
   return null;
 }
 
-// ── Verrou de création du funnel joueur ───────────────────
-// `onboarding_leads` est la seule table qui a une ligne AVANT le join (upsert au /start),
-// donc le verrou vit là. Expire après 5 min pour ne pas bloquer un retry après un crash.
+// ── Verrou de création ────────────────────────────────────
+// Clé = tg_user_id, PAS le lead ni la room (incident Alexis 2026-08-04). Les verrous
+// d'avant vivaient dans `nexa_leads.group_claimed_at` et `onboarding_leads.group_claimed_at`
+// et ne se voyaient donc PAS entre eux : le funnel joueur et le funnel Nexa pouvaient
+// créer en parallèle pour le même utilisateur Telegram. Expire après 5 min pour ne pas
+// bloquer un retry après un vrai crash.
 
-export function claimPlayerGroupCreation(tgId: number): boolean {
+const CLAIM_TTL_MIN = 5;
+
+/** true = ce process a le droit de créer. false = une création est déjà en vol. */
+export function claimGroupCreation(tgId: number, context: string): boolean {
+  if (!tgId || tgId <= 0) return false; // sans identité Telegram, aucune création possible
   const r = getDb().prepare(`
-    UPDATE onboarding_leads SET group_claimed_at = datetime('now')
-    WHERE telegram_id = ? AND (group_chat_id IS NULL OR group_chat_id = '')
-      AND (group_claimed_at IS NULL OR (julianday('now') - julianday(group_claimed_at)) * 1440 > 5)
-  `).run(tgId);
+    INSERT INTO group_claims (tg_user_id, claimed_at, context) VALUES (?, datetime('now'), ?)
+    ON CONFLICT(tg_user_id) DO UPDATE SET claimed_at = datetime('now'), context = excluded.context
+    WHERE (julianday('now') - julianday(group_claims.claimed_at)) * 1440 > ?
+  `).run(tgId, context, CLAIM_TTL_MIN);
   return r.changes > 0;
 }
 
-/** Échec de création → on relâche le verrou pour qu'un prochain /start puisse réessayer. */
-export function releasePlayerGroupClaim(tgId: number) {
-  getDb().prepare(`UPDATE onboarding_leads SET group_claimed_at = NULL WHERE telegram_id = ?`).run(tgId);
+/** Échec de création → on relâche le verrou pour qu'un prochain essai reparte tout de suite. */
+export function releaseGroupClaim(tgId: number) {
+  try { getDb().prepare(`DELETE FROM group_claims WHERE tg_user_id = ?`).run(tgId); } catch { /* best-effort */ }
+}
+
+/**
+ * Un groupe trouvé hors registre (players / leads / parrainage) y entre ici, au moment
+ * où on le réutilise : sans ça il resterait invisible aux vérifications suivantes et
+ * chaque nouveau chemin recommencerait à zéro. `joined_at` est posé — ce groupe existe
+ * depuis longtemps, il ne doit jamais devenir candidat au nettoyage 24 h.
+ */
+export function backfillRegistryForExistingGroup(o: {
+  chatId: string | number;
+  ownerKind: GroupOwnerKind;
+  ownerKey: number;
+  ownerLabel?: string | null;
+  inviteLink?: string | null;
+  topicIds?: Record<string, number> | null;
+}): boolean {
+  try {
+    const r = getDb().prepare(`
+      INSERT INTO group_creations
+        (chat_id, owner_kind, owner_key, owner_label, title, invite_link, topic_ids, joined_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'))
+      ON CONFLICT(chat_id) DO UPDATE SET
+        owner_key   = CASE WHEN group_creations.owner_key = 0 THEN excluded.owner_key ELSE group_creations.owner_key END,
+        owner_label = COALESCE(group_creations.owner_label, excluded.owner_label),
+        invite_link = COALESCE(excluded.invite_link, group_creations.invite_link),
+        topic_ids   = COALESCE(group_creations.topic_ids, excluded.topic_ids)
+    `).run(
+      String(o.chatId), o.ownerKind, o.ownerKey, o.ownerLabel ?? null, o.ownerLabel ?? null,
+      o.inviteLink ?? null, o.topicIds && Object.keys(o.topicIds).length ? JSON.stringify(o.topicIds) : null,
+    );
+    return r.changes > 0;
+  } catch (e: any) {
+    console.error(`[GROUPS] backfillRegistry(${o.chatId}) failed:`, e?.message ?? e);
+    return false;
+  }
 }
 
 export function bindPlayerGroupToLead(tgId: number, chatId: string | number, inviteLink: string | null) {

@@ -2347,6 +2347,68 @@ function initSchema(db: Database.Database) {
     console.error(`[MIGRATION:add_group_lifecycle_v1] FAILED:`, err.message);
   }
 
+  // Porte unique de création de groupe (incident Alexis, 2026-08-04).
+  //
+  // Alexis avait déjà son groupe (`players.telegram_group_id = -1003723869680`, mai) ;
+  // son rattachement à NEXA lui en a créé un SECOND (-1004319796631). Le garde-fou
+  // existait pourtant : `ensureNexaGroup` appelle `findExistingGroupForTgUser`. Mais la
+  // réutilisation était CONDITIONNÉE à l'obtention d'un lien d'invitation — pas de lien
+  // (userbot HS, plus admin du vieux groupe), et le code retombait dans la création.
+  // Un groupe trouvé doit être réutilisé même sans lien : le lien est un confort, pas
+  // une condition. Et deux chemins (parrainage affilié, API admin) ne cherchaient rien
+  // du tout et n'écrivaient jamais dans le registre.
+  //
+  //   • group_claims        : LE verrou, clé = tg_user_id (pas le lead, pas la room).
+  //     Remplace les verrous par table (`nexa_leads.group_claimed_at`,
+  //     `onboarding_leads.group_claimed_at`), qui ne se voyaient pas entre eux — deux
+  //     funnels pouvaient créer en parallèle pour le MÊME utilisateur Telegram.
+  //   • group_review_cases  : les cas AMBIGUS. Correspondance par handle ou par nom
+  //     seulement ⇒ on ne crée rien, on ne fusionne rien, Hugo tranche à la main.
+  //   • group_room_notices  : dédoublonne le message « room ajoutée à ton suivi » posté
+  //     dans un groupe réutilisé — une room rattachée deux fois ne le poste qu'une fois.
+  try {
+    const fix = db.prepare(`INSERT OR IGNORE INTO _applied_fixes (name) VALUES (?)`).run("add_group_single_door_v1");
+    if (fix.changes > 0) {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS group_claims (
+          tg_user_id INTEGER PRIMARY KEY,
+          claimed_at TEXT NOT NULL DEFAULT (datetime('now')),
+          context    TEXT
+        );
+
+        CREATE TABLE IF NOT EXISTS group_review_cases (
+          id           INTEGER PRIMARY KEY AUTOINCREMENT,
+          kind         TEXT NOT NULL CHECK(kind IN ('ambiguous_match','no_tg_user_id')),
+          context      TEXT NOT NULL,
+          tg_user_id   INTEGER,
+          handle       TEXT,
+          display_name TEXT,
+          candidates   TEXT,
+          detail       TEXT,
+          status       TEXT NOT NULL DEFAULT 'open' CHECK(status IN ('open','resolved','dismissed')),
+          created_at   TEXT NOT NULL DEFAULT (datetime('now')),
+          resolved_at  TEXT,
+          resolution   TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_group_cases_status ON group_review_cases(status, created_at);
+        -- Un même contexte non résolu ne s'empile pas : re-cliquer sur « Créer le groupe »
+        -- rouvre le même cas au lieu d'en créer un dixième.
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_group_cases_open
+          ON group_review_cases(context) WHERE status = 'open';
+
+        CREATE TABLE IF NOT EXISTS group_room_notices (
+          chat_id    TEXT NOT NULL,
+          room       TEXT NOT NULL,
+          created_at TEXT NOT NULL DEFAULT (datetime('now')),
+          PRIMARY KEY (chat_id, room)
+        );
+      `);
+      console.log("[MIGRATION] add_group_single_door_v1 applied");
+    }
+  } catch (err: any) {
+    console.error(`[MIGRATION:add_group_single_door_v1] FAILED:`, err.message);
+  }
+
   // Archivage (soft-delete) de la liste Joueurs — audit Hugo 2026-07-25.
   // 142 des 237 lignes `players` n'ont JAMAIS été des joueurs : le bot est membre d'un
   // groupe communautaire sans rapport avec le poker (`𓂃🌿 نَفَحَاتٌ إِيمَانِيَّةٌ 🌿𓂃`,

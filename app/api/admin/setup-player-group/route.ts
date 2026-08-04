@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getDb } from "@/lib/db";
-import { createPlayerGroup } from "@/lib/telegram-userbot";
+import { provisionGroup } from "@/lib/group-provisioning";
 import { sendMsg } from "@/lib/telegram-commands/helpers";
 
 export async function POST(req: NextRequest) {
@@ -34,27 +34,55 @@ export async function POST(req: NextRequest) {
     db.prepare(`UPDATE players SET ${updates.join(", ")} WHERE id = ?`).run(...params);
   }
 
-  const botToken = process.env.TELEGRAM_BOT_TOKEN ?? "";
-  const result = await createPlayerGroup(tgId, player.name, botToken, telegram_handle);
+  // Porte unique : ce chemin ne regardait QUE `players.telegram_group_id` du joueur ciblé
+  // et n'écrivait jamais au registre — il pouvait donc ouvrir un second groupe à un joueur
+  // qui en avait déjà un côté lead Nexa ou parrainage (incident Alexis 2026-08-04).
+  const out = await provisionGroup({
+    tgUserId: tgId,
+    handle: telegram_handle ?? null,
+    displayName: player.name,
+    ownerKind: "player",
+    ownerLabel: player.name,
+    context: `admin_api:player#${player_id}`,
+  });
 
-  if (!result) {
-    return NextResponse.json({ error: "Userbot not configured or group creation failed" }, { status: 500 });
+  if (out.status === "ambiguous") {
+    return NextResponse.json({
+      error: "Ambiguous match — no group created, manual arbitration required",
+      reason: out.reason, case_id: out.caseId, candidates: out.candidates,
+    }, { status: 409 });
+  }
+  if (out.status === "pending") {
+    return NextResponse.json({ error: "Group creation already in flight for this telegram user" }, { status: 409 });
+  }
+  if (out.status === "failed") {
+    return NextResponse.json({ error: out.error }, { status: 500 });
   }
 
-  // Patch player row with group data
+  const result = out.status === "created"
+    ? out.raw!
+    : {
+        chatId: Number(out.chatId), inviteLink: out.inviteLink ?? "", topicIds: out.topicIds ?? {},
+        status: "full_success" as const, failedSteps: [] as string[], errors: [] as string[], botPromoted: true,
+      };
+  const reused = out.status === "reused";
+
+  // Patch player row with group data. COALESCE : sur un groupe RÉUTILISÉ on ne connaît
+  // pas forcément tous ses topics — écrire NULL par-dessus des ids valides casserait
+  // l'accounting et les alertes de ce joueur.
   const groupId = String(result.chatId);
   db.prepare(`
     UPDATE players SET
       telegram_id = ?,
       telegram_chat_id = ?,
       telegram_group_id = ?,
-      alertes_topic_id = ?,
-      liveplay_topic_id = ?,
-      accounting_topic_id = ?,
-      deals_topic_id = ?,
-      clubs_topic_id = ?,
-      depot_topic_id = ?,
-      onboarding_topic_id = ?
+      alertes_topic_id    = COALESCE(?, alertes_topic_id),
+      liveplay_topic_id   = COALESCE(?, liveplay_topic_id),
+      accounting_topic_id = COALESCE(?, accounting_topic_id),
+      deals_topic_id      = COALESCE(?, deals_topic_id),
+      clubs_topic_id      = COALESCE(?, clubs_topic_id),
+      depot_topic_id      = COALESCE(?, depot_topic_id),
+      onboarding_topic_id = COALESCE(?, onboarding_topic_id)
     WHERE id = ?
   `).run(
     tgId,
@@ -80,10 +108,13 @@ export async function POST(req: NextRequest) {
     depot: `💳 <b>Dépôt</b>\n\n⚠️ Toujours demander confirmation AVANT d'envoyer.`,
   };
 
-  for (const [key, msg] of Object.entries(TOPIC_MESSAGES)) {
-    const topicId = result.topicIds[key];
-    if (topicId) {
-      try { await sendMsg(result.chatId, msg, topicId); } catch {}
+  // Jamais de re-seed sur un groupe réutilisé : ses topics vivent déjà.
+  if (!reused) {
+    for (const [key, msg] of Object.entries(TOPIC_MESSAGES)) {
+      const topicId = result.topicIds[key];
+      if (topicId) {
+        try { await sendMsg(result.chatId, msg, topicId); } catch {}
+      }
     }
   }
 
@@ -98,6 +129,7 @@ export async function POST(req: NextRequest) {
 
   return NextResponse.json({
     ok: true,
+    reused,
     player: updated,
     group: {
       chat_id: result.chatId,

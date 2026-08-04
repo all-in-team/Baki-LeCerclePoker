@@ -24,7 +24,7 @@ import ConversationPanel from "@/components/funnel/ConversationPanel";
 import { usePendingCount } from "@/components/funnel/usePendingCount";
 import { FUNNEL_CARD } from "@/components/funnel/styles";
 import {
-  markDepositAction, relanceAction, createGroupAction, saveNotesAction,
+  markDepositAction, relanceAction, createGroupAction, previewGroupAction, saveNotesAction,
   handoverToBotAction, stopRelancesAction,
 } from "./actions";
 
@@ -535,6 +535,54 @@ function LeadDetail({ lead, weekly, events, onChanged }: {
     } finally { setBusy(null); }
   }
 
+  /**
+   * Le bouton DIT ce qu'il va faire avant de le faire (règle Hugo 2026-08-04 : mon choix
+   * explicite en cas de doute). L'aperçu ne crée rien et n'écrit rien — c'est le même
+   * moteur de décision que la création, en dry-run, donc les deux ne peuvent pas diverger.
+   */
+  async function handleGroupClick() {
+    setBusy("group"); setMsg(null);
+    try {
+      const p = await previewGroupAction(lead.id);
+
+      if (p.action === "review") {
+        // Rapprochement non prouvé : la porte refusera de créer. On ne propose même pas
+        // le choix ici — l'arbitrage se fait sur la page « Groupes à trancher », avec les
+        // candidats sous les yeux.
+        setMsg(`🕵️ ${p.reason ?? "Cas ambigu"} — rien créé. Va sur « Groupes à trancher » pour décider.`);
+        setBusy(null);
+        return;
+      }
+
+      if (p.action === "reuse") {
+        const quand = p.createdAt ? ` (créé le ${fmtDateTime(p.createdAt)})` : "";
+        const qui = p.ownerLabel ? ` — ${p.ownerLabel}` : "";
+        const ok = window.confirm(
+          `Ce contact a déjà un groupe${quand}${qui}.\n` +
+          `Groupe ${p.chatId} · source : ${p.source}\n\n` +
+          `OK = le rattacher à NEXA (aucun nouveau groupe, message « NEXA ajouté à ton suivi » posté dedans).\n` +
+          `Annuler = ne rien faire.`
+        );
+        if (!ok) { setMsg("Annulé — rien n'a été touché."); setBusy(null); return; }
+      } else if (p.action === "create") {
+        const ok = window.confirm(
+          `Aucun groupe existant trouvé pour ce contact.\n\nOK = créer un NOUVEAU groupe.`
+        );
+        if (!ok) { setMsg("Annulé — rien n'a été touché."); setBusy(null); return; }
+      }
+
+      const res = await createGroupAction(lead.id);
+      setMsg(res.ok
+        ? (res.reused ? "♻️ Groupe existant rattaché — aucun doublon créé" : "✅ Groupe créé")
+        : res.needsReview
+          ? `🕵️ Cas ambigu — rien créé, à trancher dans « Groupes à trancher »`
+          : `❌ ${res.error ?? "Erreur"}`);
+      if (res.ok) onChanged();
+    } catch (e: any) {
+      setMsg(`❌ ${e.message ?? String(e)}`);
+    } finally { setBusy(null); }
+  }
+
   const timeline: { label: string; at: string | null }[] = [
     { label: "🚀 Started", at: lead.started_at ?? lead.created_at },
     { label: "📲 App installée", at: lead.installed_at },
@@ -594,7 +642,7 @@ function LeadDetail({ lead, weekly, events, onChanged }: {
           </button>
           {!lead.group_invite_link && (
             <button style={btn} disabled={busy === "group"}
-              onClick={() => run("group", () => createGroupAction(lead.id))}>
+              onClick={() => void handleGroupClick()}>
               {busy === "group" ? "..." : "🔐 Créer le groupe"}
             </button>
           )}
