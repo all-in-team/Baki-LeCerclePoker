@@ -104,6 +104,7 @@ Internal ops + accounting tool for a single-operator poker affiliation business 
 - Server reads (SQL) → `lib/queries.ts`
 - Schema + migrations → `lib/db.ts` (`initSchema()` + `_applied_fixes`)
 - Telegram bot → `lib/telegram-commands/*.ts` (one file per command, registered in `index.ts`)
+- Live takeover (relais lead ↔ chat admin, historique `bot_messages`) → `lib/funnels/live-takeover.ts` · doc `docs/LIVE_TAKEOVER.md`
 - Pages → `app/*/page.tsx` · API routes → `app/api/**/route.ts`
 - Shared UI → `components/`
 - **Domain glossary (READ FIRST when touching balance / wallet / report code)** → `docs/DOMAIN.md`

@@ -13,8 +13,12 @@ import WeeklyImportPanel from "@/components/funnel/WeeklyImportPanel";
 import WeeklyEvolutionTable, { type WeeklyColumn } from "@/components/funnel/WeeklyEvolutionTable";
 import { VerifiedBadge, PlayedBadge, BlockedBadge, LangBadge } from "@/components/funnel/Badges";
 import { SignedAmount } from "@/components/funnel/Amounts";
+import ConversationPanel from "@/components/funnel/ConversationPanel";
 import { FUNNEL_CARD } from "@/components/funnel/styles";
-import { markDepositAction, relanceAction, createGroupAction, saveNotesAction } from "./actions";
+import {
+  markDepositAction, relanceAction, createGroupAction, saveNotesAction,
+  handoverToBotAction, stopRelancesAction,
+} from "./actions";
 
 // NEXAPOKER n'a ni insurance ni rewards (pas de rakeback) — 4 colonnes seulement.
 const WEEKLY_COLUMNS: WeeklyColumn<NexaWeeklyStat>[] = [
@@ -25,12 +29,58 @@ const WEEKLY_COLUMNS: WeeklyColumn<NexaWeeklyStat>[] = [
 ];
 
 const HEADERS = [
-  "Lead", "Étape", "ID joueur", "OS", "Groupe", "Started", "Dépôt",
+  "Lead", "💬", "Étape", "ID joueur", "OS", "Groupe", "Started", "Dépôt",
   "Relances", "❓", "Semaines", "Σ Rake", "Σ Dépôts", "Σ Retraits", "Σ Win/Loss", "",
 ];
 const COLSPAN = HEADERS.length;
 
 const OS_LABEL: Record<string, string> = { windows: "🪟", android: "🤖", mac: "🍎" };
+
+function FilterChip({ active, tone, onClick, children }: {
+  active: boolean;
+  tone?: "warn";
+  onClick: () => void;
+  children: React.ReactNode;
+}) {
+  const accent = tone === "warn" ? "#F0B90B" : "#E8E8EE";
+  return (
+    <button
+      onClick={onClick}
+      style={{
+        padding: "5px 11px", borderRadius: 999, fontSize: 11.5, fontWeight: 600, cursor: "pointer",
+        border: `1px solid ${active ? (tone === "warn" ? "rgba(240,185,11,0.4)" : "rgba(255,255,255,0.22)") : "rgba(255,255,255,0.1)"}`,
+        background: active ? (tone === "warn" ? "rgba(240,185,11,0.10)" : "rgba(255,255,255,0.06)") : "#11141A",
+        color: active ? accent : "#8888A0",
+      }}
+    >
+      {children}
+    </button>
+  );
+}
+
+/** Pastille « message non lu » + horodatage du dernier message du lead. */
+function UnreadCell({ lead }: { lead: NexaLeadWithStats }) {
+  if (!lead.last_lead_msg_at) return <span style={{ color: "#3A3A48" }}>—</span>;
+  const unread = lead.unread === 1;
+  return (
+    <span style={{ display: "inline-flex", alignItems: "center", gap: 6, whiteSpace: "nowrap" }}>
+      <span
+        style={{
+          width: 7, height: 7, borderRadius: "50%",
+          background: unread ? "#F0B90B" : "rgba(255,255,255,0.12)",
+          boxShadow: unread ? "0 0 0 3px rgba(240,185,11,0.15)" : "none", flexShrink: 0,
+        }}
+        title={unread ? "Message non lu" : "Lu"}
+      />
+      <span style={{ color: unread ? "#F0B90B" : "#555568", fontWeight: unread ? 700 : 400 }}>
+        {fmtDateTime(lead.last_lead_msg_at)}
+      </span>
+      {lead.takeover_active === 1 && (
+        <span style={{ color: "#34D399" }} title="Takeover actif — aucun message automatique n'est envoyé">🎙</span>
+      )}
+    </span>
+  );
+}
 
 export default function NexaFunnelClient({ leads, stats, events }: {
   leads: NexaLeadWithStats[];
@@ -39,6 +89,13 @@ export default function NexaFunnelClient({ leads, stats, events }: {
 }) {
   const router = useRouter();
   const [openLead, setOpenLead] = useState<number | null>(null);
+  const [onlyUnread, setOnlyUnread] = useState(false);
+
+  const unreadCount = useMemo(() => leads.filter(l => l.unread === 1).length, [leads]);
+  const visibleLeads = useMemo(
+    () => (onlyUnread ? leads.filter(l => l.unread === 1) : leads),
+    [leads, onlyUnread],
+  );
 
   const statsByMember = useMemo(() => groupByMember(stats), [stats]);
   const eventsByLead = useMemo(() => {
@@ -62,6 +119,19 @@ export default function NexaFunnelClient({ leads, stats, events }: {
         }
       />
 
+      {/* Filtre « à répondre » — en tête de table, au-dessus des en-têtes de colonnes. */}
+      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+        <FilterChip active={!onlyUnread} onClick={() => setOnlyUnread(false)}>
+          Tous ({leads.length})
+        </FilterChip>
+        <FilterChip active={onlyUnread} tone="warn" onClick={() => setOnlyUnread(true)}>
+          🔴 À répondre ({unreadCount})
+        </FilterChip>
+        <span style={{ fontSize: 11, color: "#3A3A48" }}>
+          Clique une ligne pour ouvrir la conversation.
+        </span>
+      </div>
+
       <div style={{ ...FUNNEL_CARD, padding: 0, overflowX: "auto" }}>
         <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5 }}>
           <thead>
@@ -81,7 +151,12 @@ export default function NexaFunnelClient({ leads, stats, events }: {
                 Aucun lead pour l&apos;instant — partage le deep link <code style={{ color: "#8888A0" }}>t.me/LeCercle_Lebot?start=nexa</code>
               </td></tr>
             )}
-            {leads.map(lead => (
+            {leads.length > 0 && visibleLeads.length === 0 && (
+              <tr><td colSpan={COLSPAN} style={{ padding: 24, textAlign: "center", color: "#555568" }}>
+                Aucun message en attente de réponse. 👌
+              </td></tr>
+            )}
+            {visibleLeads.map(lead => (
               <LeadRow
                 key={lead.id}
                 lead={lead}
@@ -113,7 +188,17 @@ function LeadRow({ lead, weekly, events, isOpen, onToggle, onChanged }: {
 
   return (
     <>
-      <tr style={{ borderBottom: "1px solid rgba(255,255,255,0.04)", opacity: lead.blocked ? 0.5 : 1 }}>
+      {/* La ligne entière est cliquable (§5 du brief) : un clic ouvre le panneau
+          conversation. Les liens internes (groupe) stoppent la propagation. */}
+      <tr
+        onClick={onToggle}
+        style={{
+          borderBottom: "1px solid rgba(255,255,255,0.04)",
+          opacity: lead.blocked ? 0.5 : 1,
+          cursor: "pointer",
+          background: isOpen ? "rgba(255,255,255,0.02)" : undefined,
+        }}
+      >
         <td style={td}>
           <span style={{ color: "#E8E8EE", fontWeight: 600 }}>{name}</span>
           {lead.first_name && lead.tg_username && <span style={{ color: "#555568", marginLeft: 6 }}>{lead.first_name}</span>}
@@ -125,6 +210,7 @@ function LeadRow({ lead, weekly, events, isOpen, onToggle, onChanged }: {
           {lead.cold === 1 && <span style={{ marginLeft: 6, fontSize: 10, color: "#8888A0" }}>🧊 cold</span>}
           {hasPlayed(lead) && <PlayedBadge />}
         </td>
+        <td style={td}><UnreadCell lead={lead} /></td>
         <td style={td}><span style={{ color: stage.color, fontWeight: 600 }}>{stage.label}</span></td>
         <td style={{ ...td, color: "#E8E8EE", fontFamily: "monospace" }}>
           {lead.member_id ?? "—"}
@@ -139,7 +225,7 @@ function LeadRow({ lead, weekly, events, isOpen, onToggle, onChanged }: {
           {lead.group_invite_link
             ? (
               <>
-                <a href={lead.group_invite_link} target="_blank" rel="noreferrer" style={{ color: "#34D399", fontSize: 11 }}>🔐 groupe</a>
+                <a href={lead.group_invite_link} target="_blank" rel="noreferrer" onClick={e => e.stopPropagation()} style={{ color: "#34D399", fontSize: 11 }}>🔐 groupe</a>
                 {!lead.group_joined_at && (
                   <span style={{ marginLeft: 6, fontSize: 10, color: "#F0B90B" }} title="Groupe créé, le lead ne l'a pas encore rejoint">⏳</span>
                 )}
@@ -159,7 +245,7 @@ function LeadRow({ lead, weekly, events, isOpen, onToggle, onChanged }: {
         <td style={{ ...td, textAlign: "right", color: "#8888A0" }}>{lead.weeks_count ? fmtAmount(lead.total_withdrawals) : "—"}</td>
         <td style={{ ...td, textAlign: "right" }}>{lead.weeks_count ? <SignedAmount value={lead.total_winloss} /> : <span style={{ color: "#555568" }}>—</span>}</td>
         <td style={{ padding: "10px 14px" }}>
-          <button onClick={onToggle} style={{
+          <button onClick={e => { e.stopPropagation(); onToggle(); }} style={{
             background: "none", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 6,
             color: "#8888A0", fontSize: 10.5, padding: "3px 8px", cursor: "pointer", whiteSpace: "nowrap",
           }}>
@@ -188,11 +274,13 @@ function LeadDetail({ lead, weekly, events, onChanged }: {
   const [notes, setNotes] = useState(lead.notes ?? "");
   const [msg, setMsg] = useState<string | null>(null);
 
-  async function run(key: string, fn: () => Promise<{ ok: boolean; error?: string }>) {
+  async function run(key: string, fn: () => Promise<{ ok: boolean; error?: string; warning?: string }>) {
     setBusy(key); setMsg(null);
     try {
       const res = await fn();
-      setMsg(res.ok ? "✅ Fait" : `❌ ${res.error ?? "Erreur"}`);
+      // `warning` = l'action a réussi mais un effet de bord a été supprimé (typiquement
+      // un message au lead bloqué par le takeover). Le taire ferait croire à un envoi.
+      setMsg(res.ok ? (res.warning ? `⚠️ ${res.warning}` : "✅ Fait") : `❌ ${res.error ?? "Erreur"}`);
       if (res.ok) onChanged();
     } catch (e: any) {
       setMsg(`❌ ${e.message ?? String(e)}`);
@@ -215,6 +303,11 @@ function LeadDetail({ lead, weekly, events, onChanged }: {
 
   return (
     <div style={{ display: "grid", gridTemplateColumns: "minmax(220px, 1fr) minmax(260px, 1.2fr) minmax(240px, 1fr)", gap: 20 }}>
+      {/* Conversation — en tête de fiche : c'est ce qu'on vient chercher en cliquant. */}
+      <div style={{ gridColumn: "1 / -1" }}>
+        <ConversationPanel leadId={lead.id} onChanged={onChanged} />
+      </div>
+
       {/* Timeline */}
       <div>
         <div style={{ fontSize: 10.5, fontWeight: 700, color: "#555568", textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 8 }}>Parcours</div>
@@ -267,7 +360,27 @@ function LeadDetail({ lead, weekly, events, onChanged }: {
               {busy === "group" ? "..." : "🔐 Créer le groupe"}
             </button>
           )}
+          {/* Équivalents back-office de /bot et /stop du chat admin. */}
+          {lead.takeover_active === 1 && (
+            <button style={{ ...btn, color: "#60A5FA", borderColor: "rgba(96,165,250,0.35)" }}
+              disabled={busy === "handover"}
+              onClick={() => run("handover", () => handoverToBotAction(lead.id))}
+              title="Rend la main au scénario automatique immédiatement (= /bot)">
+              {busy === "handover" ? "..." : "🤖 Rendre la main au bot"}
+            </button>
+          )}
+          {lead.relances_off !== 1 && (
+            <button style={{ ...btn, color: "#F0B90B", borderColor: "rgba(240,185,11,0.3)" }}
+              disabled={busy === "stop"}
+              onClick={() => run("stop", () => stopRelancesAction(lead.id))}
+              title="Désactive DÉFINITIVEMENT les relances de ce lead (= /stop)">
+              {busy === "stop" ? "..." : "🔕 Stop relances"}
+            </button>
+          )}
         </div>
+        {lead.relances_off === 1 && (
+          <div style={{ fontSize: 11, color: "#F0B90B", marginBottom: 8 }}>🔕 Relances désactivées sur ce lead.</div>
+        )}
         {msg && <div style={{ fontSize: 11.5, color: msg.startsWith("✅") ? "#34D399" : "#F87171", marginBottom: 8 }}>{msg}</div>}
 
         <div style={{ fontSize: 10.5, fontWeight: 700, color: "#555568", textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 6 }}>Notes</div>

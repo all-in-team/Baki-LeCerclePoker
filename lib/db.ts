@@ -2538,4 +2538,98 @@ function initSchema(db: Database.Database) {
   } catch (err: any) {
     console.error(`[MIGRATION:add_last_player_activity_v1] FAILED:`, err.message);
   }
+
+  // Reprise en main humaine du bot funnel — « live takeover » (Hugo 2026-08-04).
+  //
+  // Problème : le bot Nexa est 100 % scripté. Un lead qui pose une question hors
+  // scénario reçoit une réponse générique et personne ne voit passer la question.
+  // Le funnel n'a AUCUN historique de conversation : `nexa_lead_events` journalise
+  // des transitions, pas des messages.
+  //
+  //   • bot_messages : l'historique complet, entrant ET sortant, takeover ou pas.
+  //     C'est la source de vérité du panneau conversation du back-office.
+  //     `created_at` est en millisecondes (strftime %f) et non `datetime('now')` :
+  //     un message scripté et une réponse d'opérateur peuvent partir dans la même
+  //     seconde, et le panneau doit afficher l'ordre RÉEL. Le format reste
+  //     lexicographiquement triable et compatible avec fmtDateTime (slice 0-16).
+  //     L'index UNIQUE partiel sur les entrants est le garde-fou d'idempotence :
+  //     même si Telegram rejoue un update, un message lead n'est relayé qu'une fois.
+  //
+  //   • relay_map : admin_message_id -> lead_id. C'est ce qui permet de résoudre le
+  //     lead quand l'opérateur utilise « Répondre » sur un post du chat admin.
+  //     Clé composite (chat, message) : les message_id ne sont uniques QUE par chat,
+  //     un UNIQUE sur admin_message_id seul casserait à tout changement de chat admin.
+  //     Purgée à 30 j par le cron (au-delà, plus personne ne répond à un vieux post).
+  //
+  //   • telegram_updates : dédoublonnage au niveau update. Telegram rejoue un update
+  //     quand le webhook dépasse son délai — c'est déjà arrivé sur ce repo (double
+  //     création de groupe, double message de bienvenue, cf. add_nexa_group_claim_v1).
+  //     Une ligne par update_id traité, purgée à 24 h.
+  //
+  //   • nexa_leads.takeover_until : tant que ce timestamp est dans le futur, aucun
+  //     message AUTOMATIQUE ne part vers ce lead (relances, promotions d'import,
+  //     confirmation de dépôt). Les réponses aux clics de bouton, elles, continuent —
+  //     un lead qui pilote lui-même ne doit pas rester sans réponse (choix Hugo).
+  //   • relances_off : /stop dans le chat admin — désactivation DÉFINITIVE des
+  //     relances pour ce lead, indépendante du flag `cold` (qui, lui, se remet à 0
+  //     dès que le lead avance d'une étape).
+  //   • last_lead_msg_at : horodatage AFFICHÉ à côté de la pastille. Purement cosmétique.
+  //   • last_read_msg_id : curseur de lecture, comparé directement au plus grand id
+  //     entrant de bot_messages (« non lu ⇔ il existe un entrant d'id supérieur »).
+  //     Ni horloge ni colonne miroir, volontairement : avec des timestamps,
+  //     `strftime('%f')` plafonne à la milliseconde et un message reçu pendant
+  //     l'ouverture du panneau passait pour lu ; avec une colonne `last_lead_msg_id`
+  //     mise à jour juste après l'INSERT, une lecture intercalée entre les deux le
+  //     ratait aussi. Comparer au contenu réel de la table ferme les deux fenêtres.
+  try {
+    const fix = db.prepare(`INSERT OR IGNORE INTO _applied_fixes (name) VALUES (?)`).run("add_live_takeover_v1");
+    if (fix.changes > 0) {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS bot_messages (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          lead_id INTEGER NOT NULL REFERENCES nexa_leads(id),
+          direction TEXT NOT NULL CHECK(direction IN ('in','out')),
+          sender TEXT NOT NULL,
+          kind TEXT NOT NULL DEFAULT 'text',
+          text TEXT,
+          telegram_message_id INTEGER,
+          created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%f','now'))
+        );
+        CREATE INDEX IF NOT EXISTS idx_bot_messages_lead ON bot_messages(lead_id, created_at);
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_bot_messages_in_unique
+          ON bot_messages(lead_id, telegram_message_id)
+          WHERE direction = 'in' AND telegram_message_id IS NOT NULL;
+
+        CREATE TABLE IF NOT EXISTS relay_map (
+          admin_chat_id TEXT NOT NULL,
+          admin_message_id INTEGER NOT NULL,
+          lead_id INTEGER NOT NULL REFERENCES nexa_leads(id),
+          created_at TEXT NOT NULL DEFAULT (datetime('now')),
+          PRIMARY KEY (admin_chat_id, admin_message_id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_relay_map_lead ON relay_map(lead_id, created_at);
+        CREATE INDEX IF NOT EXISTS idx_relay_map_age ON relay_map(created_at);
+
+        CREATE TABLE IF NOT EXISTS telegram_updates (
+          update_id INTEGER PRIMARY KEY,
+          created_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+        CREATE INDEX IF NOT EXISTS idx_telegram_updates_age ON telegram_updates(created_at);
+      `);
+      for (const sql of [
+        `ALTER TABLE nexa_leads ADD COLUMN takeover_until TEXT`,
+        `ALTER TABLE nexa_leads ADD COLUMN takeover_by TEXT`,
+        `ALTER TABLE nexa_leads ADD COLUMN relances_off INTEGER NOT NULL DEFAULT 0`,
+        `ALTER TABLE nexa_leads ADD COLUMN last_lead_msg_at TEXT`,
+        `ALTER TABLE nexa_leads ADD COLUMN last_read_msg_id INTEGER NOT NULL DEFAULT 0`,
+      ]) {
+        try { db.exec(sql); } catch { /* colonne déjà là */ }
+      }
+      db.exec(`CREATE INDEX IF NOT EXISTS idx_bot_messages_in
+                 ON bot_messages(lead_id, direction, id)`);
+      console.log("[MIGRATION] add_live_takeover_v1 applied");
+    }
+  } catch (err: any) {
+    console.error(`[MIGRATION:add_live_takeover_v1] FAILED:`, err.message);
+  }
 }

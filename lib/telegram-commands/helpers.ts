@@ -12,51 +12,56 @@ export const WALLET_GAME_PHOTO_URL = "https://lecerclepoker-production.up.railwa
 const BASE_URL = "https://lecerclepoker-production.up.railway.app";
 
 // ── Telegram API ──────────────────────────────────────────
-export async function sendMsg(chatId: number | string, text: string, messageThreadId?: number) {
+//
+// Les trois helpers d'envoi retournent `{ ok, messageId }` depuis l'ajout du live
+// takeover : `bot_messages.telegram_message_id` a besoin de l'id rendu par Telegram.
+// Rétro-compatible — les dizaines d'appels existants ignorent simplement la valeur.
+export type SendResult = { ok: boolean; messageId?: number };
+
+async function postSend(label: string, chatId: number | string, body: Record<string, any>): Promise<SendResult> {
   const token = process.env.TELEGRAM_BOT_TOKEN;
-  if (!token) return;
-  const body: Record<string, any> = { chat_id: chatId, text, parse_mode: "HTML" };
-  if (messageThreadId) body.message_thread_id = messageThreadId;
+  if (!token) return { ok: false };
   const res = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
   });
-  if (!res.ok) console.error("[TG sendMsg]", chatId, res.status, await res.text());
+  if (!res.ok) {
+    console.error(`[TG ${label}]`, chatId, res.status, await res.text());
+    return { ok: false };
+  }
+  try {
+    const json = await res.json();
+    return { ok: true, messageId: json?.result?.message_id };
+  } catch {
+    return { ok: true };
+  }
 }
 
-export async function sendMsgKeyboard(chatId: number | string, text: string, keyboard: any[][], messageThreadId?: number) {
-  const token = process.env.TELEGRAM_BOT_TOKEN;
-  if (!token) return;
+export async function sendMsg(chatId: number | string, text: string, messageThreadId?: number): Promise<SendResult> {
+  const body: Record<string, any> = { chat_id: chatId, text, parse_mode: "HTML" };
+  if (messageThreadId) body.message_thread_id = messageThreadId;
+  return postSend("sendMsg", chatId, body);
+}
+
+export async function sendMsgKeyboard(chatId: number | string, text: string, keyboard: any[][], messageThreadId?: number): Promise<SendResult> {
   const body: Record<string, any> = {
     chat_id: chatId, text, parse_mode: "HTML",
     reply_markup: JSON.stringify({ inline_keyboard: keyboard }),
   };
   if (messageThreadId) body.message_thread_id = messageThreadId;
-  const res = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  });
-  if (!res.ok) console.error("[TG sendMsgKeyboard]", chatId, res.status, await res.text());
+  return postSend("sendMsgKeyboard", chatId, body);
 }
 
 // ForceReply : ouvre directement le champ de réponse du user (clavier + focus).
 // `selective` cible le user visé dans un groupe ; en DM c'est sans effet.
-export async function sendForceReply(chatId: number | string, text: string, messageThreadId?: number) {
-  const token = process.env.TELEGRAM_BOT_TOKEN;
-  if (!token) return;
+export async function sendForceReply(chatId: number | string, text: string, messageThreadId?: number): Promise<SendResult> {
   const body: Record<string, any> = {
     chat_id: chatId, text, parse_mode: "HTML",
     reply_markup: JSON.stringify({ force_reply: true, selective: true }),
   };
   if (messageThreadId) body.message_thread_id = messageThreadId;
-  const res = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  });
-  if (!res.ok) console.error("[TG sendForceReply]", chatId, res.status, await res.text());
+  return postSend("sendForceReply", chatId, body);
 }
 
 export async function sendPhoto(chatId: number | string, photoPath: string, caption: string, messageThreadId?: number) {

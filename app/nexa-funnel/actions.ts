@@ -23,3 +23,19 @@ export async function createGroupAction(leadId: number) {
 export async function saveNotesAction(leadId: number, notes: string) {
   return saveNexaNotes(leadId, notes);
 }
+
+// ── Live takeover ─────────────────────────────────────────
+// Équivalents back-office de /bot et /stop du chat admin — même fonctions, donc
+// impossible que les deux chemins divergent.
+
+/** Rend la main au scénario automatique immédiatement (= /bot). */
+export async function handoverToBotAction(leadId: number) {
+  const { handoverToBot } = await import("@/lib/funnels/live-takeover");
+  return handoverToBot(leadId, "dashboard");
+}
+
+/** Désactive définitivement les relances de ce lead (= /stop). */
+export async function stopRelancesAction(leadId: number) {
+  const { stopRelances } = await import("@/lib/funnels/live-takeover");
+  return stopRelances(leadId, "dashboard");
+}

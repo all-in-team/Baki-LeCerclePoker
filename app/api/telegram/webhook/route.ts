@@ -61,6 +61,22 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ ok: true });
   }
 
+  // ── Idempotence des updates ─────────────────────────────────────────────────────────────────
+  // Telegram rejoue un update quand le webhook dépasse son délai de réponse : c'est la cause
+  // documentée des doubles créations de groupe et du double message de bienvenue de ce repo
+  // (cf. migration add_nexa_group_claim_v1). Aucun traitement n'a jamais besoin d'être rejoué
+  // à l'identique — on coupe donc en amont, une fois pour toutes, plutôt que de multiplier les
+  // verrous par feature. Fail-open : si la table est absente, l'update passe (cf. isDuplicateUpdate).
+  try {
+    const { isDuplicateUpdate } = await import("@/lib/funnels/live-takeover");
+    if (isDuplicateUpdate(update?.update_id)) {
+      console.log(`[WEBHOOK] update ${update.update_id} déjà traité — ignoré`);
+      return NextResponse.json({ ok: true });
+    }
+  } catch (e: any) {
+    console.error("[WEBHOOK] dedup indisponible:", e?.message ?? e);
+  }
+
   try {
   const updateType = update.callback_query ? "callback" : update.message?.new_chat_members ? "new_members" : update.message ? "message" : update.chat_member ? "chat_member" : "other";
   const logChat = update.message?.chat?.id ?? update.chat_member?.chat?.id ?? update.callback_query?.message?.chat?.id ?? "?";
@@ -192,6 +208,20 @@ export async function POST(req: NextRequest) {
   // Debug log every incoming message sender (helps verify owner ID)
   if (msg?.from?.id) {
     console.log(`[TG] msg from user_id=${msg.from.id} username=@${msg.from.username ?? "none"} text="${msg.text?.slice(0, 30) ?? ""}"`);
+  }
+
+  // ── Chat admin : réponse d'opérateur à un lead relayé ───────────────────────────────────────
+  // AVANT le bloc agent Claude, volontairement : si ADMIN_CHAT_ID et AGENT_TELEGRAM_CHAT_ID
+  // pointaient par erreur sur le même chat, une réponse à un lead serait sinon avalée par
+  // l'agent. handleAdminChatMessage ne consomme QUE les messages en réponse à un post
+  // référencé dans relay_map — le reste du chat continue son chemin normal.
+  if (msg?.reply_to_message && !msg.from?.is_bot) {
+    try {
+      const { handleAdminChatMessage } = await import("@/lib/funnels/live-takeover");
+      if (await handleAdminChatMessage(msg)) return NextResponse.json({ ok: true });
+    } catch (e: any) {
+      console.error("[TG ADMIN RELAY]", e?.message ?? e);
+    }
   }
 
   // Agent chat: in the dedicated agent group, route ALL non-command text
@@ -327,6 +357,30 @@ export async function POST(req: NextRequest) {
       await sendMsg(chatId, `❌ Erreur : ${e.message}`);
     }
     return NextResponse.json({ ok: true });
+  }
+
+  // ── Live takeover : capture de TOUT message entrant d'un lead ───────────────────────────────
+  // Placé APRÈS les blocs de commandes (qui retournent) et AVANT tout handler qui répondrait :
+  // un message de lead doit être persisté et relayé même quand le scénario sait quoi en faire
+  // (l'historique de conversation doit être complet, takeover ou pas — §1 du brief).
+  //
+  // Trois exclusions, dans cet ordre : les commandes (`/…`), les bots, et les clics de bouton
+  // (qui sont des callback_query et ne passent pas par ici du tout).
+  //
+  // `takeoverActive` coupe la suite : pendant qu'un humain a la main, le bot ne doit produire
+  // AUCUNE réponse scriptée au texte libre — sinon le lead entend deux voix. Les clics de
+  // bouton, eux, restent fonctionnels (ils passent par le bloc callback_query, plus haut).
+  if (msg && msg.chat?.type === "private" && msg.from?.id && !msg.from.is_bot
+      && !(typeof msg.text === "string" && msg.text.startsWith("/"))) {
+    try {
+      const { captureLeadInbound } = await import("@/lib/funnels/live-takeover");
+      const captured = await captureLeadInbound(msg);
+      if (captured?.duplicate) return NextResponse.json({ ok: true });
+      if (captured?.takeoverActive) return NextResponse.json({ ok: true });
+    } catch (e: any) {
+      // Le relais ne doit jamais faire tomber le funnel : on logge et on continue.
+      console.error("[TG TAKEOVER CAPTURE]", e?.message ?? e);
+    }
   }
 
   // Funnels de room (QQPK, Nexa) — DM d'un lead : capture de l'ID joueur / reprise

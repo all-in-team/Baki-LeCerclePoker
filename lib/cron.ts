@@ -146,6 +146,22 @@ export function initCronJobs() {
     console.log("[CRON] nexa-funnel-reminders DISABLED");
   }
 
+  // Purge de relay_map — tous les jours à 5h50 Paris, juste après le nettoyage des
+  // groupes fantômes. Une entrée de plus de 30 j n'a plus d'usage : personne ne
+  // répond à un post admin d'il y a un mois, et Telegram lui-même ne permet plus de
+  // citer un message aussi ancien de façon fiable. bot_messages n'est PAS purgé :
+  // c'est l'historique de conversation, il doit rester complet.
+  cron.schedule("50 5 * * *", async () => {
+    try {
+      const { purgeRelayMap } = await import("./funnels/live-takeover");
+      const r = purgeRelayMap();
+      if (r.deleted > 0) console.log(`[CRON] relay-map-purge: ${r.deleted} entrée(s) supprimée(s)`);
+    } catch (e: any) {
+      console.error("[CRON] relay-map-purge failed:", e);
+    }
+  }, opts);
+  console.log("[CRON] relay-map-purge registered (tous les jours à 5h50 Paris)");
+
   if (process.env.CASHOUT_CRONS_ENABLED !== "true") {
     console.log("[CRON] cashout crons DISABLED (set CASHOUT_CRONS_ENABLED=true to enable)");
     return;
