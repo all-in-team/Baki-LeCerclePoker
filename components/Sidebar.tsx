@@ -34,10 +34,15 @@ const MAIN: NavItem[] = [
 //   A5NUTS  = fusion A5POKER + NUTSPK (même owner, mêmes wallets).
 //   AKS/OK POKER = fusion AKS + OKPOKER (même club, même wallet mère,
 //                  deux skins d'onboarding) ; /okpoker/pnl redirige vers /aks/pnl.
+//   NEXAPOKER a DEUX entrées, et c'est voulu : /nexapoker est la room (joueurs,
+//                  parts d'action, réconciliation du report d'affiliation), tandis
+//                  que /nexa-funnel reste le funnel d'acquisition, dans son groupe.
+//                  Le funnel reste le funnel — les leads n'y sont pas des joueurs.
 const ROOMS: NavItem[] = [
   { href: "/kkpoker/pnl", label: "KKPOKER", icon: Wallet },
   { href: "/a5nuts/pnl", label: "A5NUTS", icon: Wallet },
   { href: "/aks/pnl", label: "AKS/OK POKER", icon: Wallet },
+  { href: "/nexapoker", label: "NEXAPOKER", icon: Wallet },
 ];
 
 const GROUPS: NavGroup[] = [
