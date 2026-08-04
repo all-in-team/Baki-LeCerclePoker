@@ -2511,4 +2511,31 @@ function initSchema(db: Database.Database) {
   } catch (err: any) {
     console.error(`[MIGRATION:add_onboarding_reminder_log_v1] FAILED:`, err.message);
   }
+
+  // Dernière activité joueur (Hugo 2026-08-04) — colonne SÉPARÉE de `step_entered_at`.
+  //
+  // Pourquoi une colonne à part : `step_entered_at` répond à « depuis quand ce lead est à cette
+  // étape », info métier utilisée ailleurs. La réutiliser pour l'activité détruirait ce sens, et
+  // une écriture erronée corromprait une donnée réelle. `last_player_activity_at` est au contraire
+  // jetable : recalculable, et une erreur y reste confinée.
+  //
+  // Écrite depuis le webhook Telegram, où `from.id` EST le telegram_id fourni par Telegram —
+  // aucune résolution `chat_id -> telegram_id`, donc aucune attribution silencieusement fausse.
+  // `onboarding_leads.telegram_id` étant UNIQUE, l'UPDATE touche 0 ou 1 ligne, jamais plus.
+  //
+  // Démarre NULL et non backfillable (tg_messages vide, settings._webhook_last n'garde qu'une
+  // ligne écrasée). Pendant la transition, la relance teste AUSSI `telegram_sessions.created_at` :
+  // NULL ici ne doit pas rendre tout le monde éligible. Ne retirer l'ancienne condition qu'une
+  // fois cette colonne peuplée (~30 j).
+  try {
+    const fix = db.prepare(`INSERT OR IGNORE INTO _applied_fixes (name) VALUES (?)`).run("add_last_player_activity_v1");
+    if (fix.changes > 0) {
+      try { db.exec(`ALTER TABLE onboarding_leads ADD COLUMN last_player_activity_at TEXT`); } catch { /* colonne déjà là */ }
+      db.exec(`CREATE INDEX IF NOT EXISTS idx_onboarding_leads_activity
+                 ON onboarding_leads(last_player_activity_at)`);
+      console.log("[MIGRATION] add_last_player_activity_v1 applied");
+    }
+  } catch (err: any) {
+    console.error(`[MIGRATION:add_last_player_activity_v1] FAILED:`, err.message);
+  }
 }

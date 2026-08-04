@@ -22,6 +22,7 @@ interface StalledLead {
   tx_count: number;
   last_game_session_at: string | null;
   last_bot_at: string | null;
+  last_player_activity_at: string | null;
   wallet_count: number;
 }
 
@@ -82,6 +83,7 @@ function getStalledLeads(): StalledLead[] {
         WHERE wt.player_id = p.id AND (wt.source IS NULL OR wt.source != 'unknown')) AS tx_count,
       (SELECT MAX(gs.created_at) FROM grindhouse_sessions gs WHERE gs.player_id = p.id) AS last_game_session_at,
       ts.created_at AS last_bot_at,
+      ol.last_player_activity_at,
       (
         (SELECT COUNT(*) FROM player_wallet_games g WHERE g.player_id = p.id)
         + (SELECT COUNT(*) FROM player_wallet_cashouts c WHERE c.player_id = p.id)
@@ -118,8 +120,20 @@ function getStalledLeads(): StalledLead[] {
           AND gs.created_at >= datetime('now', ?)
       )
 
-      -- ── Activité récente : interaction bot. telegram_sessions.created_at est réécrit à chaque
-      --    setSession() (INSERT OR REPLACE), donc = dernier pas de funnel franchi par le joueur. ──
+      -- ── Activité récente : interaction joueur, mesurée par DEUX signaux complémentaires.
+      --
+      --    1. ol.last_player_activity_at : écrit au webhook à chaque message ou clic du joueur.
+      --       C'est le bon signal — il capte le joueur qui écrit tous les jours sans que son
+      --       étape de funnel ne bouge. Mais il démarre NULL (non backfillable) et ne se peuple
+      --       qu'au fil des interactions.
+      --
+      --    2. ts.created_at : réécrit à chaque setSession() (INSERT OR REPLACE), donc = dernier
+      --       pas de funnel franchi. Signal plus faible — il ne bouge PAS quand le joueur dépose
+      --       ou discute sans changer d'étape — mais déjà peuplé aujourd'hui.
+      --
+      --    Les deux sont testés tant que (1) n'est pas peuplé : sinon un NULL en (1) rendrait
+      --    tout le monde éligible du jour au lendemain. Retirer (2) seulement vers 2026-09-04. ──
+      AND (ol.last_player_activity_at IS NULL OR ol.last_player_activity_at < datetime('now', ?))
       AND (ts.created_at IS NULL OR ts.created_at < datetime('now', ?))
 
       -- ── Avancement funnel : wallet enregistré ET au moins une transaction (toutes dates).
@@ -141,10 +155,11 @@ function getStalledLeads(): StalledLead[] {
       )
   `).all(
     ...TERMINAL_STEPS,
-    `-${ACTIVITY_WINDOW_DAYS} days`,
-    `-${ACTIVITY_WINDOW_DAYS} days`,
-    `-${ACTIVITY_WINDOW_DAYS} days`,
-    `-${ACTIVITY_WINDOW_DAYS} days`,
+    `-${ACTIVITY_WINDOW_DAYS} days`, // rake
+    `-${ACTIVITY_WINDOW_DAYS} days`, // transactions wallet
+    `-${ACTIVITY_WINDOW_DAYS} days`, // sessions de jeu
+    `-${ACTIVITY_WINDOW_DAYS} days`, // last_player_activity_at (webhook)
+    `-${ACTIVITY_WINDOW_DAYS} days`, // telegram_sessions.created_at (transitoire)
   ) as StalledLead[];
 }
 
@@ -182,6 +197,7 @@ function logReminder(lead: StalledLead, phase: "8h" | "24h" | "7d", sent: boolea
         tx_count: lead.tx_count,
         last_game_session_at: lead.last_game_session_at,
         last_bot_at: lead.last_bot_at,
+        last_player_activity_at: lead.last_player_activity_at,
         wallet_count: lead.wallet_count,
       }),
     );
