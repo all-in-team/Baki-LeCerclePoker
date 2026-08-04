@@ -223,7 +223,7 @@ export function buildContextCard(lead: TopicLead): string {
     `tg_id : <code>${lead.tg_user_id}</code>`,
     ``,
     `🔗 <a href="${BASE_URL}/nexa-funnel?lead=${lead.id}">Fiche dans le back-office</a>`,
-    `<i>Écris ici : le lead reçoit ton message du bot. /bot · /stop · /note</i>`,
+    `<i>Écris ici → le lead reçoit ta réponse du bot. /bot · /stop · /note</i>`,
   ].join("\n");
 }
 

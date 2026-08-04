@@ -26,8 +26,8 @@ import { nexaCopy, NEXA_LANG_CB_PREFIX, type NexaCopy } from "@/lib/funnels/nexa
 import { SUPPORT_HANDLE } from "@/lib/funnels/shared";
 import { coerceLang, langKeyboard, langPromptText, parseLangCallback, type Lang } from "@/lib/i18n";
 import {
-  esc, isTakeoverActiveForTgId, logBotMessage, notifyAutoReplyDuringTakeover,
-  postAnchoredNotice,
+  esc, isLeadMutedForTgId, logBotMessage, notifyAutoReplyWhileMuted,
+  postAnchoredNotice, setAwaitingHuman,
 } from "@/lib/funnels/live-takeover";
 import { syncTopicForStage } from "@/lib/funnels/live-takeover-topics";
 
@@ -69,6 +69,8 @@ export type NexaLead = {
   takeover_by: string | null;
   /** /stop dans le chat admin : plus aucune relance, définitivement. */
   relances_off: number;
+  /** Non NULL = le lead réclame un humain ; aucun envoi automatique jusqu'à réponse ou /bot. */
+  awaiting_human_since: string | null;
   /** Horodatage affiché à côté de la pastille (cosmétique). */
   last_lead_msg_at: string | null;
   /** Curseur de lecture du panneau conversation — comparé à bot_messages. */
@@ -427,7 +429,7 @@ export async function handleNexaFunnelCallback(callbackId: string, data: string,
   // la main. En contrepartie l'opérateur voit passer une ligne dans le chat admin,
   // pour ne pas avoir à deviner ce que le bot vient d'envoyer par-dessus lui.
   // Non bloquant : si la notif échoue, le scénario continue.
-  void notifyAutoReplyDuringTakeover(lead.id, callbackLabel(data, c)).catch(() => {});
+  void notifyAutoReplyWhileMuted(lead.id, callbackLabel(data, c)).catch(() => {});
 
   // 🌍 Choix de langue — pilote TOUT le reste du funnel. Traité en premier, et
   // idempotent : re-cliquer réécrit la même langue et rejoue l'accueil.
@@ -453,17 +455,24 @@ export async function handleNexaFunnelCallback(callbackId: string, data: string,
   if (data === "nf_q") {
     logNexaEvent(lead.id, "question", { stage: lead.stage, actor: "bot" });
     touchInteraction(lead.id);
-    await dmMsg(chatId, c.questionAck({ handle: SUPPORT_HANDLE }));
+    // Le lead pose sa question ICI. L'ancien texte le renvoyait en DM vers
+    // @hugoroine — hérité d'avant le takeover, et à contre-emploi de tout le
+    // système : le sortir du bot, c'est perdre le fil de conversation.
+    await dmMsg(chatId, c.questionAck);
+    // Silence scripté IMMÉDIAT, sans attendre qu'un opérateur ait répondu : c'est
+    // ce clic qui déclenche l'attente. Pas de takeover_until pour autant — le lead
+    // n'a encore rien dit, rien ne justifie de bloquer 6 h de relances.
+    setAwaitingHuman(lead.id);
     await sendMsg(AGENT_CHAT_ID,
       `❓ <b>Nexa Funnel</b> — <b>${leadName(lead)}</b> a une question\n` +
-      `Étape : <code>${lead.stage}</code> · tg_id <code>${lead.tg_user_id}</code>\n` +
-      `→ redirigé vers @${SUPPORT_HANDLE}`
+      `Étape : <code>${lead.stage}</code> · tg_id <code>${lead.tg_user_id}</code>`
     ).catch(() => {});
-    // Post ANCRÉ dans le chat admin : depuis le live takeover, Hugo peut répondre
-    // directement dessus et le lead reçoit la réponse dans sa conversation avec le
-    // bot, sans avoir à ouvrir un DM séparé.
+    // Post ANCRÉ dans le sujet du lead : Hugo répond directement dedans, et le lead
+    // reçoit la réponse dans sa conversation avec le bot.
     await postAnchoredNotice(lead.id,
-      `❓ a cliqué « ${esc(c.btn.question)} »\n<i>Réponds à ce message : le lead le recevra du bot.</i>`
+      `🙋 <b>attend une réponse</b> — a cliqué « ${esc(c.btn.question)} »\n` +
+      `<i>Le bot ne lui enverra plus rien d'automatique jusqu'à ta réponse (ou /bot).</i>`,
+      true,
     ).catch(() => {});
     return;
   }
@@ -554,35 +563,64 @@ export async function handleNexaFunnelDm(chatId: number, fromId: number, text: s
   const lang = leadLang(lead);
   const c = nexaCopy(lang);
 
-  // Takeover actif : le bot se TAIT sur le texte libre. Le message a déjà été
-  // capturé et relayé dans le chat admin par le webhook ; laisser le scénario
-  // répondre par-dessus ferait parler deux voix au lead. Le message est consommé
-  // (true) pour qu'aucun autre handler ne reprenne la main.
+  // Bot muselé (takeover en cours OU lead en attente d'un humain) : le scénario se
+  // TAIT sur le texte libre. Le message a déjà été capturé et relayé dans le sujet
+  // admin par le webhook ; laisser le scénario répondre par-dessus ferait parler
+  // deux voix au lead — c'est l'incident @jokerhehee du 04/08.
   // Garde de défense en profondeur : le webhook coupe déjà en amont.
-  if (isTakeoverActiveForTgId(fromId)) return true;
-
-  // Pas encore de langue choisie et rien de commencé → on repose le sélecteur
-  // plutôt que d'entamer la séquence dans une langue qu'il n'a pas demandée.
-  if (!lead.lang_chosen_at && lead.stage === "started") {
-    await sendLangPicker(chatId);
-    touchInteraction(lead.id);
-    return true;
-  }
-
-  // Avant l'étape ID, les boutons pilotent : on renvoie l'étape courante.
-  if (NEXA_STAGE_ORDER[lead.stage] < NEXA_STAGE_ORDER.app_installed) {
-    await sendCurrentStep(chatId, lead);
-    touchInteraction(lead.id);
-    return true;
-  }
-  // ID déjà fourni : on ne parse plus rien, on route vers l'humain.
-  if (lead.member_id) {
-    await dmMsg(chatId, c.idAlreadyKnown({ handle: SUPPORT_HANDLE }));
-    touchInteraction(lead.id);
+  if (isLeadMutedForTgId(fromId)) {
+    // Seule exception : si le texte EST un ID joueur valide et qu'on n'en a pas
+    // encore, on l'enregistre en silence. Le tracking d'étapes ne doit pas dépendre
+    // de qui tient le micro ; et sans ça, l'opérateur devrait redemander au lead un
+    // ID qu'il vient d'envoyer. Aucun message ne part : Hugo voit le texte relayé.
+    const candidate = text.trim();
+    if (!lead.member_id && NEXA_MEMBER_ID_RE.test(candidate)) {
+      const owner = getDb().prepare(`SELECT id FROM nexa_leads WHERE member_id = ? AND id != ?`)
+        .get(candidate, lead.id) as { id: number } | undefined;
+      if (!owner) {
+        getDb().prepare(`UPDATE nexa_leads SET member_id = ?, updated_at = datetime('now') WHERE id = ?`)
+          .run(candidate, lead.id);
+        recordMilestone(lead.id, "account_created", "bot");
+        logNexaEvent(lead.id, "admin", { stage: lead.stage, actor: "bot", payload: `ID capté en silence : ${candidate}` });
+      }
+    }
     return true;
   }
 
   const candidate = text.trim();
+  // Un texte 100 % numérique à l'étape ID est une TENTATIVE d'ID, pas une phrase :
+  // c'est le seul texte libre que le scénario sait encore traiter tout seul.
+  const looksLikeIdAttempt = /^\d+$/.test(candidate);
+  const atIdStage = !lead.member_id && NEXA_STAGE_ORDER[lead.stage] >= NEXA_STAGE_ORDER.app_installed;
+
+  // ── Tout le reste : le lead PARLE, il ne navigue pas ──
+  //
+  // Avant, ce chemin rejouait l'étape courante (message d'accueil, rappel de dépôt,
+  // « on a bien ton ID »…). C'est exactement ce qui a produit l'incident du 04/08 :
+  // le lead écrit « Je ne veux pas », le bot lui renvoie « Bienvenue au Cercle »
+  // par-dessus la conversation d'Hugo.
+  //
+  // Un message scripté ne doit jamais répondre à une phrase. On passe donc la main
+  // à l'humain : accusé de réception (une seule fois), silence ensuite, et le lead
+  // remonte dans « À répondre ».
+  if (!atIdStage || !looksLikeIdAttempt) {
+    const first = !lead.awaiting_human_since;
+    setAwaitingHuman(lead.id);
+    touchInteraction(lead.id);
+    // L'accusé ne part qu'à l'ENTRÉE dans l'attente : un lead qui écrit cinq
+    // messages d'affilée n'en reçoit pas cinq.
+    if (first) {
+      await dmMsg(chatId, c.questionAck);
+      logNexaEvent(lead.id, "question", { stage: lead.stage, actor: "bot", payload: "texte libre" });
+      await postAnchoredNotice(lead.id,
+        `🙋 <b>attend une réponse</b> — a écrit un message hors scénario\n` +
+        `<i>Le bot ne lui enverra plus rien d'automatique jusqu'à ta réponse (ou /bot).</i>`,
+        true,
+      ).catch(() => {});
+    }
+    return true;
+  }
+
   if (!NEXA_MEMBER_ID_RE.test(candidate)) {
     await dmMsg(chatId, c.idBadFormat({ hint: memberIdHint(c) }));
     touchInteraction(lead.id);
@@ -786,8 +824,8 @@ export async function applyNexaImportPromotions(
  * `skipped` distingue « pas envoyé parce qu'un humain a la main » d'un vrai échec.
  */
 async function sendDmRaw(tgId: number, text: string, keyboard?: any[][]): Promise<{ ok: boolean; status: number; skipped?: boolean }> {
-  if (isTakeoverActiveForTgId(tgId)) {
-    console.log(`[NEXA] envoi auto supprimé — takeover actif sur tg_id=${tgId}`);
+  if (isLeadMutedForTgId(tgId)) {
+    console.log(`[NEXA] envoi auto supprimé — bot muselé sur tg_id=${tgId} (takeover ou attente humaine)`);
     return { ok: false, status: 0, skipped: true };
   }
   const token = process.env.TELEGRAM_BOT_TOKEN;
@@ -844,6 +882,9 @@ export async function runNexaFunnelReminders(): Promise<{ sent: number; blocked:
       AND relances_off = 0
       -- Takeover actif : un humain a la main, rien d'automatique ne part.
       AND (takeover_until IS NULL OR takeover_until <= datetime('now'))
+      -- Attente d'un humain : le lead a posé une question restée sans réponse.
+      -- Le relancer avec un message scripté serait la pire réponse possible.
+      AND awaiting_human_since IS NULL
   `).all(NEXA_MAX_REMINDERS) as Array<NexaLead & { hours_stuck: number; hours_since_reminder: number }>;
 
   let sent = 0, blockedCount = 0, coldCount = 0, skipped = 0;
@@ -887,7 +928,10 @@ export async function sendNexaManualReminder(leadId: number): Promise<{ ok: bool
   if (lead.relances_off) return { ok: false, error: "Relances désactivées sur ce lead (/stop)." };
   // Une relance manuelle reste une relance : elle ne doit pas s'inviter au milieu
   // d'une conversation humaine. L'opérateur reprend la main avec /bot s'il la veut.
-  if (isTakeoverActiveForTgId(lead.tg_user_id)) {
+  if (lead.awaiting_human_since) {
+    return { ok: false, error: `Ce lead attend une réponse humaine depuis ${lead.awaiting_human_since} — réponds-lui, ou /bot pour rendre la main au scénario.` };
+  }
+  if (isLeadMutedForTgId(lead.tg_user_id)) {
     return { ok: false, error: `Takeover actif jusqu'à ${lead.takeover_until} — envoie /bot dans le chat admin pour rendre la main au scénario.` };
   }
 
@@ -919,7 +963,7 @@ export async function markNexaDepositDone(leadId: number): Promise<{ ok: boolean
   recordMilestone(leadId, "deposit_done", "admin");
   const res = await sendDmRaw(lead.tg_user_id, nexaCopy(lead.lang).depositConfirmed).catch(() => null);
   if (res?.skipped) {
-    return { ok: true, warning: "Étape enregistrée, mais la confirmation n'a pas été envoyée : takeover actif. Annonce-lui toi-même, ou /bot pour rendre la main." };
+    return { ok: true, warning: "Étape enregistrée, mais la confirmation n'a pas été envoyée : le bot est muselé sur ce lead (takeover ou attente de réponse). Annonce-lui toi-même, ou /bot pour rendre la main." };
   }
   return { ok: true };
 }
@@ -944,6 +988,8 @@ export type NexaLeadWithStats = NexaLead & {
   messages_count: number;
   /** 1 = un humain a la main sur ce lead en ce moment. */
   takeover_active: number;
+  /** 1 = le lead attend une réponse humaine (bot muselé). */
+  awaiting_human: number;
 };
 
 export function getNexaLeads(): NexaLeadWithStats[] {
@@ -962,7 +1008,8 @@ export function getNexaLeads(): NexaLeadWithStats[] {
       -- l'horloge ni l'ordre des écritures ne peuvent faire disparaître une pastille.
       CASE WHEN COALESCE(m.last_in_id, 0) > l.last_read_msg_id THEN 1 ELSE 0 END AS unread,
       CASE WHEN l.takeover_until IS NOT NULL AND l.takeover_until > datetime('now')
-           THEN 1 ELSE 0 END AS takeover_active
+           THEN 1 ELSE 0 END AS takeover_active,
+      CASE WHEN l.awaiting_human_since IS NOT NULL THEN 1 ELSE 0 END AS awaiting_human
     FROM nexa_leads l
     LEFT JOIN (
       SELECT lead_id, COUNT(*) AS n,

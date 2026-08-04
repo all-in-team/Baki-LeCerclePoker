@@ -134,6 +134,39 @@ Le sujet **General** est réservé aux alertes système : échecs d'envoi, confi
 manquante, incidents. **Aucun message de lead n'y est jamais posté.** Écrire dans
 General ne déclenche rien.
 
+### Deux états de silence, pas un seul
+
+Le bot se tait pour **deux** raisons distinctes. Il fallait les deux : `takeover_until`
+n'est armé qu'à la première réponse d'opérateur, donc sur le tout premier message
+d'un lead il est encore vide — et le scénario répondait par-dessus la conversation
+humaine (incident du 04/08 : le lead écrit « Je ne veux pas », le bot lui renvoie
+« Bienvenue au Cercle »).
+
+| État                       | Armé par                                                                 | Levé par                              |
+|----------------------------|--------------------------------------------------------------------------|---------------------------------------|
+| 🙋 **Attend une réponse**  | Clic « J'ai une question », ou tout texte libre hors scénario             | Une réponse d'opérateur, ou `/bot`    |
+| 🎙 **Takeover**            | Une réponse d'opérateur (Telegram ou back-office) → +6 h                  | Expiration, ou `/bot`                 |
+
+L'attente **n'expire pas** : un lead qui a posé une question et n'a jamais eu de
+réponse ne recevra plus de relance automatique. C'est délibéré — le relancer avec un
+message scripté serait la pire réponse possible. Le filet, c'est le filtre
+**« À répondre »** du back-office, qui remonte aussi les leads en attente **même
+s'ils n'ont écrit aucun message** (un simple clic sur « J'ai une question » suffit).
+
+### Ce que le bot répond encore, et ce qu'il ne répond plus
+
+- **Clic « ❓ J'ai une question »** → « 👍 Vas-y, pose ta question ici — un membre de
+  l'équipe te répond d'ici quelques minutes. » (EN : « ask right here… »). Le lead
+  **reste dans le bot** ; plus de renvoi vers un DM externe.
+- **Texte libre hors scénario** → le même accusé, **une seule fois** (à l'entrée en
+  attente), puis silence total. Le bot ne rejoue plus jamais l'étape courante en
+  réponse à une phrase.
+- **Texte 100 % numérique à l'étape ID** → toujours traité par le scénario (c'est une
+  tentative d'ID, pas une phrase), avec le rappel de format si besoin.
+- **Pendant un silence**, un ID valide envoyé par le lead est quand même
+  **enregistré en silence** : le tracking d'étapes ne dépend pas de qui tient le
+  micro, et tu n'as pas à lui redemander un ID qu'il vient d'envoyer.
+
 ### Le mode takeover
 
 Toute réponse d'opérateur (Telegram **ou** back-office) pousse `takeover_until` à
@@ -156,12 +189,18 @@ sujet reçoit une ligne discrète à chaque clic :
 
 ### Depuis le back-office (`/nexa-funnel`)
 
-- Colonne **💬** : pastille jaune = message non lu, + horodatage du dernier message
-  du lead. 🎙 = takeover actif.
-- Filtre **« À répondre »** en tête de table.
-- **Un clic sur la ligne** ouvre le panneau conversation : historique complet
-  (lead en bleu, bot en gris, opérateur en vert), lien **🧵 Sujet Telegram**, et
-  champ de réponse.
+- Colonnes **Lead** et **💬** sont **figées à gauche** : elles restent visibles quand
+  on scrolle vers les colonnes Σ.
+- Colonne **💬** : pastille jaune = message non lu ou lead en attente, + horodatage du
+  dernier message. 🙋 = attend une réponse · 🎙 = takeover actif.
+- Filtre **« À répondre »** en tête de table (non lus **et** leads en attente).
+- Toggle **« Σ Colonnes chiffres »** : les colonnes Σ sont masquées d'office sur écran
+  étroit, ce qui supprime le scroll horizontal dans l'usage courant.
+- **Un clic sur la ligne** ouvre un **drawer latéral** ancré à l'écran (~520 px) :
+  en-tête lead (nom, étape, source, ID, 🧵 Sujet Telegram, badges) → conversation
+  scrollable → champ de réponse **toujours visible** → Parcours / Historique /
+  Actions / Notes en dessous. Fermeture par **Échap**, clic extérieur ou **✕**.
+  Le tableau reste utilisable : cliquer une autre ligne change de lead sans fermer.
 - La réponse envoyée depuis le panneau passe par **exactement la même fonction**
   (`replyToLead`) que la réponse Telegram — même envoi, même journalisation, même
   effet sur `takeover_until`.
@@ -215,6 +254,7 @@ Migrations `add_live_takeover_v1` et `add_live_takeover_topics_v1` (`lib/db.ts`)
 | `nexa_leads.admin_topic_last_at`    | Dernière activité du sujet                                   |
 | `nexa_leads.last_relayed_msg_id`    | **Curseur de relais** — la garantie « aucun message perdu »   |
 | `nexa_leads.takeover_until` / `_by` | Fin du takeover ; `NULL` = le bot a la main                   |
+| `nexa_leads.awaiting_human_since`   | 🙋 le lead attend un humain — silence scripté AVANT toute réponse |
 | `nexa_leads.relances_off`           | `/stop` — exclusion définitive des relances                   |
 | `nexa_leads.last_lead_msg_at`       | Horodatage affiché à côté de la pastille                      |
 | `nexa_leads.last_read_msg_id`       | Curseur de lecture du panneau conversation                    |
@@ -262,5 +302,6 @@ suspendu.
 | J'écris dans General, rien ne part            | Normal : General est réservé aux alertes système             |
 | Pas de ✅                                     | Réactions désactivées sur le groupe → l'envoi a quand même eu lieu |
 | Le bot répond alors que j'ai la main          | C'est un **clic de bouton** du lead — voir la ligne « a cliqué » ; `/bot` ou attends |
-| Un lead ne reçoit plus de relance             | `takeover_until` encore actif, ou `/stop` posé (`relances_off = 1`) |
+| Un lead ne reçoit plus de relance             | `takeover_until` actif, `awaiting_human_since` non levé, ou `/stop` posé |
+| Le bot ne répond plus du tout à un lead       | Il est en 🙋 attente : réponds-lui, ou `/bot` pour rendre la main au scénario |
 | Le sujet d'un lead a disparu                  | Supprimé côté Telegram : il sera recréé à son prochain message |

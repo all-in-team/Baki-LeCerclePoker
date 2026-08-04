@@ -43,7 +43,8 @@ export type NexaCopy = {
   /** Le `handle` vient de SUPPORT_HANDLE (lib/funnels/shared.ts) — jamais en dur ici. */
   allSet: (o: { handle: string }) => string;
   noLead: string;
-  questionAck: (o: { handle: string }) => string;
+  /** Le lead pose sa question ICI — plus de renvoi vers un DM externe. */
+  questionAck: string;
   myIdPrompt: (o: { hint: string }) => string;
   depositPreparing: string;
   groupFailed: string;
@@ -123,8 +124,8 @@ const FR: NexaCopy = {
   hereIsChannel: `Voici ton canal privé 👇`,
   allSet: ({ handle }) => `Tout est bon de ton côté 🃏\nUne question ? Écris directement à @${handle}.`,
   noLead: `Envoie /start pour commencer !`,
-  questionAck: ({ handle }) =>
-    `👍 Pas de souci ! Écris directement à @${handle}, on te répond tout de suite.`,
+  questionAck:
+    `👍 Vas-y, pose ta question ici — un membre de l'équipe te répond d'ici quelques minutes.`,
   myIdPrompt: ({ hint }) => `Vas-y, envoie ton ID ici 👇 (${hint}, visible dans ton profil)`,
   depositPreparing:
     `⏳ Top ! Je te prépare ton canal privé avec Hugo &amp; Baki — ça prend jusqu'à 1 minute, ` +
@@ -218,8 +219,8 @@ const EN: NexaCopy = {
   hereIsChannel: `Here's your private channel 👇`,
   allSet: ({ handle }) => `You're all set 🃏\nAnything you need? Message @${handle} directly.`,
   noLead: `Send /start to get going!`,
-  questionAck: ({ handle }) =>
-    `👍 No worries! Message @${handle} directly and we'll get right back to you.`,
+  questionAck:
+    `👍 Go ahead, ask right here — someone from the team will get back to you within minutes.`,
   myIdPrompt: ({ hint }) => `Go ahead, drop your ID here 👇 (${hint}, it's in your profile)`,
   depositPreparing:
     `⏳ Nice! Setting up your private channel with Hugo &amp; Baki — takes up to a minute, ` +

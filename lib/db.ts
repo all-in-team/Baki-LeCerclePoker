@@ -2700,4 +2700,38 @@ function initSchema(db: Database.Database) {
   } catch (err: any) {
     console.error(`[MIGRATION:add_live_takeover_topics_v1] FAILED:`, err.message);
   }
+
+  // « Attente de réponse humaine » (Hugo 2026-08-04, après le test en prod).
+  //
+  // Incident constaté : le lead @jokerhehee écrit « Je ne veux pas », et le bot lui
+  // renvoie le message d'accueil du scénario PAR-DESSUS la conversation qu'Hugo
+  // était en train d'avoir avec lui.
+  //
+  // Cause : `takeover_until` n'est armé que par une RÉPONSE d'opérateur. Sur le tout
+  // premier texte libre d'un lead, il est donc encore NULL, et handleNexaFunnelDm
+  // rejoue l'étape courante. Autrement dit, le bot parlait toujours en premier — le
+  // takeover arrivait systématiquement un message trop tard.
+  //
+  // `awaiting_human_since` comble ce trou : il est posé AVANT toute réponse
+  // d'opérateur (clic « J'ai une question », ou texte libre que le scénario ne sait
+  // pas consommer) et il suffit à museler tout envoi automatique. Colonne distincte
+  // de `takeover_until`, et non une valeur sentinelle de celui-ci, parce que les deux
+  // répondent à deux questions différentes :
+  //   • takeover_until       → « un humain A RÉPONDU, il a la main pour 6 h »
+  //   • awaiting_human_since → « un humain DOIT répondre, le bot se tait en attendant »
+  // Le second n'expire pas : il est levé par une réponse d'opérateur ou par /bot.
+  // Un lead qui attend est visible dans le filtre « À répondre » du back-office —
+  // c'est ce qui empêche l'attente silencieuse de devenir un lead perdu.
+  try {
+    const fix = db.prepare(`INSERT OR IGNORE INTO _applied_fixes (name) VALUES (?)`).run("add_nexa_awaiting_human_v1");
+    if (fix.changes > 0) {
+      try { db.exec(`ALTER TABLE nexa_leads ADD COLUMN awaiting_human_since TEXT`); } catch { /* colonne déjà là */ }
+      db.exec(`CREATE INDEX IF NOT EXISTS idx_nexa_leads_awaiting
+                 ON nexa_leads(awaiting_human_since)
+                 WHERE awaiting_human_since IS NOT NULL`);
+      console.log("[MIGRATION] add_nexa_awaiting_human_v1 applied");
+    }
+  } catch (err: any) {
+    console.error(`[MIGRATION:add_nexa_awaiting_human_v1] FAILED:`, err.message);
+  }
 }

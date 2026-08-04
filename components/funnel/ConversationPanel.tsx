@@ -123,41 +123,23 @@ export default function ConversationPanel({ leadId, onChanged }: {
   }
 
   return (
-    <div>
-      <div style={{ ...LABEL, display: "flex", alignItems: "center", gap: 8 }}>
+    // Colonne flex qui REMPLIT son conteneur : c'est ce qui garde le champ de
+    // réponse visible sans scroller, quelle que soit la longueur de l'historique.
+    // Seule la liste des messages scrolle (flex:1 + minHeight:0).
+    <div style={{ display: "flex", flexDirection: "column", flex: 1, minHeight: 0 }}>
+      <div style={{ ...LABEL, display: "flex", alignItems: "center", gap: 8, flex: "none" }}>
         <span>Conversation{messages ? ` (${messages.length})` : ""}</span>
-        {head?.takeover_active && (
-          <span
-            style={{
-              fontSize: 10, padding: "2px 6px", borderRadius: 4, letterSpacing: 0,
-              background: "rgba(52,211,153,0.12)", color: "#34D399", fontWeight: 700, textTransform: "none",
-            }}
-            title={`Aucun message automatique jusqu'à ${head.takeover_until} (UTC)`}
-          >
-            🎙 takeover actif{head.takeover_by ? ` · ${head.takeover_by}` : ""}
-          </span>
-        )}
         {head?.blocked === 1 && (
           <span style={{ fontSize: 10, color: "#F87171", fontWeight: 600, textTransform: "none", letterSpacing: 0 }}>
             🚫 le lead a bloqué le bot
           </span>
-        )}
-        {head?.topic_url && (
-          <a
-            href={head.topic_url} target="_blank" rel="noreferrer"
-            onClick={e => e.stopPropagation()}
-            style={{ fontSize: 10, color: "#60A5FA", fontWeight: 600, textTransform: "none", letterSpacing: 0 }}
-            title="Ouvrir le sujet de ce lead dans le chat admin Telegram"
-          >
-            🧵 Sujet Telegram
-          </a>
         )}
       </div>
 
       <div
         ref={scroller}
         style={{
-          maxHeight: 320, overflowY: "auto", display: "flex", flexDirection: "column", gap: 6,
+          flex: 1, minHeight: 0, overflowY: "auto", display: "flex", flexDirection: "column", gap: 6,
           padding: 10, background: "#0B0D12", border: "1px solid rgba(255,255,255,0.06)", borderRadius: 10,
         }}
       >
@@ -186,7 +168,7 @@ export default function ConversationPanel({ leadId, onChanged }: {
         })}
       </div>
 
-      <div style={{ display: "flex", gap: 8, marginTop: 8, alignItems: "flex-end" }}>
+      <div style={{ display: "flex", gap: 8, marginTop: 8, alignItems: "flex-end", flex: "none" }}>
         <textarea
           value={draft}
           onChange={e => setDraft(e.target.value)}
@@ -211,10 +193,10 @@ export default function ConversationPanel({ leadId, onChanged }: {
           {sending ? "…" : "➤ Envoyer"}
         </button>
       </div>
-      <div style={{ fontSize: 10.5, color: "#3A3A48", marginTop: 4 }}>
+      <div style={{ fontSize: 10.5, color: "#3A3A48", marginTop: 4, flex: "none" }}>
         ⌘/Ctrl + Entrée pour envoyer · l&apos;envoi repousse le takeover à +6 h
       </div>
-      {error && <div style={{ fontSize: 11.5, color: "#F87171", marginTop: 6 }}>❌ {error}</div>}
+      {error && <div style={{ fontSize: 11.5, color: "#F87171", marginTop: 6, flex: "none" }}>❌ {error}</div>}
     </div>
   );
 }

@@ -58,6 +58,8 @@ export type LeadLite = {
   takeover_until: string | null;
   takeover_by: string | null;
   relances_off: number;
+  /** Non NULL = le lead réclame un humain ; le bot se tait jusqu'à réponse ou /bot. */
+  awaiting_human_since: string | null;
   admin_topic_chat_id: string | null;
   admin_thread_id: number | null;
   last_relayed_msg_id: number;
@@ -78,7 +80,7 @@ export type BotMessage = {
 };
 
 const LEAD_COLS = `id, tg_user_id, tg_username, first_name, source, stage, member_id,
-  blocked, notes, takeover_until, takeover_by, relances_off,
+  blocked, notes, takeover_until, takeover_by, relances_off, awaiting_human_since,
   admin_topic_chat_id, admin_thread_id, last_relayed_msg_id`;
 
 // ── Utilitaires ───────────────────────────────────────────
@@ -115,7 +117,7 @@ export function getLeadByTgId(tgId: number): LeadLite | undefined {
   return getDb().prepare(`SELECT ${LEAD_COLS} FROM nexa_leads WHERE tg_user_id = ?`).get(tgId) as LeadLite | undefined;
 }
 
-/** Takeover actif = un humain a la main sur ce lead, là, maintenant. */
+/** Takeover actif = un humain a RÉPONDU, il a la main sur ce lead pour 6 h. */
 export function isTakeoverActive(lead: Pick<LeadLite, "takeover_until"> | undefined | null): boolean {
   if (!lead?.takeover_until) return false;
   return lead.takeover_until > nowSql();
@@ -127,11 +129,55 @@ export function isTakeoverActiveFor(leadId: number): boolean {
   return isTakeoverActive(row);
 }
 
+/**
+ * Le bot doit-il se taire sur ce lead ?
+ *
+ * DEUX raisons, et il fallait les deux. `takeover_until` ne couvre que l'après :
+ * il n'est armé qu'à la première réponse d'opérateur. Sur le tout premier texte
+ * libre d'un lead, il est donc encore NULL — et c'est exactement là que le bot
+ * répondait par-dessus la conversation humaine (incident @jokerhehee du 04/08).
+ * `awaiting_human_since`, posé dès que le lead réclame un humain, ferme ce trou.
+ */
+export function isLeadMuted(
+  lead: Pick<LeadLite, "takeover_until" | "awaiting_human_since"> | undefined | null,
+): boolean {
+  if (!lead) return false;
+  return isTakeoverActive(lead) || lead.awaiting_human_since !== null;
+}
+
+export function isLeadMutedFor(leadId: number): boolean {
+  const row = getDb().prepare(
+    `SELECT takeover_until, awaiting_human_since FROM nexa_leads WHERE id = ?`).get(leadId) as
+    Pick<LeadLite, "takeover_until" | "awaiting_human_since"> | undefined;
+  return isLeadMuted(row);
+}
+
 /** Idem à partir du telegram_id — utilisé par les boucles de relance. */
-export function isTakeoverActiveForTgId(tgId: number): boolean {
-  const row = getDb().prepare(`SELECT takeover_until FROM nexa_leads WHERE tg_user_id = ?`).get(tgId) as
-    { takeover_until: string | null } | undefined;
-  return isTakeoverActive(row);
+export function isLeadMutedForTgId(tgId: number): boolean {
+  const row = getDb().prepare(
+    `SELECT takeover_until, awaiting_human_since FROM nexa_leads WHERE tg_user_id = ?`).get(tgId) as
+    Pick<LeadLite, "takeover_until" | "awaiting_human_since"> | undefined;
+  return isLeadMuted(row);
+}
+
+/**
+ * « Ce lead attend un humain » — le bot se tait jusqu'à ce qu'un opérateur réponde
+ * ou lance /bot. N'arme PAS `takeover_until` : le lead n'a pas encore parlé, rien
+ * ne justifie de bloquer les relances pour 6 h. Idempotent (le premier horodatage
+ * fait foi, un second clic ne réinitialise pas l'attente).
+ */
+export function setAwaitingHuman(leadId: number): void {
+  getDb().prepare(
+    `UPDATE nexa_leads SET awaiting_human_since = COALESCE(awaiting_human_since, datetime('now')),
+       updated_at = datetime('now') WHERE id = ?`
+  ).run(leadId);
+}
+
+export function clearAwaitingHuman(leadId: number): void {
+  getDb().prepare(
+    `UPDATE nexa_leads SET awaiting_human_since = NULL, updated_at = datetime('now')
+     WHERE id = ? AND awaiting_human_since IS NOT NULL`
+  ).run(leadId);
 }
 
 /**
@@ -304,6 +350,9 @@ export async function replyToLead(opts: {
     text: logged, telegramMessageId: messageId ?? null,
   });
   bumpTakeover(lead.id, opts.operator);
+  // L'attente est levée : un humain vient de répondre, c'est précisément ce que le
+  // lead attendait. Le silence scripté est désormais porté par takeover_until.
+  clearAwaitingHuman(lead.id);
   return { ok: true, messageId };
 }
 
@@ -361,21 +410,21 @@ function relayBody(lead: LeadLite, texts: string[], withHeader: boolean): string
  * rejoué l'update — auquel cas rien n'est reposté.
  */
 export async function captureLeadInbound(msg: any): Promise<
-  { lead: LeadLite; takeoverActive: boolean; duplicate: boolean } | null
+  { lead: LeadLite; muted: boolean; duplicate: boolean } | null
 > {
   const fromId: number | undefined = msg?.from?.id;
   if (!fromId || msg?.from?.is_bot) return null;
   const lead = getLeadByTgId(fromId);
   if (!lead) return null;
 
-  const takeoverActive = isTakeoverActive(lead);
+  const muted = isLeadMuted(lead);
   const { kind, text } = describeIncoming(msg);
 
   const inserted = logBotMessage({
     leadId: lead.id, direction: "in", sender: "lead", kind, text,
     telegramMessageId: msg?.message_id ?? null,
   });
-  if (inserted === null) return { lead, takeoverActive, duplicate: true };
+  if (inserted === null) return { lead, muted, duplicate: true };
 
   getDb().prepare(
     `UPDATE nexa_leads
@@ -387,7 +436,7 @@ export async function captureLeadInbound(msg: any): Promise<
   await relayPendingForLead(lead.id).catch(e =>
     console.error(`[TAKEOVER] relais admin échoué (lead=${lead.id}):`, e?.message ?? e));
 
-  return { lead, takeoverActive, duplicate: false };
+  return { lead, muted, duplicate: false };
 }
 
 /** Un relais à la fois par lead — deux messages simultanés ne doivent pas se doubler. */
@@ -586,24 +635,34 @@ async function postForLead(leadId: number, text: string, replyTo?: number) {
  * les leads restés en mode plat, la ligne relay_map garde le « Répondre » utilisable.
  * `body` est du HTML Telegram déjà sûr — à l'appelant de l'échapper.
  */
-export async function postAnchoredNotice(leadId: number, body: string): Promise<void> {
+export async function postAnchoredNotice(leadId: number, body: string, withCta = false): Promise<void> {
   const lead = getLeadById(leadId);
   if (!lead) return;
   const inTopic = lead.admin_thread_id !== null;
-  const res = await postForLead(leadId, inTopic ? body : `${relayHeader(lead)}\n———\n${body}`);
+  // L'invite dépend du mode : dans un sujet on écrit simplement dedans, à plat il
+  // faut passer par « Répondre ». Une invite fausse coûte un aller-retour à chaque
+  // fois qu'on la lit.
+  const cta = !withCta ? "" : inTopic
+    ? `\n<i>Écris ici → le lead reçoit ta réponse du bot.</i>`
+    : `\n<i>Réponds à ce message → le lead reçoit ta réponse du bot.</i>`;
+  const head = inTopic ? "" : `${relayHeader(lead)}\n———\n`;
+  const res = await postForLead(leadId, `${head}${body}${cta}`);
   if (res.ok && res.result?.message_id) {
     mapAdminMessage(adminChatId(), res.result.message_id, leadId);
   }
 }
 
 /**
- * Ligne discrète quand le lead clique un bouton PENDANT un takeover : le scénario
- * lui répond quand même (choix Hugo — un lead qui pilote ne doit pas rester sans
- * réponse), donc l'opérateur doit voir ce qui vient de partir sans avoir à deviner.
+ * Ligne discrète quand le lead clique un bouton alors que le bot est muselé
+ * (takeover en cours OU attente d'un humain) : le scénario lui répond quand même
+ * — un lead qui pilote lui-même ne doit pas rester sans réponse (choix Hugo) —
+ * donc l'opérateur doit voir ce qui vient de partir sans avoir à le deviner.
+ *
+ * Seuls les CLICS passent ; le texte libre, lui, est silencieux (cf. isLeadMuted).
  */
-export async function notifyAutoReplyDuringTakeover(leadId: number, buttonLabel: string) {
+export async function notifyAutoReplyWhileMuted(leadId: number, buttonLabel: string) {
   const lead = getLeadById(leadId);
-  if (!lead || !isTakeoverActive(lead)) return;
+  if (!lead || !isLeadMuted(lead)) return;
   const who = lead.admin_thread_id ? "Le lead" : `<b>${esc(leadLabel(lead))}</b>`;
   await postForLead(leadId, `→ ${who} a cliqué « ${esc(buttonLabel)} » · le bot a répondu automatiquement`)
     .catch(() => {});
@@ -616,7 +675,8 @@ export function handoverToBot(leadId: number, operator: string): { ok: boolean; 
   const lead = getLeadById(leadId);
   if (!lead) return { ok: false, error: "Lead introuvable" };
   getDb().prepare(
-    `UPDATE nexa_leads SET takeover_until = NULL, updated_at = datetime('now') WHERE id = ?`
+    `UPDATE nexa_leads SET takeover_until = NULL, awaiting_human_since = NULL,
+       updated_at = datetime('now') WHERE id = ?`
   ).run(leadId);
   logEvent(leadId, `takeover rendu au bot par ${operator}`);
   return { ok: true };

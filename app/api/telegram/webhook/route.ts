@@ -381,7 +381,8 @@ export async function POST(req: NextRequest) {
       const { captureLeadInbound } = await import("@/lib/funnels/live-takeover");
       const captured = await captureLeadInbound(msg);
       if (captured?.duplicate) return NextResponse.json({ ok: true });
-      if (captured?.takeoverActive) return NextResponse.json({ ok: true });
+      // Bot muselé (takeover, ou lead en attente d'un humain) : aucune suite scriptée.
+      if (captured?.muted) return NextResponse.json({ ok: true });
     } catch (e: any) {
       // Le relais ne doit jamais faire tomber le funnel : on logge et on continue.
       console.error("[TG TAKEOVER CAPTURE]", e?.message ?? e);
