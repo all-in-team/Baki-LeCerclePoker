@@ -16,7 +16,6 @@ import {
   fmtAmount, fmtDateTime, hasPlayed,
 } from "@/lib/funnels/shared";
 import ConversionCards from "@/components/funnel/ConversionCards";
-import WeeklyImportPanel from "@/components/funnel/WeeklyImportPanel";
 import WeeklyEvolutionTable, { type WeeklyColumn } from "@/components/funnel/WeeklyEvolutionTable";
 import { VerifiedBadge, PlayedBadge, BlockedBadge, LangBadge } from "@/components/funnel/Badges";
 import { SignedAmount } from "@/components/funnel/Amounts";
@@ -234,15 +233,9 @@ export default function NexaFunnelClient({ leads, stats, events }: {
     <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
       <ConversionCards cards={cards} />
 
-      <WeeklyImportPanel
-        endpoint="/api/nexa-funnel/import"
-        onImported={() => router.refresh()}
-        description={
-          <>
-            Chiffres de la <b>semaine passée</b> — seuls les Member ID enregistrés par un lead du funnel sont importés, le reste du back-office est ignoré. Ré-uploader la même semaine écrase (correction).
-          </>
-        }
-      />
+      {/* L'import XLSX hebdo a été retiré : NEXA n'envoie pas de fichier, seulement
+          des screenshots. Les chiffres se saisissent à la main sur /nexa/saisie, qui
+          écrit dans nexa_affiliate_weeks — la source de vérité du rake affichée ici. */}
 
       <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
         <FilterChip active={!onlyUnread} onClick={() => setOnlyUnread(false)}>

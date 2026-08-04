@@ -2,7 +2,6 @@
 // Aucune valeur en dur dans les handlers (règle §6 du brief).
 // Données pures : importable côté client (stages, cards) comme serveur (columnMap).
 import type { FunnelStageDef, FunnelCardSpec } from "@/lib/funnels/shared";
-import type { WeeklyColumnMap } from "@/lib/funnels/xlsx-import";
 
 export const NEXA_ROOM_LABEL = "NEXAPOKER";
 
@@ -66,23 +65,14 @@ export const NEXA_CARDS: FunnelCardSpec<LeadForCards>[] = [
   { label: "App installée", match: l => nexaStageAtLeast(l.stage, "app_installed") },
   { label: "Compte créé", match: l => nexaStageAtLeast(l.stage, "account_created") },
   { label: "Dépôt fait", match: l => nexaStageAtLeast(l.stage, "deposit_done") },
-  { label: "Vérifiés room", match: l => l.weeks_count > 0, sub: "ID vu dans un import" },
+  { label: "Vérifiés room", match: l => l.weeks_count > 0, sub: "ID vu dans le report" },
   { label: "Ont joué", match: l => l.total_rake > 0, sub: "rake > 0" },
 ];
 
 // ── Import hebdo ──────────────────────────────────────────
-// ⚠️ PLACEHOLDER — en attente du XLSX d'exemple NEXAPOKER (Hugo, 2026-07-24).
-// Les libellés ci-dessous sont des SUPPOSITIONS et ne sont pas actifs : tant que
-// NEXA_COLUMN_MAP_READY est false, la route d'import refuse le fichier avec un
-// message explicite au lieu d'importer n'importe quoi. Pour câbler : remplacer les
-// libellés par ceux du vrai fichier et passer le flag à true. Rien d'autre à toucher.
-export const NEXA_COLUMN_MAP_READY = false;
-
-export const NEXA_COLUMN_MAP: WeeklyColumnMap = {
-  memberId: "Member ID",
-  nickname: "Member nickname",
-  rake: "Rake",
-  deposits: "Deposit Amount",
-  withdrawals: "Withdrawal Amount",
-  winloss: "Win/Loss",
-};
+// RETIRÉ (2026-08-04). NEXA n'envoie pas de fichier, seulement des screenshots :
+// il n'y a jamais eu de XLSX à mapper, et NEXA_COLUMN_MAP_READY est resté false
+// depuis l'origine — la route d'import n'a donc jamais rien écrit.
+// Les chiffres se saisissent désormais à la main sur /nexa/saisie, qui écrit dans
+// nexa_affiliate_weeks via lib/funnels/nexa/affiliate-ingest (chemin unique).
+// Le jour où un fichier arriverait, il se branche sur commitWeek — pas ici.

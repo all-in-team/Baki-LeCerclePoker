@@ -841,8 +841,18 @@ async function notifyGroupFailure(lead: NexaLead, error: string) {
   ).catch(() => {});
 }
 
-// ── Promotions à l'import hebdo ───────────────────────────
+// ── Promotions sur données de la room ─────────────────────
 // Premier match d'un Member ID → room_verified (+ played si rake > 0) + message bot.
+//
+// ⚠️ ACTUELLEMENT SANS APPELANT — volontaire, ne pas supprimer.
+// Son unique appelant était la route d'import XLSX hebdo, retirée le 2026-08-04
+// (NEXA n'envoie pas de fichier). Elle n'avait de toute façon jamais tourné :
+// NEXA_COLUMN_MAP_READY était false depuis l'origine, donc aucun lead n'a jamais
+// été promu par ce chemin. Le rebranchement se fera sur le nouveau chemin
+// d'écriture (commitWeek, lib/funnels/nexa/affiliate-ingest) — conséquence à
+// connaître d'ici là : la saisie manuelle n'avance PAS le `stage` des leads.
+// Les cartes du funnel, elles, restent justes : elles se basent sur weeks_count
+// et total_rake, tous deux recalculés depuis nexa_affiliate_weeks.
 
 export async function applyNexaImportPromotions(
   rows: { member_id: string; rake: number }[],
