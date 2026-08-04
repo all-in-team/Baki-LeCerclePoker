@@ -27,7 +27,7 @@ const Database = require(path.join(REPO, "node_modules/better-sqlite3"));
 import {
   getNexaPlayersOn, getNexaPlayerWeeksOn, setActionShareOn, getActionSharesOn,
   createNexaPlayerOn, getUnreconciledOn, linkRowToPlayerOn, backfillPlayerIdOn,
-  previousWeek, currentWeekMonday,
+  previousWeek, currentWeekMonday, addMovementOn, getMovementsOn, deleteMovementOn,
 } from "../lib/funnels/nexa/players";
 import { commitWeekOn } from "../lib/funnels/nexa/affiliate-ingest";
 import type { RawAffiliateRow } from "../lib/funnels/nexa/affiliate-deal";
@@ -67,6 +67,24 @@ function freshDb() {
       player_id INTEGER NOT NULL REFERENCES players(id) ON DELETE CASCADE,
       game_id INTEGER NOT NULL REFERENCES games(id) ON DELETE CASCADE,
       external_id TEXT NOT NULL, UNIQUE(game_id, external_id));
+    -- Forme PROD relevée sur sqlite_master, triggers compris : les mouvements
+    -- manuels doivent être exercés contre les vraies contraintes.
+    CREATE TABLE wallet_transactions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      player_id INTEGER NOT NULL REFERENCES players(id) ON DELETE CASCADE,
+      app_id INTEGER, game_id INTEGER REFERENCES games(id) ON DELETE SET NULL,
+      type TEXT NOT NULL CHECK(type IN ('deposit','withdrawal')),
+      amount REAL NOT NULL, currency TEXT NOT NULL DEFAULT 'USDT', note TEXT,
+      tron_tx_hash TEXT, tx_date TEXT NOT NULL,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      counterparty_address TEXT, source TEXT DEFAULT 'unknown', tx_datetime TEXT,
+      settled INTEGER NOT NULL DEFAULT 0, settlement_id INTEGER);
+    CREATE TRIGGER wallet_tx_source_check BEFORE INSERT ON wallet_transactions
+      BEGIN
+        SELECT RAISE(ABORT, 'wallet_transactions: source must be sync (with tron_tx_hash) or manual')
+        WHERE (NEW.source = 'sync' AND (NEW.tron_tx_hash IS NULL OR NEW.tron_tx_hash = ''))
+           OR NEW.source NOT IN ('sync', 'manual', 'unknown');
+      END;
     CREATE TABLE player_game_deals (id INTEGER PRIMARY KEY AUTOINCREMENT,
       player_id INTEGER NOT NULL REFERENCES players(id) ON DELETE CASCADE,
       game_id INTEGER NOT NULL REFERENCES games(id) ON DELETE CASCADE,
@@ -269,6 +287,79 @@ console.log("\n══ Liste ══");
   // Une semaine écrite avec motif d'écart doit remonter en alerte.
   commitWeekOn(db, W3, [row({ affiliate_payment: 600 })], { overrides: { "2231053": "screenshot incohérent" } });
   eq("semaine hors tolérance comptée", getNexaPlayersOn(db).find(p => p.name === "LeCercle")!.check_ko, 1);
+  db.close();
+}
+
+console.log("\n══ Buy-in / cash-out ══");
+{
+  const db = freshDb();
+  const p = createNexaPlayerOn(db, { nickname: "LeCercle", member_id: "2231053", action_pct: 25 });
+  if (!p.ok) throw new Error(p.error);
+  const pid = p.player_id;
+
+  const bi = addMovementOn(db, { player_id: pid, kind: "buy_in", amount: 500, tx_date: "2026-08-03", note: "virement" });
+  check("buy-in enregistré", bi.ok);
+  const co = addMovementOn(db, { player_id: pid, kind: "cash_out", amount: 200, tx_date: "2026-08-04" });
+  check("cash-out enregistré", co.ok);
+
+  const w = db.prepare(`SELECT type, amount, source, currency, note, game_id FROM wallet_transactions ORDER BY id`).all();
+  eq("buy-in = deposit", w[0].type, "deposit");
+  eq("cash-out = withdrawal", w[1].type, "withdrawal");
+  eq("source = manual (jamais 'unknown', invariant #10)", [w[0].source, w[1].source], ["manual", "manual"]);
+  eq("devise USDT", w[0].currency, "USDT");
+  eq("note conservée", w[0].note, "virement");
+  eq("rattaché au game NEXAPOKER",
+     w[0].game_id, db.prepare(`SELECT id FROM games WHERE name='NEXAPOKER'`).get().id);
+
+  const list = getNexaPlayersOn(db).find(x => x.player_id === pid)!;
+  eq("cumul buy-ins", list.deposited, 500);
+  eq("cumul cash-outs", list.withdrawn, 200);
+  eq("net = retraits − dépôts", list.net_movements, -300);
+
+  const hist = getMovementsOn(db, pid);
+  eq("2 mouvements dans l'historique", hist.length, 2);
+  eq("plus récent en tête", hist[0].tx_date, "2026-08-04");
+
+  check("montant négatif refusé", !addMovementOn(db, { player_id: pid, kind: "buy_in", amount: -50, tx_date: "2026-08-03" }).ok);
+  check("montant nul refusé", !addMovementOn(db, { player_id: pid, kind: "buy_in", amount: 0, tx_date: "2026-08-03" }).ok);
+  check("date invalide refusée", !addMovementOn(db, { player_id: pid, kind: "buy_in", amount: 10, tx_date: "03/08/2026" }).ok);
+  check("joueur inexistant refusé", !addMovementOn(db, { player_id: 9999, kind: "buy_in", amount: 10, tx_date: "2026-08-03" }).ok);
+  eq("aucun mouvement parasite après les refus", getMovementsOn(db, pid).length, 2);
+
+  const del = deleteMovementOn(db, hist[0].id);
+  check("suppression d'un mouvement non réglé", del.ok);
+  eq("1 mouvement restant", getMovementsOn(db, pid).length, 1);
+
+  db.prepare(`UPDATE wallet_transactions SET settled = 1, settlement_id = 42 WHERE id = ?`).run(hist[1].id);
+  const del2 = deleteMovementOn(db, hist[1].id);
+  check("mouvement déjà réglé → suppression refusée", !del2.ok && /règlement/.test(del2.error));
+  eq("il est toujours là", getMovementsOn(db, pid).length, 1);
+
+  // Le trigger de la table doit rejeter tout ce qui n'est ni sync ni manual.
+  let trig = false;
+  try { db.prepare(`INSERT INTO wallet_transactions (player_id, game_id, type, amount, tx_date, source)
+                    VALUES (?, 1, 'deposit', 10, '2026-08-03', 'bidon')`).run(pid); }
+  catch (e: any) { trig = /source must be/.test(e.message); }
+  check("trigger wallet_tx_source_check actif sur cette base de test", trig);
+
+  // Corrections issues de l'audit money-auditor.
+  db.prepare(`INSERT INTO wallet_transactions (player_id, game_id, type, amount, currency, tx_date, source, tron_tx_hash)
+              VALUES (?, (SELECT id FROM games WHERE name='NEXAPOKER'), 'withdrawal', 999, 'USDT', '2026-08-05', 'sync', '0xabc')`).run(pid);
+  check("une ligne 'sync' n'apparaît PAS dans l'historique des mouvements",
+        getMovementsOn(db, pid).every(m => m.amount !== 999));
+  const syncId = db.prepare(`SELECT id FROM wallet_transactions WHERE source='sync'`).get().id;
+  const delSync = deleteMovementOn(db, syncId);
+  check("une ligne 'sync' n'est PAS supprimable depuis cet écran", !delSync.ok);
+  eq("elle est toujours en base",
+     db.prepare(`SELECT COUNT(*) n FROM wallet_transactions WHERE source='sync'`).get().n, 1);
+
+  db.prepare(`INSERT INTO wallet_transactions (player_id, game_id, type, amount, currency, tx_date, source)
+              VALUES (?, (SELECT id FROM games WHERE name='NEXAPOKER'), 'deposit', 777, 'EUR', '2026-08-05', 'manual')`).run(pid);
+  eq("une devise autre que USDT n'entre pas dans les cumuls (invariant #3)",
+     getNexaPlayersOn(db).find(x => x.player_id === pid)!.deposited, 500);
+
+  eq("l'import ne touche pas aux mouvements : rake inchangé",
+     getNexaPlayersOn(db).find(x => x.player_id === pid)!.total_rake, 0);
   db.close();
 }
 

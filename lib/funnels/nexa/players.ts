@@ -22,6 +22,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 import { getDb } from "@/lib/db";
 import type BetterSqlite3 from "better-sqlite3";
+import { insertWalletTransaction } from "@/lib/queries";
 import { NEXA_GAME_NAME, nicknameKey, isMondayISO } from "./affiliate-ingest";
 
 type DB = BetterSqlite3.Database;
@@ -63,6 +64,12 @@ export type NexaPlayerRow = {
   total_commission: number;
   /** Nombre de semaines dont le recalcul ne retombe pas — alerte à l'écran. */
   check_ko: number;
+  /** Buy-ins cumulés (wallet_transactions type='deposit', game NEXAPOKER). */
+  deposited: number;
+  /** Cash-outs cumulés (type='withdrawal'). */
+  withdrawn: number;
+  /** withdrawn − deposited. Positif = j'ai versé plus qu'il n'a acheté. */
+  net_movements: number;
   /** Le joueur est-il issu du funnel ? Aujourd'hui la réponse est non pour tous. */
   lead_id: number | null;
 };
@@ -82,6 +89,9 @@ export function getNexaPlayersOn(db: DB): NexaPlayerRow[] {
       COALESCE(w.total_rake, 0) AS total_rake,
       COALESCE(w.total_commission, 0) AS total_commission,
       COALESCE(w.check_ko, 0) AS check_ko,
+      COALESCE(m.deposited, 0) AS deposited,
+      COALESCE(m.withdrawn, 0) AS withdrawn,
+      COALESCE(m.net_movements, 0) AS net_movements,
       l.id AS lead_id
     FROM players p
     LEFT JOIN player_game_ids pgi ON pgi.player_id = p.id AND pgi.game_id = @gid
@@ -102,6 +112,20 @@ export function getNexaPlayersOn(db: DB): NexaPlayerRow[] {
              MAX(nickname) AS report_nickname
       FROM nexa_affiliate_weeks WHERE player_id IS NOT NULL GROUP BY player_id
     ) w ON w.player_id = p.id
+    -- Buy-in / cash-out manuels du game NEXAPOKER. Les lignes 'unknown' sont
+    -- exclues de tout agrégat (invariant #10), comme partout ailleurs.
+    LEFT JOIN (
+      SELECT player_id,
+             SUM(CASE WHEN type = 'deposit' THEN amount ELSE 0 END) AS deposited,
+             SUM(CASE WHEN type = 'withdrawal' THEN amount ELSE 0 END) AS withdrawn,
+             SUM(CASE WHEN type = 'withdrawal' THEN amount ELSE -amount END) AS net_movements
+      FROM wallet_transactions
+      -- currency = 'USDT' : invariant #3, on ne somme jamais des devises
+      -- différentes sans toUsdt(). addMovementOn force USDT, mais d'autres
+      -- chemins du repo peuvent écrire une autre devise sur ce game_id.
+      WHERE game_id = @gid AND (source IS NULL OR source != 'unknown') AND currency = 'USDT'
+      GROUP BY player_id
+    ) m ON m.player_id = p.id
     LEFT JOIN nexa_leads l ON l.player_id = p.id
     -- Un joueur est « NEXA » s'il porte un lien vers ce game, par ID ou par pseudo.
     WHERE pgi.player_id IS NOT NULL OR nl.player_id IS NOT NULL
@@ -443,3 +467,119 @@ export function linkRowToPlayerOn(
 export function linkRowToPlayer(args: { player_id: number; member_id?: string | null; nickname: string }) {
   return linkRowToPlayerOn(getDb(), args);
 }
+
+// ── Buy-in / cash-out ─────────────────────────────────────────────────────
+//
+// Sur NEXAPOKER les dépôts et retraits passent par Hugo en système d'agent, pas
+// par la blockchain. On réutilise `wallet_transactions` avec `source='manual'` —
+// la table et le motif existent déjà pour exactement ce cas, il n'y a pas de
+// table parallèle à créer. L'écriture passe par insertWalletTransaction
+// (lib/queries.ts), seul chemin d'écriture manuelle du repo.
+//
+// DIRECTION — la convention du repo, à ne pas inverser (docs/DOMAIN.md) :
+//   • buy-in   → 'deposit'    : le joueur met de l'argent, il finance son action.
+//   • cash-out → 'withdrawal' : l'opérateur paie le joueur.
+//   net = Σ retraits − Σ dépôts. Positif = j'ai versé plus qu'il n'a acheté.
+//
+// Ces mouvements sont la SAISIE d'Hugo. Ni l'import, ni l'extraction de
+// screenshot, ni commitWeek n'y touchent — même règle que le win/loss manuel.
+//
+// Deux triggers de la table, vérifiés sur le DDL de prod avant d'écrire ici :
+//   • wallet_tx_source_check accepte 'manual' ;
+//   • enforce_withdrawal_from_wallet_mere ne se déclenche QUE sur source='sync',
+//     donc l'invariant #1 (retraits issus du wallet mère) ne s'applique pas aux
+//     mouvements manuels et ne les bloque pas.
+
+export type MovementKind = "buy_in" | "cash_out";
+
+export type Movement = {
+  id: number; type: "deposit" | "withdrawal"; amount: number; currency: string;
+  note: string | null; tx_date: string; created_at: string;
+};
+
+export type MovementResult = { ok: true; id: number } | { ok: false; error: string };
+
+const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
+
+/**
+ * Enregistre un buy-in ou un cash-out.
+ *
+ * Le montant est TOUJOURS positif : c'est le `type` qui porte le sens. Accepter
+ * un négatif créerait deux façons d'exprimer la même chose et fausserait tous les
+ * agrégats qui somment par type.
+ */
+export function addMovementOn(
+  db: DB,
+  args: { player_id: number; kind: MovementKind; amount: number; tx_date: string; note?: string | null },
+): MovementResult {
+  const { player_id, kind, amount, tx_date } = args;
+  if (kind !== "buy_in" && kind !== "cash_out") return { ok: false, error: `Type de mouvement inconnu : ${kind}.` };
+  if (!Number.isFinite(amount) || amount <= 0) {
+    return { ok: false, error: "Le montant doit être un nombre strictement positif — le sens est porté par le type de mouvement." };
+  }
+  if (!ISO_DATE.test(tx_date) || Number.isNaN(new Date(`${tx_date}T00:00:00Z`).getTime())) {
+    return { ok: false, error: `Date « ${tx_date} » invalide — attendu YYYY-MM-DD.` };
+  }
+  if (!db.prepare(`SELECT 1 FROM players WHERE id = ?`).get(player_id)) {
+    return { ok: false, error: `Joueur ${player_id} introuvable.` };
+  }
+  const gid = gameId(db);
+
+  try {
+    const id = Number(insertWalletTransaction({
+      player_id, game_id: gid,
+      type: kind === "buy_in" ? "deposit" : "withdrawal",
+      amount, currency: "USDT",
+      note: args.note?.trim() || undefined,
+      tx_date,
+    }, db));
+    return { ok: true, id };
+  } catch (e: any) {
+    return { ok: false, error: e?.message ?? String(e) };
+  }
+}
+
+export function addMovement(args: { player_id: number; kind: MovementKind; amount: number; tx_date: string; note?: string | null }) {
+  return addMovementOn(getDb(), args);
+}
+
+/** Historique des mouvements NEXA d'un joueur, du plus récent au plus ancien. */
+export function getMovementsOn(db: DB, playerId: number): Movement[] {
+  const gid = gameId(db);
+  return db.prepare(`
+    SELECT id, type, amount, currency, note, tx_date, created_at
+      FROM wallet_transactions
+     WHERE player_id = ? AND game_id = ?
+       -- source='manual' STRICT : cet écran ne montre et ne supprime que la
+       -- saisie d'Hugo. Une ligne 'sync' (on-chain) n'a rien à faire ici et ne
+       -- doit surtout pas être supprimable depuis un bouton de cette page.
+       AND source = 'manual'
+     ORDER BY tx_date DESC, id DESC
+  `).all(playerId, gid) as Movement[];
+}
+
+export function getMovements(playerId: number): Movement[] { return getMovementsOn(getDb(), playerId); }
+
+/**
+ * Suppression d'un mouvement — saisie manuelle, donc corrigeable.
+ * Bornée au game NEXAPOKER et aux lignes non consommées par un règlement :
+ * une transaction déjà rattachée à un manual_settlement ne se supprime pas dans
+ * le dos de ce règlement.
+ */
+export function deleteMovementOn(db: DB, id: number): { ok: true } | { ok: false; error: string } {
+  const gid = gameId(db);
+  // source='manual' : on ne supprime QUE de la saisie manuelle. Une ligne issue
+  // d'une synchro on-chain n'est pas un « mouvement » au sens de cet écran.
+  const row = db.prepare(
+    `SELECT settled, settlement_id FROM wallet_transactions
+      WHERE id = ? AND game_id = ? AND source = 'manual'`
+  ).get(id, gid) as { settled: number; settlement_id: number | null } | undefined;
+  if (!row) return { ok: false, error: `Mouvement ${id} introuvable sur NEXAPOKER, ou non saisi manuellement.` };
+  if (row.settled === 1 || row.settlement_id !== null) {
+    return { ok: false, error: `Mouvement ${id} déjà consommé par un règlement — il ne peut plus être supprimé.` };
+  }
+  db.prepare(`DELETE FROM wallet_transactions WHERE id = ? AND game_id = ? AND source = 'manual'`).run(id, gid);
+  return { ok: true };
+}
+
+export function deleteMovement(id: number) { return deleteMovementOn(getDb(), id); }

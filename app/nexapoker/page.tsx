@@ -23,7 +23,7 @@ export default function NexaPokerPage() {
         title="NEXAPOKER"
         subtitle="Joueurs, parts d'action et réconciliation du report d'affiliation"
       />
-      <NexaPokerClient currentWeek={currentWeekMonday()} />
+      <NexaPokerClient currentWeek={currentWeekMonday()} today={new Date().toISOString().slice(0, 10)} />
     </>
   );
 }

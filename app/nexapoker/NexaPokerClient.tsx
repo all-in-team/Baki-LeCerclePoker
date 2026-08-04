@@ -26,8 +26,11 @@ const TD: React.CSSProperties = { padding: "8px 8px", fontSize: 12, color: "#E8E
 type Player = {
   player_id: number; name: string; telegram_handle: string | null; member_id: string | null;
   report_nickname: string | null; action_pct: number; action_since: string | null;
-  weeks_count: number; total_rake: number; total_commission: number; check_ko: number; lead_id: number | null;
+  weeks_count: number; total_rake: number; total_commission: number; check_ko: number;
+  deposited: number; withdrawn: number; net_movements: number; lead_id: number | null;
 };
+type Movement = { id: number; type: "deposit" | "withdrawal"; amount: number; currency: string;
+                  note: string | null; tx_date: string; created_at: string };
 type Unreconciled = {
   row_key: string; member_id: string | null; nickname: string; nickname_key: string;
   weeks: number; total_rake: number; total_commission: number; first_week: string; last_week: string;
@@ -37,7 +40,7 @@ type Simple = { id: number; name: string; telegram_handle: string | null };
 
 const fmt = (n: number) => n.toLocaleString("fr-FR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
-export default function NexaPokerClient({ currentWeek }: { currentWeek: string }) {
+export default function NexaPokerClient({ currentWeek, today }: { currentWeek: string; today: string }) {
   const [players, setPlayers] = useState<Player[]>([]);
   const [unrec, setUnrec] = useState<Unreconciled[]>([]);
   const [allPlayers, setAllPlayers] = useState<Simple[]>([]);
@@ -49,6 +52,14 @@ export default function NexaPokerClient({ currentWeek }: { currentWeek: string }
   const [editing, setEditing] = useState<{ player: Player; pct: string; week: string } | null>(null);
   const [adding, setAdding] = useState<{ nickname: string; member_id: string; telegram: string; pct: string; week: string } | null>(null);
   const [linking, setLinking] = useState<{ row: Unreconciled; target: string } | null>(null);
+  // Mouvements : saisie d'Hugo, jamais touchée par l'import ni l'extraction.
+  const [moving, setMoving] = useState<{ player: Player; kind: "buy_in" | "cash_out"; amount: string; date: string; note: string } | null>(null);
+  const [history, setHistory] = useState<{ player: Player; rows: Movement[] } | null>(null);
+
+  const openHistory = useCallback(async (p: Player) => {
+    const j = await (await fetch(`/api/nexapoker/movements?player_id=${p.player_id}`)).json();
+    if (j.ok) setHistory({ player: p, rows: j.movements });
+  }, []);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -82,6 +93,19 @@ export default function NexaPokerClient({ currentWeek }: { currentWeek: string }
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+      {/* Le geste hebdomadaire principal, à un clic depuis la room. */}
+      <div style={{ ...CARD, display: "flex", alignItems: "center", gap: 14, flexWrap: "wrap" }}>
+        <a href="/nexa/saisie" style={{ textDecoration: "none" }}>
+          <span style={{ display: "inline-block", padding: "10px 20px", borderRadius: 10, fontSize: 13,
+                         fontWeight: 700, background: "#60A5FA", color: "#0B0D12" }}>
+            📷 Saisir la semaine (screenshot)
+          </span>
+        </a>
+        <span style={{ fontSize: 12, color: "#8888A0" }}>
+          Dépose le screenshot du report NEXA : la grille se pré-remplit, tu relis, tu enregistres.
+        </span>
+      </div>
+
       {/* ── À réconcilier ─────────────────────────────────────────────── */}
       {unrec.length > 0 && (
         <div style={{ ...CARD, borderColor: "rgba(240,185,11,0.35)" }}>
@@ -159,11 +183,15 @@ export default function NexaPokerClient({ currentWeek }: { currentWeek: string }
               <th style={{ ...TH, textAlign: "right" }}>Semaines</th>
               <th style={{ ...TH, textAlign: "right" }}>Rake</th>
               <th style={{ ...TH, textAlign: "right" }}>Commission</th>
+              <th style={{ ...TH, textAlign: "right" }}>Buy-ins</th>
+              <th style={{ ...TH, textAlign: "right" }}>Cash-outs</th>
+              <th style={{ ...TH, textAlign: "right" }}>Net</th>
+              <th style={TH}>Mouvements</th>
               <th style={TH} />
             </tr></thead>
             <tbody>
               {players.length === 0 && !loading && (
-                <tr><td colSpan={9} style={{ ...TD, color: "#8888A0", padding: 20, textAlign: "center" }}>
+                <tr><td colSpan={13} style={{ ...TD, color: "#8888A0", padding: 20, textAlign: "center" }}>
                   Aucun joueur rattaché. Utilise « Ajouter un joueur », ou réconcilie une ligne du report.
                 </td></tr>
               )}
@@ -191,6 +219,29 @@ export default function NexaPokerClient({ currentWeek }: { currentWeek: string }
                   <td style={{ ...TD, textAlign: "right" }}>{p.weeks_count || "—"}</td>
                   <td style={{ ...TD, textAlign: "right" }}>{fmt(p.total_rake)}</td>
                   <td style={{ ...TD, textAlign: "right", fontWeight: 600 }}>{fmt(p.total_commission)}</td>
+                  <td style={{ ...TD, textAlign: "right", color: "#8888A0" }}>{p.deposited ? fmt(p.deposited) : "—"}</td>
+                  <td style={{ ...TD, textAlign: "right", color: "#8888A0" }}>{p.withdrawn ? fmt(p.withdrawn) : "—"}</td>
+                  <td style={{ ...TD, textAlign: "right", fontWeight: 600,
+                               color: Math.abs(p.net_movements) < 0.005 ? "#8888A0" : p.net_movements > 0 ? "#F87171" : "#34D399" }}
+                      title="Cash-outs − buy-ins. Positif = j'ai versé plus qu'il n'a acheté.">
+                    {Math.abs(p.net_movements) < 0.005 ? "—" : fmt(p.net_movements)}
+                  </td>
+                  <td style={TD}>
+                    <button disabled={busy} onClick={() => setMoving({ player: p, kind: "buy_in", amount: "", date: today, note: "" })}
+                            style={{ ...INPUT, cursor: "pointer", padding: "3px 8px", marginRight: 4, borderColor: "rgba(96,165,250,0.4)", color: "#60A5FA" }}>
+                      Buy-in
+                    </button>
+                    <button disabled={busy} onClick={() => setMoving({ player: p, kind: "cash_out", amount: "", date: today, note: "" })}
+                            style={{ ...INPUT, cursor: "pointer", padding: "3px 8px", marginRight: 4, borderColor: "rgba(240,185,11,0.4)", color: "#F0B90B" }}>
+                      Cash-out
+                    </button>
+                    {(p.deposited > 0 || p.withdrawn > 0) && (
+                      <button disabled={busy} onClick={() => void openHistory(p)}
+                              style={{ ...INPUT, cursor: "pointer", padding: "3px 8px", color: "#8888A0" }}>
+                        Historique
+                      </button>
+                    )}
+                  </td>
                   <td style={{ ...TD, textAlign: "right" }}>
                     {p.check_ko > 0 && (
                       <span style={{ color: "#F87171", fontSize: 11 }}
@@ -315,6 +366,106 @@ export default function NexaPokerClient({ currentWeek }: { currentWeek: string }
             </button>
             <button onClick={() => setLinking(null)} style={{ ...INPUT, cursor: "pointer", color: "#8888A0" }}>Annuler</button>
           </div>
+        </div>
+      )}
+
+      {/* ── Buy-in / cash-out ─────────────────────────────────────────── */}
+      {moving && (
+        <div style={{ ...CARD, borderColor: moving.kind === "buy_in" ? "rgba(96,165,250,0.35)" : "rgba(240,185,11,0.35)" }}>
+          <div style={{ fontSize: 13, fontWeight: 600, color: "#E8E8EE", marginBottom: 4 }}>
+            {moving.kind === "buy_in" ? "Buy-in" : "Cash-out"} — {moving.player.name}
+          </div>
+          <div style={{ fontSize: 12, color: "#8888A0", marginBottom: 12 }}>
+            {moving.kind === "buy_in"
+              ? "Le joueur met de l'argent : il finance son action."
+              : "Tu paies le joueur."} Montant toujours positif — le sens est porté par le type de
+            mouvement. Cette saisie est la tienne : ni l'import ni l'extraction de screenshot n'y touchent.
+          </div>
+          <div style={{ display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
+            <label style={{ fontSize: 12, color: "#8888A0", display: "flex", gap: 6, alignItems: "center" }}>
+              Montant (USDT)
+              <input value={moving.amount} inputMode="decimal" autoFocus
+                     style={{ ...INPUT, width: 110, textAlign: "right" }}
+                     onChange={e => setMoving({ ...moving, amount: e.target.value })} />
+            </label>
+            <label style={{ fontSize: 12, color: "#8888A0", display: "flex", gap: 6, alignItems: "center" }}>
+              Date
+              <input type="date" value={moving.date} style={INPUT}
+                     onChange={e => setMoving({ ...moving, date: e.target.value })} />
+            </label>
+            <label style={{ fontSize: 12, color: "#8888A0", display: "flex", gap: 6, alignItems: "center" }}>
+              Note (optionnelle)
+              <input value={moving.note} style={{ ...INPUT, width: 220 }}
+                     onChange={e => setMoving({ ...moving, note: e.target.value })} />
+            </label>
+            <button disabled={busy} onClick={async () => {
+              const ok = await post("/api/nexapoker/movements", {
+                player_id: moving.player.player_id, kind: moving.kind,
+                amount: parseFloat(moving.amount.replace(",", ".")), tx_date: moving.date,
+                note: moving.note || null,
+              }, () => `${moving.kind === "buy_in" ? "Buy-in" : "Cash-out"} enregistré pour ${moving.player.name}.`);
+              if (ok) setMoving(null);
+            }} style={{ padding: "8px 16px", borderRadius: 8, border: "none", background: "#10B981",
+                        color: "#0B0D12", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>
+              Enregistrer
+            </button>
+            <button onClick={() => setMoving(null)} style={{ ...INPUT, cursor: "pointer", color: "#8888A0" }}>Annuler</button>
+          </div>
+        </div>
+      )}
+
+      {history && (
+        <div style={CARD}>
+          <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10 }}>
+            <div style={{ fontSize: 13, fontWeight: 600, color: "#E8E8EE" }}>
+              Mouvements — {history.player.name}
+            </div>
+            <div style={{ flex: 1 }} />
+            <span style={{ fontSize: 12, color: "#8888A0" }}>
+              buy-ins {fmt(history.player.deposited)} · cash-outs {fmt(history.player.withdrawn)} ·
+              {" "}net <b style={{ color: history.player.net_movements > 0 ? "#F87171" : "#34D399" }}>
+                {fmt(history.player.net_movements)}
+              </b>
+            </span>
+            <button onClick={() => setHistory(null)} style={{ ...INPUT, cursor: "pointer", color: "#8888A0" }}>Fermer</button>
+          </div>
+          <table style={{ width: "100%", borderCollapse: "collapse" }}>
+            <thead><tr>
+              <th style={TH}>Date</th><th style={TH}>Type</th>
+              <th style={{ ...TH, textAlign: "right" }}>Montant</th><th style={TH}>Note</th><th style={TH} />
+            </tr></thead>
+            <tbody>
+              {history.rows.length === 0 && (
+                <tr><td colSpan={5} style={{ ...TD, color: "#8888A0", padding: 14 }}>Aucun mouvement.</td></tr>
+              )}
+              {history.rows.map(m => (
+                <tr key={m.id} style={{ borderTop: "1px solid rgba(255,255,255,0.05)" }}>
+                  <td style={TD}>{m.tx_date}</td>
+                  <td style={{ ...TD, color: m.type === "deposit" ? "#60A5FA" : "#F0B90B" }}>
+                    {m.type === "deposit" ? "Buy-in" : "Cash-out"}
+                  </td>
+                  <td style={{ ...TD, textAlign: "right", fontWeight: 600 }}>{fmt(m.amount)} {m.currency}</td>
+                  <td style={{ ...TD, color: "#8888A0" }}>{m.note ?? "—"}</td>
+                  <td style={{ ...TD, textAlign: "right" }}>
+                    <button disabled={busy} onClick={async () => {
+                      if (!confirm(`Supprimer ce ${m.type === "deposit" ? "buy-in" : "cash-out"} de ${fmt(m.amount)} ?`)) return;
+                      setBusy(true);
+                      try {
+                        const res = await fetch(`/api/nexapoker/movements?id=${m.id}`, { method: "DELETE" });
+                        const j = await res.json();
+                        if (!j.ok) { setBanner({ kind: "err", text: j.error }); return; }
+                        setBanner({ kind: "ok", text: "Mouvement supprimé." });
+                        await load(); await openHistory(history.player);
+                      } finally { setBusy(false); }
+                    }} style={{ ...INPUT, cursor: "pointer", padding: "3px 8px",
+                                borderColor: "rgba(239,68,68,0.35)", color: "#F87171" }}>
+                      ✕
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </div>
       )}
 

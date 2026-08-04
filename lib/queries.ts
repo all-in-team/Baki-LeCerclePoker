@@ -725,11 +725,20 @@ export function getPlayerWalletStats(playerId: number) {
   `).get(playerId) as { deposited: number; withdrawn: number; net: number; my_pnl: number } | undefined;
 }
 
+/**
+ * LE chemin d'écriture des mouvements manuels de wallet (source='manual').
+ *
+ * `dbOverride` est additif et n'existe que pour les tests, qui doivent exercer les
+ * vraies contraintes SQL (trigger wallet_tx_source_check, CHECK sur type, FK
+ * player/game) sur une base jetable. Sans lui il faudrait dupliquer cet INSERT
+ * dans le harnais — donc avoir deux écritures d'argent au lieu d'une.
+ * Comportement en production inchangé : sans argument, getDb().
+ */
 export function insertWalletTransaction(data: {
   player_id: number; game_id: number; type: "deposit" | "withdrawal";
   amount: number; currency?: string; note?: string; tx_date: string; tx_datetime?: string;
-}) {
-  const db = getDb();
+}, dbOverride?: ReturnType<typeof getDb>) {
+  const db = dbOverride ?? getDb();
   const tx_datetime = data.tx_datetime || data.tx_date.slice(0, 10) + "T00:00:00Z";
   const r = db.prepare(`
     INSERT INTO wallet_transactions (player_id, game_id, type, amount, currency, note, tx_date, tx_datetime, source)
