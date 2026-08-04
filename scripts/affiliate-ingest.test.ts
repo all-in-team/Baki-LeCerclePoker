@@ -41,7 +41,7 @@ const Database = require(path.join(REPO, "node_modules/better-sqlite3"));
 
 import {
   nicknameKey, computeRowKey, isMondayISO,
-  resolveRowsOn, previewWeekOn, commitWeekOn, getWeekRowsOn,
+  resolveRowsOn, previewWeekOn, commitWeekOn, getWeekRowsOn, getKnownEntrantsOn,
 } from "../lib/funnels/nexa/affiliate-ingest";
 import type { RawAffiliateRow } from "../lib/funnels/nexa/affiliate-deal";
 
@@ -320,6 +320,30 @@ console.log("\n══ Journal des saisies ══");
   eq("note", e.note, "screenshot du 04/08");
   eq("ligne reliée à son entrée",
      db.prepare(`SELECT COUNT(*) n FROM nexa_affiliate_weeks w JOIN nexa_affiliate_entries en ON en.id = w.entry_id`).get().n, 1);
+  db.close();
+}
+
+console.log("\n══ Autocomplétion (getKnownEntrants) ══");
+{
+  const db = freshDb(); const { p1, p2, gid } = seed(db);
+  db.prepare(`INSERT INTO player_game_ids (player_id, game_id, external_id) VALUES (?,?,?)`).run(p1, gid, "2518550");
+  db.prepare(`INSERT INTO nexa_nickname_links (nickname_key, player_id) VALUES ('mareck', ?)`).run(p2);
+  eq("base vierge de saisies → propose quand même les liens connus",
+     getKnownEntrantsOn(db).length >= 2, true);
+
+  // Deux semaines : c'est le deal de la PLUS RÉCENTE qui doit être proposé.
+  commitWeekOn(db, MONDAY, [row()]);
+  // 800×50% + 200×50% + 400×45% + 100×55% = 400 + 100 + 180 + 55 = 735
+  const w2 = commitWeekOn(db, MONDAY2, [row({ deal_text: "50% NLH and MTT, 45% PLO, 55% Spins", affiliate_payment: 735 })]);
+  check("semaine 2 écrite (sinon le « dernier deal » ne veut rien dire)", w2.ok);
+  const known = getKnownEntrantsOn(db);
+  const jopok = known.find(e => e.nickname_key === "jopok");
+  check("pseudo saisi proposé", !!jopok);
+  eq("member_id proposé", jopok?.member_id, "2518550");
+  eq("dernier deal proposé (celui de la semaine la plus récente)",
+     jopok?.last_deal_text, "50% NLH and MTT, 45% PLO, 55% Spins");
+  eq("un seul enregistrement par pseudo malgré 2 semaines",
+     known.filter(e => e.nickname_key === "jopok").length, 1);
   db.close();
 }
 

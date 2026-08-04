@@ -160,6 +160,54 @@ export function getWeekRows(weekStart: string): StoredWeekRow[] {
   return getWeekRowsOn(getDb(), weekStart);
 }
 
+// ── Joueurs déjà vus — alimente l'autocomplétion de la grille ─────────────
+
+export type KnownEntrant = {
+  nickname: string;
+  nickname_key: string;
+  member_id: string | null;
+  player_id: number | null;
+  /** Dernier deal utilisé pour ce pseudo : bien meilleur défaut que le défaut global. */
+  last_deal_text: string | null;
+};
+
+/**
+ * Tout ce qui a déjà été saisi ou rattaché, pour proposer sans jamais imposer.
+ * Union de trois sources : les lignes déjà enregistrées, les liens par pseudo et
+ * les liens par Member ID. Purement indicatif — sélectionner une proposition
+ * pré-remplit des champs que l'opérateur reste libre de corriger.
+ */
+export function getKnownEntrantsOn(db: DB): KnownEntrant[] {
+  const rows = db.prepare(`
+    SELECT w.nickname, w.nickname_key, w.member_id, w.player_id, w.deal_text AS last_deal_text
+    FROM nexa_affiliate_weeks w
+    JOIN (SELECT nickname_key, MAX(week_start) AS mx FROM nexa_affiliate_weeks GROUP BY nickname_key) last
+      ON last.nickname_key = w.nickname_key AND last.mx = w.week_start
+    GROUP BY w.nickname_key
+
+    UNION
+
+    SELECT p.name, l.nickname_key, NULL, l.player_id, NULL
+    FROM nexa_nickname_links l JOIN players p ON p.id = l.player_id
+    WHERE l.nickname_key NOT IN (SELECT nickname_key FROM nexa_affiliate_weeks)
+
+    UNION
+
+    SELECT p.name, LOWER(TRIM(p.name)), g.external_id, g.player_id, NULL
+    FROM player_game_ids g
+    JOIN players p ON p.id = g.player_id
+    JOIN games gm ON gm.id = g.game_id AND gm.name = 'NEXAPOKER'
+    WHERE g.external_id NOT IN (SELECT COALESCE(member_id, '') FROM nexa_affiliate_weeks)
+
+    ORDER BY 2
+  `).all() as KnownEntrant[];
+  return rows;
+}
+
+export function getKnownEntrants(): KnownEntrant[] {
+  return getKnownEntrantsOn(getDb());
+}
+
 // ── Diff & commit ─────────────────────────────────────────────────────────
 
 export type RowRejection = {
