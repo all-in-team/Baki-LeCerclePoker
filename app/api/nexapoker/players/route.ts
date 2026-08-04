@@ -5,6 +5,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getDb } from "@/lib/db";
 import { getNexaPlayers, getUnreconciled, createNexaPlayer } from "@/lib/funnels/nexa/players";
+import { getLeadAnomaliesOn } from "@/lib/funnels/nexa/lead-promotion";
 
 export async function GET() {
   try {
@@ -14,10 +15,16 @@ export async function GET() {
       `SELECT id, name, telegram_handle FROM players ORDER BY name`
     ).all() as { id: number; name: string; telegram_handle: string | null }[];
 
+    // Anomalies « deux leads pour un même joueur » : tout ce qui demande une
+    // décision manuelle vit dans la réconciliation, pas dans une alerte à part.
+    const db = getDb();
+    const gid = (db.prepare(`SELECT id FROM games WHERE name = 'NEXAPOKER'`).get() as { id: number } | undefined)?.id;
+
     return NextResponse.json({
       ok: true,
       players: getNexaPlayers(),
       unreconciled: getUnreconciled(),
+      leadAnomalies: gid ? getLeadAnomaliesOn(db, gid) : [],
       allPlayers,
     });
   } catch (e: any) {

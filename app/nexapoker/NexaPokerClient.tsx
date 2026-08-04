@@ -38,6 +38,9 @@ type Unreconciled = {
   hint_player_id: number | null; hint_player_name: string | null;
 };
 type Simple = { id: number; name: string; telegram_handle: string | null };
+type LeadAnomaly = { member_id: string; lead_id: number; lead_handle: string | null;
+                     player_id: number; player_name: string;
+                     other_lead_id: number; other_lead_handle: string | null };
 
 const fmt = (n: number) => n.toLocaleString("fr-FR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
@@ -45,6 +48,7 @@ export default function NexaPokerClient({ currentWeek, today }: { currentWeek: s
   const [players, setPlayers] = useState<Player[]>([]);
   const [unrec, setUnrec] = useState<Unreconciled[]>([]);
   const [allPlayers, setAllPlayers] = useState<Simple[]>([]);
+  const [anomalies, setAnomalies] = useState<LeadAnomaly[]>([]);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [banner, setBanner] = useState<{ kind: "ok" | "err"; text: string } | null>(null);
@@ -68,6 +72,7 @@ export default function NexaPokerClient({ currentWeek, today }: { currentWeek: s
       const j = await (await fetch("/api/nexapoker/players")).json();
       if (!j.ok) { setBanner({ kind: "err", text: j.error }); return; }
       setPlayers(j.players); setUnrec(j.unreconciled); setAllPlayers(j.allPlayers);
+      setAnomalies(j.leadAnomalies ?? []);
     } finally { setLoading(false); }
   }, []);
   useEffect(() => { void load(); }, [load]);
@@ -106,6 +111,29 @@ export default function NexaPokerClient({ currentWeek, today }: { currentWeek: s
           La saisie est en bas de cette page : dépose le screenshot, la grille se pré-remplit, tu relis, tu enregistres.
         </span>
       </div>
+
+      {/* Conflits de lead : deux leads revendiquent le même joueur. Le funnel n'y
+          touche pas — il faut trancher à la main. */}
+      {anomalies.length > 0 && (
+        <div style={{ ...CARD, borderColor: "rgba(239,68,68,0.35)" }}>
+          <div style={{ fontSize: 13, fontWeight: 600, color: "#F87171", marginBottom: 4 }}>
+            ⚠️ {anomalies.length} conflit(s) de lead — deux leads pour un même joueur
+          </div>
+          <div style={{ fontSize: 12, color: "#8888A0", marginBottom: 10 }}>
+            Le funnel n'a rien modifié : il ne tranche pas à ta place. Décide quel lead
+            correspond réellement au joueur, et corrige le Member ID de l'autre.
+          </div>
+          <ul style={{ margin: "0 0 0 18px", fontSize: 12, color: "#E8E8EE" }}>
+            {anomalies.map(a => (
+              <li key={`${a.lead_id}-${a.other_lead_id}`} style={{ marginBottom: 4 }}>
+                Member ID <b>{a.member_id}</b> → joueur <b>{a.player_name}</b> (#{a.player_id}), déjà lié au
+                lead #{a.other_lead_id}{a.other_lead_handle ? ` (@${a.other_lead_handle})` : ""} ;
+                réclamé aussi par le lead #{a.lead_id}{a.lead_handle ? ` (@${a.lead_handle})` : ""}.
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
 
       {/* ── À réconcilier ─────────────────────────────────────────────── */}
       {unrec.length > 0 && (

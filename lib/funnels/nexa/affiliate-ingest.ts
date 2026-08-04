@@ -17,6 +17,7 @@
 // CHECK de tolérance, colonnes générées) au lieu de les supposer.
 import { getDb } from "@/lib/db";
 import type BetterSqlite3 from "better-sqlite3";
+import { applyLeadPromotionsOn, type PromotionResult } from "./lead-promotion";
 import {
   validateRow,
   type RawAffiliateRow,
@@ -266,7 +267,7 @@ export type CommitFailure =
   | "orphans";
 
 export type CommitResult =
-  | { ok: true; entry_id: number; diff: WeekDiff; written: number }
+  | { ok: true; entry_id: number; diff: WeekDiff; written: number; promotions: PromotionResult }
   | { ok: false; reason: CommitFailure; message: string; diff: WeekDiff };
 
 const MONEY_EPS = 1e-9;
@@ -417,7 +418,7 @@ export function commitWeekOn(db: DB, weekStart: string, rows: RawAffiliateRow[],
             @affiliate_payment, @recomputed, @delta, @override_reason)
   `);
 
-  const run = db.transaction(() => {
+  const run = db.transaction((): { entryId: number; promotions: PromotionResult } => {
     const info = insEntry.run({
       week_start: weekStart,
       source: opts.source ?? "manual",
@@ -463,11 +464,20 @@ export function commitWeekOn(db: DB, weekStart: string, rows: RawAffiliateRow[],
         override_reason: overrides[r.row_key]?.trim() || null,
       });
     }
-    return entryId;
+    // Promotions des leads — DANS la transaction : une semaine écrite sans ses
+    // promotions (ou l'inverse) laisserait un état incohérent. Zéro message
+    // Telegram, voir l'encadré de ./lead-promotion.
+    const promotions = applyLeadPromotionsOn(db, game.id, toWrite.map(r => ({
+      member_id: r.raw.member_id,
+      nickname: r.raw.nickname,
+      rake: r.raw.nlh + r.raw.mtt + r.raw.plo + r.raw.spins,
+    })));
+
+    return { entryId, promotions };
   });
 
-  const entry_id = run();
-  return { ok: true, entry_id, diff, written: toWrite.length };
+  const { entryId: entry_id, promotions } = run();
+  return { ok: true, entry_id, diff, written: toWrite.length, promotions };
 }
 
 export function commitWeek(weekStart: string, rows: RawAffiliateRow[], opts: CommitOptions = {}): CommitResult {

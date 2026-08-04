@@ -30,6 +30,7 @@ import {
   previousWeek, currentWeekMonday, addMovementOn, getMovementsOn, deleteMovementOn,
 } from "../lib/funnels/nexa/players";
 import { commitWeekOn } from "../lib/funnels/nexa/affiliate-ingest";
+import { getLeadAnomaliesOn } from "../lib/funnels/nexa/lead-promotion";
 import type { RawAffiliateRow } from "../lib/funnels/nexa/affiliate-deal";
 
 let passed = 0;
@@ -60,7 +61,13 @@ function freshDb() {
     -- player_id est ajoutée par un ALTER de add_nexa_affiliate_v1 situé HORS du
     -- bloc db.exec extrait ci-dessus : la fixture doit la porter elle-même.
     CREATE TABLE nexa_leads (id INTEGER PRIMARY KEY AUTOINCREMENT, tg_user_id INTEGER NOT NULL UNIQUE,
-      member_id TEXT UNIQUE, player_id INTEGER REFERENCES players(id));
+      member_id TEXT UNIQUE, player_id INTEGER REFERENCES players(id),
+      tg_username TEXT, stage TEXT NOT NULL DEFAULT 'started',
+      updated_at TEXT NOT NULL DEFAULT (datetime('now')));
+    CREATE TABLE nexa_lead_events (id INTEGER PRIMARY KEY AUTOINCREMENT,
+      lead_id INTEGER NOT NULL REFERENCES nexa_leads(id), kind TEXT NOT NULL,
+      stage TEXT, payload TEXT, actor TEXT NOT NULL DEFAULT 'bot',
+      created_at TEXT NOT NULL DEFAULT (datetime('now')));
     CREATE TABLE manual_settlements (id INTEGER PRIMARY KEY AUTOINCREMENT, game_id INTEGER NOT NULL,
       player_id INTEGER NOT NULL, amount_due_usdt REAL NOT NULL DEFAULT 0, status TEXT NOT NULL DEFAULT 'locked');
     CREATE TABLE player_game_ids (id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -361,6 +368,107 @@ console.log("\n══ Buy-in / cash-out ══");
   eq("l'import ne touche pas aux mouvements : rake inchangé",
      getNexaPlayersOn(db).find(x => x.player_id === pid)!.total_rake, 0);
   db.close();
+}
+
+console.log("\n══ Point 5 — promotion des leads depuis le report ══");
+const gid = (db: any) => db.prepare(`SELECT id FROM games WHERE name='NEXAPOKER'`).get().id;
+const lead = (db: any, tg: number, member: string | null, stage = "account_created") =>
+  Number(db.prepare(`INSERT INTO nexa_leads (tg_user_id, member_id, tg_username, stage) VALUES (?,?,?,?)`)
+    .run(tg, member, `user${tg}`, stage).lastInsertRowid);
+{
+  // Cas 1 — lead sans joueur, ID confirmé par le report → création + lien + stage.
+  const db = freshDb();
+  const lid = lead(db, 7001, "2231053");
+  const res = commitWeekOn(db, W1, [row()]);
+  check("semaine écrite", res.ok);
+  if (res.ok) {
+    eq("1 joueur créé", res.promotions.created, 1);
+    eq("1 lead promu", res.promotions.promoted, 1);
+    eq("aucune anomalie", res.promotions.anomalies.length, 0);
+  }
+  const l = db.prepare(`SELECT player_id, stage FROM nexa_leads WHERE id=?`).get(lid);
+  check("lead lié à un joueur", l.player_id !== null);
+  eq("stage = played (rake > 0 sur la ligne)", l.stage, "played");
+  const p = db.prepare(`SELECT name FROM players WHERE id=?`).get(l.player_id);
+  eq("name = pseudo du REPORT, pas le prénom Telegram", p.name, "LeCercle");
+  eq("player_game_ids posé", db.prepare(`SELECT external_id e FROM player_game_ids`).get().e, "2231053");
+  eq("PAS de nexa_nickname_links (l'ID suffit)", db.prepare(`SELECT COUNT(*) n FROM nexa_nickname_links`).get().n, 0);
+  eq("PAS de part d'action créée", db.prepare(`SELECT COUNT(*) n FROM nexa_player_action_shares`).get().n, 0);
+  eq("événement tracé actor='import'",
+     db.prepare(`SELECT actor FROM nexa_lead_events WHERE lead_id=?`).get(lid).actor, "import");
+  eq("la ligne du report est rattachée",
+     db.prepare(`SELECT COUNT(*) n FROM nexa_affiliate_weeks WHERE player_id IS NOT NULL`).get().n, 1);
+  db.close();
+}
+{
+  // Rake nul → room_verified seulement, et jamais à reculons.
+  const db = freshDb();
+  const lid = lead(db, 7002, "9990001");
+  commitWeekOn(db, W1, [row({ nickname: "Zero", member_id: "9990001", nlh: 0, mtt: 0, plo: 0, spins: 0, affiliate_payment: 0 })]);
+  eq("rake nul → room_verified", db.prepare(`SELECT stage FROM nexa_leads WHERE id=?`).get(lid).stage, "room_verified");
+  const before = db.prepare(`SELECT stage FROM nexa_leads WHERE id=?`).get(lid).stage;
+  commitWeekOn(db, W2, [row({ nickname: "Zero", member_id: "9990001", nlh: 0, mtt: 0, plo: 0, spins: 0, affiliate_payment: 0 })]);
+  eq("le stage ne recule jamais", db.prepare(`SELECT stage FROM nexa_leads WHERE id=?`).get(lid).stage, before);
+  db.close();
+}
+{
+  // Cas 3 — joueur préexistant porte l'ID, lead non lié → lien seul, AUCUNE création.
+  const db = freshDb();
+  const p = createNexaPlayerOn(db, { nickname: "LeCercle", member_id: "2231053", action_pct: 25 });
+  if (!p.ok) throw new Error(p.error);
+  const lid = lead(db, 7003, "2231053");
+  const before = db.prepare(`SELECT COUNT(*) n FROM players`).get().n;
+  const res = commitWeekOn(db, W1, [row()]);
+  if (res.ok) {
+    eq("aucune création", res.promotions.created, 0);
+    eq("1 rattachement", res.promotions.linked, 1);
+  }
+  eq("aucun joueur en plus", db.prepare(`SELECT COUNT(*) n FROM players`).get().n, before);
+  eq("lead lié au joueur existant", db.prepare(`SELECT player_id FROM nexa_leads WHERE id=?`).get(lid).player_id, p.player_id);
+  eq("part d'action intacte", db.prepare(`SELECT pct FROM nexa_player_action_shares`).get().pct, 25);
+  db.close();
+}
+{
+  // Cas 4 — deux leads pour un joueur : on ne touche à RIEN.
+  const db = freshDb();
+  const p = createNexaPlayerOn(db, { nickname: "LeCercle", member_id: "2231053" });
+  if (!p.ok) throw new Error(p.error);
+  const first = lead(db, 7004, null);
+  db.prepare(`UPDATE nexa_leads SET player_id=? WHERE id=?`).run(p.player_id, first);
+  const second = lead(db, 7005, "2231053");
+  const res = commitWeekOn(db, W1, [row()]);
+  if (res.ok) {
+    eq("aucune création ni rattachement", [res.promotions.created, res.promotions.linked], [0, 0]);
+    eq("1 anomalie remontée", res.promotions.anomalies.length, 1);
+    eq("les deux leads sont nommés",
+       [res.promotions.anomalies[0].lead_id, res.promotions.anomalies[0].other_lead_id], [second, first]);
+  }
+  eq("le 2e lead reste NON lié", db.prepare(`SELECT player_id FROM nexa_leads WHERE id=?`).get(second).player_id, null);
+  eq("le 1er lead n'a pas bougé", db.prepare(`SELECT player_id FROM nexa_leads WHERE id=?`).get(first).player_id, p.player_id);
+  const anom = getLeadAnomaliesOn(db, gid(db));
+  eq("l'anomalie est visible pour la réconciliation", anom.length, 1);
+  eq("avec le nom du joueur", anom[0].player_name, "LeCercle");
+  db.close();
+}
+{
+  // Cas 5 — aucune création sans Member ID, et aucun ID inconnu ne crée personne.
+  const db = freshDb();
+  const res = commitWeekOn(db, W1, [noId("ImLePAD"), row({ member_id: "0000000" })]);
+  if (res.ok) eq("aucune création", [res.promotions.created, res.promotions.promoted, res.promotions.linked], [0, 0, 0]);
+  eq("aucun joueur créé", db.prepare(`SELECT COUNT(*) n FROM players`).get().n, 0);
+  eq("les 2 lignes restent à réconcilier", getUnreconciledOn(db).length, 2);
+  db.close();
+}
+{
+  // ZÉRO message Telegram : le module de promotion ne doit importer aucun réseau.
+  const src = fs.readFileSync(path.join(REPO, "lib/funnels/nexa/lead-promotion.ts"), "utf8");
+  // On teste les IMPORTS, pas le texte : le fichier PARLE de sendMsg dans son
+  // encadré pour interdire son ajout, ce qui est voulu.
+  const importsOf = (code: string) => code.split("\n").filter(l => /^\s*import\b/.test(l)).join("\n");
+  check("lead-promotion n'importe ni sendMsg ni telegram-api",
+        !/sendMsg|telegram-api|telegram-commands/.test(importsOf(src)));
+  const ing = fs.readFileSync(path.join(REPO, "lib/funnels/nexa/affiliate-ingest.ts"), "utf8");
+  check("affiliate-ingest non plus", !/sendMsg|telegram-api/.test(importsOf(ing)));
 }
 
 console.log(`\n${failures.length === 0 ? "✅" : "❌"} ${passed} passés, ${failures.length} échoués`);
