@@ -210,12 +210,17 @@ export async function POST(req: NextRequest) {
     console.log(`[TG] msg from user_id=${msg.from.id} username=@${msg.from.username ?? "none"} text="${msg.text?.slice(0, 30) ?? ""}"`);
   }
 
-  // ── Chat admin : réponse d'opérateur à un lead relayé ───────────────────────────────────────
+  // ── Chat admin : réponse d'opérateur à un lead ──────────────────────────────────────────────
   // AVANT le bloc agent Claude, volontairement : si ADMIN_CHAT_ID et AGENT_TELEGRAM_CHAT_ID
   // pointaient par erreur sur le même chat, une réponse à un lead serait sinon avalée par
-  // l'agent. handleAdminChatMessage ne consomme QUE les messages en réponse à un post
-  // référencé dans relay_map — le reste du chat continue son chemin normal.
-  if (msg?.reply_to_message && !msg.from?.is_bot) {
+  // l'agent.
+  //
+  // Depuis la bascule Sujets, le déclencheur n'est plus « Répondre » mais le SUJET : tout
+  // message posté dans le topic d'un lead lui part. On ne peut donc plus filtrer sur
+  // `reply_to_message` en amont — c'est handleAdminChatMessage qui décide, et il ne consomme
+  // que ce qui se résout vers un lead (par thread, ou par relay_map en repli). General et le
+  // reste du chat continuent leur chemin normal.
+  if (msg && !msg.from?.is_bot) {
     try {
       const { handleAdminChatMessage } = await import("@/lib/funnels/live-takeover");
       if (await handleAdminChatMessage(msg)) return NextResponse.json({ ok: true });

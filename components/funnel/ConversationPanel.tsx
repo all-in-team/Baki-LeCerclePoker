@@ -29,6 +29,8 @@ type LeadHead = {
   takeover_active: boolean;
   takeover_until: string | null;
   takeover_by: string | null;
+  /** Sujet Telegram du lead — null tant qu'aucun n'a été créé. */
+  topic_url: string | null;
 };
 
 /**
@@ -139,6 +141,16 @@ export default function ConversationPanel({ leadId, onChanged }: {
           <span style={{ fontSize: 10, color: "#F87171", fontWeight: 600, textTransform: "none", letterSpacing: 0 }}>
             🚫 le lead a bloqué le bot
           </span>
+        )}
+        {head?.topic_url && (
+          <a
+            href={head.topic_url} target="_blank" rel="noreferrer"
+            onClick={e => e.stopPropagation()}
+            style={{ fontSize: 10, color: "#60A5FA", fontWeight: 600, textTransform: "none", letterSpacing: 0 }}
+            title="Ouvrir le sujet de ce lead dans le chat admin Telegram"
+          >
+            🧵 Sujet Telegram
+          </a>
         )}
       </div>
 

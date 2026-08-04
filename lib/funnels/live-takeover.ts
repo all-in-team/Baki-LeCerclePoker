@@ -3,21 +3,32 @@
 // Le bot Nexa est scripté : hors scénario, il répondait une phrase générique et
 // la question du lead disparaissait. Ce module ajoute la couche manquante :
 //
-//   lead ──DM──> bot ──relais──> chat admin ──« Répondre »──> bot ──DM──> lead
+//   lead ──DM──> bot ──relais──> topic du chat admin ──> bot ──DM──> lead
 //
 // Côté lead c'est TOUJOURS le bot qui parle : jamais de forward, jamais de nom
 // d'opérateur, jamais de mention du back-office. C'est la contrainte structurante
-// de tout ce fichier — voir sendToLead().
+// de tout ce fichier — voir replyToLead().
 //
-// Trois tables (migration add_live_takeover_v1) :
+// Depuis la bascule Sujets, chaque lead a son topic dans le chat admin (cf.
+// lib/funnels/live-takeover-topics.ts). Écrire dans un topic suffit à répondre :
+// plus besoin de « Répondre ». relay_map reste le filet pour les leads d'avant.
+//
+// Tables :
 //   • bot_messages  — l'historique complet, entrant ET sortant, takeover ou pas.
-//   • relay_map     — admin_message_id -> lead_id, ce qui rend « Répondre » résolvable.
+//   • relay_map     — admin_message_id -> lead_id (fallback de résolution + salves).
 //   • telegram_updates — dédoublonnage des updates rejoués par Telegram.
 //
 // Ce module ne dépend PAS de lib/nexa-funnel.ts (qui, lui, l'importe) : il lit
 // `nexa_leads` en direct. Sans ça, cycle d'import à la compilation.
 import { getDb } from "@/lib/db";
-import { AGENT_CHAT_ID } from "@/lib/telegram-commands/helpers";
+import {
+  adminChatId, esc, isServiceMessage, tg, type TgResult,
+} from "@/lib/funnels/telegram-api";
+import {
+  ensureLeadTopic, resolveLeadIdFromThread, sendInTopic, touchTopic,
+} from "@/lib/funnels/live-takeover-topics";
+
+export { adminChatId, esc };
 
 // ── Paramètres ────────────────────────────────────────────
 
@@ -29,20 +40,8 @@ export const RELAY_SALVE_SECONDS = 60;
 export const RELAY_MAP_RETENTION_DAYS = 30;
 /** Un update rejoué l'est dans la minute ; 24 h de mémoire est déjà très large. */
 const UPDATE_DEDUP_RETENTION_HOURS = 24;
-
-/**
- * Chat Telegram où atterrissent les messages des leads.
- *
- * Repli sur AGENT_CHAT_ID plutôt que sur rien : une variable oubliée doit dégrader
- * (relais au mauvais endroit, visible immédiatement) et non faire disparaître les
- * questions en silence — c'est exactement le bug que cette feature corrige.
- */
-export function adminChatId(): string {
-  const id = process.env.ADMIN_CHAT_ID?.trim();
-  if (id) return id;
-  console.warn("[TAKEOVER] ADMIN_CHAT_ID non défini — repli sur AGENT_TELEGRAM_CHAT_ID. Voir docs/LIVE_TAKEOVER.md");
-  return AGENT_CHAT_ID;
-}
+/** Leads traités par passe de drain — borne le temps d'un tick de cron. */
+const DRAIN_BATCH = 50;
 
 // ── Types ─────────────────────────────────────────────────
 
@@ -59,6 +58,9 @@ export type LeadLite = {
   takeover_until: string | null;
   takeover_by: string | null;
   relances_off: number;
+  admin_topic_chat_id: string | null;
+  admin_thread_id: number | null;
+  last_relayed_msg_id: number;
 };
 
 export type MsgKind = "text" | "photo" | "document" | "voice" | "video" | "audio" | "sticker" | "other";
@@ -76,7 +78,8 @@ export type BotMessage = {
 };
 
 const LEAD_COLS = `id, tg_user_id, tg_username, first_name, source, stage, member_id,
-  blocked, notes, takeover_until, takeover_by, relances_off`;
+  blocked, notes, takeover_until, takeover_by, relances_off,
+  admin_topic_chat_id, admin_thread_id, last_relayed_msg_id`;
 
 // ── Utilitaires ───────────────────────────────────────────
 
@@ -85,14 +88,21 @@ function nowSql(): string {
   return new Date().toISOString().slice(0, 19).replace("T", " ");
 }
 
-export function esc(s: string): string {
-  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-}
-
 export function leadLabel(lead: Pick<LeadLite, "tg_username" | "first_name" | "tg_user_id">): string {
   const handle = lead.tg_username ? `@${lead.tg_username}` : null;
   if (lead.first_name && handle) return `${lead.first_name} / ${handle}`;
   return handle ?? lead.first_name ?? `tg:${lead.tg_user_id}`;
+}
+
+/**
+ * Lien cliquable vers le sujet d'un lead — utilisé par les alertes de General et
+ * par le panneau du back-office. `null` si le lead n'a pas (encore) de sujet.
+ */
+export function topicLink(lead: Pick<LeadLite, "admin_thread_id" | "admin_topic_chat_id">): string | null {
+  if (!lead.admin_thread_id || !lead.admin_topic_chat_id) return null;
+  const s = String(lead.admin_topic_chat_id);
+  if (!s.startsWith("-100")) return null;
+  return `https://t.me/c/${s.slice(4)}/${lead.admin_thread_id}`;
 }
 
 // ── Accès DB ──────────────────────────────────────────────
@@ -216,32 +226,12 @@ export function isDuplicateUpdate(updateId: unknown): boolean {
   }
 }
 
-// ── API Telegram ──────────────────────────────────────────
-
-type TgResult<T = any> = { ok: boolean; result?: T; error_code?: number; description?: string };
-
-async function tg<T = any>(method: string, body: Record<string, any>): Promise<TgResult<T>> {
-  const token = process.env.TELEGRAM_BOT_TOKEN;
-  if (!token) return { ok: false, description: "TELEGRAM_BOT_TOKEN absent" };
-  try {
-    const res = await fetch(`https://api.telegram.org/bot${token}/${method}`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    });
-    const json = (await res.json()) as TgResult<T>;
-    if (!json.ok) console.error(`[TAKEOVER tg:${method}]`, json.error_code, json.description);
-    return json;
-  } catch (e: any) {
-    console.error(`[TAKEOVER tg:${method}] fetch failed:`, e?.message ?? e);
-    return { ok: false, description: e?.message ?? String(e) };
-  }
-}
+// ── Réactions ─────────────────────────────────────────────
 
 /**
  * ✅ n'appartient pas au jeu de réactions gratuites de Telegram sur tous les chats ;
- * 👍 en fait toujours partie. On tente le pouce vert demandé, on retombe sur le
- * pouce plutôt que de laisser l'opérateur sans accusé de réception.
+ * 👍 en fait toujours partie. On tente le vert demandé, on retombe sur le pouce
+ * plutôt que de laisser l'opérateur sans accusé de réception.
  */
 async function reactOk(chatId: string, messageId: number) {
   for (const emoji of ["✅", "👍"]) {
@@ -351,12 +341,20 @@ function relayHeader(lead: LeadLite): string {
   return bits.join(" · ");
 }
 
-function relayBody(lead: LeadLite, texts: string[]): string {
-  return `${relayHeader(lead)}\n———\n${texts.map(t => esc(t)).join("\n")}`;
+/**
+ * Corps d'un post de relais.
+ *
+ * Dans un topic, l'en-tête est déjà porté par la carte contexte épinglée : le
+ * répéter à chaque message noierait la conversation. En mode plat (Sujets non
+ * activés) il reste indispensable pour savoir de qui l'on parle.
+ */
+function relayBody(lead: LeadLite, texts: string[], withHeader: boolean): string {
+  const body = texts.map(t => esc(t)).join("\n");
+  return withHeader ? `${relayHeader(lead)}\n———\n${body}` : body;
 }
 
 /**
- * Capture d'un message entrant : persistance + relais vers le chat admin.
+ * Capture d'un message entrant : persistance + relais.
  *
  * Retourne `takeoverActive` pour que l'appelant sache s'il doit couper le scénario
  * (le bot se tait pendant qu'un humain a la main) et `duplicate` si Telegram a
@@ -386,82 +384,171 @@ export async function captureLeadInbound(msg: any): Promise<
      WHERE id = ?`
   ).run(lead.id);
 
-  await relayToAdmin(lead, msg, kind, text).catch(e =>
+  await relayPendingForLead(lead.id).catch(e =>
     console.error(`[TAKEOVER] relais admin échoué (lead=${lead.id}):`, e?.message ?? e));
 
   return { lead, takeoverActive, duplicate: false };
 }
 
+/** Un relais à la fois par lead — deux messages simultanés ne doivent pas se doubler. */
+const leadRelayQueues = new Map<number, Promise<unknown>>();
+function perLead<T>(leadId: number, fn: () => Promise<T>): Promise<T> {
+  const prev = leadRelayQueues.get(leadId) ?? Promise.resolve();
+  // `.then(fn, fn)` : un relais en échec ne doit pas bloquer les suivants.
+  const next = prev.then(fn, fn);
+  const tail = next.then(() => undefined, () => undefined);
+  leadRelayQueues.set(leadId, tail);
+  // L'entrée est libérée quand plus rien n'attend derrière — sinon la Map croîtrait
+  // d'une entrée par lead pour la durée de vie du process.
+  void tail.then(() => { if (leadRelayQueues.get(leadId) === tail) leadRelayQueues.delete(leadId); });
+  return next;
+}
+
+export type RelayOutcome = { posted: number; deferred: boolean };
+
 /**
- * Poste (ou complète) le message du chat admin.
+ * Relaie tout ce qui n'a pas encore été posté pour ce lead.
+ *
+ * Le curseur `last_relayed_msg_id` n'avance qu'APRÈS un post réussi : c'est ce qui
+ * rend la perte d'un message structurellement impossible. Un rate limit sur la
+ * création du topic, un topic supprimé, une coupure réseau — dans tous les cas le
+ * travail reste en attente et `drainPendingRelays()` le reprend au tick suivant.
  *
  * Regroupement par salve : si un post existe pour ce lead depuis moins de 60 s, on
- * l'ÉDITE avec l'ensemble des messages de la salve au lieu d'en créer un second —
- * trois messages d'affilée ne doivent pas produire trois notifications. Le post
- * édité reste l'ancre relay_map : « le dernier relay_map fait foi ».
- *
- * Un média ne s'édite pas dans un post texte : il est copié en plus, et sa propre
- * ligne relay_map permet de répondre directement dessus.
+ * l'ÉDITE avec l'ensemble des messages de la salve au lieu d'en créer un second.
+ * La borne basse de la salve est un id de message (`relay_map.from_msg_id`), pas
+ * une heure : reconstruire une salve ne dépend d'aucune horloge.
  */
-async function relayToAdmin(lead: LeadLite, msg: any, kind: MsgKind, text: string) {
+export function relayPendingForLead(leadId: number): Promise<RelayOutcome> {
+  return perLead(leadId, () => relayPendingInner(leadId));
+}
+
+async function relayPendingInner(leadId: number): Promise<RelayOutcome> {
   const db = getDb();
+  const lead = getLeadById(leadId);
+  if (!lead) return { posted: 0, deferred: false };
+
+  const pending = db.prepare(
+    `SELECT id, kind, text, telegram_message_id FROM bot_messages
+     WHERE lead_id = ? AND direction = 'in' AND id > ?
+     ORDER BY id`
+  ).all(leadId, lead.last_relayed_msg_id ?? 0) as
+    Array<{ id: number; kind: string; text: string | null; telegram_message_id: number | null }>;
+  if (pending.length === 0) return { posted: 0, deferred: false };
+
+  // Le topic est créé AVANT le post : si la création est différée (rate limit), on
+  // sort sans toucher au curseur — rien n'est perdu, tout est repris plus tard.
+  const ensured = await ensureLeadTopic(leadId);
+  if (ensured.deferred) {
+    console.warn(`[TAKEOVER] relais différé pour lead ${leadId} — ${pending.length} message(s) en attente`);
+    return { posted: 0, deferred: true };
+  }
+  // En mode plat, chaque post doit reporter l'en-tête du lead ; dans un sujet, la
+  // carte épinglée le fait déjà une fois pour toutes.
+  const inTopic = !ensured.flat;
   const chat = adminChatId();
 
   const anchor = db.prepare(
-    `SELECT admin_message_id, created_at FROM relay_map
-     WHERE admin_chat_id = ? AND lead_id = ? AND created_at > datetime('now', ?)
-     ORDER BY created_at DESC LIMIT 1`
-  ).get(chat, lead.id, `-${RELAY_SALVE_SECONDS} seconds`) as
-    { admin_message_id: number; created_at: string } | undefined;
+    `SELECT admin_message_id, from_msg_id FROM relay_map
+     WHERE admin_chat_id = ? AND lead_id = ? AND from_msg_id IS NOT NULL
+       AND created_at > datetime('now', ?)
+     ORDER BY created_at DESC, admin_message_id DESC LIMIT 1`
+  ).get(chat, leadId, `-${RELAY_SALVE_SECONDS} seconds`) as
+    { admin_message_id: number; from_msg_id: number } | undefined;
 
+  let ok = false;
   if (anchor) {
     // Salve en cours : on reconstruit le post avec tous les entrants depuis l'ancre.
     const salve = db.prepare(
       `SELECT text FROM bot_messages
-       WHERE lead_id = ? AND direction = 'in' AND created_at >= ?
-       ORDER BY created_at, id`
-    ).all(lead.id, anchor.created_at) as { text: string | null }[];
+       WHERE lead_id = ? AND direction = 'in' AND id >= ?
+       ORDER BY id`
+    ).all(leadId, anchor.from_msg_id) as { text: string | null }[];
     const texts = salve.map(r => r.text ?? "").filter(Boolean);
-    const edited = await tg("editMessageText", {
-      chat_id: chat, message_id: anchor.admin_message_id,
-      text: relayBody(lead, texts.length ? texts : [text]), parse_mode: "HTML",
+    const edited = await sendInTopic(leadId, "editMessageText", {
+      message_id: anchor.admin_message_id,
+      text: relayBody(lead, texts, !inTopic),
+      parse_mode: "HTML",
     });
-    if (edited.ok) {
-      // `created_at` n'est PAS rafraîchi : c'est l'horodatage du DÉBUT de la salve.
-      // Le rafraîchir ferait glisser la fenêtre à chaque message, et la requête
-      // ci-dessus ne ramènerait plus que le dernier — le post perdrait les
-      // précédents à chaque édition. La salve dure donc 60 s à partir du premier
-      // message, ce qui est exactement la règle du brief.
-      if (kind !== "text") await copyMediaToAdmin(lead, msg, chat);
-      return;
+    ok = edited.ok;
+    if (edited.deferred) return { posted: 0, deferred: true };
+    // Édition impossible (post supprimé, contenu identique…) → on crée un post neuf.
+  }
+
+  if (!ok) {
+    const texts = pending.map(p => p.text ?? "").filter(Boolean);
+    const posted = await sendInTopic(leadId, "sendMessage", {
+      text: relayBody(lead, texts.length ? texts : ["[message vide]"], !inTopic),
+      parse_mode: "HTML",
+    });
+    if (posted.deferred) return { posted: 0, deferred: true };
+    if (!posted.ok) {
+      console.error(`[TAKEOVER] post admin impossible (lead=${leadId}) : ${posted.description}`);
+      return { posted: 0, deferred: true };
     }
-    // Édition impossible (post supprimé, message identique…) → nouveau post.
+    if (posted.result?.message_id) {
+      mapAdminMessage(chat, posted.result.message_id, leadId, pending[0].id);
+    }
   }
 
-  const posted = await tg<{ message_id: number }>("sendMessage", {
-    chat_id: chat, text: relayBody(lead, [text]), parse_mode: "HTML",
-  });
-  if (posted.ok && posted.result?.message_id) {
-    mapAdminMessage(chat, posted.result.message_id, lead.id);
+  // Les médias ne s'éditent pas dans un post texte : chacun est copié à part, et
+  // reçoit sa propre ligne relay_map pour rester répondable en mode plat.
+  for (const p of pending) {
+    if (p.kind === "text" || !p.telegram_message_id) continue;
+    const copied = await sendInTopic(leadId, "copyMessage", {
+      from_chat_id: lead.tg_user_id, message_id: p.telegram_message_id,
+    });
+    if (copied.ok && copied.result?.message_id) {
+      mapAdminMessage(chat, copied.result.message_id, leadId, p.id);
+    } else if (!copied.deferred) {
+      // Le texte/libellé du média est déjà dans le post : on n'immobilise pas le
+      // curseur pour une copie ratée, sinon un média expiré bloquerait tout le lead.
+      console.error(`[TAKEOVER] copie média échouée (lead=${leadId}, msg=${p.id}) : ${copied.description}`);
+    }
   }
-  if (kind !== "text") await copyMediaToAdmin(lead, msg, chat);
+
+  const maxId = pending[pending.length - 1].id;
+  db.prepare(`UPDATE nexa_leads SET last_relayed_msg_id = ? WHERE id = ? AND last_relayed_msg_id < ?`)
+    .run(maxId, leadId, maxId);
+  return { posted: pending.length, deferred: false };
 }
 
-/** Le média du lead lui-même, copié dans le chat admin (et répondable). */
-async function copyMediaToAdmin(lead: LeadLite, msg: any, chat: string) {
-  if (!msg?.message_id || !msg?.chat?.id) return;
-  const copied = await tg<{ message_id: number }>("copyMessage", {
-    chat_id: chat, from_chat_id: msg.chat.id, message_id: msg.message_id,
-  });
-  if (copied.ok && copied.result?.message_id) {
-    mapAdminMessage(chat, copied.result.message_id, lead.id);
+/**
+ * Reprise des relais restés en attente (rate limit, topic indisponible, panne).
+ * Appelé par le cron : c'est le filet qui rend la promesse « aucun message perdu »
+ * vraie même quand Telegram refuse de coopérer pendant un moment.
+ */
+export async function drainPendingRelays(): Promise<{ leads: number; posted: number; deferred: number }> {
+  const rows = getDb().prepare(`
+    SELECT l.id
+    FROM nexa_leads l
+    JOIN (SELECT lead_id, MAX(id) AS mx FROM bot_messages WHERE direction = 'in' GROUP BY lead_id) m
+      ON m.lead_id = l.id
+    WHERE m.mx > l.last_relayed_msg_id
+    ORDER BY l.id
+    LIMIT ?
+  `).all(DRAIN_BATCH) as Array<{ id: number }>;
+
+  let posted = 0, deferred = 0;
+  for (const r of rows) {
+    try {
+      const out = await relayPendingForLead(r.id);
+      posted += out.posted;
+      if (out.deferred) deferred++;
+    } catch (e: any) {
+      console.error(`[TAKEOVER] drain lead ${r.id} :`, e?.message ?? e);
+      deferred++;
+    }
+    await new Promise(res => setTimeout(res, 120));
   }
+  return { leads: rows.length, posted, deferred };
 }
 
-export function mapAdminMessage(chatId: string, messageId: number, leadId: number) {
+export function mapAdminMessage(chatId: string, messageId: number, leadId: number, fromMsgId?: number) {
   getDb().prepare(
-    `INSERT OR REPLACE INTO relay_map (admin_chat_id, admin_message_id, lead_id) VALUES (?, ?, ?)`
-  ).run(chatId, messageId, leadId);
+    `INSERT OR REPLACE INTO relay_map (admin_chat_id, admin_message_id, lead_id, from_msg_id)
+     VALUES (?, ?, ?, ?)`
+  ).run(chatId, messageId, leadId, fromMsgId ?? null);
 }
 
 export function resolveLeadFromAdminMessage(chatId: string | number, messageId: number): LeadLite | undefined {
@@ -471,29 +558,42 @@ export function resolveLeadFromAdminMessage(chatId: string | number, messageId: 
   return row ? getLeadById(row.lead_id) : undefined;
 }
 
-// ── Notifications d'appoint ───────────────────────────────
+// ── Notifications ─────────────────────────────────────────
 
-async function postToAdmin(text: string, replyTo?: number) {
-  return tg<{ message_id: number }>("sendMessage", {
+/**
+ * Alerte SYSTÈME — postée dans « General », jamais dans un topic de lead (§3 du
+ * brief). C'est le seul contenu qui a le droit d'y aller : erreurs d'envoi,
+ * configuration manquante, incidents.
+ */
+export async function postSystemAlert(text: string): Promise<void> {
+  await tg("sendMessage", {
     chat_id: adminChatId(), text, parse_mode: "HTML",
+    link_preview_options: { is_disabled: true },
+  });
+}
+
+/** Message posté dans le topic du lead (ou à plat si les Sujets sont désactivés). */
+async function postForLead(leadId: number, text: string, replyTo?: number) {
+  return sendInTopic(leadId, "sendMessage", {
+    text, parse_mode: "HTML",
     ...(replyTo ? { reply_parameters: { message_id: replyTo, allow_sending_without_reply: true } } : {}),
   });
 }
 
 /**
- * Post admin ANCRÉ sur un lead pour un signal qui n'est pas un message entrant
- * (clic « J'ai une question »…). Même en-tête, même relay_map : l'opérateur peut
- * répondre dessus immédiatement et le lead reçoit la réponse via le bot.
+ * Signal qui n'est pas un message entrant (clic « J'ai une question »…), posté dans
+ * le topic du lead. L'opérateur peut répondre directement dans le topic — et, pour
+ * les leads restés en mode plat, la ligne relay_map garde le « Répondre » utilisable.
  * `body` est du HTML Telegram déjà sûr — à l'appelant de l'échapper.
  */
 export async function postAnchoredNotice(leadId: number, body: string): Promise<void> {
   const lead = getLeadById(leadId);
   if (!lead) return;
-  const chat = adminChatId();
-  const res = await tg<{ message_id: number }>("sendMessage", {
-    chat_id: chat, text: `${relayHeader(lead)}\n———\n${body}`, parse_mode: "HTML",
-  });
-  if (res.ok && res.result?.message_id) mapAdminMessage(chat, res.result.message_id, leadId);
+  const inTopic = lead.admin_thread_id !== null;
+  const res = await postForLead(leadId, inTopic ? body : `${relayHeader(lead)}\n———\n${body}`);
+  if (res.ok && res.result?.message_id) {
+    mapAdminMessage(adminChatId(), res.result.message_id, leadId);
+  }
 }
 
 /**
@@ -504,9 +604,9 @@ export async function postAnchoredNotice(leadId: number, body: string): Promise<
 export async function notifyAutoReplyDuringTakeover(leadId: number, buttonLabel: string) {
   const lead = getLeadById(leadId);
   if (!lead || !isTakeoverActive(lead)) return;
-  await postToAdmin(
-    `→ <b>${esc(leadLabel(lead))}</b> a cliqué « ${esc(buttonLabel)} » · le bot a répondu automatiquement`
-  ).catch(() => {});
+  const who = lead.admin_thread_id ? "Le lead" : `<b>${esc(leadLabel(lead))}</b>`;
+  await postForLead(leadId, `→ ${who} a cliqué « ${esc(buttonLabel)} » · le bot a répondu automatiquement`)
+    .catch(() => {});
 }
 
 // ── Commandes du chat admin ───────────────────────────────
@@ -554,42 +654,71 @@ export function operatorName(from: any): string {
 }
 
 /**
+ * Résolution du lead visé par un message du chat admin.
+ *
+ * 1. Le TOPIC. C'est le chemin principal : écrire dans le sujet d'un lead suffit,
+ *    plus besoin de « Répondre ».
+ * 2. relay_map, en repli — leads créés avant la bascule Sujets, médias copiés, et
+ *    messages du topic General répondus à l'ancienne.
+ *
+ * Retourne `null` si le message ne concerne aucun lead : le chat admin reste
+ * utilisable pour autre chose, et General n'est jamais confondu avec un lead.
+ */
+function resolveAdminTarget(msg: any): LeadLite | undefined {
+  const chatId = msg?.chat?.id;
+  // `is_topic_message` distingue un vrai sujet de forum d'un simple fil de réponses
+  // (les groupes de discussion liés à un canal exposent aussi message_thread_id).
+  if (msg?.is_topic_message === true && typeof msg?.message_thread_id === "number") {
+    const leadId = resolveLeadIdFromThread(chatId, msg.message_thread_id);
+    if (leadId) return getLeadById(leadId);
+  }
+  const replyTo = msg?.reply_to_message?.message_id;
+  if (replyTo) return resolveLeadFromAdminMessage(chatId, replyTo);
+  return undefined;
+}
+
+/**
  * Point d'entrée du chat admin. Retourne true si le message a été consommé.
  *
- * Ne réagit QU'aux messages en réponse à un post relayé : le reste du chat admin
- * (discussion libre, autres bots, agent Claude) est laissé intact.
+ * Dans un topic de lead, TOUT message d'opérateur part vers le lead : c'est le
+ * cœur de la bascule Sujets. Hors topic (General) et hors relay_map, rien n'est
+ * consommé — le chat reste utilisable normalement.
  */
 export async function handleAdminChatMessage(msg: any): Promise<boolean> {
   const chatId = msg?.chat?.id;
   if (String(chatId) !== adminChatId()) return false;
-  const replyTo = msg?.reply_to_message?.message_id;
-  if (!replyTo) return false;
+  if (msg?.from?.is_bot) return false;
+  // Créations de topic, épinglages… : du bruit de service, jamais du contenu.
+  if (isServiceMessage(msg)) return false;
 
-  const lead = resolveLeadFromAdminMessage(chatId, replyTo);
+  const lead = resolveAdminTarget(msg);
   if (!lead) return false;
 
   const operator = operatorName(msg.from);
   const raw: string = (msg.text ?? msg.caption ?? "").trim();
   const cmd = raw.split(/\s+/)[0]?.toLowerCase() ?? "";
+  const replyTo = msg.message_id;
+
+  touchTopic(lead.id);
 
   // ── Commandes ──
   if (cmd === "/bot") {
     const r = handoverToBot(lead.id, operator);
-    await postToAdmin(r.ok
+    await postForLead(lead.id, r.ok
       ? `🤖 <b>${esc(leadLabel(lead))}</b> — la main est rendue au scénario automatique.`
       : `❌ ${esc(r.error ?? "Erreur")}`, replyTo);
     return true;
   }
   if (cmd === "/stop") {
     const r = stopRelances(lead.id, operator);
-    await postToAdmin(r.ok
+    await postForLead(lead.id, r.ok
       ? `🔕 <b>${esc(leadLabel(lead))}</b> — relances désactivées définitivement.`
       : `❌ ${esc(r.error ?? "Erreur")}`, replyTo);
     return true;
   }
   if (cmd === "/note") {
     const r = appendNote(lead.id, raw.slice(cmd.length), operator);
-    await postToAdmin(r.ok
+    await postForLead(lead.id, r.ok
       ? `📝 Note ajoutée sur <b>${esc(leadLabel(lead))}</b>.`
       : `❌ ${esc(r.error ?? "Erreur")}`, replyTo);
     return true;
@@ -597,7 +726,8 @@ export async function handleAdminChatMessage(msg: any): Promise<boolean> {
   // Une commande inconnue n'est pas relayée au lead : mieux vaut un message
   // d'erreur qu'un « /truc » envoyé tel quel à un prospect.
   if (cmd.startsWith("/")) {
-    await postToAdmin(`❓ Commande inconnue <code>${esc(cmd)}</code> — dispo : /bot · /stop · /note &lt;texte&gt;`, replyTo);
+    await postForLead(lead.id,
+      `❓ Commande inconnue <code>${esc(cmd)}</code> — dispo : /bot · /stop · /note &lt;texte&gt;`, replyTo);
     return true;
   }
 
@@ -610,8 +740,17 @@ export async function handleAdminChatMessage(msg: any): Promise<boolean> {
         copyFrom: { chatId, messageId: msg.message_id, kind, caption: msg.caption ?? null },
       });
 
-  if (res.ok) await reactOk(adminChatId(), msg.message_id);
-  else await postToAdmin(`❌ Envoi impossible à <b>${esc(leadLabel(lead))}</b> — ${esc(res.error ?? "erreur inconnue")}`, replyTo);
+  if (res.ok) {
+    await reactOk(adminChatId(), msg.message_id);
+  } else {
+    // Les échecs d'envoi sont des alertes système : elles vont dans General (§3),
+    // avec un lien vers le topic concerné pour ne pas perdre le contexte.
+    const link = topicLink(lead);
+    await postSystemAlert(
+      `❌ Envoi impossible à <b>${esc(leadLabel(lead))}</b> — ${esc(res.error ?? "erreur inconnue")}` +
+      (link ? `\n→ <a href="${link}">ouvrir le sujet</a>` : "")
+    );
+  }
   return true;
 }
 

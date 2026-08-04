@@ -151,6 +151,10 @@ export function initCronJobs() {
   // répond à un post admin d'il y a un mois, et Telegram lui-même ne permet plus de
   // citer un message aussi ancien de façon fiable. bot_messages n'est PAS purgé :
   // c'est l'historique de conversation, il doit rester complet.
+  //
+  // La fermeture des sujets inactifs (30 j) est enchaînée ici : même cadence, même
+  // notion de « plus personne ne s'en sert ». Rien n'est supprimé — le premier
+  // message du lead rouvre son sujet automatiquement.
   cron.schedule("50 5 * * *", async () => {
     try {
       const { purgeRelayMap } = await import("./funnels/live-takeover");
@@ -159,8 +163,37 @@ export function initCronJobs() {
     } catch (e: any) {
       console.error("[CRON] relay-map-purge failed:", e);
     }
+    try {
+      const { closeIdleTopics } = await import("./funnels/live-takeover-topics");
+      const t = await closeIdleTopics();
+      if (t.closed > 0 || t.errors > 0) {
+        console.log(`[CRON] idle-topics-close: closed=${t.closed} errors=${t.errors}`);
+      }
+    } catch (e: any) {
+      console.error("[CRON] idle-topics-close failed:", e);
+    }
   }, opts);
-  console.log("[CRON] relay-map-purge registered (tous les jours à 5h50 Paris)");
+  console.log("[CRON] relay-map-purge + idle-topics-close registered (tous les jours à 5h50 Paris)");
+
+  // Reprise des relais en attente — toutes les 5 min.
+  //
+  // C'est le filet qui rend vraie la promesse « aucun message de lead n'est perdu ».
+  // Un rate limit sur createForumTopic, un sujet supprimé, une coupure Telegram :
+  // dans tous ces cas le curseur `last_relayed_msg_id` n'a pas avancé, et cette
+  // passe reprend exactement là où le webhook s'était arrêté. Silencieux quand il
+  // n'y a rien à faire — ce qui est le cas normal.
+  cron.schedule("*/5 * * * *", async () => {
+    try {
+      const { drainPendingRelays } = await import("./funnels/live-takeover");
+      const r = await drainPendingRelays();
+      if (r.leads > 0) {
+        console.log(`[CRON] relay-drain: leads=${r.leads} posted=${r.posted} deferred=${r.deferred}`);
+      }
+    } catch (e: any) {
+      console.error("[CRON] relay-drain failed:", e);
+    }
+  }, opts);
+  console.log("[CRON] relay-drain registered (toutes les 5 min)");
 
   if (process.env.CASHOUT_CRONS_ENABLED !== "true") {
     console.log("[CRON] cashout crons DISABLED (set CASHOUT_CRONS_ENABLED=true to enable)");

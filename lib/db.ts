@@ -2632,4 +2632,72 @@ function initSchema(db: Database.Database) {
   } catch (err: any) {
     console.error(`[MIGRATION:add_live_takeover_v1] FAILED:`, err.message);
   }
+
+  // Live takeover — passage du flux plat aux Sujets de forum (Hugo 2026-08-04).
+  //
+  // Le chat admin est devenu un supergroupe avec Topics. Un topic par lead remplace
+  // le fil unique : la conversation d'un lead devient un espace, pas une suite de
+  // posts noyés dans le flux.
+  //
+  //   • admin_thread_id (+ admin_topic_chat_id) : LE routage. Un message d'opérateur
+  //     posté dans un topic est résolu par son thread — plus besoin de « Répondre ».
+  //     La paire est UNIQUE : un thread_id n'a de sens que dans son chat, indexer
+  //     le thread seul casserait au moindre changement de ADMIN_CHAT_ID.
+  //   • relay_map devient un FALLBACK (leads d'avant cette migration, et médias
+  //     copiés) — conservée telle quelle, purge 30 j inchangée.
+  //   • admin_card_message_id : la carte contexte épinglée. Stockée pour être ÉDITÉE
+  //     à chaque changement d'étape plutôt que repostée — une carte épinglée obsolète
+  //     est pire que pas de carte.
+  //   • admin_topic_name : dernier nom appliqué. Sans lui, chaque passage du
+  //     synchroniseur d'étape referait un editForumTopic identique, pour rien.
+  //   • admin_topic_closed / admin_topic_last_at : hygiène 30 j (fermeture auto,
+  //     réouverture à la volée si le lead réécrit).
+  //
+  //   • last_relayed_msg_id : LE curseur de relais, et la garantie « aucun message
+  //     perdu ». Un entrant n'est marqué relayé qu'APRÈS un post réussi ; si la
+  //     création du topic bute sur un rate limit, le curseur ne bouge pas et le
+  //     drain périodique reprend exactement là où il s'était arrêté. Backfillé
+  //     ci-dessous sur le maximum existant : les messages déjà relayés par la v1
+  //     ne doivent surtout pas être rejoués dans les nouveaux topics.
+  //
+  //   • relay_map.from_msg_id : borne basse de la salve couverte par un post admin.
+  //     Remplace la fenêtre temporelle par un intervalle d'ids — reconstruire une
+  //     salve ne dépend plus de l'horloge. NULL sur les lignes d'avant migration,
+  //     qui retombent sur l'ancien comportement.
+  try {
+    const fix = db.prepare(`INSERT OR IGNORE INTO _applied_fixes (name) VALUES (?)`).run("add_live_takeover_topics_v1");
+    if (fix.changes > 0) {
+      for (const sql of [
+        `ALTER TABLE nexa_leads ADD COLUMN admin_topic_chat_id TEXT`,
+        `ALTER TABLE nexa_leads ADD COLUMN admin_thread_id INTEGER`,
+        `ALTER TABLE nexa_leads ADD COLUMN admin_topic_name TEXT`,
+        `ALTER TABLE nexa_leads ADD COLUMN admin_card_message_id INTEGER`,
+        `ALTER TABLE nexa_leads ADD COLUMN admin_topic_closed INTEGER NOT NULL DEFAULT 0`,
+        `ALTER TABLE nexa_leads ADD COLUMN admin_topic_last_at TEXT`,
+        `ALTER TABLE nexa_leads ADD COLUMN last_relayed_msg_id INTEGER NOT NULL DEFAULT 0`,
+        `ALTER TABLE relay_map ADD COLUMN from_msg_id INTEGER`,
+      ]) {
+        try { db.exec(sql); } catch { /* colonne déjà là */ }
+      }
+      db.exec(`
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_nexa_leads_admin_thread
+          ON nexa_leads(admin_topic_chat_id, admin_thread_id)
+          WHERE admin_thread_id IS NOT NULL;
+        CREATE INDEX IF NOT EXISTS idx_nexa_leads_topic_idle
+          ON nexa_leads(admin_topic_closed, admin_topic_last_at)
+          WHERE admin_thread_id IS NOT NULL;
+      `);
+      // Tout ce qui existe a déjà été relayé par la v1 : on pose le curseur au
+      // maximum plutôt qu'à 0, sinon le premier drain reposterait l'historique
+      // complet de chaque lead dans son tout nouveau topic.
+      db.prepare(`
+        UPDATE nexa_leads
+        SET last_relayed_msg_id = COALESCE(
+          (SELECT MAX(id) FROM bot_messages WHERE lead_id = nexa_leads.id AND direction = 'in'), 0)
+      `).run();
+      console.log("[MIGRATION] add_live_takeover_topics_v1 applied");
+    }
+  } catch (err: any) {
+    console.error(`[MIGRATION:add_live_takeover_topics_v1] FAILED:`, err.message);
+  }
 }

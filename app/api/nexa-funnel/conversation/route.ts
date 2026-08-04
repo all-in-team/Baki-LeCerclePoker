@@ -8,7 +8,7 @@
 // n'exclut que /api/telegram, /api/cron, /api/portal…).
 import { NextRequest, NextResponse } from "next/server";
 import {
-  getConversation, markConversationRead, replyToLead, getLeadById, isTakeoverActive,
+  getConversation, markConversationRead, replyToLead, getLeadById, isTakeoverActive, topicLink,
 } from "@/lib/funnels/live-takeover";
 
 function parseLeadId(raw: string | null): number | null {
@@ -34,6 +34,9 @@ export async function GET(req: NextRequest) {
       stage: lead.stage, source: lead.source, member_id: lead.member_id,
       blocked: lead.blocked, takeover_until: lead.takeover_until,
       takeover_active: isTakeoverActive(lead), takeover_by: lead.takeover_by,
+      // Lien vers le sujet Telegram du lead — le back-office et le chat admin sont
+      // deux vues de la même conversation, autant pouvoir sauter de l'une à l'autre.
+      topic_url: topicLink(lead),
     },
     messages,
   });

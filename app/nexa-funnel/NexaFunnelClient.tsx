@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import type { NexaLeadWithStats, NexaWeeklyStat, NexaLeadEvent } from "@/lib/nexa-funnel";
 import { NEXA_STAGES, NEXA_CARDS } from "@/lib/funnels/nexa/config";
@@ -90,6 +90,19 @@ export default function NexaFunnelClient({ leads, stats, events }: {
   const router = useRouter();
   const [openLead, setOpenLead] = useState<number | null>(null);
   const [onlyUnread, setOnlyUnread] = useState(false);
+
+  // `?lead=<id>` — cible du lien « Fiche dans le back-office » de la carte contexte
+  // épinglée dans le sujet Telegram. Lu depuis window plutôt que via useSearchParams
+  // pour ne pas imposer de frontière Suspense au rendu de la table.
+  useEffect(() => {
+    const wanted = Number(new URLSearchParams(window.location.search).get("lead"));
+    if (!Number.isInteger(wanted) || wanted <= 0) return;
+    setOpenLead(wanted);
+    // Le panneau se déplie au même tick : on laisse le DOM se poser avant de viser.
+    requestAnimationFrame(() => {
+      document.getElementById(`lead-${wanted}`)?.scrollIntoView({ block: "center" });
+    });
+  }, []);
 
   const unreadCount = useMemo(() => leads.filter(l => l.unread === 1).length, [leads]);
   const visibleLeads = useMemo(
@@ -191,6 +204,7 @@ function LeadRow({ lead, weekly, events, isOpen, onToggle, onChanged }: {
       {/* La ligne entière est cliquable (§5 du brief) : un clic ouvre le panneau
           conversation. Les liens internes (groupe) stoppent la propagation. */}
       <tr
+        id={`lead-${lead.id}`}
         onClick={onToggle}
         style={{
           borderBottom: "1px solid rgba(255,255,255,0.04)",

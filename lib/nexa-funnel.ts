@@ -29,6 +29,7 @@ import {
   esc, isTakeoverActiveForTgId, logBotMessage, notifyAutoReplyDuringTakeover,
   postAnchoredNotice,
 } from "@/lib/funnels/live-takeover";
+import { syncTopicForStage } from "@/lib/funnels/live-takeover-topics";
 
 export type NexaLead = {
   id: number;
@@ -72,6 +73,15 @@ export type NexaLead = {
   last_lead_msg_at: string | null;
   /** Curseur de lecture du panneau conversation — comparé à bot_messages. */
   last_read_msg_id: number;
+  /** Sujet du chat admin — voir lib/funnels/live-takeover-topics.ts. */
+  admin_topic_chat_id: string | null;
+  admin_thread_id: number | null;
+  admin_topic_name: string | null;
+  admin_card_message_id: number | null;
+  admin_topic_closed: number;
+  admin_topic_last_at: string | null;
+  /** Curseur de relais vers le chat admin — n'avance qu'après un post réussi. */
+  last_relayed_msg_id: number;
   created_at: string;
   updated_at: string;
 };
@@ -173,7 +183,14 @@ export function recordMilestone(leadId: number, target: NexaStage, actor: Actor 
         updated_at = datetime('now')
     WHERE id = ?
   `).run(adv, target, adv, adv, adv, leadId);
-  if (advances) logNexaEvent(leadId, "stage_change", { stage: target, actor });
+  if (advances) {
+    logNexaEvent(leadId, "stage_change", { stage: target, actor });
+    // Le sujet du chat admin suit l'étape : nom, icône et carte épinglée.
+    // « Fire and forget » assumé — un renommage de topic est de la cosmétique, il
+    // ne doit jamais faire échouer une transition d'étape ni ralentir le webhook.
+    void syncTopicForStage(leadId).catch(e =>
+      console.error(`[NEXA] sync topic (lead=${leadId}) :`, e?.message ?? e));
+  }
   return advances;
 }
 
@@ -344,6 +361,9 @@ export async function handleNexaFunnelStart(chatId: number, from: any, payload?:
       `UPDATE nexa_leads SET tg_username = ?, first_name = ?, blocked = 0,
         last_interaction_at = datetime('now'), updated_at = datetime('now') WHERE tg_user_id = ?`
     ).run(username, firstName, tgId);
+    // Le handle ou le prénom ont pu changer depuis la création du sujet : on
+    // resynchronise le nom du topic. No-op si rien n'a bougé.
+    void syncTopicForStage(existing.id).catch(() => {});
     // Le sélecteur n'est reposé qu'à un lead qui n'a RIEN commencé : les leads
     // créés avant la feature (lang_chosen_at NULL, déjà à mi-parcours) reprennent
     // leur étape en français au lieu de se voir interrompus par une question.
