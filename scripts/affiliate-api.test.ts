@@ -67,8 +67,15 @@ const MARKERS = [...SRC.matchAll(/_applied_fixes \(name\) VALUES \(\?\)`\)\.run\
       exact_action_pct REAL, exact_rakeback_pct REAL, exact_insurance_pct REAL,
       perceived_action_pct REAL, perceived_rakeback_pct REAL, perceived_insurance_pct REAL,
       currency TEXT NOT NULL DEFAULT 'USDT');
-    CREATE TABLE IF NOT EXISTS nexa_leads (id INTEGER PRIMARY KEY AUTOINCREMENT,
-      tg_user_id INTEGER NOT NULL UNIQUE, member_id TEXT UNIQUE);
+    -- Forme réelle : player_id vient de add_nexa_affiliate_v1, stage/tg_username de
+    -- add_nexa_funnel_v1. commitWeek promeut les leads, il lit ces colonnes.
+    CREATE TABLE IF NOT EXISTS nexa_leads (id INTEGER PRIMARY KEY AUTOINCREMENT, tg_user_id INTEGER NOT NULL UNIQUE,
+      member_id TEXT UNIQUE, player_id INTEGER REFERENCES players(id), tg_username TEXT,
+      stage TEXT NOT NULL DEFAULT 'started', updated_at TEXT NOT NULL DEFAULT (datetime('now')));
+    CREATE TABLE IF NOT EXISTS nexa_lead_events (id INTEGER PRIMARY KEY AUTOINCREMENT,
+      lead_id INTEGER NOT NULL REFERENCES nexa_leads(id), kind TEXT NOT NULL,
+      stage TEXT, payload TEXT, actor TEXT NOT NULL DEFAULT 'bot',
+      created_at TEXT NOT NULL DEFAULT (datetime('now')));
     CREATE TABLE IF NOT EXISTS manual_settlements (id INTEGER PRIMARY KEY AUTOINCREMENT,
       game_id INTEGER NOT NULL, player_id INTEGER NOT NULL,
       amount_due_usdt REAL NOT NULL DEFAULT 0, status TEXT NOT NULL DEFAULT 'locked');

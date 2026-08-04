@@ -38,6 +38,7 @@ import {
   OWNER_IDS, AGENT_CHAT_ID,
 } from "@/lib/telegram-commands";
 import { sendMsgKeyboard, editMessageReplyMarkup } from "@/lib/telegram-commands/helpers";
+import { handleNexa, handleNexaCallback } from "@/lib/telegram-commands/nexa";
 // Register command handlers for the raw-message flow (breaks circular dep)
 registerCommandHandlers({
   handleDeal,
@@ -130,7 +131,9 @@ export async function POST(req: NextRequest) {
     const cbChatId = cb.message?.chat?.id;
     const cbThreadId = cb.message?.message_thread_id;
 
-    if (cbData.startsWith("kk_")) {
+    if (cbData.startsWith("nexa_")) {
+      await handleNexaCallback(cb.id, cbData, cbChatId, cb.from);
+    } else if (cbData.startsWith("kk_")) {
       await handleKkpokerCallback(cb.id, cbData, cbChatId, cbThreadId, cb.from, cb.message?.message_id);
     } else if (cbData.startsWith("a5_")) {
       await handleA5pokerCallback(cb.id, cbData, cbChatId, cbThreadId, cb.from, cb.message?.message_id);
@@ -333,6 +336,10 @@ export async function POST(req: NextRequest) {
     try {
       if (cmd === "/onboard")           await handleOnboard(rawArgs, chatId, msg.chat?.title, threadId);
       else if (cmd === "/deal")         await handleDeal(rawArgs, chatId);
+      // /nexa : buy-in / cash-out NEXAPOKER. Le handler revérifie OWNER_IDS et
+      // n'accepte que la conversation privée — il ne se contente pas de la garde
+      // du webhook.
+      else if (cmd === "/nexa")         await handleNexa(rawArgs, chatId, msg.from?.id, msg.chat?.type === "private");
       else if (cmd === "/depot")        await handleTx("deposit", rawArgs, chatId);
       else if (cmd === "/retrait")      await handleTx("withdrawal", rawArgs, chatId);
       else if (cmd === "/transfer")     await handleTransfer(rawArgs, chatId);

@@ -43,6 +43,7 @@ export { handleStartWn } from "./startwn";
 export { handleAffiliation, handleAffiliationRawMessage } from "./affiliation";
 export { handleMyAffi } from "./myaffi";
 export { handleStartAffi } from "./startaffi";
+export { handleNexa, handleNexaCallback } from "./nexa";
 export { handleLinkGroup } from "./linkgroup";
 export { handleFixGroup } from "./fixgroup";
 
