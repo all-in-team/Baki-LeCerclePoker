@@ -59,31 +59,36 @@ export function getTopicLead(leadId: number): TopicLead | undefined {
 
 type ForumProbe = { chatId: string; isForum: boolean; at: number };
 let forumProbe: ForumProbe | null = null;
-const FORUM_TTL_OK_MS = 10 * 60_000;
-/** Un échec réseau ne doit pas figer le mode plat pour 10 min. */
-const FORUM_TTL_FAIL_MS = 60_000;
+const FORUM_TTL_MS = 10 * 60_000;
 let forumWarned = false;
 
 /**
- * Le chat admin a-t-il les Sujets activés ?
+ * Le chat admin a-t-il les Sujets activés ? `null` = on ne sait pas (getChat en
+ * échec, et aucune réponse antérieure en cache).
  *
- * Sondé par `getChat` et mis en cache : c'est appelé à chaque message de lead, et
- * `is_forum` ne change qu'à la main. En cas d'échec de l'appel, on répond « pas un
- * forum » (mode plat) plutôt que de lever : un relais dégradé vaut mieux qu'un
- * message perdu. Le cache d'échec est court pour rattraper dès que possible.
+ * La tri-valeur n'est pas un raffinement : répondre `false` sur un échec réseau
+ * revient à dire « ce n'est pas un forum », donc à poster le message du lead SANS
+ * message_thread_id — c'est-à-dire dans « General », que le §3 du brief réserve aux
+ * alertes système. Un incident réseau d'une seconde suffisait à y déverser une
+ * conversation. `null` fait au contraire différer le relais : le message attend le
+ * drain, et rien ne fuit.
+ *
+ * Le résultat est mis en cache : appelé à chaque message de lead, alors que
+ * `is_forum` ne change qu'à la main. Un échec ne poisonne PAS le cache — la sonde
+ * est simplement retentée au prochain appel.
  */
-export async function adminChatIsForum(chatId: string): Promise<boolean> {
+export async function adminChatIsForum(chatId: string): Promise<boolean | null> {
   const now = Date.now();
-  if (forumProbe && forumProbe.chatId === chatId) {
-    const ttl = forumProbe.isForum ? FORUM_TTL_OK_MS : FORUM_TTL_FAIL_MS;
-    if (now - forumProbe.at < ttl) return forumProbe.isForum;
+  if (forumProbe && forumProbe.chatId === chatId && now - forumProbe.at < FORUM_TTL_MS) {
+    return forumProbe.isForum;
   }
 
   const res = await tg<{ is_forum?: boolean }>("getChat", { chat_id: chatId });
   if (!res.ok) {
-    console.error(`[TOPICS] getChat(${chatId}) a échoué (${res.description}) — mode plat temporaire`);
-    forumProbe = { chatId, isForum: false, at: now };
-    return false;
+    console.error(`[TOPICS] getChat(${chatId}) a échoué (${res.description}) — état des Sujets inconnu, relais différé`);
+    // On garde une réponse ANTÉRIEURE si on en a une : elle reste plus fiable qu'un
+    // échec de transport ponctuel.
+    return forumProbe?.chatId === chatId ? forumProbe.isForum : null;
   }
 
   const isForum = res.result?.is_forum === true;
@@ -99,10 +104,32 @@ export async function adminChatIsForum(chatId: string): Promise<boolean> {
   return isForum;
 }
 
-/** Sonde au démarrage — le warning doit sortir avant le premier lead, pas après. */
+/**
+ * Sonde au démarrage — le diagnostic doit sortir avant le premier lead, pas après.
+ *
+ * Retentée : sur Railway, `instrumentation.register()` s'exécute avant que le réseau
+ * sortant du conteneur soit prêt, et la première tentative échoue par `fetch failed`.
+ * Sans ces reprises, le log annonçait « Sujets NON activés » sur un groupe
+ * parfaitement configuré — un faux diagnostic est pire que pas de diagnostic.
+ */
 export async function probeForumAtStartup(chatId: string): Promise<void> {
-  const isForum = await adminChatIsForum(chatId).catch(() => false);
-  console.log(`[TOPICS] chat admin ${chatId} — Sujets ${isForum ? "activés" : "NON activés (mode plat)"}`);
+  const delaysMs = [2_000, 8_000, 20_000];
+  for (let i = 0; i < delaysMs.length; i++) {
+    await sleep(delaysMs[i]);
+    const state = await adminChatIsForum(chatId).catch(() => null);
+    if (state === true) {
+      console.log(`[TOPICS] chat admin ${chatId} — Sujets activés`);
+      return;
+    }
+    if (state === false) {
+      console.warn(`[TOPICS] chat admin ${chatId} — Sujets NON activés, relais en mode plat`);
+      return;
+    }
+  }
+  console.warn(
+    `[TOPICS] chat admin ${chatId} — sonde impossible (réseau) après ${delaysMs.length} tentatives. ` +
+    `Ce n'est PAS un diagnostic de configuration : l'état sera resondé au premier message de lead.`
+  );
 }
 
 // ── Nom, icône et carte contexte ──────────────────────────
@@ -236,7 +263,11 @@ export async function ensureLeadTopic(leadId: number): Promise<EnsureResult> {
   // reviendrait à déverser un message de lead dans General.
   if (!lead) return DEFER;
 
-  if (!(await adminChatIsForum(chat))) return FLAT;
+  const forum = await adminChatIsForum(chat);
+  // Inconnu (getChat en échec) : on DIFFÈRE. Poster à plat ici enverrait le message
+  // dans General si le chat est bien un forum — exactement ce qu'on s'interdit.
+  if (forum === null) return DEFER;
+  if (forum === false) return FLAT;
 
   // Topic déjà connu POUR CE CHAT. Un thread_id venu d'un autre chat admin ne veut
   // rien dire : on en recrée un plutôt que de poster dans le vide.

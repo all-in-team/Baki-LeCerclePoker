@@ -63,9 +63,13 @@ Au démarrage, les logs Railway indiquent :
 [TOPICS] chat admin -1002XXXXXXXXX — Sujets activés
 ```
 
-Si tu lis `NON activés (mode plat)`, les Sujets ne sont pas activés sur le groupe ou
-le bot n'a pas « Gérer les sujets ». Le relais **fonctionne quand même**, à plat,
-comme avant la bascule (§5).
+Trois issues possibles, à ne pas confondre :
+
+| Log                              | Signification                                                |
+|----------------------------------|---------------------------------------------------------------|
+| `Sujets activés`                 | Tout est bon                                                  |
+| `Sujets NON activés`             | Sujets désactivés sur le groupe, ou bot sans « Gérer les sujets ». Le relais fonctionne quand même, **à plat** (§5) |
+| `sonde impossible (réseau)`      | **Pas un diagnostic de configuration.** Le réseau sortant du conteneur n'était pas prêt au boot ; l'état est resondé au premier message de lead |
 
 Envoie ensuite `/start nexa` au bot depuis un compte de test, puis écris-lui.
 Un sujet doit apparaître :
