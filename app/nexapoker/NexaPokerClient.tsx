@@ -10,6 +10,7 @@
 // réconcilier vient de resolveRows et n'est jamais appliqué seul.
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { movementColor, netColor, isZeroAmount } from "@/components/ledger/MovementAmount";
 
 const CARD: React.CSSProperties = {
   background: "#12141C", border: "1px solid rgba(255,255,255,0.06)", borderRadius: 14, padding: 18,
@@ -95,14 +96,14 @@ export default function NexaPokerClient({ currentWeek, today }: { currentWeek: s
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
       {/* Le geste hebdomadaire principal, à un clic depuis la room. */}
       <div style={{ ...CARD, display: "flex", alignItems: "center", gap: 14, flexWrap: "wrap" }}>
-        <a href="/nexa/saisie" style={{ textDecoration: "none" }}>
+        <a href="#saisie" style={{ textDecoration: "none" }}>
           <span style={{ display: "inline-block", padding: "10px 20px", borderRadius: 10, fontSize: 13,
                          fontWeight: 700, background: "#60A5FA", color: "#0B0D12" }}>
             📷 Saisir la semaine (screenshot)
           </span>
         </a>
         <span style={{ fontSize: 12, color: "#8888A0" }}>
-          Dépose le screenshot du report NEXA : la grille se pré-remplit, tu relis, tu enregistres.
+          La saisie est en bas de cette page : dépose le screenshot, la grille se pré-remplit, tu relis, tu enregistres.
         </span>
       </div>
 
@@ -219,11 +220,15 @@ export default function NexaPokerClient({ currentWeek, today }: { currentWeek: s
                   <td style={{ ...TD, textAlign: "right" }}>{p.weeks_count || "—"}</td>
                   <td style={{ ...TD, textAlign: "right" }}>{fmt(p.total_rake)}</td>
                   <td style={{ ...TD, textAlign: "right", fontWeight: 600 }}>{fmt(p.total_commission)}</td>
-                  <td style={{ ...TD, textAlign: "right", color: "#8888A0" }}>{p.deposited ? fmt(p.deposited) : "—"}</td>
-                  <td style={{ ...TD, textAlign: "right", color: "#8888A0" }}>{p.withdrawn ? fmt(p.withdrawn) : "—"}</td>
+                  <td style={{ ...TD, textAlign: "right", color: movementColor("deposit") }}>
+                    {isZeroAmount(p.deposited) ? "—" : fmt(p.deposited)}
+                  </td>
+                  <td style={{ ...TD, textAlign: "right", color: movementColor("withdrawal") }}>
+                    {isZeroAmount(p.withdrawn) ? "—" : fmt(p.withdrawn)}
+                  </td>
                   <td style={{ ...TD, textAlign: "right", fontWeight: 600,
-                               color: Math.abs(p.net_movements) < 0.005 ? "#8888A0" : p.net_movements > 0 ? "#F87171" : "#34D399" }}
-                      title="Cash-outs − buy-ins. Positif = j'ai versé plus qu'il n'a acheté.">
+                               color: netColor(p.net_movements) }}
+                      title="Cash-outs − buy-ins. Convention du repo : dépôt rouge, retrait vert — un net négatif est dominé par les dépôts.">
                     {Math.abs(p.net_movements) < 0.005 ? "—" : fmt(p.net_movements)}
                   </td>
                   <td style={TD}>
@@ -423,7 +428,7 @@ export default function NexaPokerClient({ currentWeek, today }: { currentWeek: s
             <div style={{ flex: 1 }} />
             <span style={{ fontSize: 12, color: "#8888A0" }}>
               buy-ins {fmt(history.player.deposited)} · cash-outs {fmt(history.player.withdrawn)} ·
-              {" "}net <b style={{ color: history.player.net_movements > 0 ? "#F87171" : "#34D399" }}>
+              {" "}net <b style={{ color: netColor(history.player.net_movements) }}>
                 {fmt(history.player.net_movements)}
               </b>
             </span>
@@ -441,10 +446,10 @@ export default function NexaPokerClient({ currentWeek, today }: { currentWeek: s
               {history.rows.map(m => (
                 <tr key={m.id} style={{ borderTop: "1px solid rgba(255,255,255,0.05)" }}>
                   <td style={TD}>{m.tx_date}</td>
-                  <td style={{ ...TD, color: m.type === "deposit" ? "#60A5FA" : "#F0B90B" }}>
+                  <td style={{ ...TD, color: movementColor(m.type) }}>
                     {m.type === "deposit" ? "Buy-in" : "Cash-out"}
                   </td>
-                  <td style={{ ...TD, textAlign: "right", fontWeight: 600 }}>{fmt(m.amount)} {m.currency}</td>
+                  <td style={{ ...TD, textAlign: "right", fontWeight: 600, color: movementColor(m.type) }}>{fmt(m.amount)} {m.currency}</td>
                   <td style={{ ...TD, color: "#8888A0" }}>{m.note ?? "—"}</td>
                   <td style={{ ...TD, textAlign: "right" }}>
                     <button disabled={busy} onClick={async () => {

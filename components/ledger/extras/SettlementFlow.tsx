@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { movementColor } from "@/components/ledger/MovementAmount";
 import { useRouter } from "next/navigation";
 import {
   Scale, Lock, Unlock, BadgeCheck, AlertTriangle, ArrowDownLeft, ArrowUpRight, ExternalLink,
@@ -309,7 +310,7 @@ export default function SettlementFlow({
         <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", padding: "10px 12px", border: "1px dashed var(--border)", borderRadius: 10, background: "var(--bg-base)", marginBottom: 12 }}>
           <span style={{ fontSize: 11, fontWeight: 700, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.06em" }}>➕ Tx manuelle</span>
           <select value={manualTx.type} onChange={e => setManualTx(v => ({ ...v, type: e.target.value as "deposit" | "withdrawal" }))}
-            style={{ padding: "6px 10px", borderRadius: 6, fontSize: 12, fontWeight: 600, background: "var(--bg-elevated)", border: "1px solid var(--border)", color: manualTx.type === "deposit" ? "#f87171" : "var(--green)", cursor: "pointer" }}>
+            style={{ padding: "6px 10px", borderRadius: 6, fontSize: 12, fontWeight: 600, background: "var(--bg-elevated)", border: "1px solid var(--border)", color: movementColor(manualTx.type), cursor: "pointer" }}>
             <option value="deposit">Dépôt</option>
             <option value="withdrawal">Retrait</option>
           </select>
