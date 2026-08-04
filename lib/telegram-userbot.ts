@@ -1376,3 +1376,177 @@ export async function restructureGroupTopics(chatId: number): Promise<Restructur
     return res;
   }
 }
+
+// ── Audit de groupe (lecture seule) ──────────────────────
+// Ajouté pour l'arbitrage des doublons (Hugo 2026-08-04) : décider quel groupe garder
+// exige de savoir lequel VIT — qui y parle, quand — et qui en est owner. Aucune de ces
+// deux informations n'était lisible depuis le repo.
+
+export type GroupAudit = {
+  chat_id: string;
+  title: string | null;
+  ok: boolean;
+  error: string | null;
+  /** Messages lus dans la fenêtre demandée (plafonnée), pas le total historique. */
+  messages_read: number;
+  last_message_at: string | null;
+  last_message_from: string | null;
+  last_message_preview: string | null;
+  /** Qui a parlé, décompte par personne, sur la fenêtre lue. */
+  speakers: { id: number; label: string; is_bot: boolean; count: number }[];
+  participants_count: number | null;
+  creator: { id: number; label: string } | null;
+  admins: { id: number; label: string }[];
+  userbot_id: number | null;
+  userbot_is_creator: boolean;
+  userbot_is_admin: boolean;
+};
+
+function labelOfUser(u: any): string {
+  if (!u) return "?";
+  if (u.username) return `@${u.username}`;
+  const n = [u.firstName, u.lastName].filter(Boolean).join(" ");
+  return n || String(toNum(u.id));
+}
+
+/**
+ * Lit l'historique + les droits d'un groupe. NE MODIFIE RIEN.
+ * `limit` plafonne la lecture d'historique (Telegram pagine ; on ne remonte pas tout).
+ */
+export async function auditGroup(chatId: string | number, limit = 50): Promise<GroupAudit> {
+  const cid = String(chatId);
+  const res: GroupAudit = {
+    chat_id: cid, title: null, ok: false, error: null,
+    messages_read: 0, last_message_at: null, last_message_from: null, last_message_preview: null,
+    speakers: [], participants_count: null, creator: null, admins: [],
+    userbot_id: null, userbot_is_creator: false, userbot_is_admin: false,
+  };
+
+  const client = await getClient();
+  if (!client) { res.error = "userbot non connecté"; return res; }
+
+  try {
+    const me: any = await client.getMe();
+    res.userbot_id = toNum(me.id);
+
+    const numericId = parseInt(cid.replace(/^-100/, ""), 10);
+    const channelPeer = await client.getInputEntity(
+      new Api.PeerChannel({ channelId: BigInt(numericId) as any })
+    ) as unknown as Api.InputChannel;
+
+    // Titre + nombre de participants.
+    try {
+      const full: any = await client.invoke(new Api.channels.GetFullChannel({ channel: channelPeer }));
+      res.title = full?.chats?.[0]?.title ?? null;
+      res.participants_count = full?.fullChat?.participantsCount ?? null;
+    } catch (e: any) {
+      res.error = `GetFullChannel: ${errMsg(e)}`;
+    }
+
+    // Historique — qui parle, et quand pour la dernière fois.
+    try {
+      const hist: any = await client.invoke(new Api.messages.GetHistory({
+        peer: channelPeer, offsetId: 0, offsetDate: 0, addOffset: 0,
+        limit, maxId: 0, minId: 0, hash: BigInt(0) as any,
+      }));
+      const msgs: any[] = (hist.messages ?? []).filter((m: any) => m.className !== "MessageEmpty");
+      const users: any[] = hist.users ?? [];
+      const userById = new Map<number, any>(users.map((u) => [toNum(u.id), u]));
+
+      res.messages_read = msgs.length;
+
+      const counts = new Map<number, number>();
+      for (const m of msgs) {
+        const fromId = m.fromId?.userId ?? m.fromId?.channelId;
+        if (fromId == null) continue;
+        const id = toNum(fromId);
+        counts.set(id, (counts.get(id) ?? 0) + 1);
+      }
+      res.speakers = [...counts.entries()]
+        .map(([id, count]) => {
+          const u = userById.get(id);
+          return { id, label: labelOfUser(u) , is_bot: !!u?.bot, count };
+        })
+        .sort((a, b) => b.count - a.count);
+
+      // `messages` arrive du plus récent au plus ancien.
+      const last = msgs[0];
+      if (last) {
+        res.last_message_at = last.date ? new Date(last.date * 1000).toISOString() : null;
+        const fromId = last.fromId?.userId ?? last.fromId?.channelId;
+        res.last_message_from = fromId != null ? labelOfUser(userById.get(toNum(fromId))) : null;
+        const text = String(last.message ?? "").replace(/\s+/g, " ").trim();
+        res.last_message_preview = text ? text.slice(0, 120) : (last.action ? `[${last.action.className}]` : "[média]");
+      }
+    } catch (e: any) {
+      res.error = [res.error, `GetHistory: ${errMsg(e)}`].filter(Boolean).join(" | ");
+    }
+
+    // Owner + admins. `ChannelParticipantCreator` = le seul à pouvoir supprimer le groupe.
+    try {
+      const parts: any = await client.invoke(new Api.channels.GetParticipants({
+        channel: channelPeer, filter: new Api.ChannelParticipantsAdmins(),
+        offset: 0, limit: 100, hash: BigInt(0) as any,
+      }));
+      const users: any[] = parts.users ?? [];
+      const userById = new Map<number, any>(users.map((u) => [toNum(u.id), u]));
+      for (const p of (parts.participants ?? [])) {
+        const id = toNum(p.userId);
+        const entry = { id, label: labelOfUser(userById.get(id)) };
+        if (p.className === "ChannelParticipantCreator") {
+          res.creator = entry;
+          if (id === res.userbot_id) res.userbot_is_creator = true;
+        } else {
+          res.admins.push(entry);
+        }
+        if (id === res.userbot_id) res.userbot_is_admin = true;
+      }
+    } catch (e: any) {
+      res.error = [res.error, `GetParticipants(admins): ${errMsg(e)}`].filter(Boolean).join(" | ");
+    }
+
+    res.ok = res.error === null;
+    return res;
+  } catch (e: any) {
+    res.error = errMsg(e);
+    return res;
+  }
+}
+
+/**
+ * Supprime DÉFINITIVEMENT un supergroupe, pour tout le monde. Irréversible.
+ *
+ * Refuse si le userbot n'en est pas le créateur : `channels.DeleteChannel` exige le droit
+ * owner, et un refus explicite vaut mieux qu'une erreur Telegram opaque. L'appelant doit
+ * avoir vérifié en amont que le groupe n'est plus référencé — cette fonction ne juge pas
+ * de ça, elle exécute.
+ */
+export async function deleteChannelAsOwner(chatId: string | number): Promise<{
+  ok: boolean; deleted: boolean; error: string | null; title: string | null;
+}> {
+  const cid = String(chatId);
+  const audit = await auditGroup(cid, 1);
+  if (!audit.userbot_id) return { ok: false, deleted: false, error: "userbot non connecté", title: null };
+  if (!audit.userbot_is_creator) {
+    return {
+      ok: false, deleted: false, title: audit.title,
+      error: `le userbot n'est pas créateur de ce groupe (owner : ${audit.creator?.label ?? "inconnu"}) — suppression impossible`,
+    };
+  }
+
+  const client = await getClient();
+  if (!client) return { ok: false, deleted: false, error: "userbot non connecté", title: audit.title };
+
+  try {
+    const numericId = parseInt(cid.replace(/^-100/, ""), 10);
+    const channelPeer = await client.getInputEntity(
+      new Api.PeerChannel({ channelId: BigInt(numericId) as any })
+    ) as unknown as Api.InputChannel;
+
+    await client.invoke(new Api.channels.DeleteChannel({ channel: channelPeer }));
+    console.log(`[USERBOT] channel ${cid} deleted (owner)`);
+    return { ok: true, deleted: true, error: null, title: audit.title };
+  } catch (e: any) {
+    return { ok: false, deleted: false, error: errMsg(e), title: audit.title };
+  }
+}
