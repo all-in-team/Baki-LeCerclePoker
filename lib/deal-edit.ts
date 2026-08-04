@@ -78,6 +78,20 @@ export async function updateDealActionPct(
   if (!Number.isFinite(newPct) || newPct < 0 || newPct > 100) {
     return { ok: false, changed: false, error: "Le % doit être entre 0 et 100." };
   }
+  // NEXAPOKER est hors de ce chemin, volontairement. Sa part d'action vit dans
+  // nexa_player_action_shares (historisée, append-only) ; player_game_deals.action_pct
+  // n'en est qu'un CACHE de la période courante, écrit dans la même transaction par
+  // setActionShareOn (lib/funnels/nexa/players.ts). Écrire le cache ici le ferait
+  // diverger de l'historique dès la première édition — le miroir deviendrait un
+  // mensonge, et le recalcul d'une semaine passée serait faux.
+  // Aucune page de room n'appelle cette fonction pour NEXAPOKER aujourd'hui ; ce
+  // refus existe pour qu'un futur copier-coller de page ne l'introduise pas.
+  if (gameNames.some(n => n.toUpperCase() === "NEXAPOKER")) {
+    return {
+      ok: false, changed: false,
+      error: "La part d'action NEXAPOKER s'édite sur la page NEXAPOKER (historisée par période), pas ici.",
+    };
+  }
   const db = getDb();
   const gameIds = gameNames
     .map((n) => (db.prepare(`SELECT id FROM games WHERE name = ?`).get(n) as { id: number } | undefined)?.id)
