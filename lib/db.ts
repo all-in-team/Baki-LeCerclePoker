@@ -2456,4 +2456,59 @@ function initSchema(db: Database.Database) {
   } catch (err: any) {
     console.error(`[MIGRATION:add_nexa_lead_lang_v1] FAILED:`, err.message);
   }
+
+  // Journal des relances d'onboarding (Hugo 2026-07-31) — append-only.
+  //
+  // Pourquoi : avant ça, la seule trace d'une relance vivait dans 4 colonnes mutables de
+  // `onboarding_leads` (reminders_sent, last_reminder_at, ops_alerted, ops_alerted_at), écrasées
+  // sur place. Pire, `trackOnboardingStep()` les remettait à zéro dès que le joueur interagissait :
+  // une relance envoyée à un joueur actif effaçait sa propre trace. Incident du 30/07 (YuS) :
+  // impossible d'auditer autrement qu'en croyant la capture d'écran du joueur.
+  //
+  // `sent_at_utc` est nommée explicitement : le conteneur tourne en UTC, `datetime('now')` écrit
+  // de l'UTC, et le nom de colonne doit interdire toute relecture ambiguë à ±2 h.
+  //
+  // `conditions_json` fige les preuves d'activité TELLES QU'ÉVALUÉES au moment de l'envoi
+  // (dernier rake, dernière tx, dernière interaction bot, nb wallets…). Sans ce snapshot,
+  // rejouer un incident a posteriori est impossible : les données sous-jacentes ont bougé.
+  //
+  // Append-only imposé par triggers : un journal d'audit qu'on peut réécrire ne vaut rien.
+  try {
+    const fix = db.prepare(`INSERT OR IGNORE INTO _applied_fixes (name) VALUES (?)`).run("add_onboarding_reminder_log_v1");
+    if (fix.changes > 0) {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS onboarding_reminder_log (
+          id                    INTEGER PRIMARY KEY AUTOINCREMENT,
+          lead_id               INTEGER NOT NULL,
+          telegram_id           INTEGER,
+          player_id             INTEGER,
+          phase                 TEXT NOT NULL CHECK(phase IN ('8h','24h','7d')),
+          sent                  INTEGER NOT NULL DEFAULT 0,
+          chat_id               TEXT,
+          session_step          TEXT,
+          step_entered_at       TEXT,
+          hours_since           REAL,
+          reminders_sent_before INTEGER,
+          ops_alerted_before    INTEGER,
+          conditions_json       TEXT NOT NULL DEFAULT '{}',
+          sent_at_utc           TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+        CREATE INDEX IF NOT EXISTS idx_onboarding_reminder_log_lead
+          ON onboarding_reminder_log(lead_id, sent_at_utc);
+        CREATE INDEX IF NOT EXISTS idx_onboarding_reminder_log_sent_at
+          ON onboarding_reminder_log(sent_at_utc);
+
+        CREATE TRIGGER IF NOT EXISTS onboarding_reminder_log_no_update
+        BEFORE UPDATE ON onboarding_reminder_log
+        BEGIN SELECT RAISE(ABORT, 'onboarding_reminder_log est append-only'); END;
+
+        CREATE TRIGGER IF NOT EXISTS onboarding_reminder_log_no_delete
+        BEFORE DELETE ON onboarding_reminder_log
+        BEGIN SELECT RAISE(ABORT, 'onboarding_reminder_log est append-only'); END;
+      `);
+      console.log("[MIGRATION] add_onboarding_reminder_log_v1 applied");
+    }
+  } catch (err: any) {
+    console.error(`[MIGRATION:add_onboarding_reminder_log_v1] FAILED:`, err.message);
+  }
 }

@@ -151,7 +151,14 @@ export function trackOnboardingStep(telegramId: number, step: string) {
     db.prepare(`UPDATE onboarding_leads SET stage = 'joined', step_entered_at = datetime('now'), reminders_sent = 0, ops_alerted = 0 WHERE telegram_id = ?`).run(telegramId);
     return;
   }
-  db.prepare(`UPDATE onboarding_leads SET step_entered_at = datetime('now'), reminders_sent = 0, last_reminder_at = NULL, ops_alerted = 0, ops_alerted_at = NULL WHERE telegram_id = ?`).run(telegramId);
+  // `last_reminder_at` / `ops_alerted_at` ne sont PLUS remis à NULL (Hugo 2026-07-31) : ce sont
+  // des horodatages de fait — « une relance est partie à telle date » reste vrai même après que le
+  // joueur ait avancé. Les écraser détruisait la seule trace de l'envoi, précisément dans le cas
+  // qui compte : un joueur actif relancé à tort, qui interagit ensuite. Les compteurs
+  // `reminders_sent` / `ops_alerted`, eux, restent remis à zéro : ils pilotent le cycle de relance
+  // du nouveau palier, ils ne documentent pas le passé. Le journal d'audit complet vit dans
+  // `onboarding_reminder_log` (append-only).
+  db.prepare(`UPDATE onboarding_leads SET step_entered_at = datetime('now'), reminders_sent = 0, ops_alerted = 0 WHERE telegram_id = ?`).run(telegramId);
 }
 
 export async function promptGame(chatId: number, cmd: string, args: string) {
