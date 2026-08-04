@@ -2734,4 +2734,61 @@ function initSchema(db: Database.Database) {
   } catch (err: any) {
     console.error(`[MIGRATION:add_nexa_awaiting_human_v1] FAILED:`, err.message);
   }
+
+  // Expiration du silence scripté (Hugo 2026-08-04, correctif du correctif).
+  //
+  // `awaiting_human_since` n'expirait pas : un lead qui écrivait une phrase sortait
+  // DÉFINITIVEMENT du funnel automatique, sans que personne en soit averti. Un
+  // prospect qui écrit la nuit pouvait ne plus jamais rien recevoir — pire que le
+  // bug d'origine, qui lui envoyait au moins un message de trop.
+  //
+  // Le silence doit protéger une conversation humaine RÉELLE, pas hypothétique.
+  // D'où deux colonnes de plus, chacune avec une seule raison d'exister :
+  //
+  //   • first_operator_reply_at : « un opérateur a réellement répondu, au moins une
+  //     fois ». C'est le verrou qui interdit au bot de s'inviter dans une vraie
+  //     conversation. Colonne explicite plutôt que de déduire depuis `takeover_by` :
+  //     ce garde-fou ne doit pas dépendre d'un champ que quelqu'un pourrait
+  //     réutiliser pour autre chose, son mode d'échec étant « le bot coupe la parole
+  //     à un humain en direct ».
+  //
+  //   • question_open_since : « ce lead a posé une question restée sans réponse ».
+  //     N'expire PAS, contrairement à `awaiting_human_since`. Sépare deux questions
+  //     que la colonne unique confondait :
+  //       - awaiting_human_since → le bot doit-il se taire ?        (expire à 90 min)
+  //       - question_open_since  → dois-je encore à ce lead une réponse ? (jusqu'à
+  //         réponse ou /bot)
+  //     Sans elle, la reprise du bot faisait disparaître le lead du filtre
+  //     « À répondre » : le scénario redémarre, donc la question serait réglée. Non.
+  try {
+    const fix = db.prepare(`INSERT OR IGNORE INTO _applied_fixes (name) VALUES (?)`).run("add_nexa_awaiting_expiry_v1");
+    if (fix.changes > 0) {
+      for (const sql of [
+        `ALTER TABLE nexa_leads ADD COLUMN question_open_since TEXT`,
+        `ALTER TABLE nexa_leads ADD COLUMN first_operator_reply_at TEXT`,
+      ]) {
+        try { db.exec(sql); } catch { /* colonne déjà là */ }
+      }
+      // Les leads actuellement en attente gardent leur question ouverte.
+      db.prepare(
+        `UPDATE nexa_leads SET question_open_since = awaiting_human_since
+         WHERE awaiting_human_since IS NOT NULL AND question_open_since IS NULL`
+      ).run();
+      // Reconstruit depuis l'historique : la première trace d'un message d'opérateur
+      // EST la première réponse humaine. Sans ce backfill, un lead avec qui Hugo
+      // discute déjà se ferait couper la parole par la première passe d'expiration.
+      db.prepare(`
+        UPDATE nexa_leads SET first_operator_reply_at = (
+          SELECT MIN(created_at) FROM bot_messages
+          WHERE lead_id = nexa_leads.id AND direction = 'out' AND sender LIKE 'operator:%')
+        WHERE first_operator_reply_at IS NULL
+      `).run();
+      db.exec(`CREATE INDEX IF NOT EXISTS idx_nexa_leads_question_open
+                 ON nexa_leads(question_open_since)
+                 WHERE question_open_since IS NOT NULL`);
+      console.log("[MIGRATION] add_nexa_awaiting_expiry_v1 applied");
+    }
+  } catch (err: any) {
+    console.error(`[MIGRATION:add_nexa_awaiting_expiry_v1] FAILED:`, err.message);
+  }
 }

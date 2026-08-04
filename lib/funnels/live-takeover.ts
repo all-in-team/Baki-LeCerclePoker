@@ -42,6 +42,13 @@ export const RELAY_MAP_RETENTION_DAYS = 30;
 const UPDATE_DEDUP_RETENTION_HOURS = 24;
 /** Leads traités par passe de drain — borne le temps d'un tick de cron. */
 const DRAIN_BATCH = 50;
+/**
+ * Au-delà, le silence ne protège plus rien : le bot reprend la main.
+ *
+ * SAUF si un opérateur a déjà répondu au moins une fois (first_operator_reply_at) —
+ * là une vraie conversation est en cours et le bot ne doit pas s'y inviter.
+ */
+export const AWAITING_EXPIRY_MINUTES = 90;
 
 // ── Types ─────────────────────────────────────────────────
 
@@ -58,8 +65,12 @@ export type LeadLite = {
   takeover_until: string | null;
   takeover_by: string | null;
   relances_off: number;
-  /** Non NULL = le lead réclame un humain ; le bot se tait jusqu'à réponse ou /bot. */
+  /** Non NULL = le bot se tait. EXPIRE à 90 min si aucun opérateur n'a jamais répondu. */
   awaiting_human_since: string | null;
+  /** Non NULL = une question du lead reste sans réponse. N'expire pas. */
+  question_open_since: string | null;
+  /** Première réponse d'un opérateur — verrou anti-reprise du bot. */
+  first_operator_reply_at: string | null;
   admin_topic_chat_id: string | null;
   admin_thread_id: number | null;
   last_relayed_msg_id: number;
@@ -81,6 +92,7 @@ export type BotMessage = {
 
 const LEAD_COLS = `id, tg_user_id, tg_username, first_name, source, stage, member_id,
   blocked, notes, takeover_until, takeover_by, relances_off, awaiting_human_since,
+  question_open_since, first_operator_reply_at,
   admin_topic_chat_id, admin_thread_id, last_relayed_msg_id`;
 
 // ── Utilitaires ───────────────────────────────────────────
@@ -168,16 +180,80 @@ export function isLeadMutedForTgId(tgId: number): boolean {
  */
 export function setAwaitingHuman(leadId: number): void {
   getDb().prepare(
-    `UPDATE nexa_leads SET awaiting_human_since = COALESCE(awaiting_human_since, datetime('now')),
-       updated_at = datetime('now') WHERE id = ?`
+    `UPDATE nexa_leads
+     SET awaiting_human_since = COALESCE(awaiting_human_since, datetime('now')),
+         question_open_since  = COALESCE(question_open_since, datetime('now')),
+         updated_at = datetime('now')
+     WHERE id = ?`
   ).run(leadId);
 }
 
+/** Réponse d'opérateur ou /bot : le lead n'attend plus rien, la question est close. */
 export function clearAwaitingHuman(leadId: number): void {
   getDb().prepare(
-    `UPDATE nexa_leads SET awaiting_human_since = NULL, updated_at = datetime('now')
-     WHERE id = ? AND awaiting_human_since IS NOT NULL`
+    `UPDATE nexa_leads SET awaiting_human_since = NULL, question_open_since = NULL,
+       updated_at = datetime('now')
+     WHERE id = ? AND (awaiting_human_since IS NOT NULL OR question_open_since IS NOT NULL)`
   ).run(leadId);
+}
+
+/**
+ * Le bot reprend la main faute de réponse — mais la question, elle, RESTE ouverte :
+ * `question_open_since` n'est pas touché. Qu'un scénario ait redémarré ne veut pas
+ * dire que quelqu'un a répondu au lead ; il doit rester dans « À répondre ».
+ */
+function releaseAwaitingOnly(leadId: number): void {
+  getDb().prepare(
+    `UPDATE nexa_leads SET awaiting_human_since = NULL, updated_at = datetime('now') WHERE id = ?`
+  ).run(leadId);
+}
+
+/**
+ * Leads dont le silence a assez duré. Le filtre `first_operator_reply_at IS NULL`
+ * est LE garde-fou : dès qu'un humain a répondu une fois, le bot ne reprend jamais
+ * la main tout seul.
+ */
+export function listExpiredAwaiting(): Array<{ id: number; awaiting_human_since: string }> {
+  return getDb().prepare(`
+    SELECT id, awaiting_human_since
+    FROM nexa_leads
+    WHERE awaiting_human_since IS NOT NULL
+      AND first_operator_reply_at IS NULL
+      AND blocked = 0
+      AND relances_off = 0
+      AND awaiting_human_since <= datetime('now', ?)
+    ORDER BY awaiting_human_since
+    LIMIT 50
+  `).all(`-${AWAITING_EXPIRY_MINUTES} minutes`) as Array<{ id: number; awaiting_human_since: string }>;
+}
+
+/**
+ * Lève le silence et trace la reprise dans le sujet. L'ENVOI du message doux au
+ * lead appartient au funnel (il connaît la copy et l'étape) — d'où le callback :
+ * ce module ne parle jamais la langue du lead.
+ */
+export async function expireAwaitingHuman(
+  leadId: number,
+  resume: (leadId: number) => Promise<void>,
+): Promise<boolean> {
+  const lead = getLeadById(leadId);
+  if (!lead || !lead.awaiting_human_since) return false;
+  // Re-vérification au moment d'agir : entre la sélection et ici, un opérateur a pu
+  // répondre. Le coût d'un doublon de lecture est nul face à celui d'une coupure.
+  if (lead.first_operator_reply_at) return false;
+
+  releaseAwaitingOnly(leadId);
+  try {
+    await resume(leadId);
+  } catch (e: any) {
+    console.error(`[TAKEOVER] reprise du bot échouée (lead=${leadId}):`, e?.message ?? e);
+  }
+  logEvent(leadId, `${AWAITING_EXPIRY_MINUTES} min sans réponse — le bot a repris la main`);
+  await postAnchoredNotice(leadId,
+    `🤖 <b>${AWAITING_EXPIRY_MINUTES} min sans réponse</b> — le bot a repris la main\n` +
+    `<i>La question reste ouverte : le lead est toujours dans « À répondre ».</i>`,
+  ).catch(() => {});
+  return true;
 }
 
 /**
@@ -360,7 +436,12 @@ export async function replyToLead(opts: {
 export function bumpTakeover(leadId: number, operator: string) {
   getDb().prepare(
     `UPDATE nexa_leads
-     SET takeover_until = datetime('now', ?), takeover_by = ?, updated_at = datetime('now')
+     SET takeover_until = datetime('now', ?), takeover_by = ?,
+         -- Posé UNE fois, jamais réécrit : c'est la preuve qu'une vraie conversation
+         -- humaine a eu lieu, et donc le verrou qui interdit au bot de reprendre la
+         -- main tout seul sur ce lead.
+         first_operator_reply_at = COALESCE(first_operator_reply_at, datetime('now')),
+         updated_at = datetime('now')
      WHERE id = ?`
   ).run(`+${TAKEOVER_HOURS} hours`, operator, leadId);
 }

@@ -142,16 +142,37 @@ d'un lead il est encore vide — et le scénario répondait par-dessus la conver
 humaine (incident du 04/08 : le lead écrit « Je ne veux pas », le bot lui renvoie
 « Bienvenue au Cercle »).
 
-| État                       | Armé par                                                                 | Levé par                              |
-|----------------------------|--------------------------------------------------------------------------|---------------------------------------|
-| 🙋 **Attend une réponse**  | Clic « J'ai une question », ou tout texte libre hors scénario             | Une réponse d'opérateur, ou `/bot`    |
-| 🎙 **Takeover**            | Une réponse d'opérateur (Telegram ou back-office) → +6 h                  | Expiration, ou `/bot`                 |
+| État                       | Armé par                                                     | Levé par                                        |
+|----------------------------|--------------------------------------------------------------|-------------------------------------------------|
+| 🙋 **Attend une réponse**  | Clic « J'ai une question », ou tout texte libre hors scénario | Réponse d'opérateur, `/bot`, **ou 90 min**      |
+| ❓ **Question ouverte**     | Idem                                                         | Réponse d'opérateur, ou `/bot` — **jamais le temps** |
+| 🎙 **Takeover**            | Une réponse d'opérateur (Telegram ou back-office) → +6 h      | Expiration des 6 h, ou `/bot`                   |
 
-L'attente **n'expire pas** : un lead qui a posé une question et n'a jamais eu de
-réponse ne recevra plus de relance automatique. C'est délibéré — le relancer avec un
-message scripté serait la pire réponse possible. Le filet, c'est le filtre
-**« À répondre »** du back-office, qui remonte aussi les leads en attente **même
-s'ils n'ont écrit aucun message** (un simple clic sur « J'ai une question » suffit).
+### Le filet : le silence expire, la question non
+
+Un silence qui n'expire jamais est pire que le bug qu'il corrige : un prospect qui
+écrit à 2 h du matin sortirait **définitivement** du funnel automatique sans que
+personne en soit averti.
+
+Au bout de **90 minutes** sans réponse, le bot reprend donc la main — poliment :
+
+> Désolé pour l'attente 🙏 En attendant, tu peux continuer ici 👇
+
+…suivi des boutons de l'étape courante (EN : « Sorry for the wait 🙏 In the meantime,
+you can keep going here 👇 »). La reprise est tracée dans le sujet :
+`🤖 90 min sans réponse — le bot a repris la main`.
+
+**La reprise ne se déclenche JAMAIS si un opérateur a déjà répondu au moins une fois**
+dans la conversation (`first_operator_reply_at`). Le silence protège une conversation
+humaine *réelle*, pas hypothétique — et une fois qu'elle existe, le bot ne s'y invite
+plus jamais tout seul, même après l'expiration du takeover de 6 h. Les leads sous
+`/stop` et ceux qui ont bloqué le bot ne sont pas réveillés non plus.
+
+**La question, elle, reste ouverte.** Que le scénario ait redémarré ne veut pas dire
+que quelqu'un a répondu : le lead reste dans le filtre **« À répondre »** jusqu'à ce
+qu'un humain lui parle (ou `/bot`). Ce filtre remonte aussi les leads en attente
+**même s'ils n'ont écrit aucun message** — un simple clic sur « J'ai une question »
+suffit.
 
 ### Ce que le bot répond encore, et ce qu'il ne répond plus
 
@@ -254,7 +275,9 @@ Migrations `add_live_takeover_v1` et `add_live_takeover_topics_v1` (`lib/db.ts`)
 | `nexa_leads.admin_topic_last_at`    | Dernière activité du sujet                                   |
 | `nexa_leads.last_relayed_msg_id`    | **Curseur de relais** — la garantie « aucun message perdu »   |
 | `nexa_leads.takeover_until` / `_by` | Fin du takeover ; `NULL` = le bot a la main                   |
-| `nexa_leads.awaiting_human_since`   | 🙋 le lead attend un humain — silence scripté AVANT toute réponse |
+| `nexa_leads.awaiting_human_since`   | 🙋 silence scripté — expire à 90 min si aucun opérateur n'a répondu |
+| `nexa_leads.question_open_since`    | ❓ question sans réponse — n'expire pas, pilote « À répondre »   |
+| `nexa_leads.first_operator_reply_at`| Verrou : un humain a répondu ⇒ le bot ne reprend jamais la main seul |
 | `nexa_leads.relances_off`           | `/stop` — exclusion définitive des relances                   |
 | `nexa_leads.last_lead_msg_at`       | Horodatage affiché à côté de la pastille                      |
 | `nexa_leads.last_read_msg_id`       | Curseur de lecture du panneau conversation                    |
@@ -303,5 +326,6 @@ suspendu.
 | Pas de ✅                                     | Réactions désactivées sur le groupe → l'envoi a quand même eu lieu |
 | Le bot répond alors que j'ai la main          | C'est un **clic de bouton** du lead — voir la ligne « a cliqué » ; `/bot` ou attends |
 | Un lead ne reçoit plus de relance             | `takeover_until` actif, `awaiting_human_since` non levé, ou `/stop` posé |
-| Le bot ne répond plus du tout à un lead       | Il est en 🙋 attente : réponds-lui, ou `/bot` pour rendre la main au scénario |
+| Le bot ne répond plus du tout à un lead       | Il est en 🙋 attente : réponds-lui, `/bot`, ou attends la reprise à 90 min |
+| Le bot a relancé un lead à qui je parlais     | Ne devrait pas arriver : la reprise s'interdit dès qu'un opérateur a répondu une fois. Vérifie `first_operator_reply_at` sur ce lead |
 | Le sujet d'un lead a disparu                  | Supprimé côté Telegram : il sera recréé à son prochain message |

@@ -88,9 +88,16 @@ function leadName(lead: NexaLeadWithStats): string {
   return lead.tg_username ? `@${lead.tg_username}` : (lead.first_name ?? `tg:${lead.tg_user_id}`);
 }
 
-/** Un lead « à répondre » : message non lu, OU en attente explicite d'un humain. */
+/**
+ * Un lead « à répondre » : message non lu, OU question restée sans réponse.
+ *
+ * On teste `question_open` et NON `awaiting_human` : le silence du bot expire à
+ * 90 min, pas la question. Qu'un scénario ait repris la main ne veut pas dire que
+ * quelqu'un a répondu au lead — il doit rester dans la liste jusqu'à ce que ce soit
+ * vrai.
+ */
 function needsReply(lead: NexaLeadWithStats): boolean {
-  return lead.unread === 1 || lead.awaiting_human === 1;
+  return lead.unread === 1 || lead.question_open === 1;
 }
 
 function FilterChip({ active, tone, onClick, title, children }: {
@@ -120,22 +127,26 @@ function FilterChip({ active, tone, onClick, title, children }: {
 /** Pastille « message non lu » + horodatage du dernier message du lead. */
 function UnreadCell({ lead }: { lead: NexaLeadWithStats }) {
   const unread = lead.unread === 1;
-  const waiting = lead.awaiting_human === 1;
-  if (!lead.last_lead_msg_at && !waiting) return <span style={{ color: "#3A3A48" }}>—</span>;
+  const muted = lead.awaiting_human === 1;
+  const open = lead.question_open === 1;
+  const flag = unread || open;
+  if (!lead.last_lead_msg_at && !open) return <span style={{ color: "#3A3A48" }}>—</span>;
   return (
     <span style={{ display: "inline-flex", alignItems: "center", gap: 6, whiteSpace: "nowrap" }}>
       <span
         style={{
           width: 7, height: 7, borderRadius: "50%",
-          background: unread || waiting ? "#F0B90B" : "rgba(255,255,255,0.12)",
-          boxShadow: unread || waiting ? "0 0 0 3px rgba(240,185,11,0.15)" : "none", flexShrink: 0,
+          background: flag ? "#F0B90B" : "rgba(255,255,255,0.12)",
+          boxShadow: flag ? "0 0 0 3px rgba(240,185,11,0.15)" : "none", flexShrink: 0,
         }}
-        title={waiting ? "Attend une réponse humaine" : unread ? "Message non lu" : "Lu"}
+        title={open ? "Question sans réponse" : unread ? "Message non lu" : "Lu"}
       />
-      <span style={{ color: unread || waiting ? "#F0B90B" : "#555568", fontWeight: unread || waiting ? 700 : 400 }}>
+      <span style={{ color: flag ? "#F0B90B" : "#555568", fontWeight: flag ? 700 : 400 }}>
         {lead.last_lead_msg_at ? fmtDateTime(lead.last_lead_msg_at) : "en attente"}
       </span>
-      {waiting && <span title="Le bot est muselé : le lead attend un humain">🙋</span>}
+      {/* 🙋 = le bot est muselé · ❓ = question ouverte mais le bot a repris la main. */}
+      {muted && <span title="Le bot est muselé : le lead attend un humain">🙋</span>}
+      {!muted && open && <span title="Question sans réponse — le bot a repris la main après 90 min">❓</span>}
       {lead.takeover_active === 1 && (
         <span style={{ color: "#34D399" }} title="Takeover actif — aucun message automatique n'est envoyé">🎙</span>
       )}
@@ -234,7 +245,7 @@ export default function NexaFunnelClient({ leads, stats, events }: {
           Tous ({leads.length})
         </FilterChip>
         <FilterChip active={onlyUnread} tone="warn" onClick={() => setOnlyUnread(true)}
-          title="Messages non lus et leads en attente d'une réponse humaine">
+          title="Messages non lus et questions restées sans réponse">
           🔴 À répondre ({replyCount})
         </FilterChip>
         <FilterChip active={showNumbers} onClick={() => setShowNumbers(v => !v)}
@@ -462,6 +473,12 @@ const LeadDrawer = function LeadDrawer({ ref, lead, weekly, events, onClose, onC
                   🙋 attend une réponse
                 </span>
               )}
+              {lead.awaiting_human !== 1 && lead.question_open === 1 && (
+                <span style={{ fontSize: 10, padding: "2px 6px", borderRadius: 4, background: "rgba(240,185,11,0.10)", color: "#F0B90B", fontWeight: 600 }}
+                  title="Sa question est restée sans réponse — le bot a repris la main après 90 min">
+                  ❓ question sans réponse
+                </span>
+              )}
             </div>
           </div>
           <button onClick={onClose} aria-label="Fermer" style={{
@@ -572,7 +589,7 @@ function LeadDetail({ lead, weekly, events, onChanged }: {
           )}
           {/* Équivalents back-office de /bot et /stop du chat admin. `/bot` lève
               aussi l'attente de réponse humaine — d'où le bouton dans les deux cas. */}
-          {(lead.takeover_active === 1 || lead.awaiting_human === 1) && (
+          {(lead.takeover_active === 1 || lead.awaiting_human === 1 || lead.question_open === 1) && (
             <button style={{ ...btn, color: "#60A5FA", borderColor: "rgba(96,165,250,0.35)" }}
               disabled={busy === "handover"}
               onClick={() => run("handover", () => handoverToBotAction(lead.id))}

@@ -69,8 +69,12 @@ export type NexaLead = {
   takeover_by: string | null;
   /** /stop dans le chat admin : plus aucune relance, définitivement. */
   relances_off: number;
-  /** Non NULL = le lead réclame un humain ; aucun envoi automatique jusqu'à réponse ou /bot. */
+  /** Non NULL = aucun envoi automatique. Expire à 90 min si aucun opérateur n'a répondu. */
   awaiting_human_since: string | null;
+  /** Non NULL = question du lead restée sans réponse. N'expire pas. */
+  question_open_since: string | null;
+  /** Première réponse d'un opérateur — verrou anti-reprise automatique du bot. */
+  first_operator_reply_at: string | null;
   /** Horodatage affiché à côté de la pastille (cosmétique). */
   last_lead_msg_at: string | null;
   /** Curseur de lecture du panneau conversation — comparé à bot_messages. */
@@ -920,6 +924,41 @@ export async function runNexaFunnelReminders(): Promise<{ sent: number; blocked:
   return { sent, blocked: blockedCount, cold: coldCount, skipped };
 }
 
+// ── Reprise du bot après un silence trop long ─────────────
+//
+// Le silence scripté protège une conversation humaine RÉELLE, pas hypothétique :
+// sans expiration, un lead qui écrit une phrase la nuit sortait définitivement du
+// funnel automatique sans que personne en soit averti. Le verrou anti-coupure
+// (`first_operator_reply_at`) vit dans listExpiredAwaiting() — ici on ne fait que
+// parler au lead.
+
+/** Message doux puis étape courante — jamais un rejeu brut de l'étape seule. */
+async function resumeScenarioForLead(leadId: number): Promise<void> {
+  const lead = getNexaLeadById(leadId);
+  if (!lead) return;
+  await dmMsg(lead.tg_user_id, nexaCopy(lead.lang).botResumed);
+  await sendCurrentStep(lead.tg_user_id, lead);
+}
+
+/**
+ * Passe d'expiration (cron). Rend la main au scénario sur les leads dont la
+ * question est restée sans réponse assez longtemps — en laissant leur question
+ * OUVERTE, donc toujours visible dans « À répondre ».
+ */
+export async function runNexaAwaitingExpiry(): Promise<{ resumed: number }> {
+  const { listExpiredAwaiting, expireAwaitingHuman } = await import("@/lib/funnels/live-takeover");
+  let resumed = 0;
+  for (const row of listExpiredAwaiting()) {
+    try {
+      if (await expireAwaitingHuman(row.id, resumeScenarioForLead)) resumed++;
+    } catch (e: any) {
+      console.error(`[NEXA] expiration attente (lead=${row.id}) :`, e?.message ?? e);
+    }
+    await new Promise(r => setTimeout(r, 150));
+  }
+  return { resumed };
+}
+
 /** Relance déclenchée à la main depuis la fiche lead (back-office). */
 export async function sendNexaManualReminder(leadId: number): Promise<{ ok: boolean; error?: string }> {
   const lead = getNexaLeadById(leadId);
@@ -988,8 +1027,10 @@ export type NexaLeadWithStats = NexaLead & {
   messages_count: number;
   /** 1 = un humain a la main sur ce lead en ce moment. */
   takeover_active: number;
-  /** 1 = le lead attend une réponse humaine (bot muselé). */
+  /** 1 = le bot est muselé sur ce lead (attente d'un humain). */
   awaiting_human: number;
+  /** 1 = une question reste sans réponse, même si le bot a repris la main. */
+  question_open: number;
 };
 
 export function getNexaLeads(): NexaLeadWithStats[] {
@@ -1009,7 +1050,8 @@ export function getNexaLeads(): NexaLeadWithStats[] {
       CASE WHEN COALESCE(m.last_in_id, 0) > l.last_read_msg_id THEN 1 ELSE 0 END AS unread,
       CASE WHEN l.takeover_until IS NOT NULL AND l.takeover_until > datetime('now')
            THEN 1 ELSE 0 END AS takeover_active,
-      CASE WHEN l.awaiting_human_since IS NOT NULL THEN 1 ELSE 0 END AS awaiting_human
+      CASE WHEN l.awaiting_human_since IS NOT NULL THEN 1 ELSE 0 END AS awaiting_human,
+      CASE WHEN l.question_open_since IS NOT NULL THEN 1 ELSE 0 END AS question_open
     FROM nexa_leads l
     LEFT JOIN (
       SELECT lead_id, COUNT(*) AS n,

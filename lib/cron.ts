@@ -192,8 +192,23 @@ export function initCronJobs() {
     } catch (e: any) {
       console.error("[CRON] relay-drain failed:", e);
     }
+
+    // Expiration du silence scripté — enchaînée sur le même tick plutôt que sur un
+    // planificateur séparé : même cadence utile, ordre déterministe, et une seule
+    // salve d'écritures SQLite au lieu de deux qui se croisent.
+    //
+    // Sans cette passe, un lead qui écrit une phrase sort DÉFINITIVEMENT du funnel
+    // automatique. Le garde-fou inverse (ne jamais couper une vraie conversation)
+    // vit dans listExpiredAwaiting(), qui exclut tout lead déjà répondu par un humain.
+    try {
+      const { runNexaAwaitingExpiry } = await import("./nexa-funnel");
+      const r = await runNexaAwaitingExpiry();
+      if (r.resumed > 0) console.log(`[CRON] awaiting-expiry: ${r.resumed} lead(s), le bot a repris la main`);
+    } catch (e: any) {
+      console.error("[CRON] awaiting-expiry failed:", e);
+    }
   }, opts);
-  console.log("[CRON] relay-drain registered (toutes les 5 min)");
+  console.log("[CRON] relay-drain + awaiting-expiry registered (toutes les 5 min)");
 
   if (process.env.CASHOUT_CRONS_ENABLED !== "true") {
     console.log("[CRON] cashout crons DISABLED (set CASHOUT_CRONS_ENABLED=true to enable)");

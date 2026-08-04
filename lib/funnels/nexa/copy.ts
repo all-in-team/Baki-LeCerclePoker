@@ -45,6 +45,8 @@ export type NexaCopy = {
   noLead: string;
   /** Le lead pose sa question ICI — plus de renvoi vers un DM externe. */
   questionAck: string;
+  /** Reprise du scénario après 90 min sans réponse humaine — s'excuse avant de relancer. */
+  botResumed: string;
   myIdPrompt: (o: { hint: string }) => string;
   depositPreparing: string;
   groupFailed: string;
@@ -126,6 +128,7 @@ const FR: NexaCopy = {
   noLead: `Envoie /start pour commencer !`,
   questionAck:
     `👍 Vas-y, pose ta question ici — un membre de l'équipe te répond d'ici quelques minutes.`,
+  botResumed: `Désolé pour l'attente 🙏 En attendant, tu peux continuer ici 👇`,
   myIdPrompt: ({ hint }) => `Vas-y, envoie ton ID ici 👇 (${hint}, visible dans ton profil)`,
   depositPreparing:
     `⏳ Top ! Je te prépare ton canal privé avec Hugo &amp; Baki — ça prend jusqu'à 1 minute, ` +
@@ -221,6 +224,7 @@ const EN: NexaCopy = {
   noLead: `Send /start to get going!`,
   questionAck:
     `👍 Go ahead, ask right here — someone from the team will get back to you within minutes.`,
+  botResumed: `Sorry for the wait 🙏 In the meantime, you can keep going here 👇`,
   myIdPrompt: ({ hint }) => `Go ahead, drop your ID here 👇 (${hint}, it's in your profile)`,
   depositPreparing:
     `⏳ Nice! Setting up your private channel with Hugo &amp; Baki — takes up to a minute, ` +
