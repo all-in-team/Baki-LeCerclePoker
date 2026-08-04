@@ -2812,4 +2812,256 @@ function initSchema(db: Database.Database) {
   } catch (err: any) {
     console.error(`[MIGRATION:add_nexa_question_nudge_v1] FAILED:`, err.message);
   }
+
+  // ── NEXA : rakeback joueur & parts d'action — SCHÉMA SEUL (Hugo 2026-08-04) ──
+  //
+  // Étape 1/7 du module. Rien n'est branché dessus : ni saisie, ni calcul, ni écran.
+  // Ces tables restent vides jusqu'à l'étape 4. Aucune table existante n'est lue,
+  // réécrite ou supprimée ici — les deux seuls ALTER sont additifs.
+  //
+  // SOURCE DES CHIFFRES. NEXA n'envoie pas de fichier : Hugo recopie à la main les
+  // screenshots du report d'affiliation. `nexa_affiliate_weeks` est malgré tout LA
+  // source de vérité du rake NEXA, indépendamment de la façon dont elle est remplie.
+  // Un import XLSX pourra se brancher plus tard sur le même chemin d'écriture
+  // (`commitWeek`, étape 3) sans une ligne de schéma en plus : d'où `source` et
+  // `filename`/`file_hash` déjà présents sur `nexa_affiliate_entries`.
+  //
+  // CE QUI N'EST PAS TOUCHÉ. `nexa_weekly_stats` / `nexa_weekly_reports` (l'ancien
+  // import hebdo de la room) restent en place. Constaté en prod avant d'écrire ce
+  // bloc, le 2026-08-04 : 0 ligne dans les deux. L'import n'a jamais pu tourner
+  // (`NEXA_COLUMN_MAP_READY` est false depuis l'origine). Leur retrait et la bascule
+  // des deux requêtes de lib/nexa-funnel.ts sont une décision distincte, pas celle-ci.
+  //
+  // ⚠️ MARQUEUR ÉCRIT APRÈS SUCCÈS — dérogation ASSUMÉE au motif des 93 autres migrations.
+  // Les autres font `INSERT INTO _applied_fixes` PUIS `db.exec(...)`. Si l'exec jette, le
+  // marqueur est déjà posé : la migration se déclare appliquée sans avoir rien créé, et
+  // ne se rejouera JAMAIS. Ce mode d'échec a été observé pour de vrai en test (2026-08-04,
+  // sur base vierge) : ce bloc s'est retrouvé en position 94/94 de _applied_fixes avec zéro
+  // table créée. Sur un schéma qui porte de l'argent, c'est inacceptable — d'où l'ordre
+  // inversé ici, et ici seulement (décision Hugo).
+  // Ce que ça impose en échange : le corps doit être REJOUABLE tel quel, puisqu'un échec
+  // partiel sera retenté au boot suivant. Il l'est par construction — CREATE TABLE/INDEX
+  // IF NOT EXISTS, INSERT OR IGNORE, ALTER TABLE sous try/catch — et c'est vérifié par un
+  // test de rejeu explicite.
+  try {
+    const alreadyApplied = db.prepare(`SELECT 1 FROM _applied_fixes WHERE name = ?`).get("add_nexa_affiliate_v1");
+    if (!alreadyApplied) {
+      db.exec(`
+        -- La room devient un game. C'est ce qui ouvre, sans rien réinventer :
+        -- player_game_ids (lien joueur ↔ Member ID, UNIQUE(game_id, external_id)),
+        -- manual_settlements et le hub /payments.
+        -- default_action_pct = 0 : le % d'action NEXA est historisé par joueur dans
+        -- nexa_player_action_shares, il n'est pas porté par le game (même parti pris
+        -- que QQPK).
+        INSERT OR IGNORE INTO games (name, status, default_action_pct, currency)
+          VALUES ('NEXAPOKER', 'active', 0, 'USDT');
+
+        -- ── Historique des saisies ────────────────────────────────────────────
+        -- Une ligne par semaine COMMITÉE, pas par fichier : une saisie manuelle en
+        -- crée une, un futur XLSX de 3 semaines en créera 3 partageant un batch_id.
+        -- La colonne actor vaut 'baki' en dur : l'app n'a pas d'auth (v1). Elle existe
+        -- pour le jour où il y aura un login ; ce n'est pas une piste d'audit fiable.
+        CREATE TABLE IF NOT EXISTS nexa_affiliate_entries (
+          id            INTEGER PRIMARY KEY AUTOINCREMENT,
+          week_start    TEXT NOT NULL,                  -- lundi ISO 'YYYY-MM-DD'
+          source        TEXT NOT NULL DEFAULT 'manual' CHECK(source IN ('manual','xlsx')),
+          actor         TEXT NOT NULL DEFAULT 'baki',
+          batch_id      TEXT,                           -- regroupe les semaines d'un même fichier
+          filename      TEXT,                           -- NULL en saisie manuelle
+          file_hash     TEXT,                           -- idem — réservés au futur XLSX
+          rows_total    INTEGER NOT NULL DEFAULT 0,
+          rows_ok       INTEGER NOT NULL DEFAULT 0,
+          rows_rejected INTEGER NOT NULL DEFAULT 0,
+          rejects       TEXT,                           -- JSON du rapport d'erreurs
+          note          TEXT,
+          created_at    TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+        CREATE INDEX IF NOT EXISTS idx_nexa_aff_entries_week
+          ON nexa_affiliate_entries(week_start, created_at);
+
+        -- ── Détail joueur × semaine — SOURCE DE VÉRITÉ du rake NEXA ───────────
+        CREATE TABLE IF NOT EXISTS nexa_affiliate_weeks (
+          id           INTEGER PRIMARY KEY AUTOINCREMENT,
+          entry_id     INTEGER REFERENCES nexa_affiliate_entries(id),
+          week_start   TEXT NOT NULL,                   -- lundi ISO
+          member_id    TEXT,                            -- NULL : absent du report, c'est fréquent
+          nickname     TEXT NOT NULL,
+          nickname_key TEXT NOT NULL,                   -- lower(trim(nickname)) : rattachement de secours
+
+          -- Clé de dédup. Une UNIQUE(week_start, member_id) ne tiendrait PAS : SQLite
+          -- tolère N NULL dans un UNIQUE, donc chaque re-saisie d'une ligne sans ID
+          -- créerait un doublon. Colonne GÉNÉRÉE, pas calculée en JS : elle ne peut
+          -- pas diverger de ses deux sources.
+          -- Effet de bord assumé : deux joueurs homonymes SANS ID entrent en collision.
+          -- La saisie les rejettera tous les deux explicitement plutôt que de les
+          -- fusionner en silence (règle : jamais d'à-peu-près sur l'identité).
+          row_key      TEXT GENERATED ALWAYS AS
+                         (COALESCE(NULLIF(member_id, ''), 'nick:' || nickname_key)) STORED,
+
+          -- Résolu à l'écriture (member_id → player_game_ids, puis nickname_key →
+          -- nexa_nickname_links). NULL = à traiter dans l'écran de réconciliation.
+          -- Le lien VALIDÉ ne vit jamais ici : il vit dans player_game_ids /
+          -- nexa_nickname_links. C'est ce qui permet à la ré-écriture d'une semaine
+          -- (DELETE + INSERT) de ne perdre aucun rattachement.
+          player_id    INTEGER REFERENCES players(id) ON DELETE SET NULL,
+          affiliate    TEXT,
+          deal_text    TEXT NOT NULL,                   -- la chaîne brute, telle que lue
+
+          nlh   REAL NOT NULL DEFAULT 0,
+          mtt   REAL NOT NULL DEFAULT 0,
+          plo   REAL NOT NULL DEFAULT 0,
+          spins REAL NOT NULL DEFAULT 0,
+
+          -- Taux effectivement APPLIQUÉS, en %, issus du parsing de deal_text.
+          -- Stockés pour que le recalcul d'une semaine passée reste auditable même si
+          -- le deal du joueur change ensuite.
+          rate_nlh   REAL NOT NULL,
+          rate_mtt   REAL NOT NULL,
+          rate_plo   REAL NOT NULL,
+          rate_spins REAL NOT NULL,
+
+          affiliate_payment            REAL NOT NULL,   -- valeur lue sur le screenshot
+          affiliate_payment_recomputed REAL NOT NULL,   -- Σ montant × taux
+          check_delta                  REAL NOT NULL,   -- recomputed − saisi
+          -- Générée : le verdict ne peut pas mentir sur son propre écart.
+          check_ok INTEGER GENERATED ALWAYS AS
+                     (CASE WHEN ABS(check_delta) <= 0.02 THEN 1 ELSE 0 END) STORED,
+          -- Motif obligatoire pour écrire une ligne hors tolérance (cas du screenshot
+          -- NEXA lui-même incohérent). Une telle ligne s'affiche en alerte partout ET
+          -- coupe la chaîne de makeup du joueur (règle validée par Hugo).
+          override_reason TEXT,
+
+          created_at TEXT NOT NULL DEFAULT (datetime('now')),
+
+          -- Le filet anti-faute de frappe, au niveau du schéma et pas seulement du code :
+          -- hors tolérance sans motif explicite = écriture refusée par la base.
+          CHECK (ABS(check_delta) <= 0.02 OR override_reason IS NOT NULL)
+        );
+        -- UNIQUE posé en index séparé plutôt qu'en contrainte inline : une UNIQUE
+        -- inline portant sur une colonne générée est un terrain plus incertain selon
+        -- les versions de SQLite, l'index l'est beaucoup moins.
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_nexa_aff_weeks_key
+          ON nexa_affiliate_weeks(week_start, row_key);
+        CREATE INDEX IF NOT EXISTS idx_nexa_aff_weeks_player
+          ON nexa_affiliate_weeks(player_id, week_start);
+        CREATE INDEX IF NOT EXISTS idx_nexa_aff_weeks_member
+          ON nexa_affiliate_weeks(member_id) WHERE member_id IS NOT NULL;
+        CREATE INDEX IF NOT EXISTS idx_nexa_aff_weeks_nick
+          ON nexa_affiliate_weeks(nickname_key);
+        -- Alimente l'alerte « semaines dont le recalcul ne retombe pas ».
+        CREATE INDEX IF NOT EXISTS idx_nexa_aff_weeks_check
+          ON nexa_affiliate_weeks(week_start) WHERE check_ok = 0;
+        -- Alimente l'écran de réconciliation.
+        CREATE INDEX IF NOT EXISTS idx_nexa_aff_weeks_unlinked
+          ON nexa_affiliate_weeks(week_start) WHERE player_id IS NULL;
+
+        -- ── Rattachement par pseudo, mémorisé ────────────────────────────────
+        -- Rempli UNIQUEMENT par une validation manuelle dans l'écran de
+        -- réconciliation. Aucune correspondance approximative n'écrit ici, jamais.
+        -- (Le rattachement par Member ID n'a pas de table : il utilise player_game_ids
+        -- avec le game NEXAPOKER, qui existe déjà.)
+        CREATE TABLE IF NOT EXISTS nexa_nickname_links (
+          nickname_key TEXT PRIMARY KEY,
+          player_id    INTEGER NOT NULL REFERENCES players(id) ON DELETE CASCADE,
+          created_at   TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+        CREATE INDEX IF NOT EXISTS idx_nexa_nickname_links_player
+          ON nexa_nickname_links(player_id);
+
+        -- ── Rakeback joueur, versionné dans le temps ─────────────────────────
+        -- Périodes en semaines (lundis ISO), bornes incluses, end_week NULL = en cours.
+        -- Versionné et non écrasé : changer un % ne doit pas réécrire rétroactivement
+        -- des semaines déjà réglées.
+        --
+        -- makeup_carry : que devient le makeup accumulé quand cette période commence ?
+        --   'carry' (défaut) → il se reporte depuis la période précédente
+        --   'reset'          → il repart de 0
+        -- Existe parce qu'un makeup accumulé sur la base « commission affilié » n'a pas
+        -- la même unité qu'un makeup sur la base « rake brut » : au changement de
+        -- basis, Hugo tranche explicitement (choix validé — pas de purge automatique).
+        --
+        -- Défauts globaux dans la table settings (voir seed plus bas).
+        -- Le non-chevauchement des périodes d'un même joueur est vérifié à l'écriture :
+        -- SQLite ne sait pas l'exprimer en contrainte.
+        CREATE TABLE IF NOT EXISTS nexa_player_rakeback (
+          id           INTEGER PRIMARY KEY AUTOINCREMENT,
+          player_id    INTEGER NOT NULL REFERENCES players(id) ON DELETE CASCADE,
+          pct          REAL NOT NULL CHECK(pct >= 0 AND pct <= 100),
+          basis        TEXT NOT NULL CHECK(basis IN ('gross_rake','affiliate_commission')),
+          makeup_carry TEXT NOT NULL DEFAULT 'carry' CHECK(makeup_carry IN ('carry','reset')),
+          start_week   TEXT NOT NULL,
+          end_week     TEXT,
+          note         TEXT,
+          created_at   TEXT NOT NULL DEFAULT (datetime('now')),
+          CHECK (end_week IS NULL OR end_week >= start_week)
+        );
+        CREATE INDEX IF NOT EXISTS idx_nexa_rb_player
+          ON nexa_player_rakeback(player_id, start_week);
+
+        -- ── Parts d'action, historisées ──────────────────────────────────────
+        -- Append-only : modifier une part = clore la période courante (end_week) puis
+        -- en insérer une nouvelle. Jamais d'UPDATE du pct sur une période passée.
+        CREATE TABLE IF NOT EXISTS nexa_player_action_shares (
+          id         INTEGER PRIMARY KEY AUTOINCREMENT,
+          player_id  INTEGER NOT NULL REFERENCES players(id) ON DELETE CASCADE,
+          pct        REAL NOT NULL CHECK(pct >= 0 AND pct <= 100),
+          start_week TEXT NOT NULL,
+          end_week   TEXT,
+          note       TEXT,
+          created_at TEXT NOT NULL DEFAULT (datetime('now')),
+          CHECK (end_week IS NULL OR end_week >= start_week)
+        );
+        CREATE INDEX IF NOT EXISTS idx_nexa_action_player
+          ON nexa_player_action_shares(player_id, start_week);
+
+        -- ── Win/loss par joueur × semaine, saisi à la main ───────────────────
+        -- L'assiette des parts d'action. Le report d'affiliation NEXA ne contient
+        -- AUCUN win/loss : ses 4 colonnes (NLH/MTT/PLO/Spins) sont du rake. Cette
+        -- donnée est donc celle d'Hugo, pas celle de la room — la re-saisie d'une
+        -- semaine du report ne doit jamais l'écraser.
+        CREATE TABLE IF NOT EXISTS nexa_player_weekly_winloss (
+          id         INTEGER PRIMARY KEY AUTOINCREMENT,
+          player_id  INTEGER NOT NULL REFERENCES players(id) ON DELETE CASCADE,
+          week_start TEXT NOT NULL,
+          amount     REAL NOT NULL,             -- signé : une semaine perdante est négative
+          note       TEXT,
+          entered_at TEXT NOT NULL DEFAULT (datetime('now')),
+          UNIQUE(player_id, week_start)
+        );
+      `);
+
+      // Lien lead ↔ joueur, 1-1 optionnel des DEUX côtés : un lead peut ne jamais
+      // devenir joueur, et un joueur peut être arrivé hors funnel (bouche-à-oreille,
+      // ou avant la mise en place du bot). L'index partiel donne l'unicité côté
+      // joueur sans interdire les leads non rattachés.
+      try { db.exec(`ALTER TABLE nexa_leads ADD COLUMN player_id INTEGER REFERENCES players(id)`); } catch { /* déjà là */ }
+      db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_nexa_leads_player
+                 ON nexa_leads(player_id) WHERE player_id IS NOT NULL`);
+
+      // manual_settlements accueille un second flux. Jusqu'ici toutes ses lignes
+      // étaient de l'action (net_selected_usdt × action_pct) ; le rakeback NEXA a un
+      // montant qui ne vient PAS d'une sélection de transactions.
+      // DEFAULT 'action' : les lignes existantes gardent leur sens exact, aucun
+      // backfill, aucune relecture de l'historique (invariant #6, additif seulement).
+      try { db.exec(`ALTER TABLE manual_settlements ADD COLUMN kind TEXT NOT NULL DEFAULT 'action'`); } catch { /* déjà là */ }
+
+      // Défauts globaux paramétrables. INSERT OR IGNORE : si Hugo les a déjà réglés,
+      // une réapplication de la migration ne les réécrase pas.
+      // Le texte de deal par défaut est une VALEUR DE DÉPART pré-remplie dans la
+      // grille de saisie, jamais un taux appliqué en dur : les taux effectifs sont
+      // toujours ceux parsés depuis le deal_text de la ligne.
+      const seedSetting = db.prepare(`INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)`);
+      seedSetting.run("nexa_default_deal_text", "40% NLH and MTT, 45% PLO, 55% Spins");
+      seedSetting.run("nexa_default_rakeback_pct", "0");
+      seedSetting.run("nexa_default_rakeback_basis", "affiliate_commission");
+
+      // Tout est passé — SEULEMENT MAINTENANT on marque la migration comme appliquée.
+      // Si une seule ligne au-dessus avait jeté, on n'arrive pas ici, aucun marqueur
+      // n'est posé, et le boot suivant rejoue le bloc au lieu de le sauter en silence.
+      db.prepare(`INSERT OR IGNORE INTO _applied_fixes (name) VALUES (?)`).run("add_nexa_affiliate_v1");
+      console.log("[MIGRATION] add_nexa_affiliate_v1 applied");
+    }
+  } catch (err: any) {
+    console.error(`[MIGRATION:add_nexa_affiliate_v1] FAILED (sera rejouée au prochain boot):`, err.message);
+  }
 }
