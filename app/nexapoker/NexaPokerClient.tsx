@@ -55,6 +55,7 @@ type PlayerDetail = {
   };
   blocked_weeks: { count: number; week_starts: string[]; gross_rake: number; commission: number };
   warnings: { week_start: string; message: string }[];
+  settled_weeks: Record<string, number>;
   deposited: number; withdrawn: number; net_movements: number;
   net_position: number | null;
 };
@@ -105,6 +106,9 @@ export default function NexaPokerClient({ currentWeek, today }: { currentWeek: s
   const [agency, setAgency] = useState<Agency | null>(null);
   const [detailBusy, setDetailBusy] = useState(false);
   const [wlDraft, setWlDraft] = useState<Record<string, string>>({});
+  // Semaines cochées pour le règlement. On n'envoie QUE des semaines : le montant
+  // est recalculé par le moteur au lock, jamais repris de l'écran.
+  const [toSettle, setToSettle] = useState<Record<string, boolean>>({});
 
   // Vue détail : c'est le MOTEUR qui donne la part d'action, jamais l'écran.
   // On stocke ce qu'il renvoie tel quel et on ne recalcule rien côté client.
@@ -113,7 +117,7 @@ export default function NexaPokerClient({ currentWeek, today }: { currentWeek: s
     try {
       const j = await (await fetch(`/api/nexapoker/winloss?player_id=${p.player_id}`)).json();
       if (!j.ok) { setBanner({ kind: "err", text: j.error ?? "Détail indisponible." }); return; }
-      setDetail(j.detail); setWlDraft({});
+      setDetail(j.detail); setWlDraft({}); setToSettle({});
     } finally { setDetailBusy(false); }
   }, []);
 
@@ -550,12 +554,17 @@ export default function NexaPokerClient({ currentWeek, today }: { currentWeek: s
                 <th style={{ ...TH, textAlign: "right" }}>Win/loss (saisie)</th>
                 <th style={{ ...TH, textAlign: "right" }}>Action %</th>
                 <th style={{ ...TH, textAlign: "right" }}>Part d'action</th>
+                <th style={{ ...TH, textAlign: "center" }}>À régler</th>
                 <th style={TH} />
               </tr></thead>
               <tbody>
                 {detail.weeks.map(w => {
                   const draft = wlDraft[w.week_start];
                   const shown = draft !== undefined ? draft : (w.winloss === null ? "" : String(w.winloss));
+                  const settledId = detail.settled_weeks[w.week_start];
+                  const settleable = settledId === undefined && w.status === "ok"
+                                     && w.winloss !== null && w.action_amount !== null
+                                     && Math.abs(w.action_amount) > 0.0000001;
                   const save = async (amount: number | null) => {
                     const ok = await post("/api/nexapoker/winloss",
                       { player_id: detail.player_id, week_start: w.week_start, amount },
@@ -583,6 +592,22 @@ export default function NexaPokerClient({ currentWeek, today }: { currentWeek: s
                                    color: w.action_amount === null ? "#555568" : netColor(w.action_amount) }}>
                         {w.action_amount === null ? "—" : fmt(w.action_amount)}
                       </td>
+                      {/* Réglable = calculée, win/loss saisi, part non nulle, pas déjà réglée.
+                          Une semaine réglée affiche son règlement et n'est plus sélectionnable :
+                          elle ne peut pas revenir dans un second règlement. */}
+                      <td style={{ ...TD, textAlign: "center" }}>
+                        {settledId !== undefined ? (
+                          <span style={{ fontSize: 10, color: "#10B981" }} title="Déjà réglée — figée au règlement">
+                            réglée #{settledId}
+                          </span>
+                        ) : settleable ? (
+                          <input type="checkbox" checked={!!toSettle[w.week_start]}
+                                 onChange={e => setToSettle({ ...toSettle, [w.week_start]: e.target.checked })} />
+                        ) : (
+                          <span style={{ fontSize: 10, color: "#555568" }}
+                                title="Contrôle en échec, win/loss non saisi, ou part d'action nulle">—</span>
+                        )}
+                      </td>
                       <td style={{ ...TD, textAlign: "right" }}>
                         <button disabled={busy} onClick={() => {
                           const v = parseFloat(shown.replace(",", "."));
@@ -605,6 +630,42 @@ export default function NexaPokerClient({ currentWeek, today }: { currentWeek: s
               </tbody>
             </table>
           </div>
+
+          {/* Règlement de la part d'action — et RIEN d'autre. Les mouvements restent
+              de la trésorerie : ils ne deviennent jamais une ligne de règlement. */}
+          {(() => {
+            const picked = detail.weeks.filter(w => toSettle[w.week_start]);
+            if (picked.length === 0) return null;
+            const preview = picked.reduce((s, w) => s + (w.action_amount ?? 0), 0);
+            return (
+              <div style={{ ...CARD, borderColor: "rgba(34,211,238,0.35)", marginTop: 14, padding: 12 }}>
+                <div style={{ fontSize: 12, color: "#E8E8EE", marginBottom: 8 }}>
+                  Régler la part d'action — {picked.length} semaine(s) :{" "}
+                  <b style={{ color: netColor(preview) }}>{fmt(preview)}</b>{" "}
+                  <span style={{ color: "#8888A0" }}>
+                    ({preview >= 0 ? "il te doit" : "tu lui dois"})
+                  </span>
+                </div>
+                <div style={{ fontSize: 11, color: "#8888A0", marginBottom: 10 }}>
+                  Ce montant est un aperçu. Le montant réglé est <b>recalculé par le moteur</b> au
+                  verrouillage : si le report a changé depuis l'affichage, c'est le calcul qui gagne.
+                  Les buy-ins et cash-outs n'entrent pas dans ce règlement.
+                </div>
+                <button disabled={busy} onClick={async () => {
+                  const ok = await post("/api/nexapoker/settle-action",
+                    { player_id: detail.player_id, week_starts: picked.map(w => w.week_start) },
+                    j => `Règlement #${j.settlement_id} verrouillé — ${fmt(j.amount_due_usdt)} sur ${j.weeks.length} semaine(s).`);
+                  if (ok) { const p = players.find(x => x.player_id === detail.player_id); if (p) await openDetail(p); }
+                }} style={{ padding: "8px 16px", borderRadius: 8, border: "none", background: "#22D3EE",
+                            color: "#0B0D12", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>
+                  Verrouiller le règlement
+                </button>
+                <span style={{ fontSize: 11, color: "#8888A0", marginLeft: 10 }}>
+                  La ligne apparaîtra dans /payments, room NEXAPOKER.
+                </span>
+              </div>
+            );
+          })()}
 
           {/* Pied : les totaux du moteur, plus la trésorerie qui n'entre pas dans le calcul. */}
           <div style={{ display: "flex", gap: 18, flexWrap: "wrap", marginTop: 14, fontSize: 12, color: "#8888A0" }}>

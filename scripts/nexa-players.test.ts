@@ -53,6 +53,13 @@ const anchor = SRC.indexOf("const alreadyApplied = db.prepare");
 const execStart = SRC.indexOf("db.exec(`", anchor);
 const MIGRATION_SQL = SRC.slice(execStart + "db.exec(`".length, SRC.indexOf("`);", execStart + 9));
 
+// La table de règlement de la part d'action vit dans une migration SÉPARÉE
+// (add_nexa_action_settlement_v1), hors du bloc extrait ci-dessus. getNexaPlayerDetailOn
+// la lit pour marquer les semaines déjà réglées : sans elle, la fixture ment sur le
+// schéma réel. On la reprend telle quelle depuis la source, comme le reste.
+const SETTLE_START = SRC.indexOf("CREATE TABLE IF NOT EXISTS nexa_action_settlement_weeks");
+const SETTLE_SQL = SRC.slice(SETTLE_START, SRC.indexOf("`);", SETTLE_START));
+
 function freshDb() {
   const db = new Database(":memory:");
   db.pragma("foreign_keys = ON");
@@ -107,6 +114,7 @@ function freshDb() {
       created_at TEXT NOT NULL DEFAULT (datetime('now')), UNIQUE(player_id, game_id));
   `);
   db.exec(MIGRATION_SQL);
+  db.exec(SETTLE_SQL);
   return db;
 }
 

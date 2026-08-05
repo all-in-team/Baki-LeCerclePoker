@@ -419,6 +419,13 @@ export const SETTLE_ROOMS: SettleRoom[] = [
   { label: "AKS/OK",  games: ["AKS", "OKPOKER"],     basePath: "/aks/pnl",     color: "#F5C518" },
   { label: "JVIP",    games: ["JVIP"],               basePath: "/jvip/pnl",    color: "#F97316" },
   { label: "TTPOKER", games: ["TTPOKER"],            basePath: "/ttpoker/pnl", color: "#EC4899" },
+  // NEXAPOKER n'est pas un règlement adossé à des transactions : ce qui s'y règle est la
+  // PART D'ACTION, dont l'assiette est le win/loss saisi à la main. Ses lignes sont écrites
+  // par lockNexaActionSettlementOn (lib/funnels/nexa/action-settlement.ts), jamais par
+  // lockSettlement — qui calculerait `net des transactions × action_pct` et lirait le % dans
+  // le miroir player_game_deals, deux choses fausses ici. Le hub, lui, les affiche comme les
+  // autres : elles portent bien un game_id et un amount_due_usdt dans la même convention.
+  { label: "NEXAPOKER", games: ["NEXAPOKER"],        basePath: "/nexapoker",   color: "#22D3EE" },
 ];
 
 // games.name → room, resolved once per call. A game absent from SETTLE_ROOMS returns null
@@ -524,8 +531,18 @@ const HUB_SELECT = `
          ms.net_selected_usdt, ms.action_pct_applied, ms.amount_due_usdt,
          ms.status, ms.tx_hash, ms.notes, ms.locked_at, ms.paid_at, ms.paid_date,
          (SELECT COUNT(*) FROM wallet_transactions wt WHERE wt.settlement_id = ms.id) AS tx_count,
-         (SELECT MIN(COALESCE(wt.tx_datetime, wt.tx_date)) FROM wallet_transactions wt WHERE wt.settlement_id = ms.id) AS period_start,
-         (SELECT MAX(COALESCE(wt.tx_datetime, wt.tx_date)) FROM wallet_transactions wt WHERE wt.settlement_id = ms.id) AS period_end
+         -- COALESCE sur nexa_action_settlement_weeks : un règlement de part d'action NEXA
+         -- n'a AUCUNE transaction back-linkée (son assiette est le win/loss saisi), sa
+         -- période est donc portée par les semaines couvertes. Sans ce repli, la ligne
+         -- s'afficherait dans le hub sans période ni libellé de semaine.
+         COALESCE(
+           (SELECT MIN(COALESCE(wt.tx_datetime, wt.tx_date)) FROM wallet_transactions wt WHERE wt.settlement_id = ms.id),
+           (SELECT MIN(nw.week_start) FROM nexa_action_settlement_weeks nw WHERE nw.settlement_id = ms.id)
+         ) AS period_start,
+         COALESCE(
+           (SELECT MAX(COALESCE(wt.tx_datetime, wt.tx_date)) FROM wallet_transactions wt WHERE wt.settlement_id = ms.id),
+           (SELECT MAX(nw.week_start) FROM nexa_action_settlement_weeks nw WHERE nw.settlement_id = ms.id)
+         ) AS period_end
   FROM manual_settlements ms
   JOIN games g ON g.id = ms.game_id
   JOIN players p ON p.id = ms.player_id

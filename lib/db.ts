@@ -3155,4 +3155,47 @@ function initSchema(db: Database.Database) {
   } catch (err: any) {
     console.error(`[MIGRATION:nexa_mirror_start_date_v1] FAILED (sera rejouée au prochain boot):`, err.message);
   }
+
+  // ── Règlement de la part d'action NEXAPOKER ───────────────────────────────
+  //
+  // Le flux de règlement standard des rooms adosse son montant à une SÉLECTION DE
+  // TRANSACTIONS : `dû = net des transactions × action_pct`, et l'anti-double-comptage
+  // est le drapeau `wallet_transactions.settled`. La part d'action NEXA ne marche pas
+  // comme ça : son assiette est le win/loss saisi à la main, semaine par semaine, et
+  // aucune transaction ne lui correspond. Il lui faut donc son propre ancrage.
+  //
+  // Cette table EST l'anti-double-comptage, et elle est aussi le FIGEMENT : le moteur
+  // rejoue la chaîne à chaque lecture (aucun solde n'est stocké), mais un montant réglé,
+  // lui, ne doit plus bouger même si la semaine est corrigée après coup. On recopie donc
+  // ici le win/loss, le % et le montant tels qu'ils étaient AU RÈGLEMENT.
+  //
+  // UNIQUE(player_id, week_start) : régler deux fois la même semaine devient impossible
+  // au niveau du schéma, pas seulement au niveau du code. C'est l'équivalent du
+  // `settled = 1` des transactions, pour un flux qui n'en a pas.
+  // ON DELETE CASCADE : déverrouiller un règlement (unlockSettlement supprime la ligne
+  // manual_settlements) libère les semaines, qui redeviennent réglables.
+  try {
+    const already = db.prepare(`SELECT 1 FROM _applied_fixes WHERE name = ?`).get("add_nexa_action_settlement_v1");
+    if (!already) {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS nexa_action_settlement_weeks (
+          id            INTEGER PRIMARY KEY AUTOINCREMENT,
+          settlement_id INTEGER NOT NULL REFERENCES manual_settlements(id) ON DELETE CASCADE,
+          player_id     INTEGER NOT NULL REFERENCES players(id) ON DELETE CASCADE,
+          week_start    TEXT NOT NULL,
+          winloss       REAL NOT NULL,
+          action_pct    REAL NOT NULL,
+          action_amount REAL NOT NULL,
+          created_at    TEXT NOT NULL DEFAULT (datetime('now')),
+          UNIQUE(player_id, week_start)
+        );
+        CREATE INDEX IF NOT EXISTS idx_nexa_action_settle_settlement
+          ON nexa_action_settlement_weeks(settlement_id);
+      `);
+      db.prepare(`INSERT OR IGNORE INTO _applied_fixes (name) VALUES (?)`).run("add_nexa_action_settlement_v1");
+      console.log("[MIGRATION] add_nexa_action_settlement_v1 applied");
+    }
+  } catch (err: any) {
+    console.error(`[MIGRATION:add_nexa_action_settlement_v1] FAILED (sera rejouée au prochain boot):`, err.message);
+  }
 }

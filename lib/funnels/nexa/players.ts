@@ -303,6 +303,12 @@ export type NexaPlayerDetail = {
   player_id: number;
   name: string;
   weeks: WeekResult[];
+  /**
+   * week_start → id du règlement qui a figé cette semaine. Le moteur, lui, rejoue
+   * toujours TOUTE la chaîne : c'est cette carte qui dit ce qui est déjà réglé, et
+   * elle seule. Sans elle, l'écran présenterait comme dû ce qui a déjà été payé.
+   */
+  settled_weeks: Record<string, number>;
   totals: EngineResult["totals"];
   blocked_weeks: EngineResult["blocked_weeks"];
   warnings: EngineResult["warnings"];
@@ -361,10 +367,18 @@ export function getNexaPlayerDetailOn(db: DB, playerId: number): NexaPlayerDetai
 
   const netMovements = mv.withdrawn - mv.deposited;
 
+  // Lecture directe plutôt qu'un import de ./action-settlement : ce module-ci est
+  // importé PAR celui-là (getNexaPlayerDetailOn y alimente le calcul du réglable),
+  // un import retour créerait un cycle.
+  const settledRows = db.prepare(
+    `SELECT week_start, settlement_id FROM nexa_action_settlement_weeks WHERE player_id = ?`
+  ).all(playerId) as { week_start: string; settlement_id: number }[];
+
   return {
     player_id: p.id,
     name: p.name,
     weeks: r.weeks,
+    settled_weeks: Object.fromEntries(settledRows.map(s => [s.week_start, s.settlement_id])),
     totals: r.totals,
     blocked_weeks: r.blocked_weeks,
     warnings: r.warnings,
