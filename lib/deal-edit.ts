@@ -89,7 +89,7 @@ export async function updateDealActionPct(
   if (gameNames.some(n => n.toUpperCase() === "NEXAPOKER")) {
     return {
       ok: false, changed: false,
-      error: "La part d'action NEXAPOKER s'édite sur la page NEXAPOKER (historisée par période), pas ici.",
+      error: "La part d'action et le rakeback NEXAPOKER s'éditent sur la page NEXAPOKER (historisés par période), pas ici.",
     };
   }
   const db = getDb();

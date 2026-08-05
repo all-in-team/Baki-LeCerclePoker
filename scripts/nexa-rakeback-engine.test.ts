@@ -87,7 +87,7 @@ console.log("SistheR — 3 semaines à 0 de rake :");
   }
   eq("total dû", r.totals.due, 0);
   eq("makeup final", r.makeup_final, 0);
-  is("aucune semaine bloquée", r.blocked.length, 0);
+  is("aucune semaine bloquée", r.blocked_weeks.count, 0);
   // Le point du cas : zéro ligne poussée vers le règlement, pas trois lignes à 0.
   is("AUCUNE ligne réglable", settleableWeeks(r).length, 0);
 
@@ -240,9 +240,11 @@ console.log("\nRejeu indépendant de l'ordre d'entrée :");
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// 4. check_ok = 0 → la chaîne de makeup est COUPÉE.
+// 4. check_ok = 0 → la semaine SORT DU CALCUL, l'aval n'est PAS gelé.
+//    Arbitrage Hugo : « ne pas propager un makeup douteux », pas « geler le
+//    joueur ». Un écart accepté avec motif ne rend personne incalculable à vie.
 // ─────────────────────────────────────────────────────────────────────────────
-console.log("\ncheck_ok = 0 → chaîne coupée :");
+console.log("\ncheck_ok = 0 → semaine hors calcul, la chaîne repart à zéro :");
 {
   const weeks = [
     week("2026-07-13", { gross_rake: 100 }),
@@ -254,7 +256,7 @@ console.log("\ncheck_ok = 0 → chaîne coupée :");
   ];
   const r = computeRakeback(weeks, periods, NO_ACTION, SETTINGS);
 
-  // La semaine saine AVANT la coupure reste calculée et réglable.
+  // La semaine saine AVANT reste calculée et réglable.
   is("S1 status", r.weeks[0].status, "ok");
   eq("S1 dû (50 % de 100)", r.weeks[0].due, 50);
 
@@ -263,25 +265,144 @@ console.log("\ncheck_ok = 0 → chaîne coupée :");
   eq("S2 dû", r.weeks[1].due, 0);
   is("S2 motif renseigné", r.weeks[1].blocked_reason !== null, true);
   is("S2 net_operator null", r.weeks[1].net_operator, null);
+  eq("S2 ne propage rien (makeup_out 0)", r.weeks[1].makeup_out, 0);
 
-  // Et TOUT l'aval est bloqué : une assiette fausse ne doit pas contaminer la suite.
-  is("S3 status (aval coupé)", r.weeks[2].status, "blocked");
-  eq("S3 dû", r.weeks[2].due, 0);
-  is("S3 motif = chaîne coupée en amont", r.weeks[2].blocked_reason?.includes("Chaîne coupée") ?? false, true);
+  // L'APRÈS est calculé normalement : c'est tout le sens de l'arbitrage.
+  is("S3 status (aval NON gelé)", r.weeks[2].status, "ok");
+  eq("S3 makeup_in (chaîne repartie de zéro)", r.weeks[2].makeup_in, 0);
+  eq("S3 base_net = assiette pleine", r.weeks[2].base_net, 400);
+  eq("S3 dû (400 × 50 %)", r.weeks[2].due, 200);
 
-  is("2 semaines bloquées", r.blocked.length, 2);
-  is("blocked = les deux dernières", r.blocked.join(","), "2026-07-20,2026-07-27");
-  eq("total dû = la seule semaine saine", r.totals.due, 50);
-  is("1 seule ligne réglable", settleableWeeks(r).length, 1);
-  is("ligne réglable = 2026-07-13", settleableWeeks(r)[0].week_start, "2026-07-13");
+  // Le bloc de ce qui est exclu : rien ne disparaît en silence.
+  is("1 semaine bloquée", r.blocked_weeks.count, 1);
+  is("laquelle", r.blocked_weeks.week_starts.join(","), "2026-07-20");
+  eq("rake exclu des totaux", r.blocked_weeks.gross_rake, 500);
 
-  // NON VERROUILLÉ ICI, EN ATTENTE D'ARBITRAGE : totals.gross_rake et
-  // totals.commission somment TOUTES les semaines (bloquées comprises), alors
-  // que totals.due / action_amount / net_operator ne somment que les « ok ».
-  // Les quatre totaux ne se réconcilient donc pas entre eux dès qu'une semaine
-  // est bloquée. Idem net_operator, qui compte 0 pour une semaine sans win/loss
-  // au lieu de rester incalculable comme au niveau semaine. Ces agrégats
-  // resteront sans assertion tant que la règle n'est pas tranchée.
+  // Les totaux ne portent QUE les semaines ok, et se réconcilient.
+  eq("total dû (50 + 200)", r.totals.due, 250);
+  eq("total gross_rake (100 + 400, sans la bloquée)", r.totals.gross_rake, 500);
+  is("2 lignes réglables", settleableWeeks(r).length, 2);
+  is("lignes réglables", settleableWeeks(r).map(w => w.week_start).join(","), "2026-07-13,2026-07-27");
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 4 bis. Un makeup en cours ne TRAVERSE pas une semaine bloquée — il est
+//        abandonné, et l'abandon est signalé (il profite au joueur).
+// ─────────────────────────────────────────────────────────────────────────────
+console.log("\nMakeup en cours + semaine bloquée → makeup abandonné et signalé :");
+{
+  const weeks = [
+    week("2026-07-13", { gross_rake: -200 }),
+    week("2026-07-20", { gross_rake: 500, check_ok: false }),
+    week("2026-07-27", { gross_rake: 400 }),
+  ];
+  const periods: RakebackPeriod[] = [
+    { pct: 50, basis: "gross_rake", start_week: "2026-07-06", end_week: null, makeup_carry: "carry" },
+  ];
+  const r = computeRakeback(weeks, periods, NO_ACTION, SETTINGS);
+
+  eq("S1 makeup_out", r.weeks[0].makeup_out, -200);
+  eq("S2 makeup_in (ce qui arrivait)", r.weeks[1].makeup_in, -200);
+  eq("S2 makeup_out (abandonné)", r.weeks[1].makeup_out, 0);
+
+  // S3 repart à zéro : 400 × 50 % = 200, et NON (400 − 200) × 50 % = 100.
+  eq("S3 makeup_in remis à zéro", r.weeks[2].makeup_in, 0);
+  eq("S3 dû (makeup non traversant)", r.weeks[2].due, 200);
+  is("≠ makeup traversant (100)", approx(r.weeks[2].due, 100), false);
+
+  // L'abandon avantage le joueur : il doit être dit, pas subi en silence.
+  is("1 alerte d'abandon", r.warnings.length, 1);
+  is("alerte sur la semaine bloquée", r.warnings[0].week_start, "2026-07-20");
+  is("alerte chiffre le makeup perdu", r.warnings[0].message.includes("-200.00"), true);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 4 ter. Les cinq totaux se réconcilient entre eux, sur le même périmètre.
+// ─────────────────────────────────────────────────────────────────────────────
+console.log("\nRéconciliation des totaux (même périmètre = semaines ok) :");
+{
+  const weeks = [
+    week("2026-07-13", { gross_rake: 100, affiliate_commission: 40, winloss: 1000 }),
+    week("2026-07-20", { gross_rake: 500, affiliate_commission: 200, check_ok: false, winloss: 200 }),
+    week("2026-07-27", { gross_rake: 400, affiliate_commission: 160, winloss: -600 }),
+  ];
+  const periods: RakebackPeriod[] = [
+    { pct: 50, basis: "gross_rake", start_week: "2026-07-06", end_week: null, makeup_carry: "carry" },
+  ];
+  const action: ActionPeriod[] = [{ pct: 50, start_week: "2026-07-06", end_week: null }];
+  const r = computeRakeback(weeks, periods, action, SETTINGS);
+  const t = r.totals;
+
+  eq("total gross_rake (ok seulement)", t.gross_rake, 500);
+  eq("total commission (ok seulement)", t.commission, 200);
+  eq("total dû (50 + 200)", t.due, 250);
+  eq("total action (500 − 300)", t.action_amount!, 200);
+  eq("net = commission − dû + action", t.net_operator!, 200 - 250 + 200);
+  // L'identité doit tenir sur les totaux eux-mêmes, pas seulement par semaine.
+  eq("réconciliation explicite", t.net_operator!, t.commission - t.due + t.action_amount!);
+
+  // Et ce qui est exclu est chiffré à côté, jamais escamoté.
+  eq("rake exclu", r.blocked_weeks.gross_rake, 500);
+  eq("commission exclue", r.blocked_weeks.commission, 200);
+  eq("action exclue", r.blocked_weeks.action_amount!, 100);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 4 quater. Un total amputé doit se VOIR : net et action passent à null.
+// ─────────────────────────────────────────────────────────────────────────────
+console.log("\nUn win/loss manquant rend les totaux concernés null (pas 0) :");
+{
+  const weeks = [
+    week("2026-07-13", { gross_rake: 100, affiliate_commission: 40, winloss: 1000 }),
+    week("2026-07-20", { gross_rake: 400, affiliate_commission: 160, winloss: null }),
+  ];
+  const periods: RakebackPeriod[] = [
+    { pct: 50, basis: "gross_rake", start_week: "2026-07-06", end_week: null, makeup_carry: "carry" },
+  ];
+  const action: ActionPeriod[] = [{ pct: 50, start_week: "2026-07-06", end_week: null }];
+  const r = computeRakeback(weeks, periods, action, SETTINGS);
+
+  is("net total null", r.totals.net_operator, null);
+  is("action totale null", r.totals.action_amount, null);
+  is("indicateur explicite du pourquoi", r.totals.weeks_missing_winloss, 1);
+  // Les totaux qui RESTENT calculables le restent : on n'annule pas tout.
+  eq("dû total toujours chiffré", r.totals.due, 50 + 200);
+  eq("commission totale toujours chiffrée", r.totals.commission, 200);
+
+  // Une fois le win/loss saisi, le total redevient un chiffre.
+  const complet = computeRakeback(
+    [weeks[0], { ...weeks[1], winloss: -600 }], periods, action, SETTINGS,
+  );
+  is("plus aucune semaine sans win/loss", complet.totals.weeks_missing_winloss, 0);
+  eq("net redevenu calculable", complet.totals.net_operator!, 200 - 250 + 200);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 4 quinquies. makeup_out ne devient JAMAIS positif, ni -0.
+// ─────────────────────────────────────────────────────────────────────────────
+console.log("\nInvariant makeup_out <= 0 (bornage Math.min) :");
+{
+  const periods: RakebackPeriod[] = [
+    { pct: 50, basis: "gross_rake", start_week: "2026-07-06", end_week: null, makeup_carry: "carry" },
+  ];
+
+  // Assiette nette strictement dans la fenêtre d'epsilon : positive, mais
+  // traitée par la branche « déficit ». Sans bornage, elle sortirait en makeup
+  // POSITIF, c'est-à-dire en bonus d'assiette la semaine suivante.
+  const r = computeRakeback([week("2026-07-13", { gross_rake: 1e-8 })], periods, NO_ACTION, SETTINGS);
+  is("makeup_out jamais positif", r.weeks[0].makeup_out <= 0, true);
+  eq("makeup_out borné à 0", r.weeks[0].makeup_out, 0);
+  eq("makeup final borné", r.makeup_final, 0);
+
+  // Makeup exactement soldé (−100 puis +100) : 0 franc, pas -0.
+  const solde = computeRakeback(
+    [week("2026-07-13", { gross_rake: -100 }), week("2026-07-20", { gross_rake: 100 })],
+    periods, NO_ACTION, SETTINGS,
+  );
+  eq("assiette nette exactement soldée", solde.weeks[1].base_net, 0);
+  eq("makeup_out", solde.weeks[1].makeup_out, 0);
+  is("pas de -0", Object.is(solde.weeks[1].makeup_out, -0), false);
+  is("aucune ligne réglable (dû 0)", settleableWeeks(solde).length, 0);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

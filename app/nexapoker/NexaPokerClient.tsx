@@ -24,11 +24,20 @@ const TH: React.CSSProperties = {
 };
 const TD: React.CSSProperties = { padding: "8px 8px", fontSize: 12, color: "#E8E8EE", whiteSpace: "nowrap" };
 
+type Basis = "gross_rake" | "affiliate_commission";
+type MakeupCarry = "carry" | "reset";
 type Player = {
   player_id: number; name: string; telegram_handle: string | null; member_id: string | null;
   report_nickname: string | null; action_pct: number; action_since: string | null;
+  rakeback_pct: number; rakeback_basis: Basis; rakeback_makeup_carry: MakeupCarry;
+  rakeback_since: string | null; rakeback_is_default: boolean;
   weeks_count: number; total_rake: number; total_commission: number; check_ko: number;
   deposited: number; withdrawn: number; net_movements: number; lead_id: number | null;
+};
+/** L'assiette du % — deux unités différentes, jamais interchangeables. */
+const BASIS_LABEL: Record<Basis, string> = {
+  gross_rake: "rake brut",
+  affiliate_commission: "commission",
 };
 type Movement = { id: number; type: "deposit" | "withdrawal"; amount: number; currency: string;
                   note: string | null; tx_date: string; created_at: string };
@@ -55,6 +64,10 @@ export default function NexaPokerClient({ currentWeek, today }: { currentWeek: s
 
   // Édition de la part d'action : pct + SEMAINE D'EFFET, demandée à chaque fois.
   const [editing, setEditing] = useState<{ player: Player; pct: string; week: string } | null>(null);
+  // Édition du rakeback : même modèle, plus l'assiette et le sort du makeup.
+  const [editingRb, setEditingRb] = useState<
+    { player: Player; pct: string; basis: Basis; carry: MakeupCarry; week: string } | null
+  >(null);
   const [adding, setAdding] = useState<{ nickname: string; member_id: string; telegram: string; pct: string; week: string } | null>(null);
   const [linking, setLinking] = useState<{ row: Unreconciled; target: string } | null>(null);
   // Mouvements : saisie d'Hugo, jamais touchée par l'import ni l'extraction.
@@ -208,6 +221,7 @@ export default function NexaPokerClient({ currentWeek, today }: { currentWeek: s
             <thead><tr>
               {/* Action % en PREMIÈRE colonne après le nom, comme demandé. */}
               <th style={TH}>Joueur</th><th style={{ ...TH, textAlign: "right" }}>Action %</th>
+              <th style={{ ...TH, textAlign: "right" }}>RB %</th>
               <th style={TH}>Member ID</th><th style={TH}>@ Telegram</th><th style={TH}>Pseudo report</th>
               <th style={{ ...TH, textAlign: "right" }}>Semaines</th>
               <th style={{ ...TH, textAlign: "right" }}>Rake</th>
@@ -220,7 +234,7 @@ export default function NexaPokerClient({ currentWeek, today }: { currentWeek: s
             </tr></thead>
             <tbody>
               {players.length === 0 && !loading && (
-                <tr><td colSpan={13} style={{ ...TD, color: "#8888A0", padding: 20, textAlign: "center" }}>
+                <tr><td colSpan={14} style={{ ...TD, color: "#8888A0", padding: 20, textAlign: "center" }}>
                   Aucun joueur rattaché. Utilise « Ajouter un joueur », ou réconcilie une ligne du report.
                 </td></tr>
               )}
@@ -240,6 +254,30 @@ export default function NexaPokerClient({ currentWeek, today }: { currentWeek: s
                                      borderRadius: 6, padding: "3px 10px", cursor: "pointer",
                                      color: p.action_pct > 0 ? "#E8E8EE" : "#8888A0", fontSize: 12, fontWeight: 700 }}>
                       {p.action_pct} %
+                    </button>
+                  </td>
+                  {/* RB % — l'assiette est affichée avec le taux : 40 % du rake brut
+                      et 40 % de la commission ne sont pas le même montant. */}
+                  <td style={{ ...TD, textAlign: "right" }}>
+                    <button disabled={busy}
+                            onClick={() => setEditingRb({
+                              player: p, pct: String(p.rakeback_pct), basis: p.rakeback_basis,
+                              carry: p.rakeback_makeup_carry, week: currentWeek,
+                            })}
+                            title={p.rakeback_since
+                              ? `${p.rakeback_pct} % sur ${BASIS_LABEL[p.rakeback_basis]}, en vigueur depuis le ${p.rakeback_since}`
+                              : `Aucune période enregistrée — défaut global (settings) : ${p.rakeback_pct} % sur ${BASIS_LABEL[p.rakeback_basis]}`}
+                            style={{ background: "transparent",
+                                     border: `1px solid ${p.rakeback_is_default ? "rgba(255,255,255,0.06)" : "rgba(255,255,255,0.12)"}`,
+                                     borderRadius: 6, padding: "3px 10px", cursor: "pointer",
+                                     color: p.rakeback_is_default ? "#555568" : "#E8E8EE", fontSize: 12, fontWeight: 700 }}>
+                      {p.rakeback_pct} %
+                      <span style={{ fontSize: 10, fontWeight: 500, color: "#8888A0", marginLeft: 4 }}>
+                        {BASIS_LABEL[p.rakeback_basis]}
+                      </span>
+                      {p.rakeback_is_default && (
+                        <span style={{ fontSize: 9, color: "#555568", marginLeft: 4 }}>déf.</span>
+                      )}
                     </button>
                   </td>
                   <td style={TD}>{p.member_id ?? <span style={{ color: "#555568" }}>—</span>}</td>
@@ -322,6 +360,71 @@ export default function NexaPokerClient({ currentWeek, today }: { currentWeek: s
             </button>
             <button onClick={() => setEditing(null)} style={{ ...INPUT, cursor: "pointer", color: "#8888A0" }}>Annuler</button>
           </div>
+        </div>
+      )}
+
+      {/* ── Édition du rakeback ───────────────────────────────────────── */}
+      {editingRb && (
+        <div style={{ ...CARD, borderColor: "rgba(240,185,11,0.35)" }}>
+          <div style={{ fontSize: 13, fontWeight: 600, color: "#E8E8EE", marginBottom: 4 }}>
+            Rakeback — {editingRb.player.name}
+          </div>
+          <div style={{ fontSize: 12, color: "#8888A0", marginBottom: 12 }}>
+            Même modèle que la part d'action : la période en cours sera close la semaine précédente et une
+            nouvelle démarrera à la semaine choisie. L'historique n'est jamais modifié — c'est lui qui permet
+            de recalculer une semaine passée avec le % qui s'appliquait alors.
+            {editingRb.player.rakeback_since
+              ? <> Période actuelle : {editingRb.player.rakeback_pct} % sur {BASIS_LABEL[editingRb.player.rakeback_basis]} depuis
+                  le {editingRb.player.rakeback_since}.</>
+              : <> Aucune période enregistrée : le défaut global de settings s'applique
+                  ({editingRb.player.rakeback_pct} % sur {BASIS_LABEL[editingRb.player.rakeback_basis]}).</>}
+          </div>
+          <div style={{ display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
+            <label style={{ fontSize: 12, color: "#8888A0", display: "flex", gap: 6, alignItems: "center" }}>
+              Rakeback %
+              <input value={editingRb.pct} inputMode="decimal" style={{ ...INPUT, width: 80, textAlign: "right" }}
+                     onChange={e => setEditingRb({ ...editingRb, pct: e.target.value })} />
+            </label>
+            <label style={{ fontSize: 12, color: "#8888A0", display: "flex", gap: 6, alignItems: "center" }}>
+              Assiette
+              <select value={editingRb.basis} style={{ ...INPUT, cursor: "pointer" }}
+                      onChange={e => setEditingRb({ ...editingRb, basis: e.target.value as Basis })}>
+                <option value="gross_rake">Rake brut</option>
+                <option value="affiliate_commission">Commission d'affiliation</option>
+              </select>
+            </label>
+            <label style={{ fontSize: 12, color: "#8888A0", display: "flex", gap: 6, alignItems: "center" }}>
+              Makeup en cours
+              <select value={editingRb.carry} style={{ ...INPUT, cursor: "pointer" }}
+                      onChange={e => setEditingRb({ ...editingRb, carry: e.target.value as MakeupCarry })}>
+                <option value="carry">Reporter</option>
+                <option value="reset">Purger</option>
+              </select>
+            </label>
+            <label style={{ fontSize: 12, color: "#8888A0", display: "flex", gap: 6, alignItems: "center" }}>
+              À effet du (lundi)
+              <input type="date" value={editingRb.week} style={INPUT}
+                     onChange={e => setEditingRb({ ...editingRb, week: e.target.value })} />
+            </label>
+            <button disabled={busy} onClick={async () => {
+              const ok = await post("/api/nexapoker/rakeback",
+                { player_id: editingRb.player.player_id, pct: parseFloat(editingRb.pct.replace(",", ".")),
+                  basis: editingRb.basis, makeup_carry: editingRb.carry, start_week: editingRb.week },
+                j => `Rakeback enregistré${j.closed_previous ? ` — période précédente close au ${j.closed_previous}` : ""}.`);
+              if (ok) setEditingRb(null);
+            }} style={{ padding: "8px 16px", borderRadius: 8, border: "none", background: "#10B981", color: "#0B0D12", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>
+              Enregistrer
+            </button>
+            <button onClick={() => setEditingRb(null)} style={{ ...INPUT, cursor: "pointer", color: "#8888A0" }}>Annuler</button>
+          </div>
+          {/* Le choix n'a d'effet qu'au changement d'assiette, et il est loin d'être neutre. */}
+          {editingRb.basis !== editingRb.player.rakeback_basis && (
+            <div style={{ fontSize: 11, color: "#F0B90B", marginTop: 10 }}>
+              Tu changes l'assiette ({BASIS_LABEL[editingRb.player.rakeback_basis]} → {BASIS_LABEL[editingRb.basis]}).
+              « Reporter » applique un makeup accumulé sur l'ancienne assiette à la nouvelle — deux unités
+              différentes. « Purger » repart de zéro à cette semaine.
+            </div>
+          )}
         </div>
       )}
 

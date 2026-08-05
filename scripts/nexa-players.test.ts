@@ -28,7 +28,9 @@ import {
   getNexaPlayersOn, getNexaPlayerWeeksOn, setActionShareOn, getActionSharesOn,
   createNexaPlayerOn, getUnreconciledOn, linkRowToPlayerOn, backfillPlayerIdOn,
   previousWeek, currentWeekMonday, addMovementOn, getMovementsOn, deleteMovementOn,
+  setRakebackOn, getRakebackPeriodsOn, getNexaRakebackDefaultsOn,
 } from "../lib/funnels/nexa/players";
+import { computeRakeback } from "../lib/funnels/nexa/rakeback-engine";
 import { commitWeekOn } from "../lib/funnels/nexa/affiliate-ingest";
 import { getLeadAnomaliesOn } from "../lib/funnels/nexa/lead-promotion";
 import type { RawAffiliateRow } from "../lib/funnels/nexa/affiliate-deal";
@@ -194,6 +196,149 @@ console.log("\n══ Part d'action — append-only ══");
   check("semaine non-lundi refusée", !setActionShareOn(db, { player_id: p.player_id, pct: 30, start_week: "2026-07-28" }).ok);
   check("pct > 100 refusé", !setActionShareOn(db, { player_id: p.player_id, pct: 150, start_week: W3 }).ok);
   check("joueur inexistant refusé", !setActionShareOn(db, { player_id: 9999, pct: 30, start_week: W3 }).ok);
+  db.close();
+}
+
+console.log("\n══ Rakeback — append-only, SANS miroir ══");
+{
+  const db = freshDb();
+  const p = createNexaPlayerOn(db, { nickname: "LeCercle", member_id: "2231053", action_pct: 25, action_start_week: W1 });
+  if (!p.ok) throw new Error(p.error);
+
+  const first = setRakebackOn(db, {
+    player_id: p.player_id, pct: 30, basis: "gross_rake", makeup_carry: "carry", start_week: W1,
+  });
+  check("1re période créée", first.ok && first.created);
+  if (first.ok) eq("rien à fermer", first.closed_previous, null);
+
+  const bump = setRakebackOn(db, {
+    player_id: p.player_id, pct: 40, basis: "affiliate_commission", makeup_carry: "reset", start_week: W3,
+  });
+  check("nouvelle période créée", bump.ok && bump.created);
+  if (bump.ok) eq("période précédente fermée au lundi d'avant", bump.closed_previous, W2);
+
+  const hist = getRakebackPeriodsOn(db, p.player_id);
+  eq("2 périodes conservées", hist.length, 2);
+  eq("l'ancienne garde SON pct et SA base", [hist[1].pct, hist[1].basis], [30, "gross_rake"]);
+  eq("l'ancienne est bornée", [hist[1].start_week, hist[1].end_week], [W1, W2]);
+  eq("la nouvelle est ouverte", [hist[0].start_week, hist[0].end_week], [W3, null]);
+  eq("makeup_carry mémorisé par période", [hist[1].makeup_carry, hist[0].makeup_carry], ["carry", "reset"]);
+
+  // Le point qui distingue le rakeback de la part d'action : AUCUN miroir.
+  // player_game_deals.rakeback_pct doit rester à 0, comme avant l'ajout.
+  const deal = db.prepare(`SELECT rakeback_pct FROM player_game_deals d JOIN games g ON g.id = d.game_id
+                           WHERE d.player_id = ? AND g.name = 'NEXAPOKER'`).get(p.player_id) as { rakeback_pct: number };
+  eq("PAS de miroir : player_game_deals.rakeback_pct reste 0", deal.rakeback_pct, 0);
+
+  const same = setRakebackOn(db, {
+    player_id: p.player_id, pct: 45, basis: "gross_rake", makeup_carry: "carry", start_week: W3,
+  });
+  check("même semaine = correction sur place", same.ok && !same.created);
+  eq("toujours 2 périodes", getRakebackPeriodsOn(db, p.player_id).length, 2);
+  eq("pct, base et carry corrigés ensemble",
+     [getRakebackPeriodsOn(db, p.player_id)[0].pct,
+      getRakebackPeriodsOn(db, p.player_id)[0].basis,
+      getRakebackPeriodsOn(db, p.player_id)[0].makeup_carry],
+     [45, "gross_rake", "carry"]);
+
+  const back = setRakebackOn(db, {
+    player_id: p.player_id, pct: 10, basis: "gross_rake", makeup_carry: "carry", start_week: W1,
+  });
+  check("effet ANTÉRIEUR à la période courante → refusé", !back.ok);
+  if (!back.ok) check("message explicite", /postérieur|au moins égale/.test(back.error), back.error);
+  eq("historique intact après refus", getRakebackPeriodsOn(db, p.player_id).length, 2);
+
+  const bad = (o: any) => setRakebackOn(db, {
+    player_id: p.player_id, pct: 30, basis: "gross_rake", makeup_carry: "carry", start_week: W3, ...o,
+  });
+  check("semaine non-lundi refusée", !bad({ start_week: "2026-07-28" }).ok);
+  check("pct > 100 refusé", !bad({ pct: 150 }).ok);
+  check("pct négatif refusé", !bad({ pct: -1 }).ok);
+  check("base inconnue refusée", !bad({ basis: "net_rake" }).ok);
+  check("makeup_carry inconnu refusé", !bad({ makeup_carry: "maybe" }).ok);
+  check("joueur inexistant refusé", !setRakebackOn(db, {
+    player_id: 9999, pct: 30, basis: "gross_rake", makeup_carry: "carry", start_week: W3,
+  }).ok);
+  eq("aucun refus n'a écrit", getRakebackPeriodsOn(db, p.player_id).length, 2);
+  db.close();
+}
+
+console.log("\n══ Rakeback — défauts globaux (settings) ══");
+{
+  const db = freshDb();
+  // La fixture ne seed PAS les settings (ils sont posés hors du bloc de migration) :
+  // c'est exactement le cas « réglage absent », qui doit retomber sur 0 %.
+  eq("settings absents → 0 % / commission",
+     [getNexaRakebackDefaultsOn(db).defaultPct, getNexaRakebackDefaultsOn(db).defaultBasis],
+     [0, "affiliate_commission"]);
+
+  const set = db.prepare(`INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)`);
+  set.run("nexa_default_rakeback_pct", "35");
+  set.run("nexa_default_rakeback_basis", "gross_rake");
+  eq("settings lus", [getNexaRakebackDefaultsOn(db).defaultPct, getNexaRakebackDefaultsOn(db).defaultBasis],
+     [35, "gross_rake"]);
+
+  // Un réglage illisible ne doit JAMAIS produire un pourcentage inventé.
+  set.run("nexa_default_rakeback_pct", "beaucoup");
+  set.run("nexa_default_rakeback_basis", "net_rake");
+  eq("réglage illisible → repli sûr",
+     [getNexaRakebackDefaultsOn(db).defaultPct, getNexaRakebackDefaultsOn(db).defaultBasis],
+     [0, "affiliate_commission"]);
+  set.run("nexa_default_rakeback_pct", "150");
+  eq("pct hors bornes → repli sûr", getNexaRakebackDefaultsOn(db).defaultPct, 0);
+  db.close();
+}
+
+console.log("\n══ Rakeback — ce que la liste affiche ══");
+{
+  const db = freshDb();
+  db.prepare(`INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)`).run("nexa_default_rakeback_pct", "12");
+  const p = createNexaPlayerOn(db, { nickname: "LeCercle", member_id: "2231053", action_pct: 25, action_start_week: W1 });
+  if (!p.ok) throw new Error(p.error);
+
+  const before = getNexaPlayersOn(db)[0];
+  eq("sans période : le défaut settings s'affiche", before.rakeback_pct, 12);
+  eq("base par défaut", before.rakeback_basis, "affiliate_commission");
+  eq("aucune période enregistrée", before.rakeback_since, null);
+  check("marqué comme défaut", before.rakeback_is_default);
+
+  setRakebackOn(db, { player_id: p.player_id, pct: 40, basis: "gross_rake", makeup_carry: "carry", start_week: W1 });
+  const after = getNexaPlayersOn(db)[0];
+  eq("après saisie : le % du joueur", after.rakeback_pct, 40);
+  eq("sa base", after.rakeback_basis, "gross_rake");
+  eq("depuis quand", after.rakeback_since, W1);
+  check("ce n'est plus un défaut", !after.rakeback_is_default);
+
+  // La liste ne montre QUE la période en cours, jamais la période close.
+  setRakebackOn(db, { player_id: p.player_id, pct: 50, basis: "gross_rake", makeup_carry: "carry", start_week: W3 });
+  const latest = getNexaPlayersOn(db)[0];
+  eq("période courante uniquement", [latest.rakeback_pct, latest.rakeback_since], [50, W3]);
+  db.close();
+}
+
+console.log("\n══ Rakeback — les périodes lues pilotent vraiment le moteur ══");
+{
+  const db = freshDb();
+  const p = createNexaPlayerOn(db, { nickname: "ImLePAD", action_pct: 50, action_start_week: W1 });
+  if (!p.ok) throw new Error(p.error);
+  setRakebackOn(db, { player_id: p.player_id, pct: 40, basis: "gross_rake", makeup_carry: "carry", start_week: W1 });
+
+  // Chaîne réelle d'ImLePAD, rejouée avec les périodes SORTIES DE LA BASE : c'est
+  // le contrat entre la couche données et le moteur qui est vérifié ici.
+  const r = computeRakeback(
+    [
+      { week_start: W1, gross_rake: 0, affiliate_commission: 0, check_ok: true, winloss: null },
+      { week_start: W2, gross_rake: -41.4, affiliate_commission: -15.26, check_ok: true, winloss: null },
+      { week_start: W3, gross_rake: 296.12, affiliate_commission: 119.44, check_ok: true, winloss: null },
+    ],
+    getRakebackPeriodsOn(db, p.player_id),
+    [],
+    getNexaRakebackDefaultsOn(db),
+  );
+  eq("la base du moteur vient de la période enregistrée", r.weeks[2].basis, "gross_rake");
+  eq("le pct aussi", r.weeks[2].rakeback_pct, 40);
+  check("makeup reporté sur l'assiette", Math.abs(r.weeks[2].base_net - 254.72) < 1e-9);
+  check("dû = 101.888", Math.abs(r.weeks[2].due - 101.888) < 1e-9);
   db.close();
 }
 

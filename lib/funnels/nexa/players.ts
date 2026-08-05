@@ -24,8 +24,40 @@ import { getDb } from "@/lib/db";
 import type BetterSqlite3 from "better-sqlite3";
 import { insertWalletTransaction } from "@/lib/queries";
 import { NEXA_GAME_NAME, nicknameKey, isMondayISO } from "./affiliate-ingest";
+import type { Basis, MakeupCarry, RakebackPeriod } from "./rakeback-engine";
 
 type DB = BetterSqlite3.Database;
+
+// ── Défauts globaux de rakeback (settings) ────────────────────────────────
+// Le % de rakeback n'a PAS de miroir dans player_game_deals, contrairement à la
+// part d'action. C'est délibéré : ce cache ne porte que la période courante, et
+// le moteur a interdiction de le lire (il appliquerait le % d'aujourd'hui à une
+// semaine d'il y a deux mois). nexa_player_rakeback est la seule vérité.
+
+const BASES: readonly Basis[] = ["gross_rake", "affiliate_commission"];
+const CARRIES: readonly MakeupCarry[] = ["carry", "reset"];
+
+export type NexaRakebackDefaults = { defaultPct: number; defaultBasis: Basis };
+
+/** Défauts appliqués aux semaines qu'aucune période ne couvre. */
+export function getNexaRakebackDefaultsOn(db: DB): NexaRakebackDefaults {
+  const read = (key: string): string | null => {
+    const r = db.prepare(`SELECT value FROM settings WHERE key = ?`).get(key) as { value: string } | undefined;
+    return r?.value ?? null;
+  };
+  const pct = Number(read("nexa_default_rakeback_pct"));
+  const basis = read("nexa_default_rakeback_basis");
+  return {
+    // Un réglage absent ou illisible retombe sur 0 % : ne jamais deviner un
+    // pourcentage — 0 ne doit rien au joueur, une valeur inventée si.
+    defaultPct: Number.isFinite(pct) && pct >= 0 && pct <= 100 ? pct : 0,
+    defaultBasis: BASES.includes(basis as Basis) ? (basis as Basis) : "affiliate_commission",
+  };
+}
+
+export function getNexaRakebackDefaults(): NexaRakebackDefaults {
+  return getNexaRakebackDefaultsOn(getDb());
+}
 
 function gameId(db: DB): number {
   const g = db.prepare(`SELECT id FROM games WHERE name = ?`).get(NEXA_GAME_NAME) as { id: number } | undefined;
@@ -59,6 +91,14 @@ export type NexaPlayerRow = {
   /** Période EN COURS uniquement (end_week IS NULL). 0 quand rien n'est enregistré. */
   action_pct: number;
   action_since: string | null;
+  /** Rakeback EN COURS. À défaut de période enregistrée : les valeurs de settings. */
+  rakeback_pct: number;
+  rakeback_basis: Basis;
+  rakeback_makeup_carry: MakeupCarry;
+  /** null = aucune période enregistrée, donc le défaut global s'applique. */
+  rakeback_since: string | null;
+  /** true quand la ligne affiche le défaut settings et non un choix explicite. */
+  rakeback_is_default: boolean;
   weeks_count: number;
   total_rake: number;
   total_commission: number;
@@ -74,9 +114,18 @@ export type NexaPlayerRow = {
   lead_id: number | null;
 };
 
+/** Ligne SQL brute : le rakeback y est encore nullable, avant repli sur settings. */
+type NexaPlayerRawRow = Omit<
+  NexaPlayerRow, "rakeback_pct" | "rakeback_basis" | "rakeback_makeup_carry" | "rakeback_is_default"
+> & {
+  rb_pct: number | null;
+  rb_basis: Basis | null;
+  rb_makeup_carry: MakeupCarry | null;
+};
+
 export function getNexaPlayersOn(db: DB): NexaPlayerRow[] {
   const gid = gameId(db);
-  return db.prepare(`
+  const rows = db.prepare(`
     SELECT
       p.id AS player_id,
       p.name,
@@ -85,6 +134,10 @@ export function getNexaPlayersOn(db: DB): NexaPlayerRow[] {
       w.report_nickname,
       COALESCE(a.pct, 0) AS action_pct,
       a.start_week AS action_since,
+      rb.pct AS rb_pct,
+      rb.basis AS rb_basis,
+      rb.makeup_carry AS rb_makeup_carry,
+      rb.start_week AS rakeback_since,
       COALESCE(w.weeks_count, 0) AS weeks_count,
       COALESCE(w.total_rake, 0) AS total_rake,
       COALESCE(w.total_commission, 0) AS total_commission,
@@ -103,6 +156,12 @@ export function getNexaPlayersOn(db: DB): NexaPlayerRow[] {
              ROW_NUMBER() OVER (PARTITION BY player_id ORDER BY start_week DESC, id DESC) AS rn
       FROM nexa_player_action_shares WHERE end_week IS NULL
     ) a ON a.player_id = p.id AND a.rn = 1
+    -- Rakeback en cours, même règle : une seule période ouverte, la plus récente.
+    LEFT JOIN (
+      SELECT player_id, pct, basis, makeup_carry, start_week,
+             ROW_NUMBER() OVER (PARTITION BY player_id ORDER BY start_week DESC, id DESC) AS rn
+      FROM nexa_player_rakeback WHERE end_week IS NULL
+    ) rb ON rb.player_id = p.id AND rb.rn = 1
     LEFT JOIN (
       SELECT player_id,
              COUNT(*) AS weeks_count,
@@ -130,7 +189,18 @@ export function getNexaPlayersOn(db: DB): NexaPlayerRow[] {
     -- Un joueur est « NEXA » s'il porte un lien vers ce game, par ID ou par pseudo.
     WHERE pgi.player_id IS NOT NULL OR nl.player_id IS NOT NULL
     ORDER BY COALESCE(w.total_rake, 0) DESC, p.name
-  `).all({ gid }) as NexaPlayerRow[];
+  `).all({ gid }) as NexaPlayerRawRow[];
+
+  // Repli sur les défauts globaux, une seule lecture de settings pour la liste.
+  // `rakeback_is_default` dit à l'écran que le chiffre affiché n'est pas un choix.
+  const def = getNexaRakebackDefaultsOn(db);
+  return rows.map(({ rb_pct, rb_basis, rb_makeup_carry, ...r }) => ({
+    ...r,
+    rakeback_pct: rb_pct ?? def.defaultPct,
+    rakeback_basis: rb_basis ?? def.defaultBasis,
+    rakeback_makeup_carry: rb_makeup_carry ?? "carry",
+    rakeback_is_default: rb_pct === null,
+  }));
 }
 
 export function getNexaPlayers(): NexaPlayerRow[] { return getNexaPlayersOn(getDb()); }
@@ -282,6 +352,114 @@ export function getActionSharesOn(db: DB, playerId: number) {
     `SELECT id, pct, start_week, end_week, note, created_at
        FROM nexa_player_action_shares WHERE player_id = ? ORDER BY start_week DESC, id DESC`
   ).all(playerId) as { id: number; pct: number; start_week: string; end_week: string | null; note: string | null; created_at: string }[];
+}
+
+// ── Rakeback ──────────────────────────────────────────────────────────────
+
+export type RakebackResult =
+  | { ok: true; created: boolean; closed_previous: string | null; player_id: number }
+  | { ok: false; error: string };
+
+export type SetRakebackArgs = {
+  player_id: number;
+  pct: number;
+  basis: Basis;
+  /** Au changement de base : reporter le makeup en cours, ou le purger. */
+  makeup_carry: MakeupCarry;
+  start_week: string;
+  note?: string | null;
+};
+
+/**
+ * Enregistre un % de rakeback à effet d'une semaine donnée.
+ *
+ * Strictement le même modèle que setActionShareOn — append-only, période en
+ * cours close à la semaine précédente, correction sur place si la semaine
+ * demandée EST celle de la période ouverte — avec deux champs en plus, `basis`
+ * et `makeup_carry`, que la table exige (basis est NOT NULL sans défaut).
+ *
+ * PAS DE MIROIR vers player_game_deals, contrairement à la part d'action. Ce
+ * cache ne porte que la période courante ; le moteur, lui, rejoue l'historique.
+ * Y écrire le rakeback créerait exactement la source de vérité concurrente que
+ * l'encadré en tête de fichier interdit. player_game_deals.rakeback_pct reste
+ * donc à 0 pour NEXAPOKER, comme aujourd'hui.
+ */
+export function setRakebackOn(db: DB, args: SetRakebackArgs): RakebackResult {
+  const { player_id, pct, basis, makeup_carry, start_week } = args;
+  if (!Number.isFinite(pct) || pct < 0 || pct > 100) {
+    return { ok: false, error: "Le rakeback doit être un nombre entre 0 et 100." };
+  }
+  if (!BASES.includes(basis)) {
+    return { ok: false, error: `Base « ${basis} » invalide — attendu gross_rake ou affiliate_commission.` };
+  }
+  if (!CARRIES.includes(makeup_carry)) {
+    return { ok: false, error: `Report de makeup « ${makeup_carry} » invalide — attendu carry ou reset.` };
+  }
+  if (!isMondayISO(start_week)) {
+    return { ok: false, error: `Semaine d'effet « ${start_week} » invalide — attendu la date d'un LUNDI.` };
+  }
+  if (!db.prepare(`SELECT 1 FROM players WHERE id = ?`).get(player_id)) {
+    return { ok: false, error: `Joueur ${player_id} introuvable.` };
+  }
+
+  const run = db.transaction((): { created: boolean; closed: string | null } => {
+    const open = db.prepare(
+      `SELECT id, pct, basis, start_week FROM nexa_player_rakeback
+        WHERE player_id = ? AND end_week IS NULL ORDER BY start_week DESC, id DESC LIMIT 1`
+    ).get(player_id) as { id: number; pct: number; basis: Basis; start_week: string } | undefined;
+
+    let created = true, closed: string | null = null;
+    if (open && open.start_week === start_week) {
+      db.prepare(`UPDATE nexa_player_rakeback SET pct = ?, basis = ?, makeup_carry = ?, note = ? WHERE id = ?`)
+        .run(pct, basis, makeup_carry, args.note ?? null, open.id);
+      created = false;
+    } else {
+      if (open) {
+        // Même refus que pour la part d'action : une période qui commencerait
+        // APRÈS la semaine demandée produirait un historique qui se chevauche.
+        if (open.start_week > start_week) {
+          throw new Error(
+            `Un rakeback court déjà depuis le ${open.start_week}, postérieur au ${start_week} demandé. ` +
+            `Choisis une semaine d'effet au moins égale à ${open.start_week}.`
+          );
+        }
+        closed = previousWeek(start_week);
+        db.prepare(`UPDATE nexa_player_rakeback SET end_week = ? WHERE id = ?`).run(closed, open.id);
+      }
+      db.prepare(
+        `INSERT INTO nexa_player_rakeback (player_id, pct, basis, makeup_carry, start_week, note)
+         VALUES (?, ?, ?, ?, ?, ?)`
+      ).run(player_id, pct, basis, makeup_carry, start_week, args.note ?? null);
+    }
+    return { created, closed };
+  });
+
+  try {
+    const r = run();
+    return { ok: true, created: r.created, closed_previous: r.closed, player_id };
+  } catch (e: any) {
+    return { ok: false, error: e?.message ?? String(e) };
+  }
+}
+
+export function setRakeback(args: SetRakebackArgs): RakebackResult {
+  return setRakebackOn(getDb(), args);
+}
+
+/**
+ * Historique complet des périodes de rakeback d'un joueur, au format exact
+ * attendu par computeRakeback(). C'est CETTE fonction qui alimentera le moteur
+ * à l'étape 7 — jamais player_game_deals, jamais getPlayerWalletStats.
+ */
+export function getRakebackPeriodsOn(db: DB, playerId: number): RakebackPeriod[] {
+  return db.prepare(
+    `SELECT pct, basis, makeup_carry, start_week, end_week
+       FROM nexa_player_rakeback WHERE player_id = ? ORDER BY start_week DESC, id DESC`
+  ).all(playerId) as RakebackPeriod[];
+}
+
+export function getRakebackPeriods(playerId: number): RakebackPeriod[] {
+  return getRakebackPeriodsOn(getDb(), playerId);
 }
 
 // ── Création manuelle ─────────────────────────────────────────────────────

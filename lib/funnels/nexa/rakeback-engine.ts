@@ -16,6 +16,20 @@
 // COURANTE : elle appliquerait le % d'aujourd'hui à une semaine d'il y a deux
 // mois. La vérité historisée est nexa_player_action_shares / nexa_player_rakeback,
 // et c'est elle seule qui entre ici. (Constat de l'audit money-auditor.)
+//
+// SEMAINE EN ÉCHEC DE CONTRÔLE (check_ok = 0) : elle SORT DU CALCUL — dû 0,
+// signalée — et la chaîne REPART À ZÉRO la semaine suivante. Le makeup en cours
+// n'est pas propagé au travers (c'est ça, « ne pas propager un makeup douteux »),
+// mais l'aval n'est PAS gelé : les semaines suivantes se calculent normalement.
+// Un écart accepté avec motif (arrondi NEXA) ne doit pas rendre un joueur
+// incalculable à vie ; et si la semaine est corrigée plus tard, le rejeu se
+// recorrige seul.
+//
+// UN TOTAL INCOMPLET DOIT SE VOIR. Les totaux ne somment QUE les semaines `ok`
+// et se réconcilient entre eux ; ce qu'ils excluent est exposé à côté dans
+// `blocked_weeks`. Et `net_operator` vaut null — pas 0 — dès qu'une semaine `ok`
+// n'a pas son win/loss : un total amputé ne doit jamais ressembler à un chiffre
+// valide. Le compteur `weeks_missing_winloss` dit pourquoi.
 // ─────────────────────────────────────────────────────────────────────────────
 
 export type Basis = "gross_rake" | "affiliate_commission";
@@ -28,7 +42,7 @@ export type WeekInput = {
   gross_rake: number;
   /** Affiliate Payment du report. Peut être négatif. */
   affiliate_commission: number;
-  /** false = le recalcul ne retombe pas sur le report. Coupe la chaîne. */
+  /** false = le recalcul ne retombe pas sur le report. Sort la semaine du calcul. */
   check_ok: boolean;
   /** Saisie manuelle d'Hugo. null = non saisi — on ne suppose JAMAIS 0. */
   winloss: number | null;
@@ -53,7 +67,7 @@ export type EngineConfig = {
 
 export type WeekResult = {
   week_start: string;
-  /** blocked = non calculée ET non propagée : la chaîne s'arrête là. */
+  /** blocked = hors calcul et hors totaux ; la chaîne repart de zéro après elle. */
   status: "ok" | "blocked";
   blocked_reason: string | null;
 
@@ -78,7 +92,8 @@ export type WeekResult = {
   /** null tant que le win/loss n'est pas saisi. */
   action_amount: number | null;
 
-  /** Rappel, pour l'affichage. */
+  /** Rappels, pour l'affichage et pour agréger au même périmètre que le reste. */
+  gross_rake: number;
   commission: number;
   /** commission − dû + action. null si le win/loss manque : le net serait faux. */
   net_operator: number | null;
@@ -88,19 +103,38 @@ export type EngineWarning = { week_start: string; message: string };
 
 export type EngineResult = {
   weeks: WeekResult[];
+  /**
+   * MÊME PÉRIMÈTRE POUR TOUS : uniquement les semaines `ok`. Les cinq totaux se
+   * réconcilient donc entre eux (net = commission − due + action). Ce qui en est
+   * exclu est exposé dans `blocked_weeks`, jamais escamoté.
+   */
   totals: {
     gross_rake: number;
     commission: number;
     due: number;
-    action_amount: number;
-    net_operator: number;
-    /** Nombre de semaines dont le net est incalculable faute de win/loss. */
+    /** null si un win/loss manque : sommer les autres ferait passer une semaine
+     *  non renseignée pour une semaine à zéro. */
+    action_amount: number | null;
+    /**
+     * null dès qu'une semaine `ok` n'a pas son win/loss : le net serait amputé
+     * du `commission − dû` de cette semaine et passerait pour un chiffre juste.
+     * Voir `weeks_missing_winloss`.
+     */
+    net_operator: number | null;
+    /** Nombre de semaines `ok` dont le net est incalculable faute de win/loss. */
     weeks_missing_winloss: number;
+  };
+  /** Ce que les totaux N'INCLUENT PAS. Existe pour que rien ne disparaisse en silence. */
+  blocked_weeks: {
+    count: number;
+    week_starts: string[];
+    gross_rake: number;
+    commission: number;
+    /** null si l'une de ces semaines n'a pas son win/loss (même règle que le net). */
+    action_amount: number | null;
   };
   /** Makeup restant à la fin de la chaîne. <= 0. */
   makeup_final: number;
-  /** Semaines bloquées par un contrôle en échec. */
-  blocked: string[];
   warnings: EngineWarning[];
 };
 
@@ -131,10 +165,10 @@ function periodAt<T extends { start_week: string; end_week: string | null }>(
  * C'est la différence qui compte : avec S1 à −200 puis S2 à +300 et 50 %, le dû
  * de S2 vaut 50 — (300−200)×50 % — et non 150−200.
  *
- * SEMAINE EN ÉCHEC DE CONTRÔLE : la chaîne est COUPÉE. Cette semaine et TOUTES
- * les suivantes passent en `blocked`, sans dû et sans propagation. Une assiette
- * fausse contaminerait tout l'aval ; mieux vaut ne rien annoncer que d'annoncer
- * faux. Le déblocage passe par la correction de la semaine dans la grille.
+ * SEMAINE EN ÉCHEC DE CONTRÔLE : elle sort du calcul (dû 0, `blocked`), le
+ * makeup en cours n'est PAS propagé au travers, et la chaîne repart de zéro la
+ * semaine suivante. L'aval n'est pas gelé. Le makeup abandonné au passage est
+ * signalé dans `warnings` : il profite au joueur, ça ne doit pas être muet.
  */
 export function computeRakeback(
   weeks: WeekInput[],
@@ -147,10 +181,8 @@ export function computeRakeback(
 
   const out: WeekResult[] = [];
   const warnings: EngineWarning[] = [];
-  const blocked: string[] = [];
 
   let makeup = 0;
-  let chainCut = false;
   let prevPeriodKey: string | null = null;
   let prevBasis: Basis | null = null;
 
@@ -162,29 +194,38 @@ export function computeRakeback(
     const actionPct = ap?.pct ?? 0;
     const base = basis === "gross_rake" ? w.gross_rake : w.affiliate_commission;
     const commission = w.affiliate_commission;
+    const periodKey = rp ? `${rp.start_week}|${rp.pct}|${rp.basis}` : "default";
 
-    // Part d'action — flux INDÉPENDANT du rakeback, y compris quand la chaîne de
-    // makeup est coupée : une assiette de rake fausse ne rend pas le win/loss faux.
+    // Part d'action — flux INDÉPENDANT du rakeback, y compris sur une semaine
+    // bloquée : une assiette de rake fausse ne rend pas le win/loss faux.
     const actionAmount = w.winloss === null ? null : (w.winloss * actionPct) / 100;
 
-    if (chainCut || !w.check_ok) {
-      if (!chainCut) chainCut = true;
-      blocked.push(w.week_start);
+    if (!w.check_ok) {
+      // La semaine sort du calcul, et le makeup en cours s'arrête là : on ne
+      // propage pas un report adossé à une assiette qu'on sait fausse. La
+      // semaine suivante repart de zéro — l'aval n'est pas gelé.
+      if (makeup < -EPS) {
+        warnings.push({
+          week_start: w.week_start,
+          message: `Semaine en échec de contrôle : le makeup de ${makeup.toFixed(2)} en cours n'est pas reporté au-delà `
+                 + `et la chaîne repart de zéro. Corriger cette semaine puis relire rétablit le report.`,
+        });
+      }
       out.push({
         week_start: w.week_start, status: "blocked",
-        blocked_reason: w.check_ok
-          ? "Chaîne coupée par une semaine antérieure en échec de contrôle."
-          : "Le recalcul de cette semaine ne retombe pas sur le report — assiette non fiable.",
-        basis, rakeback_pct: pct, base, makeup_in: makeup, base_net: 0, due: 0, makeup_out: makeup,
+        blocked_reason: "Le recalcul de cette semaine ne retombe pas sur le report — assiette non fiable.",
+        basis, rakeback_pct: pct, base, makeup_in: makeup, base_net: 0, due: 0, makeup_out: 0,
         action_pct: actionPct, winloss: w.winloss, action_amount: actionAmount,
-        commission, net_operator: null,
+        gross_rake: w.gross_rake, commission, net_operator: null,
       });
+      makeup = 0;
+      prevPeriodKey = periodKey;
+      prevBasis = basis;
       continue;
     }
 
     // Changement de période : le makeup se reporte ou repart de zéro, selon le
     // choix EXPLICITE porté par la nouvelle période.
-    const periodKey = rp ? `${rp.start_week}|${rp.pct}|${rp.basis}` : "default";
     if (prevPeriodKey !== null && periodKey !== prevPeriodKey) {
       if (rp?.makeup_carry === "reset") {
         if (makeup < -EPS) {
@@ -213,8 +254,12 @@ export function computeRakeback(
     let makeupOut = 0;
     if (baseNet <= EPS) {
       // Assiette nette négative ou nulle : rien n'est dû, le déficit se reporte.
+      // Math.min borne à 0 : dans la fenêtre 0 < base_net <= EPS, base_net est
+      // positif et deviendrait un makeup POSITIF, donc un bonus d'assiette la
+      // semaine suivante — l'inverse d'un makeup. Le type promet <= 0 : on tient
+      // la promesse, y compris sur un montant dérisoire. (Et pas de -0.)
       due = 0;
-      makeupOut = baseNet;
+      makeupOut = Math.min(baseNet, 0) || 0;
     } else {
       due = (baseNet * pct) / 100;
       makeupOut = 0;
@@ -225,24 +270,48 @@ export function computeRakeback(
       week_start: w.week_start, status: "ok", blocked_reason: null,
       basis, rakeback_pct: pct, base, makeup_in: makeupIn, base_net: baseNet, due, makeup_out: makeupOut,
       action_pct: actionPct, winloss: w.winloss, action_amount: actionAmount,
-      commission,
+      gross_rake: w.gross_rake, commission,
       net_operator: actionAmount === null ? null : commission - due + actionAmount,
     });
   }
 
+  // Un seul périmètre pour tous les totaux : les semaines `ok`. Ce qui en sort
+  // est repris tel quel dans blocked_weeks — aucune ligne ne s'évapore.
   const okWeeks = out.filter(w => w.status === "ok");
+  const blockedWeeks = out.filter(w => w.status === "blocked");
+
+  const okMissingWinloss = okWeeks.filter(w => w.winloss === null).length;
+  const sumCommission = okWeeks.reduce((s, w) => s + w.commission, 0);
+  const sumDue = okWeeks.reduce((s, w) => s + w.due, 0);
+  // Ces deux sommes n'ont de sens QUE si tous les win/loss du périmètre sont
+  // saisis : sinon un `?? 0` ferait passer une semaine non renseignée pour une
+  // semaine à zéro. Incalculable se dit null, pas 0.
+  const sumAction = okMissingWinloss > 0
+    ? null
+    : okWeeks.reduce((s, w) => s + (w.action_amount ?? 0), 0);
+
+  const blockedMissingWinloss = blockedWeeks.some(w => w.winloss === null);
+
   return {
     weeks: out,
     totals: {
-      gross_rake: ordered.reduce((s, w) => s + w.gross_rake, 0),
-      commission: ordered.reduce((s, w) => s + w.affiliate_commission, 0),
-      due: okWeeks.reduce((s, w) => s + w.due, 0),
-      action_amount: okWeeks.reduce((s, w) => s + (w.action_amount ?? 0), 0),
-      net_operator: okWeeks.reduce((s, w) => s + (w.net_operator ?? 0), 0),
-      weeks_missing_winloss: okWeeks.filter(w => w.winloss === null).length,
+      gross_rake: okWeeks.reduce((s, w) => s + w.gross_rake, 0),
+      commission: sumCommission,
+      due: sumDue,
+      action_amount: sumAction,
+      net_operator: sumAction === null ? null : sumCommission - sumDue + sumAction,
+      weeks_missing_winloss: okMissingWinloss,
+    },
+    blocked_weeks: {
+      count: blockedWeeks.length,
+      week_starts: blockedWeeks.map(w => w.week_start),
+      gross_rake: blockedWeeks.reduce((s, w) => s + w.gross_rake, 0),
+      commission: blockedWeeks.reduce((s, w) => s + w.commission, 0),
+      action_amount: blockedMissingWinloss
+        ? null
+        : blockedWeeks.reduce((s, w) => s + (w.action_amount ?? 0), 0),
     },
     makeup_final: makeup,
-    blocked,
     warnings,
   };
 }
