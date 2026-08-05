@@ -62,12 +62,15 @@ eq("mondayOf(dimanche)", mondayOf("2026-07-19"), "2026-07-13");
 eq("lifetime = pas de borne", weekWindowFromParisDates(undefined, undefined), { from: null, to: null });
 eq("bornes ancrées sur le lundi", weekWindowFromParisDates("2026-07-15", "2026-07-29"),
    { from: "2026-07-13", to: "2026-07-27" });
-// Ni trou ni recouvrement entre deux semaines consécutives.
+// Ni trou ni recouvrement : une semaine donnée tombe dans UNE seule des deux
+// fenêtres consécutives. Oracle indépendant — on interroge inWindow via
+// aggregateDashboard plutôt que de recomparer mondayOf à lui-même.
 const semA = weekWindowFromParisDates("2026-07-20", "2026-07-26");
 const semB = weekWindowFromParisDates("2026-07-27", "2026-08-02");
-check("semaines consécutives disjointes", semA.to !== semB.from,
-      `${JSON.stringify(semA)} vs ${JSON.stringify(semB)}`);
-check("et contiguës", mondayOf("2026-07-27") === semB.from);
+const sonde = (w: WeekWindow) =>
+  aggregateDashboard([chain(1, "A", [wk("2026-07-27", 100, 40, 0)])], w).weeks_in_period.length;
+eq("la semaine du 27 est dans la fenêtre B", sonde(semB), 1);
+eq("et pas dans la fenêtre A", sonde(semA), 0);
 eq("libellé lifetime", weekWindowLabel(ALL), "toutes les semaines saisies");
 eq("libellé une semaine", weekWindowLabel({ from: "2026-07-13", to: "2026-07-13" }), "semaine du 2026-07-13");
 
@@ -122,8 +125,21 @@ near("Σ semaines = total (commission)", multi.weeks.reduce((s, w) => s + w.comm
 near("Σ joueurs = total (dû)", multi.players.reduce((s, p) => s + p.due, 0), multi.totals.due);
 near("Σ semaines = total (dû)", multi.weeks.reduce((s, w) => s + w.due, 0), multi.totals.due);
 near("Σ joueurs = total (action)", multi.players.reduce((s, p) => s + (p.action_amount ?? 0), 0), multi.totals.action_amount);
+near("Σ semaines = total (action)", multi.weeks.reduce((s, w) => s + (w.action_amount ?? 0), 0), multi.totals.action_amount);
 near("net = commission − dû", multi.totals.net_affiliation, multi.totals.commission - multi.totals.due);
 near("total = net + action", multi.totals.total, multi.totals.net_affiliation + (multi.totals.action_amount ?? 0));
+
+// ASYMÉTRIE ASSUMÉE, et documentée ici pour qu'elle ne surprenne pas au
+// branchement du graph : un win/loss manquant rend le TOTAL incalculable, mais
+// une semaine dont tous les win/loss sont saisis reste chiffrable. Les deux
+// granularités disent vrai — c'est le périmètre qui diffère, pas la règle.
+const asym = aggregateDashboard([
+  chain(1, "A", [wk("2026-07-13", 400, 160, 100), wk("2026-07-20", 400, 160, null)]),
+  chain(2, "B", [wk("2026-07-13", 200, 80, 50)]),
+], ALL);
+near("total incalculable dès qu'un win/loss manque", asym.totals.action_amount, null);
+near("mais la semaine complète reste chiffrable", asym.weeks[0].action_amount, 75);
+near("et la semaine incomplète, non", asym.weeks[1].action_amount, null);
 
 // ── 6. Semaines en échec de contrôle ───────────────────────────────────────
 console.log("\n6. Contrôle en échec : exclu des totaux, jamais escamoté");
@@ -140,6 +156,24 @@ eq("elle ne gonfle pas le compte de semaines", ko.weeks_in_period, ["2026-07-13"
 const koSeul = aggregateDashboard([chain(1, "A", [wk("2026-07-13", 600, 240, 0, false)])], ALL);
 eq("semaine seulement bloquée : hors du compte", koSeul.weeks_in_period, []);
 near("et son total vaut null, pas 0", koSeul.weeks[0].total, null);
+// La même règle DOIT remonter au joueur et au total — c'est le trou que le
+// second passage money-auditor a trouvé : un reduce sur une liste vide rendait
+// 0, donc une carte « TOTAL 0,00 » verte là où rien n'est calculable.
+near("joueur entièrement bloqué : action null, pas 0", koSeul.players[0].action_amount, null);
+near("joueur entièrement bloqué : total null, pas 0", koSeul.players[0].total, null);
+near("total de la période : action null, pas 0", koSeul.totals.action_amount, null);
+near("total de la période : total null, pas 0", koSeul.totals.total, null);
+near("la commission reçue reste exposée", koSeul.totals.blocked_commission, 240);
+
+// ── 6-bis. Fenêtre entièrement vide ────────────────────────────────────────
+console.log("\n6-bis. Période sans aucune donnée");
+const vide = aggregateDashboard([chain(1, "A", [wk("2026-07-13", 1000, 400, 0)])],
+                                { from: "2026-01-05", to: "2026-01-05" });
+eq("aucun joueur retenu", vide.players.length, 0);
+eq("aucune semaine", vide.weeks_in_period, []);
+near("action null, pas 0", vide.totals.action_amount, null);
+near("total null, pas 0", vide.totals.total, null);
+near("commission 0 — là c'est vrai : rien n'a été encaissé", vide.totals.commission, 0);
 
 // ── 7. Joueur hors période ─────────────────────────────────────────────────
 console.log("\n7. Joueur sans semaine dans la fenêtre");

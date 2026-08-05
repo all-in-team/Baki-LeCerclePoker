@@ -41,7 +41,13 @@ export default function PeriodFilterBar({
     setWeekOpen(false);
     setPendingFilter(filter);
     startTransition(() => {
-      router.push(filter === "current" ? basePath : `${basePath}?filter=${filter}`);
+      // `?filter=current` est émis EXPLICITEMENT, y compris pour la semaine en
+      // cours. Auparavant « Cette semaine » renvoyait sur basePath nu : sur une
+      // page dont le défaut sans query n'est pas « current » (NEXAPOKER ouvre en
+      // lifetime, son report étant hebdomadaire et différé), le bouton était mort.
+      // Aucun changement pour les pages P&L : leur défaut sans query EST déjà
+      // « current », et computePeriodFilter("current") rend exactement ce défaut.
+      router.push(`${basePath}?filter=${filter}`);
     });
   }
 

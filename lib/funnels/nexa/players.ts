@@ -197,13 +197,33 @@ export function getNexaPlayersOn(db: DB): NexaPlayerRow[] {
   // Repli sur les défauts globaux, une seule lecture de settings pour la liste.
   // `rakeback_is_default` dit à l'écran que le chiffre affiché n'est pas un choix.
   const def = getNexaRakebackDefaultsOn(db);
-  return rows.map(({ rb_pct, rb_basis, rb_makeup_carry, ...r }) => ({
-    ...r,
-    rakeback_pct: rb_pct ?? def.defaultPct,
-    rakeback_basis: rb_basis ?? def.defaultBasis,
-    rakeback_makeup_carry: rb_makeup_carry ?? "carry",
-    rakeback_is_default: rb_pct === null,
-  }));
+
+  // UN JOUEUR, UNE LIGNE — garanti ici, à la source.
+  //
+  // La requête ci-dessus fait des LEFT JOIN sur player_game_ids, nexa_nickname_links
+  // et nexa_leads sans DISTINCT : un joueur qui porte DEUX pseudos de report (cas
+  // nominal — il change de pseudo dans la room) ou deux Member ID sortait deux fois.
+  // Tous ses montants étaient alors comptés double chez CHAQUE appelant qui somme :
+  // vue Agence (position nette, action déjà réglée), Σ rake / Σ commission de la
+  // table joueurs, et cartes du tableau de bord. Le piège : commission, dû et action
+  // doublant ensemble, la réconciliation interne restait vraie et ne signalait rien.
+  //
+  // Dédoublonner ici plutôt que chez chaque appelant tarit la source : un nouvel
+  // appelant hérite de la garantie sans avoir à y penser. La première ligne gagne —
+  // l'ORDER BY porte sur le rake, pas sur les colonnes jointes, donc les doublons
+  // sont adjacents et ne diffèrent que par le member_id / pseudo retenu.
+  // (Constat money-auditor 2026-08-05 ; aucun doublon en prod à cette date —
+  // 8 lignes pour 8 joueurs — c'était une bombe à retardement, pas un chiffre faux.)
+  const seen = new Set<number>();
+  return rows
+    .filter(r => { if (seen.has(r.player_id)) return false; seen.add(r.player_id); return true; })
+    .map(({ rb_pct, rb_basis, rb_makeup_carry, ...r }) => ({
+      ...r,
+      rakeback_pct: rb_pct ?? def.defaultPct,
+      rakeback_basis: rb_basis ?? def.defaultBasis,
+      rakeback_makeup_carry: rb_makeup_carry ?? "carry",
+      rakeback_is_default: rb_pct === null,
+    }));
 }
 
 export function getNexaPlayers(): NexaPlayerRow[] { return getNexaPlayersOn(getDb()); }

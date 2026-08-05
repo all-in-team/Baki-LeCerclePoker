@@ -23,6 +23,24 @@ export default function NexaKpiCards({ dash, rangeLabel }: {
   const t = dash.totals;
   const nWeeks = dash.weeks_in_period.length;
 
+  // TROIS ÉTATS, PAS DEUX. « Rien à dire » et « rien gagné » ne s'écrivent pas
+  // pareil : une période antérieure au premier report n'a AUCUNE donnée, elle ne
+  // vaut pas zéro. Le sélecteur propose 12 semaines alors que l'historique NEXA
+  // en couvre moins — le cas est à un clic.
+  const vide = nWeeks === 0 && t.blocked_weeks === 0;
+  if (vide) {
+    return (
+      <div style={{
+        background: "var(--bg-raised)", border: "1px solid var(--border)", borderRadius: 10,
+        padding: "22px 20px", marginBottom: 20, textAlign: "center",
+        color: "var(--text-dim)", fontSize: 13,
+      }}>
+        Aucune semaine saisie sur cette période ({rangeLabel}) — rien à afficher, ce qui n&apos;est
+        pas la même chose que zéro.
+      </div>
+    );
+  }
+
   // DEUX CHIFFRES SOUS LE MÊME MOT, C'EST UN BUG D'ÉCRAN. La vue Agence, plus bas
   // sur la page, affiche aussi « Commission encaissée » — mais au périmètre BRUT,
   // semaines en échec de contrôle comprises (choix documenté dans agency.ts : cet

@@ -157,6 +157,8 @@ export function aggregateDashboard(chains: PlayerChain[], window: WeekWindow): N
 
   let tCommission = 0, tDue = 0, tAction = 0;
   let anyMissing = false, tMissing = 0, tBlocked = 0, tBlockedCommission = 0;
+  /** Couples joueur×semaine CALCULÉS sur la période. 0 = rien de chiffrable. */
+  let tOkLines = 0;
 
   // DÉDUPLICATION OBLIGATOIRE. getNexaPlayersOn fait des LEFT JOIN sur
   // player_game_ids, nexa_nickname_links et nexa_leads sans DISTINCT : un joueur
@@ -184,7 +186,14 @@ export function aggregateDashboard(chains: PlayerChain[], window: WeekWindow): N
     const missing = ok.filter(w => w.winloss === null).length;
     // Même règle que le moteur : un seul win/loss manquant rend la part d'action
     // du joueur incalculable sur la période. On ne complète pas par un zéro.
-    const action = missing > 0 ? null : ok.reduce((s, w) => s + (w.action_amount ?? 0), 0);
+    //
+    // `ok.length === 0` compte AUSSI comme incalculable : sans aucune semaine
+    // calculée, un reduce rendrait 0 — un « 0,00 » vert qui se lit « ce joueur ne
+    // m'a rien rapporté » là où la vérité est « rien n'est calculable sur cette
+    // période » (toutes ses semaines y sont en échec de contrôle).
+    const action = ok.length === 0 || missing > 0
+      ? null
+      : ok.reduce((s, w) => s + (w.action_amount ?? 0), 0);
     const netAffiliation = commission - due;
 
     players.push({
@@ -200,6 +209,7 @@ export function aggregateDashboard(chains: PlayerChain[], window: WeekWindow): N
     tCommission += commission;
     tDue += due;
     tMissing += missing;
+    tOkLines += ok.length;
     if (missing > 0) anyMissing = true;
     else tAction += action ?? 0;
     tBlocked += blocked.length;
@@ -221,7 +231,12 @@ export function aggregateDashboard(chains: PlayerChain[], window: WeekWindow): N
   }
 
   const tNet = tCommission - tDue;
-  const tActionOrNull = anyMissing ? null : tAction;
+  // Aucune ligne calculée sur toute la période (fenêtre vide, ou uniquement des
+  // semaines en échec) : le total est INCALCULABLE, pas nul. Sans cette garde,
+  // choisir une semaine antérieure au premier report afficherait cinq cartes à
+  // « 0,00 » en vert — un écran qui affirme « tu n'as rien gagné » alors qu'il
+  // n'a rien à dire. (Constat money-auditor, second passage.)
+  const tActionOrNull = tOkLines === 0 || anyMissing ? null : tAction;
 
   const weeks = [...byWeek.entries()]
     .sort((a, b) => a[0].localeCompare(b[0]))

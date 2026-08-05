@@ -45,8 +45,14 @@ export default async function NexaPokerPage({ searchParams }: {
   // celui-ci retombe sur « cette semaine », et une URL malformée ouvrirait donc la
   // page sur des cartes à zéro — précisément l'écran qu'on veut éviter.
   const raw = (await searchParams).filter;
-  const rawFilter = raw !== undefined && KNOWN_FILTER.test(raw) ? raw : "lifetime";
-  const period = computePeriodFilter(rawFilter);
+  const wanted = raw !== undefined && KNOWN_FILTER.test(raw) ? raw : "lifetime";
+  // Deuxième garde : une valeur de BONNE FORME peut rester irrésoluble
+  // (`2026-W99`, une semaine ISO future, un `custom:` malformé). computePeriodFilter
+  // les rejette en retombant sur « cette semaine » — donc, ici, sur des cartes à
+  // zéro. On détecte le rejet en comparant la clé rendue à celle demandée.
+  const probe = computePeriodFilter(wanted);
+  const rawFilter = probe.key === wanted ? wanted : "lifetime";
+  const period = rawFilter === wanted ? probe : computePeriodFilter("lifetime");
   const window = weekWindowFromParisDates(
     period.startDate ? toParisDate(period.startDate) : undefined,
     period.endDate ? toParisDate(period.endDate) : undefined,
