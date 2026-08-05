@@ -22,6 +22,36 @@ import { buildSheet, type ExtractedSheet } from "@/lib/funnels/nexa/affiliate-sc
 const MAX_BYTES = 8 * 1024 * 1024;
 const ACCEPTED = ["image/png", "image/jpeg", "image/webp", "image/gif"];
 
+// ── Saturation de l'API (529) ─────────────────────────────────────────────
+//
+// Le 529 `overloaded_error` est transitoire : l'API est saturée, la même requête
+// passera dans quelques secondes. Le SDK retente déjà les 5xx, mais avec un
+// backoff court (quelques centaines de ms) taillé pour un hoquet, pas pour une
+// saturation qui dure. On lui coupe donc ses reprises (`maxRetries: 0`) et on
+// pilote nous-mêmes, avec des délais assez longs pour laisser passer la vague —
+// sans multiplier les tentatives à l'insu de tout le monde (3 reprises SDK × 3
+// boucles = 9 appels vision facturés).
+//
+// UNIQUEMENT SUR 529. Un 400 (image invalide) ou un 401 (clé fausse) ne
+// deviendront jamais bons en réessayant : les retenter brûle du temps et de
+// l'argent pour finir sur la même erreur.
+const RETRY_DELAYS_MS = [2_000, 5_000, 10_000];
+
+/** 529 / overloaded_error, et rien d'autre. */
+function isOverloaded(e: unknown): boolean {
+  if (!(e instanceof Anthropic.APIError)) return false;
+  // `status` et `type` sont portés par les sous-classes APIStatusError ; on les
+  // lit sans caster la classe elle-même (elle est exportée comme valeur, pas type).
+  const { status, type } = e as unknown as { status?: number; type?: string };
+  return status === 529 || type === "overloaded_error";
+}
+
+const OVERLOADED_MESSAGE =
+  "API saturée, réessaie dans une minute. Rien n'a été perdu : ton screenshot n'est pas encore enregistré, "
+  + "il suffit de le redéposer. (Le serveur a déjà réessayé plusieurs fois de son côté.)";
+
+const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
+
 // Cellule : chaîne, ou null quand elle est ILLISIBLE. La distinction est le cœur
 // du contrat — une case vide vaut "" (elle vaut 0 dans le format NEXA), une case
 // qu'on n'arrive pas à lire vaut null et fera rejeter la ligne en aval.
@@ -110,9 +140,10 @@ export async function POST(req: NextRequest) {
     }
 
     const data = Buffer.from(await file.arrayBuffer()).toString("base64");
-    const client = new Anthropic(); // lit ANTHROPIC_API_KEY dans l'environnement
+    // maxRetries: 0 — les reprises sont pilotées ci-dessous, voir l'encadré 529.
+    const client = new Anthropic({ maxRetries: 0 }); // lit ANTHROPIC_API_KEY dans l'environnement
 
-    const response = await client.messages.create({
+    const callVision = () => client.messages.create({
       model: "claude-opus-5",
       max_tokens: 16000,
       thinking: { type: "adaptive" },
@@ -125,6 +156,26 @@ export async function POST(req: NextRequest) {
         ],
       }],
     });
+
+    // `!` : la boucle sort soit par `break` (response assignée), soit par un
+    // `return`/`throw`. TypeScript ne sait pas le déduire d'un for(;;).
+    let response!: Anthropic.Message;
+    for (let attempt = 0; ; attempt++) {
+      try {
+        response = await callVision();
+        break;
+      } catch (e) {
+        // Toute autre erreur remonte au catch général : on ne retente QUE la saturation.
+        if (!isOverloaded(e)) throw e;
+        if (attempt >= RETRY_DELAYS_MS.length) {
+          console.error(`[NEXA_AFFILIATE_EXTRACT] 529 overloaded après ${attempt + 1} tentative(s) — abandon.`);
+          return NextResponse.json({ error: OVERLOADED_MESSAGE }, { status: 503 });
+        }
+        const wait = RETRY_DELAYS_MS[attempt];
+        console.warn(`[NEXA_AFFILIATE_EXTRACT] 529 overloaded — reprise ${attempt + 1}/${RETRY_DELAYS_MS.length} dans ${wait} ms`);
+        await sleep(wait);
+      }
+    }
 
     // Un refus classifieur revient en HTTP 200 : à tester AVANT de lire content.
     if (response.stop_reason === "refusal") {
@@ -169,6 +220,33 @@ export async function POST(req: NextRequest) {
     // de requête, donc la clé. On ne garde que le message.
     console.error("[NEXA_AFFILIATE_EXTRACT]", e?.message ?? e);
     const status = typeof e?.status === "number" ? e.status : 500;
+
+    // Le message d'une erreur SDK est le JSON de l'API ({"type":"error",...}) :
+    // illisible à l'écran. On traduit les cas connus et on garde le brut en log.
+    if (isOverloaded(e)) {
+      return NextResponse.json({ error: OVERLOADED_MESSAGE }, { status: 503 });
+    }
+    if (e instanceof Anthropic.RateLimitError) {
+      return NextResponse.json({
+        error: "Quota API atteint (trop de requêtes). Attends une minute avant de redéposer le screenshot.",
+      }, { status: 429 });
+    }
+    if (e instanceof Anthropic.AuthenticationError || e instanceof Anthropic.PermissionDeniedError) {
+      return NextResponse.json({
+        error: "La clé API du serveur est refusée par Anthropic — extraction indisponible. Saisis la semaine à la main.",
+      }, { status });
+    }
+    if (e instanceof Anthropic.APIConnectionError) {
+      return NextResponse.json({
+        error: "Impossible de joindre l'API Anthropic (réseau). Réessaie dans un instant.",
+      }, { status: 503 });
+    }
+    if (e instanceof Anthropic.APIError) {
+      // Erreur API non identifiée : on affiche le statut, pas la charge JSON.
+      return NextResponse.json({
+        error: `L'API a répondu ${status}. Réessaie, ou saisis la semaine à la main.`,
+      }, { status });
+    }
     return NextResponse.json({ error: e?.message ?? "Erreur d'extraction." }, { status });
   }
 }
