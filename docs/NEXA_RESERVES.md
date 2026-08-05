@@ -1,8 +1,11 @@
 # Réserves ouvertes — miroir NEXAPOKER et bornes de deal
 
-Issues de l'audit `money-auditor` du commit `6658d24` (verdict **GO SOUS RÉSERVE, 0 faille**).
-Aucune ne produit un montant faux sur l'état actuel des données. Elles sont ici parce qu'elles
-peuvent en produire un plus tard, et qu'aucune n'est corrigée.
+Issues des audits `money-auditor` du chantier NEXA (commits `6658d24` et `ade7f63` — verdicts
+**GO SOUS RÉSERVE, 0 faille**). Aucune ne produit un montant faux sur l'état actuel des données.
+Elles sont ici parce qu'elles peuvent en produire un plus tard, et qu'aucune n'est corrigée.
+
+Réserves **1 à 5** : miroir `player_game_deals` et bornes de deal (audit du 6658d24).
+Réserves **6 et 7** : règlement de la part d'action (audit de C4, ade7f63).
 
 Contexte : `player_game_deals` sert de **cache de période courante** pour NEXAPOKER. La vérité est
 historisée dans `nexa_player_action_shares` / `nexa_player_rakeback`. Le commit `6658d24` a rendu
@@ -11,7 +14,7 @@ ci-dessous : une borne qui ne servait à rien borne désormais de l'argent.
 
 ---
 
-## ⚠️ À FAIRE AVANT TOUT DÉPLOIEMENT — chiffrer l'impact du backfill en prod
+## ✅ CLOS — chiffrage de l'impact du backfill en prod : **0 ligne**
 
 La migration `nexa_mirror_start_date_v1` (`lib/db.ts`) pose
 `player_game_deals.start_date = MIN(nexa_player_action_shares.start_week)` sur les deals NEXAPOKER
@@ -20,8 +23,10 @@ qui l'avaient à NULL. Une fois posée, la borne
 seulement un pourcentage — dans une quinzaine de requêtes d'argent (`getPlayerWalletStats`,
 `getPlayerBalance`, `getWalletKPIs`, `getNetPnlSeries`, `getWalletSummaryByPlayer`…).
 
-Mesuré en local : **0 ligne concernée**. En prod : **inconnu**. À exécuter en lecture seule avant
-de déployer, et à comparer à zéro :
+**Passé en prod le 2026-08-05, avant le déploiement : résultat `0`.** La migration a d'ailleurs
+loggué `nexa_mirror_start_date_v1 applied — 0 deal(s) NEXAPOKER datés` : aucune borne posée, donc
+aucune transaction exclue, donc aucun montant affiché n'a bougé. Requête conservée ici pour la
+prochaine fois qu'un deal NEXA sera créé en prod :
 
 ```sql
 -- Mouvements NEXAPOKER qui SORTIRONT des agrégats à cause de la nouvelle borne.
@@ -41,8 +46,9 @@ WHERE g.name = 'NEXAPOKER'
 GROUP BY wt.player_id, p.name, d.start_date;
 ```
 
-Accès prod : la clé SSH Railway n'est pas enregistrée (`railway ssh keys add`). En attendant, passer
-par une route admin en lecture, ou enregistrer la clé.
+Accès prod : la clé SSH Railway n'est pas enregistrée (`railway ssh keys add`). Le chiffrage a été
+passé via `POST /api/admin/db-diagnostic` (action `run-sql`, SELECT seul) — cette route est hors du
+matcher d'auth et gardée par une clé en dur, voir le point de sécurité dans CLAUDE.md.
 
 ---
 
@@ -104,6 +110,53 @@ pas de dérive future, mais le cas « mouvement saisi avant la part » reste pos
   `WHERE start_date IS NULL`), mais non canonique.
 
 ---
+
+## Réserve 6 — « déjà réglé » ne distingue pas `locked` de `paid`
+
+`getNexaPlayerDetailOn` calcule `action_settled` à partir de **toutes** les lignes de
+`nexa_action_settlement_weeks`, sans regarder le `status` du `manual_settlements` qui les porte. Une
+semaine verrouillée mais **pas encore encaissée** sort donc de la position nette au même titre
+qu'une semaine payée.
+
+C'est correct pour l'anti-double-comptage — la semaine ne doit pas repartir dans un second
+règlement — mais le libellé du pied de page (« un dû éteint ne doit plus s'afficher comme dû ») est
+inexact pour une ligne `locked` : elle n'est pas éteinte, elle est en attente de paiement dans
+`/payments`. Le montant reste visible là-bas, donc rien ne disparaît ; c'est la formulation qui
+ment.
+
+Correctif : scinder `action_settled` par statut (`action_locked` / `action_paid`), ou au minimum
+reformuler le pied de page. Aucune math à changer.
+
+## Réserve 7 — aucun détecteur d'oubli sur une semaine d'action jamais verrouillée
+
+Depuis l'exclusion de NEXAPOKER de `getOverdueBuckets` (réserve fermée par le commit du
+2026-08-05), **rien ne signale une semaine d'action réglable qu'on aurait oublié de verrouiller** :
+
+- pas dans les impayés — NEXA en est exclu, et à raison : son règlement n'est pas adossé aux
+  transactions, donc `wallet_transactions.settled` ne peut rien détecter ;
+- pas dans les règlements en attente — `getPendingSettlements` ne voit que les lignes **déjà**
+  `locked` ;
+- pas dans le résumé Telegram quotidien ni dans `get_unpaid_settlements`.
+
+Elle n'est visible que si on ouvre `/nexapoker` et qu'on clique « Détail » sur le joueur. C'est un
+angle mort assumé, pas un bug : le détecteur qu'on a retiré ne détectait rien d'utile et polluait
+l'alerte. Mais il n'a pas été remplacé.
+
+Correctif possible : un compteur « N semaine(s) réglables non verrouillées » sur la vue agence
+(la donnée existe déjà via `getSettleableActionWeeksOn`), ou une ligne dédiée dans le résumé
+quotidien.
+
+## Limite constatée — la reprise sur 529 ne couvre pas une saturation longue
+
+`app/api/nexa/affiliate/extract/route.ts` retente un 529 trois fois (2 s, 5 s, 10 s), soit **~17 s de
+saturation absorbée**. Constaté en vrai le 2026-08-05 sur les trois semaines de juillet : le
+screenshot du **20.07 est passé par l'extraction**, celui du **13.07 a échoué malgré les reprises** et
+a été saisi à la main. La saturation a donc duré plus longtemps que la fenêtre.
+
+Ce n'est pas un bug : le chemin de repli — saisir la semaine à la main dans la grille — existe et a
+fonctionné. Mais si le cas se répète, la piste est d'allonger l'échelle (`RETRY_DELAYS_MS`) plutôt
+que d'ajouter des reprises rapprochées. À arbitrer avec le temps d'attente à l'écran, déjà de ~17 s
+avant que le message n'apparaisse.
 
 ## Trou de couverture connu
 

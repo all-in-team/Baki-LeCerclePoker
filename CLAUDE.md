@@ -119,7 +119,27 @@ Internal ops + accounting tool for a single-operator poker affiliation business 
 - DB: better-sqlite3, raw SQL, no ORM. File: `data/lecercle.db` (local) / `/data/lecercle.db` (Railway volume)
 - Charts: Recharts · Telegram: GramJS + Bot API · AI: @anthropic-ai/sdk · XLS: xlsx
 - Deploy: Railway via `npm run deploy` (force-deploy + verify). Node 20.
-- No auth (v1). No tests. No staging — `main` is prod.
+- No tests. No staging — `main` is prod.
+- **Auth : il y en a une.** `middleware.ts` exige un cookie `session` (JWT vérifié via `jwtVerify`)
+  sur toute l'app. La ligne « No auth (v1) » qui traînait ici était FAUSSE et coûte du temps :
+  elle fait interpréter une redirection vers `/login` comme un 404 ou une route absente.
+  *(Constaté le 2026-08-05 : `/api/nexapoker/players` renvoyait un 307 → page de login, pris pour
+  une route non déployée.)*
+
+### ⚠️ `/api/admin/*` est HORS du matcher d'auth
+Le matcher de `middleware.ts` exclut `api/login`, `api/logout`, `api/portal`, `api/telegram`,
+`api/cron`, `api/version`, `api/morning-checkin`, `api/agent-dispatch`, `api/agent-report`,
+**`api/admin`**, et les assets statiques. Tout le reste exige le cookie.
+
+Conséquence : **aucune route sous `app/api/admin/` n'est protégée par le middleware** — chacune ne
+tient que par sa propre vérification. La plupart lisent `ADMIN_RECONCILE_TOKEN` via l'en-tête
+`x-admin-token`, mais pas toutes : `app/api/admin/db-diagnostic/route.ts` est gardée par une **clé
+en dur dans le code** (`db-diag-20260518`) et expose une action `run-sql` qui exécute du SQL
+arbitraire — `SELECT` comme écritures — sur la base de PROD.
+
+Point de sécurité à traiter dans un chantier dédié : passer `db-diagnostic` sur
+`ADMIN_RECONCILE_TOKEN` (ou la retirer), et auditer les autres routes `admin/` qui n'ont pas de
+garde. Ne pas se fier au middleware pour ce dossier.
 
 ## File routing — where things live
 - Server reads (SQL) → `lib/queries.ts`
