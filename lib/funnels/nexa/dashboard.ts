@@ -82,6 +82,8 @@ export type NexaDashboard = {
     total: number | null;
     /** Couples joueur×semaine bloqués sur cette semaine. */
     blocked: number;
+    /** Commission REÇUE sur ces lignes bloquées — hors totaux, jamais escamotée. */
+    blocked_commission: number;
     missing_winloss: number;
     /** Couples joueur×semaine calculés. 0 = semaine uniquement bloquée. */
     ok_lines: number;
@@ -152,18 +154,23 @@ export function aggregateDashboard(chains: PlayerChain[], window: WeekWindow): N
   const players: NexaDashboardPlayer[] = [];
   const byWeek = new Map<string, {
     gross_rake: number; commission: number; due: number; action: number;
-    missing: number; blocked: number;
+    missing: number; blocked: number; blocked_commission: number;
     /** Lignes joueur×semaine CALCULÉES sur cette semaine. 0 = semaine seulement bloquée. */
     ok_lines: number;
   }>();
-  const emptyWeek = () => ({ gross_rake: 0, commission: 0, due: 0, action: 0, missing: 0, blocked: 0, ok_lines: 0 });
+  const emptyWeek = () => ({ gross_rake: 0, commission: 0, due: 0, action: 0,
+                             missing: 0, blocked: 0, blocked_commission: 0, ok_lines: 0 });
 
   let tCommission = 0, tDue = 0, tAction = 0;
   let anyMissing = false, tMissing = 0, tBlocked = 0, tBlockedCommission = 0;
   /** Couples joueur×semaine CALCULÉS sur la période. 0 = rien de chiffrable. */
   let tOkLines = 0;
 
-  // DÉDUPLICATION OBLIGATOIRE. getNexaPlayersOn fait des LEFT JOIN sur
+  // DÉDUPLICATION — SECONDE BARRIÈRE. getNexaPlayersOn dédoublonne désormais à la
+  // source (players.ts), mais aggregateDashboard est une fonction PURE qui accepte
+  // n'importe quelle liste : elle ne peut pas se reposer sur son appelant. Le garde
+  // ci-dessous est ce que le test vérifie, et il tiendrait même si la source
+  // régressait. Rappel du problème d'origine : getNexaPlayersOn faisait des LEFT JOIN sur
   // player_game_ids, nexa_nickname_links et nexa_leads sans DISTINCT : un joueur
   // qui porte DEUX pseudos de report (cas nominal — un joueur change de pseudo
   // dans la room) ou deux Member ID sort deux fois. Sans ce garde-fou, sa chaîne
@@ -230,6 +237,7 @@ export function aggregateDashboard(chains: PlayerChain[], window: WeekWindow): N
     for (const w of blocked) {
       const e = byWeek.get(w.week_start) ?? emptyWeek();
       e.blocked += 1;
+      e.blocked_commission += w.commission;
       byWeek.set(w.week_start, e);
     }
   }
@@ -255,8 +263,8 @@ export function aggregateDashboard(chains: PlayerChain[], window: WeekWindow): N
         commission: e.commission, due: e.due, net_affiliation: net,
         action_amount: action,
         total: action === null ? null : net + action,
-        blocked: e.blocked, missing_winloss: e.missing,
-        ok_lines: e.ok_lines,
+        blocked: e.blocked, blocked_commission: e.blocked_commission,
+        missing_winloss: e.missing, ok_lines: e.ok_lines,
       };
     });
 

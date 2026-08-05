@@ -19,6 +19,13 @@ export async function GET(req: NextRequest) {
     if (!/^\d{4}-\d{2}-\d{2}$/.test(week)) {
       return NextResponse.json({ error: "week_start (YYYY-MM-DD) requis." }, { status: 400 });
     }
+    // Les semaines sont ancrées sur le lundi. Une autre date ne renverrait AUCUN
+    // montant et afficherait toute la grille en « non saisi » alors que la semaine
+    // est saisie — une invitation à re-saisir par-dessus. On refuse plutôt.
+    const d = new Date(`${week}T00:00:00Z`);
+    if (Number.isNaN(d.getTime()) || d.getUTCDay() !== 1) {
+      return NextResponse.json({ error: `${week} n'est pas un lundi.` }, { status: 400 });
+    }
     const db = getDb();
     const saved = getWinlossForWeekOn(db, week);
     // getNexaPlayersOn dédoublonne déjà par player_id (cf. son commentaire) : la

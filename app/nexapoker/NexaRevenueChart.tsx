@@ -45,6 +45,8 @@ export type NexaChartWeek = {
   total: number | null;
   /** Couples joueur×semaine sortis du calcul (contrôle en échec). */
   blocked: number;
+  /** Commission REÇUE sur ces lignes exclues — hors totaux, mais jamais escamotée. */
+  blocked_commission: number;
   missing_winloss: number;
   ok_lines: number;
 };
@@ -146,14 +148,32 @@ export default function NexaRevenueChart({ weeks, currency = "USDT" }: {
     return weeks.map(w => {
       const r: Record<string, any> = {
         week: w.week_start, flagged: w.blocked > 0, blocked: w.blocked,
-        missing_winloss: w.missing_winloss,
+        missing_winloss: w.missing_winloss, ok_lines: w.ok_lines,
+        blocked_commission: w.blocked_commission,
       };
+      // Semaine sans AUCUNE ligne calculée (toutes en échec de contrôle) : toutes
+      // ses séries valent null — y compris commission et rake, pourtant des nombres
+      // dans l'agrégat. Sinon le graph dessinerait une barre à 0,00 pour une semaine
+      // où la room a bien versé : un zéro qui affirme « rien reçu ». La semaine reste
+      // visible et marquée en ambre, elle n'est pas masquée.
+      const horsPerimetre = w.ok_lines === 0;
       for (const s of available) {
-        const v = s.value(w);
+        const v = horsPerimetre ? null : s.value(w);
         r[s.key] = v;
+
+        if (horsPerimetre) {
+          // Hors périmètre par construction : la semaine ne CASSE pas le cumul (ce
+          // n'est pas un trou de donnée), elle n'y contribue simplement pas. La
+          // courbe reste plate le temps de la traverser.
+          r[`${s.key}_cum`] = broken[s.key] ? null : (acc[s.key] ?? 0);
+          continue;
+        }
+        // Un vrai trou — semaine calculée dont la valeur manque — arrête le cumul
+        // définitivement : reprendre après en sautant la semaine donnerait une
+        // courbe d'apparence complète à laquelle il manque un morceau.
         if (v === null) broken[s.key] = true;
         if (!broken[s.key]) {
-          acc[s.key] = (acc[s.key] ?? 0) + (v ?? 0);
+          acc[s.key] = (acc[s.key] ?? 0) + (v as number);
           r[`${s.key}_cum`] = acc[s.key];
         } else {
           r[`${s.key}_cum`] = null;
@@ -187,7 +207,12 @@ export default function NexaRevenueChart({ weeks, currency = "USDT" }: {
   const headline = active[0];
   // Le grand chiffre n'a de sens que si la série est complète sur la période :
   // sommer en ignorant les trous afficherait un total d'apparence juste, amputé.
-  const headlineBroken = headline ? rows.some(r => r[headline.key] === null) : false;
+  // Une semaine SANS ligne calculée n'ampute pas le total : elle est hors périmètre
+  // par construction (contrôle en échec), et son montant est exposé à part. Seule
+  // une semaine calculée dont la valeur manque rend la série incalculable.
+  const headlineBroken = headline
+    ? rows.some(r => r.ok_lines > 0 && r[headline.key] === null)
+    : false;
   const headlineTotal = headline && !headlineBroken
     ? rows.reduce((s, r) => s + (r[headline.key] ?? 0), 0)
     : null;
@@ -236,8 +261,9 @@ export default function NexaRevenueChart({ weeks, currency = "USDT" }: {
           qui disparaît — même règle que la vue Agence juste en dessous. */}
       {flaggedCount > 0 && (
         <div style={{ fontSize: 11, color: AMBER, fontWeight: 600, marginBottom: 6 }}>
-          ⚠️ {flaggedCount} semaine(s) en échec de contrôle — comptée(s) dans le total,
-          {mode === "cumul" ? " marquée(s) d'un point ambre." : " hachurée(s) en ambre."}
+          ⚠️ {flaggedCount} semaine(s) en échec de contrôle — leurs lignes sont EXCLUES des
+          montants ci-dessous (la commission reçue dessus est reprise dans la vue Agence),
+          {mode === "cumul" ? " et la semaine est marquée d'un point ambre." : " et la semaine est hachurée en ambre."}
         </div>
       )}
 
@@ -309,7 +335,7 @@ export default function NexaRevenueChart({ weeks, currency = "USDT" }: {
           <span style={{ fontSize: 10, color: "var(--text-dim)" }}>
             Σ {headline.label.toLowerCase()} ={" "}
             {headlineTotal === null
-              ? `incalculable — ${rows.filter(r => r[headline.key] === null).length} semaine(s) sans win/loss`
+              ? `incalculable — ${rows.filter(r => r.ok_lines > 0 && r[headline.key] === null).length} semaine(s) sans win/loss`
               : `${fmt2(headlineTotal)} ${currency}`}
           </span>
         )}
@@ -328,14 +354,23 @@ function ChartTooltip({ active, payload, label, active_, cumul, currency }: {
   return (
     <div style={{ background: "var(--bg-elevated)", border: "1px solid var(--border)", borderRadius: 8, padding: "8px 12px", fontSize: 12 }}>
       <div style={{ color: "var(--text-dim)", fontSize: 11, marginBottom: 2 }}>Semaine du {String(label)}</div>
-      {active_.map(s => (
-        <div key={s.key} style={{ color: s.color, fontWeight: 600 }}>
-          {s.label} : {fmt2(row[cumul ? `${s.key}_cum` : s.key] ?? 0)} {currency}
-        </div>
-      ))}
+      {active_.map(s => {
+        const v = row[cumul ? `${s.key}_cum` : s.key];
+        return (
+          <div key={s.key} style={{ color: v === null || v === undefined ? GREY : s.color, fontWeight: 600 }}>
+            {/* JAMAIS de `?? 0` ici : trois des cinq séries sont nullables, et un
+                zéro affiché dans l'infobulle contredirait la barre absente juste
+                à côté — c'est l'infobulle que Baki lit pour le chiffre. */}
+            {s.label} : {v === null || v === undefined
+              ? (cumul ? "non chiffrable au-delà d'un trou" : "non chiffrable")
+              : `${fmt2(v)} ${currency}`}
+          </div>
+        );
+      })}
       {row.flagged && (
         <div style={{ color: AMBER, fontSize: 11, marginTop: 2 }}>
-          ⚠️ contrôle en échec sur {row.blocked} ligne(s) — montant conservé
+          ⚠️ contrôle en échec sur {row.blocked} ligne(s) — exclue(s) du calcul
+          {row.blocked_commission > 0 && ` (${fmt2(row.blocked_commission)} ${currency} reçus, hors totaux)`}
         </div>
       )}
       {cumul && <div style={{ color: GREY, fontSize: 10, marginTop: 2 }}>cumul depuis la première semaine</div>}

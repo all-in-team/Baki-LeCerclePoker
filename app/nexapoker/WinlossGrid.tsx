@@ -28,15 +28,48 @@ const INPUT: React.CSSProperties = {
   borderRadius: 8, color: "#E8E8EE", padding: "6px 8px", fontSize: 12,
 };
 
-/** Lundi de la semaine passée — celle qu'on saisit le lundi matin. */
+/**
+ * Lundi de la semaine passée — celle qu'on saisit le lundi matin.
+ *
+ * Tout en calendrier UTC : mélanger getUTCDay() avec une date construite sur
+ * l'heure locale décale d'une semaine entière entre minuit et 2 h à Paris (le
+ * dimanche 22 h UTC est déjà lundi à Paris). La grille se serait ouverte sur la
+ * mauvaise semaine, à l'heure exacte où on la remplit le moins.
+ */
 function lastMonday(): string {
-  const d = new Date();
+  const now = new Date();
+  const d = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
   d.setUTCDate(d.getUTCDate() - ((d.getUTCDay() + 6) % 7) - 7);
   return d.toISOString().slice(0, 10);
 }
 
+/** La saisie est hebdomadaire : une date qui n'est pas un lundi n'a pas de sens ici. */
+function isMonday(iso: string): boolean {
+  const d = new Date(`${iso}T00:00:00Z`);
+  return !Number.isNaN(d.getTime()) && d.getUTCDay() === 1;
+}
+
 const fmt = (n: number) =>
   n.toLocaleString("fr-FR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+/**
+ * Parse STRICT d'un montant saisi. `undefined` = illisible, et le champ passe en
+ * rouge : rien ne part en base.
+ *
+ * parseFloat seul est un piège de saisie d'argent : il s'arrête au premier
+ * caractère invalide et rend un nombre d'apparence valide. « 1 234,56 » collé
+ * depuis un tableur devient 1 — pas une erreur, pas une alerte, juste un montant
+ * faux de 1233,56. « 12o » devient 12, « 5- » devient 5. Ici on nettoie d'abord
+ * les séparateurs de milliers (espace, espace insécable, apostrophe), on ramène
+ * la virgule sur le point, puis on EXIGE que toute la chaîne soit un nombre.
+ */
+export function parseMontant(raw: string): number | undefined {
+  const t = raw.trim().replace(/[\s\u00A0\u202F']/g, "").replace(",", ".");
+  if (t === "") return undefined;
+  if (!/^[+-]?\d*\.?\d+$/.test(t)) return undefined;
+  const v = Number(t);
+  return Number.isFinite(v) ? v : undefined;
+}
 
 export default function WinlossGrid() {
   const router = useRouter();
@@ -77,7 +110,15 @@ export default function WinlossGrid() {
   }
 
   async function saveAll() {
+    if (!isMonday(week)) {
+      setMsg({ kind: "err", text: `${week} n'est pas un lundi — la saisie est hebdomadaire.` });
+      return;
+    }
     setBusy(true); setMsg(null);
+    // La semaine est FIGÉE le temps de la boucle : si elle changeait en cours de
+    // route, le test « inchangé » se jugerait sur les montants d'une autre semaine
+    // et sauterait silencieusement une saisie légitime.
+    const week0 = week;
     let ecrits = 0, desaisis = 0, inchanges = 0;
     const erreurs: string[] = [];
     for (const r of shown) {
@@ -89,20 +130,26 @@ export default function WinlossGrid() {
       if (brut === "") {
         amount = null; // dé-saisie explicite d'une valeur qui existait
       } else {
-        const v = parseFloat(brut.replace(",", "."));
-        if (Number.isNaN(v)) { erreurs.push(`${r.name} : « ${brut} » illisible`); continue; }
+        const v = parseMontant(brut);
+        if (v === undefined) { erreurs.push(`${r.name} : « ${brut} » illisible`); continue; }
         // Comparaison de flottants par différence (invariant #9), jamais par ===.
         if (r.amount !== null && Math.abs(v - r.amount) < 0.005) { inchanges++; continue; }
         amount = v;
       }
 
-      const res = await fetch("/api/nexapoker/winloss", {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ player_id: r.player_id, week_start: week, amount }),
-      });
-      const j = await res.json().catch(() => null);
-      if (!j?.ok) { erreurs.push(`${r.name} : ${j?.error ?? `HTTP ${res.status}`}`); continue; }
-      if (amount === null) desaisis++; else ecrits++;
+      // Un fetch qui LÈVE (réseau coupé) ne doit pas interrompre la boucle sans
+      // récapitulatif : les écritures déjà passées sont en base, il faut les dire.
+      try {
+        const res = await fetch("/api/nexapoker/winloss", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ player_id: r.player_id, week_start: week0, amount }),
+        });
+        const j = await res.json().catch(() => null);
+        if (!j?.ok) { erreurs.push(`${r.name} : ${j?.error ?? `HTTP ${res.status}`}`); continue; }
+        if (amount === null) desaisis++; else ecrits++;
+      } catch (e: any) {
+        erreurs.push(`${r.name} : ${e?.message ?? "réseau injoignable"}`);
+      }
     }
 
     const parts = [
@@ -112,9 +159,9 @@ export default function WinlossGrid() {
     ].filter(Boolean).join(" · ");
     setMsg(erreurs.length > 0
       ? { kind: "err", text: `${parts || "rien d'écrit"} — ${erreurs.length} échec(s) : ${erreurs.join(" ; ")}` }
-      : { kind: "ok", text: `Semaine du ${week} — ${parts || "rien à écrire"}.` });
+      : { kind: "ok", text: `Semaine du ${week0} — ${parts || "rien à écrire"}.` });
 
-    await load(week);
+    await load(week0);
     // Les cartes, le graph et la table vivent côté serveur : sans ce refresh, la
     // grille afficherait des win/loss que le reste de la page ignore encore.
     router.refresh();
@@ -129,15 +176,17 @@ export default function WinlossGrid() {
         </div>
         <label style={{ fontSize: 12, color: "#8888A0", display: "flex", gap: 6, alignItems: "center" }}>
           Semaine du (lundi)
-          <input type="date" value={week} style={INPUT} onChange={e => setWeek(e.target.value)} />
+          <input type="date" value={week} disabled={busy}
+                 style={{ ...INPUT, borderColor: isMonday(week) ? "rgba(255,255,255,0.1)" : "rgba(239,68,68,0.5)" }}
+                 onChange={e => setWeek(e.target.value)} />
         </label>
         <label style={{ fontSize: 11, color: "#8888A0", display: "flex", gap: 5, alignItems: "center", cursor: "pointer" }}>
           <input type="checkbox" checked={onlyStaked} onChange={e => setOnlyStaked(e.target.checked)} />
           joueurs stakés seulement
         </label>
         <div style={{ flex: 1 }} />
-        <span style={{ fontSize: 11, color: "#555568" }}>
-          {loading ? "…" : `${saisis}/${shown.length} renseigné(s)`}
+        <span style={{ fontSize: 11, color: isMonday(week) ? "#555568" : "#F87171" }}>
+          {!isMonday(week) ? "⚠️ pas un lundi" : loading ? "…" : `${saisis}/${shown.length} renseigné(s)`}
         </span>
       </div>
       <div style={{ fontSize: 12, color: "#8888A0", marginBottom: 12 }}>
@@ -159,8 +208,9 @@ export default function WinlossGrid() {
         <div style={{ display: "grid", gap: 6, gridTemplateColumns: "repeat(auto-fill, minmax(260px, 1fr))" }}>
           {shown.map((r, i) => {
             const brut = draft[r.player_id] ?? "";
-            const v = brut.trim() === "" ? null : parseFloat(brut.replace(",", "."));
-            const illisible = brut.trim() !== "" && Number.isNaN(v);
+            const parsed = parseMontant(brut);
+            const illisible = brut.trim() !== "" && parsed === undefined;
+            const v = parsed ?? null;
             // « Déjà saisi » se juge sur la BASE, pas sur le brouillon.
             const enBase = r.amount !== null;
             return (
@@ -193,7 +243,7 @@ export default function WinlossGrid() {
       )}
 
       <div style={{ display: "flex", alignItems: "center", gap: 12, marginTop: 12, flexWrap: "wrap" }}>
-        <button disabled={busy || loading || shown.length === 0} onClick={() => void saveAll()}
+        <button disabled={busy || loading || shown.length === 0 || !isMonday(week)} onClick={() => void saveAll()}
                 style={{ padding: "8px 16px", borderRadius: 8, border: "none", background: "#A78BFA",
                          color: "#0B0D12", fontSize: 12, fontWeight: 700, cursor: "pointer",
                          opacity: busy || loading ? 0.6 : 1 }}>
