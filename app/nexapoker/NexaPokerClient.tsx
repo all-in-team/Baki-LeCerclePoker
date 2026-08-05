@@ -12,6 +12,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 import { movementColor, netColor, isZeroAmount } from "@/components/ledger/MovementAmount";
+import NexaRevenueChart from "./NexaRevenueChart";
 
 const CARD: React.CSSProperties = {
   background: "#12141C", border: "1px solid rgba(255,255,255,0.06)", borderRadius: 14, padding: 18,
@@ -215,18 +216,9 @@ export default function NexaPokerClient({ currentWeek, today }: { currentWeek: s
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-      {/* Le geste hebdomadaire principal, à un clic depuis la room. */}
-      <div style={{ ...CARD, display: "flex", alignItems: "center", gap: 14, flexWrap: "wrap" }}>
-        <a href="#saisie" style={{ textDecoration: "none" }}>
-          <span style={{ display: "inline-block", padding: "10px 20px", borderRadius: 10, fontSize: 13,
-                         fontWeight: 700, background: "#60A5FA", color: "#0B0D12" }}>
-            📷 Saisir la semaine (screenshot)
-          </span>
-        </a>
-        <span style={{ fontSize: 12, color: "#8888A0" }}>
-          La saisie est en bas de cette page : dépose le screenshot, la grille se pré-remplit, tu relis, tu enregistres.
-        </span>
-      </div>
+      {/* Le bandeau « Saisir la semaine » a été retiré : il faisait doublon avec la
+          section de saisie en bas de page, que la page raccourcie met à portée de
+          molette. La table des joueurs est le haut de page. */}
 
       {/* Conflits de lead : deux leads revendiquent le même joueur. Le funnel n'y
           touche pas — il faut trancher à la main. */}
@@ -500,6 +492,14 @@ export default function NexaPokerClient({ currentWeek, today }: { currentWeek: s
             <button onClick={() => setEditing(null)} style={{ ...INPUT, cursor: "pointer", color: "#8888A0" }}>Annuler</button>
           </div>
         </div>
+      )}
+
+      {/* ── Graph des gains ──────────────────────────────────────────────
+          Entre la table des joueurs et la vue Agence. Il est alimenté par les
+          MÊMES semaines que le tableau « Par semaine » ci-dessous (agency.weeks) :
+          deux lectures du même agrégat serveur, donc impossible qu'elles divergent. */}
+      {agency && agency.weeks.length > 0 && (
+        <NexaRevenueChart weeks={agency.weeks} />
       )}
 
       {/* ── Vue agence : la rentrée hebdo, et ma position par joueur ──── */}
