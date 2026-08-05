@@ -250,8 +250,13 @@ export default function NexaRevenueChart({ weeks, currency = "USDT" }: {
             <YAxis tick={{ fontSize: 10, fill: "var(--text-dim)" }} axisLine={false} tickLine={false} width={46} tickFormatter={compact} />
             <ReferenceLine y={0} stroke="var(--border)" />
             <Tooltip cursor={{ fill: "rgba(255,255,255,0.03)" }} content={<ChartTooltip active_={active} currency={currency} />} />
+            {/* maxBarSize : sans plafond, recharts répartit toute la largeur entre les
+                catégories — à 3 semaines saisies, ça donnait des barres de 308 px,
+                des dalles illisibles qui ne ressemblaient plus à un graph. Le plafond
+                ne gêne pas le cas nombreux : au-delà d'une quinzaine de semaines, la
+                largeur calculée passe sous le plafond et celui-ci devient inerte. */}
             {active.map(s => (
-              <Bar key={s.key} dataKey={s.key} radius={[2, 2, 0, 0]} isAnimationActive={false}>
+              <Bar key={s.key} dataKey={s.key} radius={[2, 2, 0, 0]} maxBarSize={54} isAnimationActive={false}>
                 {rows.map((r, i) => (
                   <Cell key={i} fill={r.flagged ? `url(#nexaFlag_${s.key})` : s.color} fillOpacity={0.85} />
                 ))}
