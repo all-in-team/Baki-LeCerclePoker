@@ -58,6 +58,14 @@ type PlayerDetail = {
   deposited: number; withdrawn: number; net_movements: number;
   net_position: number | null;
 };
+/** Miroir de NexaAgency (lib/funnels/nexa/agency.ts). */
+type Agency = {
+  weeks: { week_start: string; gross_rake: number; commission: number; players_count: number; check_ko: number }[];
+  players: { player_id: number; name: string; commission: number; action_amount: number | null;
+             net_movements: number; net_position: number | null; weeks_missing_winloss: number }[];
+  totals: { gross_rake: number; commission: number; weeks_with_check_ko: number;
+            net_position: number | null; players_incomplete: number };
+};
 type Movement = { id: number; type: "deposit" | "withdrawal"; amount: number; currency: string;
                   note: string | null; tx_date: string; created_at: string };
 type Unreconciled = {
@@ -94,6 +102,7 @@ export default function NexaPokerClient({ currentWeek, today }: { currentWeek: s
   const [history, setHistory] = useState<{ player: Player; rows: Movement[] } | null>(null);
   // Détail hebdo d'un joueur + brouillons de saisie du win/loss (par semaine).
   const [detail, setDetail] = useState<PlayerDetail | null>(null);
+  const [agency, setAgency] = useState<Agency | null>(null);
   const [detailBusy, setDetailBusy] = useState(false);
   const [wlDraft, setWlDraft] = useState<Record<string, string>>({});
 
@@ -120,6 +129,10 @@ export default function NexaPokerClient({ currentWeek, today }: { currentWeek: s
       if (!j.ok) { setBanner({ kind: "err", text: j.error }); return; }
       setPlayers(j.players); setUnrec(j.unreconciled); setAllPlayers(j.allPlayers);
       setAnomalies(j.leadAnomalies ?? []);
+      // La vue agence se recharge avec le reste : toute saisie de win/loss ou de
+      // mouvement la déplace, elle ne doit jamais rester sur un chiffre périmé.
+      const a = await (await fetch("/api/nexapoker/agency")).json();
+      if (a.ok) setAgency(a.agency);
     } finally { setLoading(false); }
   }, []);
   useEffect(() => { void load(); }, [load]);
@@ -399,6 +412,107 @@ export default function NexaPokerClient({ currentWeek, today }: { currentWeek: s
             </button>
             <button onClick={() => setEditing(null)} style={{ ...INPUT, cursor: "pointer", color: "#8888A0" }}>Annuler</button>
           </div>
+        </div>
+      )}
+
+      {/* ── Vue agence : la rentrée hebdo, et ma position par joueur ──── */}
+      {agency && agency.weeks.length > 0 && (
+        <div style={CARD}>
+          <div style={{ fontSize: 13, fontWeight: 600, color: "#E8E8EE", marginBottom: 4 }}>
+            Agence — ce que NEXAPOKER rapporte
+          </div>
+          <div style={{ fontSize: 12, color: "#8888A0", marginBottom: 12 }}>
+            La commission d'affiliation est de l'argent reçu : elle est comptée même sur une semaine dont
+            le contrôle a échoué. C'est la colonne « contrôle » qui signale l'écart, pas une disparition
+            silencieuse du chiffre.
+          </div>
+
+          <div style={{ display: "flex", gap: 20, flexWrap: "wrap", marginBottom: 14, fontSize: 12, color: "#8888A0" }}>
+            <span>Rake généré <b style={{ color: "#E8E8EE" }}>{fmt(agency.totals.gross_rake)}</b></span>
+            <span>Commission encaissée <b style={{ color: "#10B981", fontSize: 14 }}>{fmt(agency.totals.commission)}</b></span>
+            <span>Position nette totale{" "}
+              <b style={{ color: agency.totals.net_position === null ? "#555568" : netColor(agency.totals.net_position) }}>
+                {agency.totals.net_position === null ? "incalculable" : fmt(agency.totals.net_position)}
+              </b>
+            </span>
+            {agency.totals.weeks_with_check_ko > 0 && (
+              <span style={{ color: "#F87171" }}>⚠️ {agency.totals.weeks_with_check_ko} semaine(s) avec un contrôle en échec</span>
+            )}
+          </div>
+
+          <div style={{ display: "flex", gap: 24, flexWrap: "wrap", alignItems: "flex-start" }}>
+            <div style={{ flex: "1 1 320px", overflowX: "auto" }}>
+              <div style={{ fontSize: 11, color: "#8888A0", fontWeight: 600, marginBottom: 6 }}>PAR SEMAINE</div>
+              <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 300 }}>
+                <thead><tr>
+                  <th style={TH}>Semaine</th>
+                  <th style={{ ...TH, textAlign: "right" }}>Rake</th>
+                  <th style={{ ...TH, textAlign: "right" }}>Commission</th>
+                  <th style={{ ...TH, textAlign: "right" }}>Joueurs</th>
+                  <th style={{ ...TH, textAlign: "right" }}>Contrôle</th>
+                </tr></thead>
+                <tbody>
+                  {agency.weeks.map(w => (
+                    <tr key={w.week_start} style={{ borderTop: "1px solid rgba(255,255,255,0.05)" }}>
+                      <td style={{ ...TD, fontWeight: 600 }}>{w.week_start}</td>
+                      <td style={{ ...TD, textAlign: "right" }}>{fmt(w.gross_rake)}</td>
+                      <td style={{ ...TD, textAlign: "right", fontWeight: 600, color: "#10B981" }}>{fmt(w.commission)}</td>
+                      <td style={{ ...TD, textAlign: "right", color: "#8888A0" }}>{w.players_count}</td>
+                      <td style={{ ...TD, textAlign: "right" }}>
+                        {w.check_ko > 0
+                          ? <span style={{ color: "#F87171" }}>⚠️ {w.check_ko}</span>
+                          : <span style={{ color: "#555568" }}>ok</span>}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            <div style={{ flex: "1 1 320px", overflowX: "auto" }}>
+              <div style={{ fontSize: 11, color: "#8888A0", fontWeight: 600, marginBottom: 6 }}>
+                MA POSITION PAR JOUEUR
+              </div>
+              <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 320 }}>
+                <thead><tr>
+                  <th style={TH}>Joueur</th>
+                  <th style={{ ...TH, textAlign: "right" }}>Commission</th>
+                  <th style={{ ...TH, textAlign: "right" }}>Action</th>
+                  <th style={{ ...TH, textAlign: "right" }}>Mouvements</th>
+                  <th style={{ ...TH, textAlign: "right" }}>Position</th>
+                </tr></thead>
+                <tbody>
+                  {agency.players.map(p => (
+                    <tr key={p.player_id} style={{ borderTop: "1px solid rgba(255,255,255,0.05)" }}>
+                      <td style={{ ...TD, fontWeight: 600 }}>{p.name}</td>
+                      <td style={{ ...TD, textAlign: "right", color: "#10B981" }}>{fmt(p.commission)}</td>
+                      <td style={{ ...TD, textAlign: "right",
+                                   color: p.action_amount === null ? "#555568" : netColor(p.action_amount) }}>
+                        {p.action_amount === null ? "—" : fmt(p.action_amount)}
+                      </td>
+                      <td style={{ ...TD, textAlign: "right", color: netColor(p.net_movements) }}>
+                        {fmt(p.net_movements)}
+                      </td>
+                      <td style={{ ...TD, textAlign: "right", fontWeight: 600,
+                                   color: p.net_position === null ? "#555568" : netColor(p.net_position) }}
+                          title={p.weeks_missing_winloss > 0
+                            ? `${p.weeks_missing_winloss} semaine(s) sans win/loss saisi`
+                            : "Positif = le joueur te doit"}>
+                        {p.net_position === null ? `— (${p.weeks_missing_winloss} sem.)` : fmt(p.net_position)}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          {agency.totals.players_incomplete > 0 && (
+            <div style={{ fontSize: 11, color: "#F0B90B", marginTop: 10 }}>
+              {agency.totals.players_incomplete} joueur(s) sans win/loss complet — la position totale reste
+              incalculable tant qu'ils ne sont pas saisis. Un total partiel passerait pour un total.
+            </div>
+          )}
         </div>
       )}
 

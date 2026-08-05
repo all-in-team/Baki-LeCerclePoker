@@ -32,6 +32,7 @@ import {
   setWeeklyWinlossOn, clearWeeklyWinlossOn, getWeeklyWinlossOn, getNexaPlayerDetailOn,
 } from "../lib/funnels/nexa/players";
 import { computeRakeback } from "../lib/funnels/nexa/rakeback-engine";
+import { getNexaAgencyOn } from "../lib/funnels/nexa/agency";
 import { commitWeekOn } from "../lib/funnels/nexa/affiliate-ingest";
 import { getLeadAnomaliesOn } from "../lib/funnels/nexa/lead-promotion";
 import type { RawAffiliateRow } from "../lib/funnels/nexa/affiliate-deal";
@@ -730,6 +731,61 @@ console.log("\n══ Vue détail — une semaine en échec de contrôle ══"
   eq("part d'action calculée quand même", blocked[0].action_amount, 100);
   // Mais elle n'entre pas dans les totaux, qui gardent un périmètre unique.
   eq("total action = semaines ok seulement", d.totals.action_amount, 100);
+  db.close();
+}
+
+console.log("\n══ Vue agence — rentrée hebdo et position par joueur ══");
+{
+  const db = freshDb();
+  const a = createNexaPlayerOn(db, { nickname: "LeCercle", member_id: "2231053", action_pct: 50, action_start_week: W1 });
+  const b = createNexaPlayerOn(db, { nickname: "ImLePAD", member_id: "2518550", action_pct: 50, action_start_week: W1 });
+  if (!a.ok || !b.ok) throw new Error("setup");
+
+  // W2 saine pour les deux ; W3 avec un ecart accepte sur LeCercle (check_ok = 0).
+  commitWeekOn(db, W2, [
+    row({ nlh: 1000, mtt: 0, plo: 0, spins: 0, affiliate_payment: 400 }),
+    { nickname: "ImLePAD", member_id: "2518550", deal_text: DEAL,
+      nlh: 500, mtt: 0, plo: 0, spins: 0, affiliate_payment: 200 },
+  ]);
+  commitWeekOn(db, W3, [row({ nlh: 1000, mtt: 0, plo: 0, spins: 0, affiliate_payment: 999 })],
+    { overrides: { "2231053": "arrondi NEXA" } });
+
+  const ag = getNexaAgencyOn(db);
+
+  eq("2 semaines dans la rentrée", ag.weeks.length, 2);
+  eq("W2 : rake agrégé", ag.weeks[0].gross_rake, 1500);
+  eq("W2 : commission agrégée", ag.weeks[0].commission, 600);
+  eq("W2 : 2 joueurs", ag.weeks[0].players_count, 2);
+  eq("W2 : contrôle sain", ag.weeks[0].check_ko, 0);
+
+  // Le point du cas : la commission d'une semaine en echec est COMPTEE (elle a ete
+  // encaissee), et l'echec est signale a cote au lieu de faire disparaitre l'argent.
+  eq("W3 : commission comptée malgré l'échec", ag.weeks[1].commission, 999);
+  eq("W3 : échec signalé", ag.weeks[1].check_ko, 1);
+  eq("total commission = 600 + 999", ag.totals.commission, 1599);
+  eq("1 semaine avec contrôle en échec", ag.totals.weeks_with_check_ko, 1);
+
+  // Aucun win/loss saisi : chaque position est incalculable, et le total AUSSI.
+  eq("2 joueurs listés", ag.players.length, 2);
+  check("toutes les positions sont null", ag.players.every(p => p.net_position === null));
+  eq("total position null", ag.totals.net_position, null);
+  eq("2 joueurs incomplets", ag.totals.players_incomplete, 2);
+
+  // On complète UN seul joueur : le total reste null tant que l'autre manque.
+  setWeeklyWinlossOn(db, { player_id: b.player_id, week_start: W2, amount: 1000 });
+  const ag2 = getNexaAgencyOn(db);
+  const imle = ag2.players.find(p => p.player_id === b.player_id)!;
+  eq("ImLePAD : action calculée", imle.action_amount, 500);
+  eq("ImLePAD : position nette", imle.net_position, 500);
+  eq("total toujours null (l'autre joueur manque)", ag2.totals.net_position, null);
+  eq("1 seul joueur incomplet", ag2.totals.players_incomplete, 1);
+
+  // On complète le second : le total devient un chiffre.
+  setWeeklyWinlossOn(db, { player_id: a.player_id, week_start: W2, amount: -200 });
+  setWeeklyWinlossOn(db, { player_id: a.player_id, week_start: W3, amount: 0 });
+  const ag3 = getNexaAgencyOn(db);
+  eq("plus aucun joueur incomplet", ag3.totals.players_incomplete, 0);
+  eq("total position = somme des joueurs", ag3.totals.net_position, 500 + -100);
   db.close();
 }
 
