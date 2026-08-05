@@ -1,5 +1,5 @@
 import { getDb } from "@/lib/db";
-import { updatePlayerActionPct, getScopeActionPcts } from "@/lib/queries";
+import { updatePlayerActionPct, getScopeActionPcts, NexaDealGuardError } from "@/lib/queries";
 
 // Inline action-% edit from the P&L tables. Reuses the existing deal write path
 // (player_game_deals) and, on an effective change, announces it in the player's Telegram group
@@ -15,6 +15,21 @@ export interface UpdateActionPctResult {
 }
 
 const round2 = (x: number) => Math.round(x * 100) / 100;
+
+// ── Garde-fou NEXAPOKER, partagé ──────────────────────────────────────────
+// La part d'action NEXA vit dans nexa_player_action_shares (historisée, append-only) ;
+// player_game_deals n'en est qu'un CACHE de la période courante, écrit par
+// setActionShareOn seule. Toute autre écriture le fait diverger de l'historique sans
+// trace, et le recalcul d'une semaine passée devient faux.
+//
+// Ce refus vivait uniquement dans updateDealActionPct, appelé par les tables de P&L
+// des rooms. La fiche joueur passe par /api/games/deals, qui n'était gardé nulle part :
+// le trou est ici, pas dans le chemin des rooms.
+// Le test « est-ce NEXAPOKER ? » et le message ont UNE seule définition, dans queries.ts,
+// à côté de l'écriture qu'ils protègent. Quatre copies d'un toUpperCase() finissent par
+// diverger, et celle qui diverge est celle qui laisse passer.
+export const NEXA_DEAL_GUARD_MESSAGE = new NexaDealGuardError().message;
+export { isNexaGameId, isNexaDealId } from "@/lib/queries";
 
 function parisDateTime(): string {
   // Regular server runtime (not a workflow script) → new Date() is available.
@@ -87,10 +102,7 @@ export async function updateDealActionPct(
   // Aucune page de room n'appelle cette fonction pour NEXAPOKER aujourd'hui ; ce
   // refus existe pour qu'un futur copier-coller de page ne l'introduise pas.
   if (gameNames.some(n => n.toUpperCase() === "NEXAPOKER")) {
-    return {
-      ok: false, changed: false,
-      error: "La part d'action et le rakeback NEXAPOKER s'éditent sur la page NEXAPOKER (historisés par période), pas ici.",
-    };
+    return { ok: false, changed: false, error: NEXA_DEAL_GUARD_MESSAGE };
   }
   const db = getDb();
   const gameIds = gameNames

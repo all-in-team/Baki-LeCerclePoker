@@ -382,22 +382,87 @@ export function getAllTeleCashoutsByPlayer() {
   return getAllCashoutsByPlayer("TELE");
 }
 
+/**
+ * Le deal NEXAPOKER ne s'écrit QUE par setActionShareOn (lib/funnels/nexa/players.ts).
+ *
+ * La garde vit ici, dans la fonction, et pas dans les routes : le point de passage est
+ * `upsertPlayerGameDeal`, appelé aussi par les commandes Telegram /deal et /depot via
+ * findGame(), qui matche `nexapoker` sans distinction de casse. Garder la règle au niveau
+ * des routes laissait ce chemin ouvert — et il remettait `start_date` à NULL, désarmant
+ * la borne temporelle dont dépendent une dizaine de requêtes d'argent. (Invariant #2 :
+ * la règle d'argent vit dans queries.ts, pas dans un handler.)
+ */
+export class NexaDealGuardError extends Error {
+  constructor() {
+    super("La part d'action et le rakeback NEXAPOKER s'éditent sur la page NEXAPOKER (historisés par période), pas ici.");
+    this.name = "NexaDealGuardError";
+  }
+}
+
+/** Définition CANONIQUE — tout le repo doit passer par elle, jamais recopier le test. */
+export function isNexaGameId(gameId: number): boolean {
+  const g = getDb().prepare(`SELECT name FROM games WHERE id = ?`).get(gameId) as { name: string } | undefined;
+  return (g?.name ?? "").toUpperCase() === "NEXAPOKER";
+}
+
+/** Idem pour une ligne player_game_deals. */
+export function isNexaDealId(dealId: number): boolean {
+  const r = getDb().prepare(
+    `SELECT g.name FROM player_game_deals d JOIN games g ON g.id = d.game_id WHERE d.id = ?`
+  ).get(dealId) as { name: string } | undefined;
+  return (r?.name ?? "").toUpperCase() === "NEXAPOKER";
+}
+
+function isNexaGame(db: ReturnType<typeof getDb>, gameId: number): boolean {
+  const g = db.prepare(`SELECT name FROM games WHERE id = ?`).get(gameId) as { name: string } | undefined;
+  return (g?.name ?? "").toUpperCase() === "NEXAPOKER";
+}
+
 export function upsertPlayerGameDeal(data: { player_id: number; game_id: number; action_pct: number; rakeback_pct: number; start_date?: string | null; end_date?: string | null }) {
   const db = getDb();
+  if (isNexaGame(db, data.game_id)) throw new NexaDealGuardError();
+
+  // CHAMP ABSENT ≠ NULL EXPLICITE — les deux bornent de l'argent, dans des sens opposés :
+  //   • absent  (undefined) → l'appelant ne parle pas de la date : on GARDE l'existante.
+  //     Les commandes Telegram /deal et /depot sont dans ce cas ; écraser par NULL
+  //     réintégrerait en silence des mouvements antérieurs dans tous les agrégats.
+  //   • null explicite      → l'appelant EFFACE la date. C'est le geste de réactivation
+  //     d'un deal archivé (case « actif » de PlayerEditModal) ; le refuser laisserait le
+  //     deal borné et amputerait le net du joueur sans le moindre signal.
+  // app/api/games/deals/route.ts encode cette distinction pour les DEUX dates
+  // (`x !== undefined ? (x || null) : undefined`). Tout nouvel appelant doit faire de
+  // même : passer `null` là où il voulait dire « je ne touche pas » efface une borne
+  // d'argent en silence.
+  const hasStart = data.start_date !== undefined;
+  const hasEnd = data.end_date !== undefined;
+
   const r = db.prepare(`
     INSERT INTO player_game_deals (player_id, game_id, action_pct, rakeback_pct, start_date, end_date)
     VALUES (@player_id, @game_id, @action_pct, @rakeback_pct, @start_date, @end_date)
     ON CONFLICT(player_id, game_id) DO UPDATE SET
       action_pct = excluded.action_pct,
       rakeback_pct = excluded.rakeback_pct,
-      start_date = excluded.start_date,
-      end_date = excluded.end_date
-  `).run({ ...data, start_date: data.start_date ?? null, end_date: data.end_date ?? null });
+      start_date = CASE WHEN @has_start = 1 THEN excluded.start_date ELSE player_game_deals.start_date END,
+      end_date   = CASE WHEN @has_end   = 1 THEN excluded.end_date   ELSE player_game_deals.end_date   END
+  `).run({
+    ...data,
+    start_date: data.start_date ?? null,
+    end_date: data.end_date ?? null,
+    has_start: hasStart ? 1 : 0,
+    has_end: hasEnd ? 1 : 0,
+  });
   return r.lastInsertRowid;
 }
 
 export function deletePlayerGameDeal(id: number) {
-  getDb().prepare(`DELETE FROM player_game_deals WHERE id = ?`).run(id);
+  const db = getDb();
+  const r = db.prepare(
+    `SELECT g.name FROM player_game_deals d JOIN games g ON g.id = d.game_id WHERE d.id = ?`
+  ).get(id) as { name: string } | undefined;
+  // Supprimer le deal NEXA sortirait le joueur du JOIN de getPlayerWalletStats : ses
+  // mouvements disparaîtraient de tous les agrégats sans que rien ne le signale.
+  if ((r?.name ?? "").toUpperCase() === "NEXAPOKER") throw new NexaDealGuardError();
+  db.prepare(`DELETE FROM player_game_deals WHERE id = ?`).run(id);
 }
 
 // Distinct action_pct values held by the player across a game scope. Length > 1 = divergent
@@ -417,6 +482,10 @@ export function getScopeActionPcts(playerId: number, gameIds: number[]): number[
 // pcts and the number of rows updated. Money-adjacent (action_pct drives the agency cut).
 export function updatePlayerActionPct(playerId: number, gameIds: number[], newPct: number): { updated: number; oldPcts: number[] } {
   const db = getDb();
+  // La garde vit ici et pas seulement chez l'appelant (updateDealActionPct filtre par NOM
+  // de game) : une future page de room qui appellerait cette fonction directement
+  // écraserait le cache d'action NEXA sans laisser de trace.
+  for (const gid of gameIds) if (isNexaGame(db, gid)) throw new NexaDealGuardError();
   const ph = gameIds.map(() => "?").join(", ");
   const oldRows = db.prepare(
     `SELECT DISTINCT action_pct FROM player_game_deals WHERE player_id = ? AND game_id IN (${ph})`

@@ -98,6 +98,10 @@ function freshDb() {
       player_id INTEGER NOT NULL REFERENCES players(id) ON DELETE CASCADE,
       game_id INTEGER NOT NULL REFERENCES games(id) ON DELETE CASCADE,
       action_pct REAL NOT NULL DEFAULT 50, rakeback_pct REAL NOT NULL DEFAULT 0,
+      -- start_date/end_date : ajoutées par ALTER dans lib/db.ts, donc hors du bloc de
+      -- migration extrait par ce harnais. Sans elles la fixture ment sur le schéma réel
+      -- et le miroir ne peut pas être testé.
+      start_date TEXT, end_date TEXT,
       created_at TEXT NOT NULL DEFAULT (datetime('now')), UNIQUE(player_id, game_id));
   `);
   db.exec(MIGRATION_SQL);
@@ -115,8 +119,9 @@ const noId = (nickname: string): RawAffiliateRow => ({
   nickname, member_id: null, deal_text: DEAL, nlh: 1200, mtt: 0, plo: 0, spins: 0, affiliate_payment: 480,
 });
 const pgd = (db: any, pid: number) =>
-  db.prepare(`SELECT action_pct FROM player_game_deals d JOIN games g ON g.id = d.game_id
-              WHERE d.player_id = ? AND g.name = 'NEXAPOKER'`).get(pid) as { action_pct: number } | undefined;
+  db.prepare(`SELECT action_pct, start_date FROM player_game_deals d JOIN games g ON g.id = d.game_id
+              WHERE d.player_id = ? AND g.name = 'NEXAPOKER'`).get(pid) as
+    { action_pct: number; start_date: string | null } | undefined;
 
 console.log("\n══ Helpers de semaine ══");
 eq("previousWeek", previousWeek("2026-07-20"), "2026-07-13");
@@ -180,6 +185,10 @@ console.log("\n══ Part d'action — append-only ══");
   eq("l'ancienne est bornée", [hist[1].start_week, hist[1].end_week], [W1, W2]);
   eq("la nouvelle est ouverte", [hist[0].start_week, hist[0].end_week], [W3, null]);
   eq("MIROIR suit la période courante", pgd(db, p.player_id)?.action_pct, 40);
+  // start_date = PREMIÈRE période, pas la dernière : les requêtes d'argent de queries.ts
+  // bornent le deal par `start_date IS NULL OR tx_datetime >= start_date`. À NULL la garde
+  // ne borne rien ; datée de la dernière modif, elle amputerait l'historique déjà couvert.
+  eq("MIROIR daté de la 1re période (garde temporelle armée)", pgd(db, p.player_id)?.start_date, W1);
 
   const same = setActionShareOn(db, { player_id: p.player_id, pct: 45, start_week: W3 });
   check("même semaine = correction sur place", same.ok && !same.created);
@@ -615,6 +624,21 @@ const lead = (db: any, tg: number, member: string | null, stage = "account_creat
   const ing = fs.readFileSync(path.join(REPO, "lib/funnels/nexa/affiliate-ingest.ts"), "utf8");
   check("affiliate-ingest non plus", !/sendMsg|telegram-api/.test(importsOf(ing)));
 }
+
+// ══ Garde-fou NEXAPOKER sur player_game_deals — NON TESTÉ ICI, volontairement ══
+//
+// upsertPlayerGameDeal / deletePlayerGameDeal (lib/queries.ts) portent la garde, mais
+// sont liées à getDb(), dont le DB_PATH est calculé au chargement du module et ne suit
+// PAS le process.chdir() de ce harnais. Les exercer ici écrit dans la vraie
+// data/lecercle.db — constaté, puis nettoyé. Un test qui pollue la base de travail est
+// pire que pas de test.
+//
+// La garde est vérifiée de bout en bout par HTTP sur le serveur de dev :
+//   PATCH  /api/games/deals/<id nexa>  -> 409, aucune écriture
+//   DELETE /api/games/deals/<id nexa>  -> 409, aucune écriture
+//   POST   /api/games/deals {game_id: nexa} -> 409, aucune écriture
+// Pour la couvrir en unitaire il faudrait donner à ces deux fonctions une forme
+// `xOn(db, …)`, comme le reste des modules NEXA. À faire si on y retouche.
 
 console.log(`\n${failures.length === 0 ? "✅" : "❌"} ${passed} passés, ${failures.length} échoués`);
 try { fs.rmSync(TMP, { recursive: true, force: true }); } catch {}

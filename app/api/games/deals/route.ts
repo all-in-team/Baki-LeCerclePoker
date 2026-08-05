@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getPlayerGameDeals, upsertPlayerGameDeal } from "@/lib/queries";
 import { getDb } from "@/lib/db";
+import { isNexaGameId, NEXA_DEAL_GUARD_MESSAGE } from "@/lib/deal-edit";
 
 export async function GET(req: NextRequest) {
   const player_id = req.nextUrl.searchParams.get("player_id");
@@ -16,12 +17,25 @@ export async function POST(req: NextRequest) {
   const playerId = Number(body.player_id);
   const gameId = Number(body.game_id);
 
+  // Un upsert ici écraserait le cache d'action NEXA sans toucher l'historique :
+  // le miroir mentirait dès la première divergence.
+  if (isNexaGameId(gameId)) {
+    return NextResponse.json({ error: NEXA_DEAL_GUARD_MESSAGE }, { status: 409 });
+  }
+
   const id = upsertPlayerGameDeal({
     player_id: playerId,
     game_id: gameId,
     action_pct: Number(body.action_pct),
     rakeback_pct: Number(body.rakeback_pct),
-    start_date: body.start_date || null,
+    // Symétrique de end_date juste en dessous, et ce n'est pas cosmétique.
+    // `body.start_date || null` ne rend JAMAIS undefined : un POST sans start_date
+    // l'EFFAÇAIT. Or PlayerEditModal re-POSTe chaque deal coché à chaque sauvegarde
+    // de la fiche — corriger un numéro de téléphone effaçait donc start_date sur
+    // toutes les games ouvertes du joueur. Cette borne conditionne
+    // `pgd.start_date IS NULL OR wt.tx_datetime >= pgd.start_date` dans une quinzaine
+    // de requêtes d'argent (soldes, KPI, séries) et l'ancre de cycle QQPK.
+    start_date: body.start_date !== undefined ? (body.start_date || null) : undefined,
     end_date: body.end_date !== undefined ? (body.end_date || null) : undefined,
   });
 

@@ -59,8 +59,12 @@ export async function POST(req: NextRequest) {
           .run(row.player_id, game_id, row.external_id);
       } catch {}
 
-      // Save action_pct + rakeback_pct per player per game — auto-fills on next import
-      if (row.action_pct !== null || row.rakeback_pct !== null) {
+      // Save action_pct + rakeback_pct per player per game — auto-fills on next import.
+      // Cette route écrit son SQL en direct : la garde de upsertPlayerGameDeal ne la couvre
+      // pas. NEXAPOKER est exclu ici aussi — son deal est historisé par période et ne se
+      // déduit pas d'un import de report.
+      const isNexa = (db.prepare(`SELECT name FROM games WHERE id = ?`).get(game_id) as { name: string } | undefined)?.name?.toUpperCase() === "NEXAPOKER";
+      if (!isNexa && (row.action_pct !== null || row.rakeback_pct !== null)) {
         try {
           db.prepare(`
             INSERT INTO player_game_deals (player_id, game_id, action_pct, rakeback_pct)

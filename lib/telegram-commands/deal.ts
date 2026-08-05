@@ -32,7 +32,14 @@ export async function handleDeal(rawText: string, chatId: number) {
   if (!game) { await sendMsg(chatId, `❌ Game "${p.gameName}" inconnue`); return; }
 
   const rb = p.rakeback_pct ?? 0;
-  upsertPlayerGameDeal({ player_id: players[0].id, game_id: game.id, action_pct: p.action_pct, rakeback_pct: rb });
+  // findGame() matche `nexapoker` sans distinction de casse : sans ce filet, /deal
+  // écrasait le cache d'action NEXA et remettait sa start_date à NULL.
+  try {
+    upsertPlayerGameDeal({ player_id: players[0].id, game_id: game.id, action_pct: p.action_pct, rakeback_pct: rb });
+  } catch (e: any) {
+    await sendMsg(chatId, `❌ ${e?.message ?? e}`);
+    return;
+  }
 
   await sendMsg(chatId,
     `✅ <b>Deal enregistré</b>\n<b>${players[0].name}</b> sur <b>${game.name}</b>\nAction : <b>${p.action_pct}%</b> · RB : <b>${rb}%</b>`

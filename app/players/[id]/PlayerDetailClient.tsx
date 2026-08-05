@@ -88,7 +88,14 @@ export default function PlayerDetailClient({ player, transactions, gameDeals: in
 
   async function removeDeal(dealId: number) {
     if (!confirm("Retirer cette game ?")) return;
-    await fetch(`/api/games/deals/${dealId}`, { method: "DELETE" });
+    const res = await fetch(`/api/games/deals/${dealId}`, { method: "DELETE" });
+    // L'API refuse NEXAPOKER en 409. Sans ce test, l'écran retirait la ligne alors que le
+    // deal était toujours en base : l'écran mentait sur une écriture qui n'a pas eu lieu.
+    if (!res.ok) {
+      const j = await res.json().catch(() => null);
+      alert(j?.error ?? "Suppression refusée.");
+      return;
+    }
     setDeals(d => d.filter(x => x.id !== dealId));
   }
 
@@ -115,10 +122,17 @@ export default function PlayerDetailClient({ player, transactions, gameDeals: in
   }
 
   async function updateDeal(dealId: number, field: string, value: unknown) {
-    await fetch(`/api/games/deals/${dealId}`, {
+    const res = await fetch(`/api/games/deals/${dealId}`, {
       method: "PATCH", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ [field]: value }),
     });
+    // Idem : sur un 409 NEXAPOKER, afficher la nouvelle valeur ferait croire que la borne
+    // start_date a bougé — or c'est elle qui borne dix requêtes d'argent.
+    if (!res.ok) {
+      const j = await res.json().catch(() => null);
+      alert(j?.error ?? "Modification refusée.");
+      return;
+    }
     setDeals(ds => ds.map(d => d.id === dealId ? { ...d, [field]: value } : d));
   }
 
@@ -160,14 +174,19 @@ export default function PlayerDetailClient({ player, transactions, gameDeals: in
         <StatCard label="Net P&L Joueur" value={fmt(stats.net) + " USDT"} sub="Retraits − Dépôts" accent={netAccent} />
       </div>
       {/* my_pnl vient de getPlayerWalletStats : action appliquée aux SEULS mouvements wallet
-          (ni rakeback, ni reports, ni grindhouse). Le chiffre de référence est l'Agency cut
-          plus haut (getPlayerPnLAllGames) — d'où la ligne discrète plutôt qu'une 4e carte. */}
+          (ni rakeback, ni reports, ni grindhouse).
+          ⚠️ Les deux chiffres n'ont PAS le même périmètre de games : l'Agency cut vient de
+          getPlayerPnLAllGames, borné à AGENCY_GAMES (queries.ts) — NEXAPOKER n'y est pas.
+          my_pnl, lui, joint wallet_transactions sans filtre de game et inclut donc NEXA.
+          Les désigner l'un comme « référence » de l'autre serait faux : on dit le périmètre. */}
       <div style={{ fontSize: 11, color: "var(--text-dim)", marginBottom: 28 }}>
         Part action sur ces flux wallet :{" "}
         <strong style={{ color: myAccent === "green" ? "var(--green)" : myAccent === "red" ? "#EF4444" : "var(--text-muted)" }}>
           {fmt(stats.my_pnl)} USDT
         </strong>
-        {" — "}hors rakeback / reports / grindhouse. Référence : Agency cut ci-dessus.
+        {" — "}toutes games confondues (NEXAPOKER compris), hors rakeback / reports / grindhouse.
+        Périmètre différent de l'Agency cut ci-dessus, qui ne couvre pas NEXAPOKER : les deux
+        ne s'additionnent pas et ne se recoupent pas.
       </div>
 
       {/* Games section */}
@@ -205,6 +224,15 @@ export default function PlayerDetailClient({ player, transactions, gameDeals: in
                       Action <span style={{ color: "var(--gold)", fontWeight: 600 }}>{d.action_pct}%</span>
                       {d.rakeback_pct > 0 && <> · RB <span style={{ color: "var(--green)", fontWeight: 600 }}>{d.rakeback_pct}%</span></>}
                       {d.start_date && <> · Début <span style={{ color: "var(--text-muted)", fontWeight: 600 }}>{d.start_date}</span></>}
+                      {/* Sur NEXAPOKER cette ligne est un CACHE de la période courante : la
+                          vérité est historisée par période dans nexa_player_action_shares, et
+                          le RB n'est pas mirroité du tout (il vaudrait 0 à tort). L'API refuse
+                          l'édition ; il faut aussi que l'écran cesse de la présenter comme un fait. */}
+                      {d.game_name.toUpperCase() === "NEXAPOKER" && (
+                        <span style={{ color: "var(--text-dim)", fontStyle: "italic" }}>
+                          {" "}· période courante — historisé sur la page NEXAPOKER
+                        </span>
+                      )}
                     </span>
                     <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 10 }}>
                       {ids.length > 0

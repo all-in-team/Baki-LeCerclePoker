@@ -45,6 +45,14 @@ export async function PATCH(req: NextRequest) {
   }
 
   if (body.status === "active") {
+    // NE PAS rouvrir les deals ici. L'archivage (ci-dessus) pose end_date sur les deals
+    // ouverts, mais un `SET end_date = NULL WHERE game_id = ?` détruirait aussi les
+    // clôtures posées DÉLIBÉRÉMENT joueur par joueur — stopQqpkPlayer() et le décochage
+    // d'une game dans PlayerEditModal en posent. Rien ne distingue aujourd'hui « fermé par
+    // l'archivage » de « fermé à la main » : il faudrait un games.archived_at et une
+    // réouverture bornée à `end_date = date(archived_at)`. Tant que cette colonne n'existe
+    // pas, réactiver un game laisse les deals fermés — c'est réparable à la main, alors
+    // qu'une clôture individuelle effacée est perdue.
     db.prepare(`UPDATE games SET status = 'active' WHERE id = ?`).run(id);
     return NextResponse.json({ ok: true });
   }

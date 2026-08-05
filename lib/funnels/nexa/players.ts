@@ -325,11 +325,30 @@ export function setActionShareOn(
     // ── MIROIR — même transaction, voir l'encadré en tête de fichier ──
     // player_game_deals.action_pct est un cache de la période COURANTE. Il ne
     // porte aucun historique : c'est nexa_player_action_shares qui fait foi.
+    //
+    // start_date EST POSÉE, et ce n'est pas cosmétique : toutes les requêtes
+    // d'argent de lib/queries.ts (getPlayerWalletStats, getPlayerBalance,
+    // getWalletKPIs…) bornent le deal par
+    //   `pgd.start_date IS NULL OR wt.tx_datetime >= pgd.start_date`.
+    // Laissée à NULL, cette garde est INOPÉRANTE et le % courant s'applique
+    // rétroactivement à toutes les semaines passées. On garde la date d'ouverture
+    // de la PREMIÈRE période (MIN) : le miroir vaut pour tout l'historique NEXA,
+    // pas seulement depuis la dernière modification du %.
+    const firstWeek = (db.prepare(
+      `SELECT MIN(start_week) AS w FROM nexa_player_action_shares WHERE player_id = ?`
+    ).get(player_id) as { w: string | null }).w ?? start_week;
+
+    // COALESCE dans CET ordre : on ne pose la date que si elle manque, on ne la RECULE
+    // jamais. Reculer une borne existante réintégrerait en silence, dans getPlayerBalance
+    // et les KPI, des mouvements qui en étaient sortis — une borne d'argent ne s'élargit
+    // pas comme effet de bord d'un changement de pourcentage.
     db.prepare(`
-      INSERT INTO player_game_deals (player_id, game_id, action_pct, rakeback_pct)
-      VALUES (?, ?, ?, 0)
-      ON CONFLICT(player_id, game_id) DO UPDATE SET action_pct = excluded.action_pct
-    `).run(player_id, gid, pct);
+      INSERT INTO player_game_deals (player_id, game_id, action_pct, rakeback_pct, start_date)
+      VALUES (?, ?, ?, 0, ?)
+      ON CONFLICT(player_id, game_id) DO UPDATE SET
+        action_pct = excluded.action_pct,
+        start_date = COALESCE(player_game_deals.start_date, excluded.start_date)
+    `).run(player_id, gid, pct, firstWeek);
 
     return { created, closed };
   });

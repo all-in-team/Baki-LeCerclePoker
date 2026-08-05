@@ -1,15 +1,24 @@
 import { NextRequest, NextResponse } from "next/server";
 import { deletePlayerGameDeal } from "@/lib/queries";
 import { getDb } from "@/lib/db";
+import { isNexaDealId, NEXA_DEAL_GUARD_MESSAGE } from "@/lib/deal-edit";
 
 export async function DELETE(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
+  // Supprimer le deal NEXA sortirait le joueur du JOIN de getPlayerWalletStats : ses
+  // mouvements disparaîtraient des agrégats sans que rien ne le signale.
+  if (isNexaDealId(Number(id))) {
+    return NextResponse.json({ error: NEXA_DEAL_GUARD_MESSAGE }, { status: 409 });
+  }
   deletePlayerGameDeal(Number(id));
   return NextResponse.json({ ok: true });
 }
 
 export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
+  if (isNexaDealId(Number(id))) {
+    return NextResponse.json({ error: NEXA_DEAL_GUARD_MESSAGE }, { status: 409 });
+  }
   const body = await req.json();
   const sets: string[] = [];
   const vals: unknown[] = [];

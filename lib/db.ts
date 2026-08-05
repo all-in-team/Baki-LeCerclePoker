@@ -3126,4 +3126,33 @@ function initSchema(db: Database.Database) {
   } catch (err: any) {
     console.error(`[MIGRATION:add_nexa_affiliate_v1] FAILED (sera rejouée au prochain boot):`, err.message);
   }
+
+  // ── Backfill : start_date du miroir NEXAPOKER ────────────────────────────
+  // setActionShareOn recevait la semaine d'effet sans jamais l'écrire dans
+  // player_game_deals.start_date. Or toutes les requêtes d'argent de queries.ts
+  // bornent le deal par `pgd.start_date IS NULL OR wt.tx_datetime >= pgd.start_date` :
+  // à NULL, la garde ne borne RIEN et le % courant s'applique rétroactivement à
+  // toutes les semaines passées. On repose la date depuis la vérité historisée.
+  //
+  // PÉRIMÈTRE VOLONTAIREMENT ÉTROIT : game NEXAPOKER uniquement, start_date NULL
+  // uniquement, et seulement si le joueur a une période d'action enregistrée.
+  // Aucun deal d'une autre room ne peut être atteint par ce UPDATE.
+  try {
+    const already = db.prepare(`SELECT 1 FROM _applied_fixes WHERE name = ?`).get("nexa_mirror_start_date_v1");
+    if (!already) {
+      const r = db.prepare(`
+        UPDATE player_game_deals
+           SET start_date = (SELECT MIN(s.start_week) FROM nexa_player_action_shares s
+                              WHERE s.player_id = player_game_deals.player_id)
+         WHERE start_date IS NULL
+           AND game_id = (SELECT id FROM games WHERE name = 'NEXAPOKER')
+           AND EXISTS (SELECT 1 FROM nexa_player_action_shares s2
+                        WHERE s2.player_id = player_game_deals.player_id)
+      `).run();
+      db.prepare(`INSERT OR IGNORE INTO _applied_fixes (name) VALUES (?)`).run("nexa_mirror_start_date_v1");
+      console.log(`[MIGRATION] nexa_mirror_start_date_v1 applied — ${r.changes} deal(s) NEXAPOKER datés`);
+    }
+  } catch (err: any) {
+    console.error(`[MIGRATION:nexa_mirror_start_date_v1] FAILED (sera rejouée au prochain boot):`, err.message);
+  }
 }

@@ -31,7 +31,14 @@ export async function handleTx(type: "deposit" | "withdrawal", rawText: string, 
   let dealMsg = "";
   if (p.action_pct !== null) {
     const rb = p.rakeback_pct ?? 0;
-    upsertPlayerGameDeal({ player_id: players[0].id, game_id: game.id, action_pct: p.action_pct, rakeback_pct: rb });
+    // Même filet que /deal : le deal NEXA ne s'écrit que depuis la page NEXAPOKER.
+    // On refuse AVANT d'enregistrer le mouvement, pour ne pas laisser un demi-geste.
+    try {
+      upsertPlayerGameDeal({ player_id: players[0].id, game_id: game.id, action_pct: p.action_pct, rakeback_pct: rb });
+    } catch (e: any) {
+      await sendMsg(chatId, `❌ ${e?.message ?? e}`);
+      return;
+    }
     dealMsg = `\nDeal : <b>${p.action_pct}% action</b> · <b>${rb}% RB</b>`;
   }
 
