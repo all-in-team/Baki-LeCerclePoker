@@ -3198,4 +3198,56 @@ function initSchema(db: Database.Database) {
   } catch (err: any) {
     console.error(`[MIGRATION:add_nexa_action_settlement_v1] FAILED (sera rejouée au prochain boot):`, err.message);
   }
+
+  // ── Règlement du RAKEBACK NEXAPOKER ────────────────────────────────────────
+  //
+  // Deuxième flux de règlement de la room, à côté de la part d'action. Les deux
+  // vivent dans manual_settlements et se distinguent par `kind` ('action' par
+  // défaut, 'rakeback' ici) — la colonne existe déjà, aucun backfill n'est fait :
+  // toutes les lignes antérieures sont bien des règlements d'action.
+  //
+  // SNAPSHOT COMPLET DES PARAMÈTRES APPLIQUÉS. Contrairement à l'action, dont le
+  // calcul tient dans un % et un win/loss, le rakeback dépend d'une ASSIETTE
+  // (base), d'un TAUX, et surtout d'un MAKEUP ENTRANT qui vient des semaines
+  // précédentes. Rejouer un règlement passé sans ces trois valeurs est impossible :
+  // le report a pu être corrigé depuis, et le rejeu donnerait un autre chiffre.
+  // On fige donc, par semaine réglée : base, taux, makeup consommé, assiette nette,
+  // dû, makeup sortant. C'est la seule façon de répondre plus tard à « pourquoi
+  // ai-je payé ce montant-là ce jour-là ».
+  //
+  // UNIQUE(player_id, week_start) : une semaine ne peut pas être réglée deux fois,
+  // garanti par le schéma et pas seulement par le code. Supprimer le règlement
+  // (ON DELETE CASCADE depuis manual_settlements) libère les semaines.
+  try {
+    const fix = db.prepare(`INSERT OR IGNORE INTO _applied_fixes (name) VALUES (?)`)
+      .run("add_nexa_rakeback_settlement_v1");
+    if (fix.changes > 0) {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS nexa_rakeback_settlement_weeks (
+          id            INTEGER PRIMARY KEY AUTOINCREMENT,
+          settlement_id INTEGER NOT NULL REFERENCES manual_settlements(id) ON DELETE CASCADE,
+          player_id     INTEGER NOT NULL REFERENCES players(id) ON DELETE CASCADE,
+          week_start    TEXT NOT NULL,
+          -- Paramètres EFFECTIVEMENT appliqués, figés au verrouillage.
+          basis         TEXT NOT NULL CHECK(basis IN ('gross_rake','affiliate_commission')),
+          rakeback_pct  REAL NOT NULL,
+          base          REAL NOT NULL,   -- assiette brute de la semaine, selon la base
+          makeup_in     REAL NOT NULL,   -- makeup consommé en entrée (<= 0)
+          base_net      REAL NOT NULL,   -- base + makeup_in
+          due           REAL NOT NULL,   -- ce qui a été payé pour cette semaine
+          makeup_out    REAL NOT NULL,   -- reliquat sortant (<= 0)
+          created_at    TEXT NOT NULL DEFAULT (datetime('now')),
+          UNIQUE(player_id, week_start)
+        );
+        CREATE INDEX IF NOT EXISTS idx_nexa_rb_settle_settlement
+          ON nexa_rakeback_settlement_weeks(settlement_id);
+        CREATE INDEX IF NOT EXISTS idx_nexa_rb_settle_player
+          ON nexa_rakeback_settlement_weeks(player_id, week_start);
+      `);
+      db.prepare(`INSERT OR IGNORE INTO _applied_fixes (name) VALUES (?)`).run("add_nexa_rakeback_settlement_v1");
+      console.log("[MIGRATION] add_nexa_rakeback_settlement_v1 applied");
+    }
+  } catch (err: any) {
+    console.error(`[MIGRATION:add_nexa_rakeback_settlement_v1] FAILED (sera rejouée au prochain boot):`, err.message);
+  }
 }

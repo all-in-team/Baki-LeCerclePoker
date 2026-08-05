@@ -344,6 +344,12 @@ export type NexaPlayerDetail = {
    * elle seule. Sans elle, l'écran présenterait comme dû ce qui a déjà été payé.
    */
   settled_weeks: Record<string, number>;
+  /** week_start → id du règlement de RAKEBACK qui a figé cette semaine. */
+  rb_settled_weeks: Record<string, number>;
+  /** Dernière semaine dont le rakeback est réglé — la borne de makeup. */
+  rb_settled_through: string | null;
+  /** Rakeback déjà versé, au montant FIGÉ. */
+  rb_settled_total: number;
   /**
    * Part d'action DÉJÀ RÉGLÉE, au montant FIGÉ dans nexa_action_settlement_weeks —
    * pas au montant que le rejeu donnerait aujourd'hui. Si la semaine est corrigée
@@ -406,8 +412,21 @@ export function getNexaPlayerDetailOn(db: DB, playerId: number): NexaPlayerDetai
     `SELECT pct, start_week, end_week FROM nexa_player_action_shares WHERE player_id = ?`
   ).all(playerId) as ActionPeriod[];
 
+  // Borne de remise à zéro du makeup : la dernière semaine dont le RAKEBACK a été
+  // réglé. Régler solde le compte de la période, déficit compris — sans cette borne
+  // le rejeu reporterait sur la suite un makeup adossé à des semaines déjà payées,
+  // et le joueur paierait deux fois le même déficit.
+  //
+  // Lecture directe plutôt qu'un import de ./rakeback-settlement : ce module-ci est
+  // importé PAR celui-là (getNexaPlayerDetailOn alimente le calcul du réglable), un
+  // import retour créerait un cycle. Même parti que pour ./action-settlement.
+  const rbSettledThrough = (db.prepare(
+    `SELECT MAX(week_start) AS w FROM nexa_rakeback_settlement_weeks WHERE player_id = ?`
+  ).get(playerId) as { w: string | null } | undefined)?.w ?? null;
+
   const r = computeRakeback(
-    weeks, getRakebackPeriodsOn(db, playerId), actionPeriods, getNexaRakebackDefaultsOn(db),
+    weeks, getRakebackPeriodsOn(db, playerId), actionPeriods,
+    { ...getNexaRakebackDefaultsOn(db), rbSettledThrough },
   );
 
   const gid = gameId(db);
@@ -426,6 +445,13 @@ export function getNexaPlayerDetailOn(db: DB, playerId: number): NexaPlayerDetai
   const settledRows = db.prepare(
     `SELECT week_start, settlement_id, action_amount FROM nexa_action_settlement_weeks WHERE player_id = ?`
   ).all(playerId) as { week_start: string; settlement_id: number; action_amount: number }[];
+
+  // Semaines dont le RAKEBACK est réglé — flux distinct de l'action : une semaine
+  // peut avoir son action réglée et pas son rakeback, ou l'inverse. Deux mémoires
+  // séparées, jamais confondues à l'écran.
+  const rbSettledRows = db.prepare(
+    `SELECT week_start, settlement_id, due FROM nexa_rakeback_settlement_weeks WHERE player_id = ?`
+  ).all(playerId) as { week_start: string; settlement_id: number; due: number }[];
   const settledSet = new Set(settledRows.map(s => s.week_start));
 
   // Le réglé vaut son montant FIGÉ ; le reste à régler est recalculé par le rejeu.
@@ -444,6 +470,9 @@ export function getNexaPlayerDetailOn(db: DB, playerId: number): NexaPlayerDetai
     name: p.name,
     weeks: r.weeks,
     settled_weeks: Object.fromEntries(settledRows.map(s => [s.week_start, s.settlement_id])),
+    rb_settled_weeks: Object.fromEntries(rbSettledRows.map(s => [s.week_start, s.settlement_id])),
+    rb_settled_through: rbSettledThrough,
+    rb_settled_total: rbSettledRows.reduce((s, w) => s + w.due, 0),
     action_settled: actionSettled,
     action_unsettled: actionUnsettled,
     totals: r.totals,

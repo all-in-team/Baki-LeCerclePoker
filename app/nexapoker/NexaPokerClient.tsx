@@ -15,6 +15,7 @@ import { createPortal } from "react-dom";
 import { movementColor, netColor, isZeroAmount } from "@/components/ledger/MovementAmount";
 import NexaRevenueChart, { type NexaChartWeek } from "./NexaRevenueChart";
 import WinlossGrid from "./WinlossGrid";
+import RakebackSettlePanel from "./RakebackSettlePanel";
 
 const CARD: React.CSSProperties = {
   background: "#12141C", border: "1px solid rgba(255,255,255,0.06)", borderRadius: 14, padding: 18,
@@ -171,6 +172,10 @@ export default function NexaPokerClient({ currentWeek, today, chartWeeks, period
   // Semaines cochées pour le règlement. On n'envoie QUE des semaines : le montant
   // est recalculé par le moteur au lock, jamais repris de l'écran.
   const [toSettle, setToSettle] = useState<Record<string, boolean>>({});
+  // Avertissements du règlement d'action, remontés par le 409 du serveur, plus le
+  // « j'ai vu » qui débloque. Remis à zéro à chaque ouverture de détail.
+  const [actionWarnings, setActionWarnings] = useState<{ code: string; message: string }[]>([]);
+  const [ackAction, setAckAction] = useState(false);
 
   // Vue détail : c'est le MOTEUR qui donne la part d'action, jamais l'écran.
   // On stocke ce qu'il renvoie tel quel et on ne recalcule rien côté client.
@@ -180,6 +185,7 @@ export default function NexaPokerClient({ currentWeek, today, chartWeeks, period
       const j = await (await fetch(`/api/nexapoker/winloss?player_id=${p.player_id}`)).json();
       if (!j.ok) { setBanner({ kind: "err", text: j.error ?? "Détail indisponible." }); return; }
       setDetail(j.detail); setWlDraft({}); setToSettle({});
+      setActionWarnings([]); setAckAction(false);
     } finally { setDetailBusy(false); }
   }, []);
 
@@ -768,11 +774,43 @@ export default function NexaPokerClient({ currentWeek, today, chartWeeks, period
                   verrouillage : si le report a changé depuis l'affichage, c'est le calcul qui gagne.
                   Les buy-ins et cash-outs n'entrent pas dans ce règlement.
                 </div>
-                <button disabled={busy} onClick={async () => {
-                  const ok = await post("/api/nexapoker/settle-action",
-                    { player_id: detail.player_id, week_starts: picked.map(w => w.week_start) },
-                    j => `Règlement #${j.settlement_id} verrouillé — ${fmt(j.amount_due_usdt)} sur ${j.weeks.length} semaine(s).`);
-                  if (ok) { const p = players.find(x => x.player_id === detail.player_id); if (p) await openDetail(p); }
+                {/* Le refus pour avertissements non confirmés remonte en 409 avec la
+                    liste : on l'affiche et on redemande, coché. Un règlement d'action
+                    ne doit jamais passer au-dessus d'un trou de win/loss sans qu'il
+                    ait été montré. */}
+                {actionWarnings.length > 0 && (
+                  <div style={{ border: "1px solid rgba(240,185,11,0.4)", background: "rgba(240,185,11,0.06)",
+                                borderRadius: 10, padding: 10, marginBottom: 10 }}>
+                    {actionWarnings.map((w, i) => (
+                      <div key={i} style={{ fontSize: 11.5, color: "#F0B90B", marginBottom: 6 }}>⚠️ {w.message}</div>
+                    ))}
+                    <label style={{ display: "flex", gap: 6, alignItems: "center", fontSize: 11.5, color: "#E8E8EE", cursor: "pointer" }}>
+                      <input type="checkbox" checked={ackAction} onChange={e => setAckAction(e.target.checked)} />
+                      J'ai vu ces avertissements et je règle quand même.
+                    </label>
+                  </div>
+                )}
+                <button disabled={busy || (actionWarnings.length > 0 && !ackAction)} onClick={async () => {
+                  setBusy(true);
+                  try {
+                    const res = await fetch("/api/nexapoker/settle-action", {
+                      method: "POST", headers: { "Content-Type": "application/json" },
+                      body: JSON.stringify({ player_id: detail.player_id,
+                                             week_starts: picked.map(w => w.week_start),
+                                             acknowledge_warnings: ackAction }),
+                    });
+                    const j = await res.json().catch(() => null);
+                    if (!j?.ok) {
+                      setActionWarnings(j?.warnings ?? []);
+                      setBanner({ kind: "err", text: j?.error ?? `Échec (HTTP ${res.status}).` });
+                      return;
+                    }
+                    setActionWarnings([]); setAckAction(false);
+                    setBanner({ kind: "ok", text: `Règlement #${j.settlement_id} verrouillé — ${fmt(j.amount_due_usdt)} sur ${j.weeks.length} semaine(s).` });
+                    await load();
+                    const p = players.find(x => x.player_id === detail.player_id); if (p) await openDetail(p);
+                    router.refresh();
+                  } finally { setBusy(false); }
                 }} style={{ padding: "8px 16px", borderRadius: 8, border: "none", background: "#22D3EE",
                             color: "#0B0D12", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>
                   Verrouiller le règlement
@@ -805,6 +843,14 @@ export default function NexaPokerClient({ currentWeek, today, chartWeeks, period
               </b>
             </span>
           </div>
+          {/* Règlement du RAKEBACK — flux distinct de la part d'action, et qui va
+              dans l'autre sens : le rakeback SORT. Les deux panneaux cohabitent
+              dans la vue détail sans jamais additionner leurs montants. */}
+          <div style={{ marginTop: 14 }}>
+            <RakebackSettlePanel playerId={detail.player_id} playerName={detail.name}
+                                 onSettled={() => { const p = players.find(x => x.player_id === detail.player_id); if (p) void openDetail(p); void load(); }} />
+          </div>
+
           <div style={{ fontSize: 11, color: "#555568", marginTop: 6 }}>
             Position nette = part d'action <b>non réglée</b> + net des mouvements. Positif = le joueur te doit.
             Une semaine réglée en sort : un dû éteint ne doit plus s'afficher comme dû.

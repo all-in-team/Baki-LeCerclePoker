@@ -60,6 +60,13 @@ const MIGRATION_SQL = SRC.slice(execStart + "db.exec(`".length, SRC.indexOf("`);
 const SETTLE_START = SRC.indexOf("CREATE TABLE IF NOT EXISTS nexa_action_settlement_weeks");
 const SETTLE_SQL = SRC.slice(SETTLE_START, SRC.indexOf("`);", SETTLE_START));
 
+// Le règlement du RAKEBACK vit dans une migration séparée, hors du bloc extrait
+// ci-dessus. getNexaPlayerDetailOn la lit pour connaître la borne de remise à zéro
+// du makeup : sans elle, la fixture ment sur le schéma réel.
+const RB_START = SRC.indexOf("CREATE TABLE IF NOT EXISTS nexa_rakeback_settlement_weeks");
+const RB_SQL = SRC.slice(RB_START, SRC.indexOf("`);", RB_START));
+
+
 function freshDb() {
   const db = new Database(":memory:");
   db.pragma("foreign_keys = ON");
@@ -115,6 +122,7 @@ function freshDb() {
   `);
   db.exec(MIGRATION_SQL);
   db.exec(SETTLE_SQL);
+  db.exec(RB_SQL);
   return db;
 }
 

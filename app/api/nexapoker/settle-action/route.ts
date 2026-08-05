@@ -32,19 +32,26 @@ export async function POST(req: NextRequest) {
     if (!b || typeof b.player_id !== "number" || !Array.isArray(b.week_starts)
         || b.week_starts.some((w: unknown) => typeof w !== "string")) {
       return NextResponse.json(
-        { error: "Corps invalide : { player_id, week_starts: string[] } attendu." },
+        { error: "Corps invalide : { player_id, week_starts: string[], acknowledge_warnings? } attendu." },
         { status: 400 },
       );
     }
     const r = lockNexaActionSettlement({
-      player_id: b.player_id, week_starts: b.week_starts, notes: b.notes ?? null,
+      player_id: b.player_id, week_starts: b.week_starts,
+      acknowledge_warnings: b.acknowledge_warnings === true,
+      notes: b.notes ?? null,
     });
-    if (!r.ok) return NextResponse.json({ ok: false, error: r.error }, { status: 409 });
+    // Les avertissements accompagnent le refus : l'écran doit pouvoir les montrer
+    // et proposer la confirmation, pas seulement afficher « refusé ».
+    if (!r.ok) {
+      return NextResponse.json({ ok: false, error: r.error, warnings: r.warnings ?? [] }, { status: 409 });
+    }
     return NextResponse.json({
       ok: true,
       settlement_id: r.settlement_id,
       amount_due_usdt: r.amount_due_usdt,
       weeks: r.weeks,
+      warnings: r.warnings,
       detail: getNexaPlayerDetail(b.player_id),
     });
   } catch (e: any) {

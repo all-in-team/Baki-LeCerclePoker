@@ -83,9 +83,63 @@ export function getSettleableActionWeeks(playerId: number): SettleableWeek[] {
   return getSettleableActionWeeksOn(getDb(), playerId);
 }
 
+export type SettlementWarning = { code: string; message: string };
+
+/**
+ * Ce qu'il faut avoir VU avant de régler une part d'action.
+ *
+ * La part d'action s'appuie sur les win/loss SAISIS À LA MAIN. Une semaine sans
+ * win/loss est silencieusement écartée par getSettleableActionWeeksOn — c'est
+ * correct (on ne règle pas un montant inventé), mais dangereux si personne ne le
+ * dit : on croit régler « la période », on ne règle que les semaines renseignées.
+ * D'où cet avertissement sur les TROUS À L'INTÉRIEUR de la plage réglée, et sur
+ * les semaines en échec de contrôle qui la traversent.
+ * (Règle tranchée par Hugo, 2026-08-05.)
+ */
+export function getActionSettlementWarningsOn(
+  db: DB, playerId: number, weekStarts: string[],
+): SettlementWarning[] {
+  const d = getNexaPlayerDetailOn(db, playerId);
+  if (!d || weekStarts.length === 0) return [];
+  const asked = [...weekStarts].sort();
+  const from = asked[0], to = asked[asked.length - 1];
+  const settled = getSettledWeeksOn(db, playerId);
+  const out: SettlementWarning[] = [];
+
+  // Semaines de la PLAGE que le règlement n'emporte pas, et pourquoi.
+  const inSpan = d.weeks.filter(w => w.week_start >= from && w.week_start <= to);
+  const manquantes = inSpan.filter(
+    w => w.status === "ok" && w.winloss === null && !settled.has(w.week_start)
+         && !asked.includes(w.week_start),
+  );
+  if (manquantes.length > 0) {
+    out.push({
+      code: "missing_winloss",
+      message: `${manquantes.length} semaine(s) de la plage ${from} → ${to} n'ont pas de win/loss saisi `
+             + `et ne seront PAS réglées : ${manquantes.map(w => w.week_start).join(", ")}. `
+             + `Saisis-les d'abord si tu veux solder toute la période.`,
+    });
+  }
+
+  const bloquees = inSpan.filter(w => w.status === "blocked");
+  if (bloquees.length > 0) {
+    out.push({
+      code: "blocked_weeks",
+      message: `${bloquees.length} semaine(s) en échec de contrôle dans la plage : `
+             + `${bloquees.map(w => w.week_start).join(", ")}. Elles sont hors calcul et ne `
+             + `seront pas réglées — l'assiette de rake n'est pas fiable sur ces semaines.`,
+    });
+  }
+  return out;
+}
+
+export function getActionSettlementWarnings(playerId: number, weekStarts: string[]): SettlementWarning[] {
+  return getActionSettlementWarningsOn(getDb(), playerId, weekStarts);
+}
+
 export type LockResult =
-  | { ok: true; settlement_id: number; amount_due_usdt: number; weeks: SettleableWeek[] }
-  | { ok: false; error: string };
+  | { ok: true; settlement_id: number; amount_due_usdt: number; weeks: SettleableWeek[]; warnings: SettlementWarning[] }
+  | { ok: false; error: string; warnings?: SettlementWarning[] };
 
 /**
  * Verrouille le règlement de la part d'action sur les semaines demandées.
@@ -95,7 +149,8 @@ export type LockResult =
  * l'opération entière — mieux vaut refuser que régler un sous-ensemble silencieux.
  */
 export function lockNexaActionSettlementOn(
-  db: DB, args: { player_id: number; week_starts: string[]; notes?: string | null },
+  db: DB,
+  args: { player_id: number; week_starts: string[]; acknowledge_warnings?: boolean; notes?: string | null },
 ): LockResult {
   const { player_id } = args;
   const asked = [...new Set(args.week_starts)].sort();
@@ -126,6 +181,17 @@ export function lockNexaActionSettlementOn(
     };
   }
 
+  // Les avertissements se calculent APRÈS les refus durs : inutile de détailler
+  // des trous sur une plage qu'on va de toute façon rejeter.
+  const warnings = getActionSettlementWarningsOn(db, player_id, asked);
+  if (warnings.length > 0 && !args.acknowledge_warnings) {
+    return {
+      ok: false,
+      error: "Règlement non verrouillé : des avertissements doivent être vus et confirmés.",
+      warnings,
+    };
+  }
+
   const rows = asked.map(w => settleable.get(w)!);
   const due = rows.reduce((s, w) => s + w.action_amount, 0);
   const netSelected = rows.reduce((s, w) => s + w.winloss, 0);
@@ -143,7 +209,11 @@ export function lockNexaActionSettlementOn(
         VALUES (@game_id, @player_id, @net, @pct, @due, 'locked', @notes, datetime('now'), 'action')
       `).run({
         game_id: gid, player_id, net: netSelected, pct: uniformPct, due,
-        notes: args.notes ?? (pcts.length > 1 ? `Taux d'action multiples : ${pcts.join(" / ")} %` : null),
+        notes: [
+          args.notes,
+          pcts.length > 1 ? `Taux d'action multiples : ${pcts.join(" / ")} %` : null,
+          warnings.length > 0 ? `⚠️ ${warnings.length} avertissement(s) confirmé(s)` : null,
+        ].filter(Boolean).join(" — ") || null,
       });
       const settlementId = Number(ins.lastInsertRowid);
 
@@ -158,7 +228,7 @@ export function lockNexaActionSettlementOn(
       return settlementId;
     });
     const settlementId = run();
-    return { ok: true, settlement_id: settlementId, amount_due_usdt: due, weeks: rows };
+    return { ok: true, settlement_id: settlementId, amount_due_usdt: due, weeks: rows, warnings };
   } catch (e: any) {
     // La contrainte UNIQUE est le dernier rempart si deux locks se croisent : la
     // transaction est annulée, aucune semaine n'est à moitié réglée.
@@ -166,6 +236,8 @@ export function lockNexaActionSettlementOn(
   }
 }
 
-export function lockNexaActionSettlement(args: { player_id: number; week_starts: string[]; notes?: string | null }) {
+export function lockNexaActionSettlement(
+  args: { player_id: number; week_starts: string[]; acknowledge_warnings?: boolean; notes?: string | null },
+) {
   return lockNexaActionSettlementOn(getDb(), args);
 }

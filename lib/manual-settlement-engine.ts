@@ -509,6 +509,15 @@ export interface HubSettlement {
   net_selected_usdt: number;
   action_pct_applied: number;
   amount_due_usdt: number;      // >0 = le joueur doit au Cercle (ça rentre) · <0 = on doit au joueur (ça sort)
+  /**
+   * Nature du règlement. 'action' = part d'action (défaut historique, toutes les
+   * lignes antérieures). 'rakeback' = rakeback NEXAPOKER, un flux qui SORT.
+   *
+   * Doit être affiché : les deux natures cohabitent pour un même joueur et n'ont
+   * pas le même sens. Sans ce libellé, deux lignes identiques à l'écran voudraient
+   * dire l'une « il me doit », l'autre « je lui dois ».
+   */
+  kind: string;
   status: "locked" | "paid";
   tx_hash: string | null;
   notes: string | null;
@@ -529,19 +538,24 @@ export interface HubSettlement {
 const HUB_SELECT = `
   SELECT ms.id, ms.game_id, g.name AS game_name, ms.player_id, p.name AS player_name,
          ms.net_selected_usdt, ms.action_pct_applied, ms.amount_due_usdt,
-         ms.status, ms.tx_hash, ms.notes, ms.locked_at, ms.paid_at, ms.paid_date,
+         ms.status, ms.tx_hash, ms.notes, ms.locked_at, ms.paid_at, ms.paid_date, ms.kind,
          (SELECT COUNT(*) FROM wallet_transactions wt WHERE wt.settlement_id = ms.id) AS tx_count,
          -- COALESCE sur nexa_action_settlement_weeks : un règlement de part d'action NEXA
          -- n'a AUCUNE transaction back-linkée (son assiette est le win/loss saisi), sa
          -- période est donc portée par les semaines couvertes. Sans ce repli, la ligne
          -- s'afficherait dans le hub sans période ni libellé de semaine.
+         -- Troisième repli : nexa_rakeback_settlement_weeks. Un règlement de
+         -- rakeback n'a pas plus de transaction back-linkée qu'un règlement
+         -- d'action, et sans ce repli il s'afficherait sans période ni semaine.
          COALESCE(
            (SELECT MIN(COALESCE(wt.tx_datetime, wt.tx_date)) FROM wallet_transactions wt WHERE wt.settlement_id = ms.id),
-           (SELECT MIN(nw.week_start) FROM nexa_action_settlement_weeks nw WHERE nw.settlement_id = ms.id)
+           (SELECT MIN(nw.week_start) FROM nexa_action_settlement_weeks nw WHERE nw.settlement_id = ms.id),
+           (SELECT MIN(rw.week_start) FROM nexa_rakeback_settlement_weeks rw WHERE rw.settlement_id = ms.id)
          ) AS period_start,
          COALESCE(
            (SELECT MAX(COALESCE(wt.tx_datetime, wt.tx_date)) FROM wallet_transactions wt WHERE wt.settlement_id = ms.id),
-           (SELECT MAX(nw.week_start) FROM nexa_action_settlement_weeks nw WHERE nw.settlement_id = ms.id)
+           (SELECT MAX(nw.week_start) FROM nexa_action_settlement_weeks nw WHERE nw.settlement_id = ms.id),
+           (SELECT MAX(rw.week_start) FROM nexa_rakeback_settlement_weeks rw WHERE rw.settlement_id = ms.id)
          ) AS period_end
   FROM manual_settlements ms
   JOIN games g ON g.id = ms.game_id
@@ -936,7 +950,7 @@ export function getManualSettlementHistory(gameId: GameScope): ManualSettlementR
   return db.prepare(`
     SELECT ms.id, ms.game_id, ms.player_id, p.name AS player_name,
            ms.net_selected_usdt, ms.action_pct_applied, ms.amount_due_usdt,
-           ms.status, ms.tx_hash, ms.notes, ms.locked_at, ms.paid_at, ms.paid_date, ms.created_at,
+           ms.status, ms.tx_hash, ms.notes, ms.locked_at, ms.paid_at, ms.paid_date, ms.kind, ms.created_at,
            (SELECT COUNT(*) FROM wallet_transactions wt WHERE wt.settlement_id = ms.id) AS tx_count
     FROM manual_settlements ms
     JOIN players p ON p.id = ms.player_id

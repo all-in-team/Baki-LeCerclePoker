@@ -170,6 +170,29 @@ const inputStyle: React.CSSProperties = { padding: "6px 10px", borderRadius: 7, 
 type SortKey = "age" | "amount" | "room";
 type ViewMode = "grouped" | "flat";
 
+
+/**
+ * Nature du règlement, à côté de la room.
+ *
+ * 'action' est le défaut historique et reste MUET : l'afficher partout ajouterait
+ * du bruit sur toutes les lignes existantes sans rien apprendre. Seuls les flux
+ * introduits après lui se nomment — aujourd'hui le rakeback, qui SORT alors que la
+ * part d'action RENTRE. Sans ce badge, deux lignes du même joueur au même montant
+ * seraient indiscernables et voudraient dire l'inverse l'une de l'autre.
+ */
+function KindBadge({ kind }: { kind: string }) {
+  if (!kind || kind === "action") return null;
+  const label = kind === "rakeback" ? "RAKEBACK" : kind.toUpperCase();
+  return (
+    <span title="Rakeback dû au joueur — de l'argent qui sort, à ne pas confondre avec une part d'action"
+          style={{ marginLeft: 6, fontSize: 9.5, fontWeight: 700, letterSpacing: "0.04em",
+                   padding: "2px 6px", borderRadius: 4,
+                   background: "rgba(167,139,250,0.14)", color: "#A78BFA" }}>
+      {label}
+    </span>
+  );
+}
+
 export default function PaymentsClient({
   pending, pendingGroups, overdue, overdueGroups, paid, totals, rooms, graceDays,
   markPaidAction, markPaidBulkAction, unlockAction,
@@ -364,7 +387,7 @@ export default function PaymentsClient({
       }}>
         <TriCheckbox checked={isSel} onChange={() => toggleOne(s.id)} title="Sélectionner pour un règlement groupé" />
 
-        <RoomBadge label={s.room_label} color={s.room_color} />
+        <RoomBadge label={s.room_label} color={s.room_color} /><KindBadge kind={s.kind} />
 
         <a href={`${s.room_base_path}?player=${s.player_id}`} title="Ouvrir le joueur dans sa room"
           style={{ fontSize: 13, fontWeight: 600, color: "var(--text)", textDecoration: "none" }}>
@@ -732,7 +755,7 @@ export default function PaymentsClient({
                 const dir = direction(s.amount_due_usdt);
                 return (
                   <div key={s.id} style={{ ...rowBase, gridTemplateColumns: "88px minmax(120px,1fr) 118px 110px 150px auto" }}>
-                    <RoomBadge label={s.room_label} color={s.room_color} />
+                    <RoomBadge label={s.room_label} color={s.room_color} /><KindBadge kind={s.kind} />
                     <a href={`${s.room_base_path}?player=${s.player_id}`} style={{ fontSize: 13, fontWeight: 600, color: "var(--text)", textDecoration: "none" }}>
                       {s.player_name}
                     </a>
@@ -871,7 +894,7 @@ export default function PaymentsClient({
               const dir = direction(s.amount_due_usdt);
               return (
                 <div key={s.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "7px 11px", borderBottom: "1px solid var(--border)", fontSize: 12 }}>
-                  <RoomBadge label={s.room_label} color={s.room_color} />
+                  <RoomBadge label={s.room_label} color={s.room_color} /><KindBadge kind={s.kind} />
                   <span style={{ color: "var(--text)", fontWeight: 600 }}>{s.player_name}</span>
                   <WeekChip label={s.week_label} />
                   <span style={{ marginLeft: "auto", fontWeight: 700, color: dir.color, fontVariantNumeric: "tabular-nums" }}>{agencySigned(s.amount_due_usdt)}</span>
