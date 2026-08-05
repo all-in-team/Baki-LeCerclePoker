@@ -10,6 +10,7 @@
 // réconcilier vient de resolveRows et n'est jamais appliqué seul.
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
 import { createPortal } from "react-dom";
 import { movementColor, netColor, isZeroAmount } from "@/components/ledger/MovementAmount";
 import NexaRevenueChart from "./NexaRevenueChart";
@@ -114,6 +115,7 @@ type LeadAnomaly = { member_id: string; lead_id: number; lead_handle: string | n
 const fmt = (n: number) => n.toLocaleString("fr-FR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
 export default function NexaPokerClient({ currentWeek, today }: { currentWeek: string; today: string }) {
+  const router = useRouter();
   const [players, setPlayers] = useState<Player[]>([]);
   const [unrec, setUnrec] = useState<Unreconciled[]>([]);
   const [allPlayers, setAllPlayers] = useState<Simple[]>([]);
@@ -202,6 +204,10 @@ export default function NexaPokerClient({ currentWeek, today }: { currentWeek: s
       if (!j.ok) { setBanner({ kind: "err", text: j.error ?? `Échec (HTTP ${res.status}).` }); return false; }
       setBanner({ kind: "ok", text: okText(j) });
       await load();
+      // Les cartes chiffres du haut sont rendues CÔTÉ SERVEUR : sans ce refresh,
+      // une saisie de win/loss mettrait à jour la table sans bouger le total —
+      // deux chiffres contradictoires à l'écran.
+      router.refresh();
       return true;
     } catch (e: any) {
       setBanner({ kind: "err", text: e.message ?? String(e) }); return false;
