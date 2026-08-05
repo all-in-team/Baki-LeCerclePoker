@@ -10,7 +10,7 @@ These rules override default behavior. Violation = stop and report.
 - **NO `until` / `while` polling loops.** Single check, report result, move on.
 - **NO background-waiting** for deploys, queues, or state changes to settle.
 - **Max 10 min wall-clock** per task before mandatory user checkpoint.
-- **Max 1 deploy per task.** No speculative `railway up`.
+- **Max 1 deploy per task**, et UNIQUEMENT sur feu vert explicite de Baki (cf. § RAILWAY DEPLOY RULES). No speculative `railway up`.
 
 ## FORBIDDEN PATTERNS (specific failures observed in this repo)
 - ❌ `until [ ... /api/version ... ]` polling — endpoint can return stale "local-dev" forever
@@ -62,7 +62,28 @@ No exceptions. No "this is just a small change". Run money-auditor and paste its
 When stopping: state current situation, list 2-3 options for proceeding, wait for user choice. Do NOT pick an option yourself.
 
 ## RAILWAY DEPLOY RULES
-- Git auto-deploy is UNRELIABLE on this project (silently skips commits). Always use `railway up --ci --detach` to force.
+
+### 🛑 `railway up` = FEU VERT EXPLICITE DE BAKI, À CHAQUE FOIS
+**AUCUN `railway up` sans accord explicite de Baki** — quelle que soit la session, quel que soit
+le chantier, même si le code compile, même si "c'est juste pour vérifier".
+
+`railway up` **envoie l'arbre de travail LOCAL**, quelle que soit la branche sur laquelle tu te
+trouves. Ce n'est pas une commande de confort, c'est un déploiement en production. Le trigger git
+de Railway, lui, ne suit que `main` : c'est donc `railway up` — et lui seul — qui met du code de
+branche en prod.
+*(Constat 2026-08-05 : la prod tournait sur `579e9f4`, un commit de la branche `nexa-rakeback`,
+déployé par un `railway up` depuis une session Claude Code. Meta du déploiement : `cliCaller:
+"claude_code"`, aucun hash de commit.)*
+
+**`npm run deploy` compte comme un `railway up`** : `scripts/deploy.sh` l'appelle (ligne 20).
+La règle couvre les deux, sans exception.
+
+Ce qui NE déploie PAS, et ne demande donc pas de feu vert : `git commit`, et `git push` sur une
+branche autre que `main`. Un push sur `main` déclenche le trigger github → demander avant.
+
+### Le reste
+- Git auto-deploy is UNRELIABLE on this project (silently skips commits). Quand Baki a donné son
+  feu vert, utiliser `railway up --ci --detach` pour forcer.
 - NEVER ask the user to check the Railway dashboard. Use Railway CLI from terminal.
 - After `railway up --ci --detach`: ONE curl check on `/api/version`, accept the result. Do not loop.
 
@@ -155,8 +176,13 @@ Full glossary including currencies, exchange rates, club logic, legacy-vs-new ac
 ## Workflow rules
 
 - **AUTO-COMMIT RULE.** After completing any feature, fix, or meaningful change, always run `git add` + `git commit` + `git push` automatically before declaring the work done. Never leave uncommitted work waiting for user approval to commit. The user will catch problems by testing on Railway, not by reviewing local commits.
-- **Deploy without asking.** After any change that compiles, deploy to prod. Commit style: `fix:` or `feat:` prefix, lowercase, single line.
-- **ALWAYS use `npm run deploy` to ship changes.** Never rely on `git push` alone — Railway's auto-deploy silently skips builds. The script handles: push → `railway up --ci` → verify `/api/version` matches HEAD (5-min cap).
+- **Commit sans demander, DÉPLOYER JAMAIS sans demander.** Après un changement qui compile : commit
+  (style `fix:`/`feat:`, minuscules, une ligne). Le déploiement, lui, attend le feu vert explicite de
+  Baki — voir § RAILWAY DEPLOY RULES. (Cette ligne disait « deploy to prod » sans condition : c'est
+  cette formulation qui a mis du code de branche en prod.)
+- **Quand Baki a dit oui, utiliser `npm run deploy`.** Ne jamais compter sur `git push` seul — le trigger
+  github ne suit que `main`. Le script fait : push → `railway up --ci` → vérification `/api/version`
+  (plafond 5 min). ⚠️ Il appelle `railway up` : il EST un déploiement, il exige le même feu vert.
 - If deploy script reports "❌" → check Railway build logs. Otherwise never needed.
 - **Maximum work yourself.** Run lints, builds, curls, log inspections. Only ask Baki for credentials, 2FA codes, on-device approvals, physical actions.
 - **Ask before acting** ONLY for:
