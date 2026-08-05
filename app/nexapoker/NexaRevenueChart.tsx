@@ -11,10 +11,13 @@
 // fiche joueur). Le repo a déjà ce précédent : QqpkEvolutionChart est un composant
 // de page distinct qui reprend le même vocabulaire visuel.
 //
-// AUCUNE MATH D'ARGENT ICI (invariant #2). Les semaines arrivent déjà agrégées par
-// getNexaAgencyOn (lib/funnels/nexa/agency.ts) : commission = SUM(affiliate_payment),
-// rake = SUM(nlh+mtt+plo+spins), check_ko = COUNT(check_ok = 0). Ce composant ne fait
-// que cumuler pour la vue « Cumulé » — une somme d'affichage, pas un calcul de dû.
+// AUCUNE MATH D'ARGENT ICI (invariant #2). Les semaines arrivent deja agregees ET
+// FILTREES SUR LA PERIODE par getNexaDashboard (lib/funnels/nexa/dashboard.ts), qui
+// les tient lui-meme du moteur. Ce composant ne fait que cumuler pour la vue
+// « Cumule » — une somme d'affichage, pas un calcul de du.
+//
+// Il lit desormais le MEME agregat que les cartes du haut. Avant, il restait en
+// lifetime pendant que les cartes se filtraient : deux verites sur le meme ecran.
 
 import { useMemo, useState } from "react";
 import {
@@ -22,26 +25,35 @@ import {
   ResponsiveContainer, ReferenceLine,
 } from "recharts";
 
-const GREEN = "#22C55E", BLUE = "#60A5FA", AMBER = "#F0B90B", GREY = "#64748B";
+const GREEN = "#22C55E", BLUE = "#60A5FA", TEAL = "#2DD4BF",
+      VIOLET = "#A78BFA", WHITE = "#E8E8EE", AMBER = "#F0B90B", GREY = "#64748B";
 
-/** Miroir de AgencyWeek (lib/funnels/nexa/agency.ts) — le serveur fait foi. */
+/**
+ * Miroir de NexaDashboard["weeks"] (lib/funnels/nexa/dashboard.ts) — le serveur
+ * fait foi. Le graph lit désormais le MÊME agrégat que les cartes du haut, donc
+ * il suit le filtre de période : avant, il restait en lifetime pendant que les
+ * cartes se filtraient, deux vérités contradictoires sur le même écran.
+ */
 export type NexaChartWeek = {
   week_start: string;
   gross_rake: number;
   commission: number;
-  check_ko: number;
-  /**
-   * RÉSERVÉ au moteur rakeback (étape suivante) : commission − rakeback dû.
-   * Absent aujourd'hui — voir SERIES ci-dessous pour le branchement.
-   */
-  net_operator?: number | null;
+  due: number;
+  net_affiliation: number;
+  /** null = un win/loss manque sur la semaine. Jamais complété par un zéro. */
+  action_amount: number | null;
+  total: number | null;
+  /** Couples joueur×semaine sortis du calcul (contrôle en échec). */
+  blocked: number;
+  missing_winloss: number;
+  ok_lines: number;
 };
 
 type SeriesDef = {
   key: string;
   label: string;
   color: string;
-  /** Valeur de la semaine, ou null si la donnée n'existe pas encore. */
+  /** Valeur de la semaine, ou null si elle n'est pas chiffrable. */
   value: (w: NexaChartWeek) => number | null;
   /** Affichée à l'ouverture. */
   defaultOn: boolean;
@@ -50,31 +62,36 @@ type SeriesDef = {
 };
 
 /**
- * Registre des séries — c'est le seul endroit à toucher pour en ajouter une.
+ * Registre des séries — le seul endroit à toucher pour en ajouter une.
  *
- * Quand le moteur rakeback livrera le net par semaine, il suffira de renseigner
- * `net_operator` dans la charge utile de /api/nexapoker/agency et d'ajouter ici :
+ * Une série dont `value` ne renvoie que des null se masque d'elle-même (voir
+ * `available`) : « Part d'action » et « Total » disparaissent donc tant qu'aucun
+ * win/loss n'est saisi, au lieu d'afficher une ligne à zéro qui affirmerait
+ * « rien gagné » là où la vérité est « pas encore de donnée ».
  *
- *   { key: "net", label: "Net pour moi", color: "#A78BFA", defaultOn: true,
- *     value: w => w.net_operator ?? null,
- *     hint: "Commission encaissée moins le rakeback dû aux joueurs." },
- *
- * Rien d'autre à modifier : le cumul, les barres, l'infobulle, la légende et les
- * chips se construisent tous par itération sur ce tableau. Une série dont `value`
- * ne renvoie que des null se masque d'elle-même (voir `available` plus bas) —
- * elle ne peut donc pas afficher une ligne à zéro là où la donnée manque.
- *
- * Branchement vérifié le 2026-08-05 en ajoutant réellement cette entrée : chip,
- * barres groupées, courbe cumulée, infobulle et légende ont suivi sans autre
- * modification. Éviter en revanche un or/jaune pour cette série — il se confondait
- * avec l'ambre du marquage « contrôle en échec », d'où le passage de ce marquage
- * en hachure (voir le <defs> du mode barres).
+ * Éviter un or/jaune pour toute nouvelle série : c'est la couleur du marquage
+ * « contrôle en échec » (hachure des barres, point de la courbe).
  */
 const SERIES: SeriesDef[] = [
   {
-    key: "commission", label: "Commission encaissée", color: GREEN, defaultOn: true,
+    key: "commission", label: "Commission", color: GREEN, defaultOn: true,
     value: w => w.commission,
-    hint: "L'argent réellement reçu de la room. Compté même sur une semaine dont le contrôle a échoué.",
+    hint: "L'argent reçu de la room sur les semaines calculées.",
+  },
+  {
+    key: "net", label: "Net affiliation", color: TEAL, defaultOn: false,
+    value: w => w.net_affiliation,
+    hint: "Commission encaissée moins le rakeback dû aux joueurs.",
+  },
+  {
+    key: "action", label: "Part d'action", color: VIOLET, defaultOn: false,
+    value: w => w.action_amount,
+    hint: "Ma part sur les win/loss saisis. Positive quand le joueur gagne — même convention que les pages P&L.",
+  },
+  {
+    key: "total", label: "Total", color: WHITE, defaultOn: true,
+    value: w => w.total,
+    hint: "Net affiliation + part d'action : ce que la semaine me rapporte vraiment.",
   },
   {
     key: "rake", label: "Rake généré", color: BLUE, defaultOn: false,
@@ -118,17 +135,29 @@ export default function NexaRevenueChart({ weeks, currency = "USDT" }: {
   );
   const active = available.filter(s => on[s.key]);
 
+  // Un null RESTE null. En vue « Par semaine », recharts ne dessine simplement pas
+  // la barre — une semaine sans win/loss n'affiche donc pas une part d'action à
+  // zéro. En vue « Cumulé », le cumul S'ARRÊTE au premier trou : reprendre après
+  // en ignorant la semaine manquante donnerait une courbe qui a l'air complète
+  // alors qu'il lui manque un morceau.
   const rows = useMemo(() => {
     const acc: Record<string, number> = {};
+    const broken: Record<string, boolean> = {};
     return weeks.map(w => {
       const r: Record<string, any> = {
-        week: w.week_start, flagged: w.check_ko > 0, check_ko: w.check_ko,
+        week: w.week_start, flagged: w.blocked > 0, blocked: w.blocked,
+        missing_winloss: w.missing_winloss,
       };
       for (const s of available) {
-        const v = s.value(w) ?? 0;
-        acc[s.key] = (acc[s.key] ?? 0) + v;
+        const v = s.value(w);
         r[s.key] = v;
-        r[`${s.key}_cum`] = acc[s.key];
+        if (v === null) broken[s.key] = true;
+        if (!broken[s.key]) {
+          acc[s.key] = (acc[s.key] ?? 0) + (v ?? 0);
+          r[`${s.key}_cum`] = acc[s.key];
+        } else {
+          r[`${s.key}_cum`] = null;
+        }
       }
       return r;
     });
@@ -156,9 +185,12 @@ export default function NexaRevenueChart({ weeks, currency = "USDT" }: {
   const flaggedCount = rows.filter(r => r.flagged).length;
   // Le grand chiffre = le total de la PREMIÈRE série active, celle qui porte le titre.
   const headline = active[0];
-  const headlineTotal = headline
+  // Le grand chiffre n'a de sens que si la série est complète sur la période :
+  // sommer en ignorant les trous afficherait un total d'apparence juste, amputé.
+  const headlineBroken = headline ? rows.some(r => r[headline.key] === null) : false;
+  const headlineTotal = headline && !headlineBroken
     ? rows.reduce((s, r) => s + (r[headline.key] ?? 0), 0)
-    : 0;
+    : null;
 
   const chipStyle = (s: SeriesDef, isOn: boolean): React.CSSProperties => ({
     padding: "3px 10px", borderRadius: 999, fontSize: 11, fontWeight: 600, cursor: "pointer",
@@ -188,8 +220,8 @@ export default function NexaRevenueChart({ weeks, currency = "USDT" }: {
             <button onClick={() => setMode("cumul")} style={tabBtn(mode === "cumul")}>Cumulé</button>
           </div>
           {headline && (
-            <span style={{ fontSize: 14, fontWeight: 700, color: headline.color }}>
-              {fmt2(headlineTotal)} {currency}
+            <span style={{ fontSize: 14, fontWeight: 700, color: headlineTotal === null ? "var(--text-dim)" : headline.color }}>
+              {headlineTotal === null ? "incalculable" : `${fmt2(headlineTotal)} ${currency}`}
             </span>
           )}
         </div>
@@ -275,7 +307,10 @@ export default function NexaRevenueChart({ weeks, currency = "USDT" }: {
         </div>
         {headline && (
           <span style={{ fontSize: 10, color: "var(--text-dim)" }}>
-            Σ {headline.label.toLowerCase()} = {fmt2(headlineTotal)} {currency}
+            Σ {headline.label.toLowerCase()} ={" "}
+            {headlineTotal === null
+              ? `incalculable — ${rows.filter(r => r[headline.key] === null).length} semaine(s) sans win/loss`
+              : `${fmt2(headlineTotal)} ${currency}`}
           </span>
         )}
       </div>
@@ -300,7 +335,7 @@ function ChartTooltip({ active, payload, label, active_, cumul, currency }: {
       ))}
       {row.flagged && (
         <div style={{ color: AMBER, fontSize: 11, marginTop: 2 }}>
-          ⚠️ contrôle en échec sur {row.check_ko} ligne(s) — montant conservé
+          ⚠️ contrôle en échec sur {row.blocked} ligne(s) — montant conservé
         </div>
       )}
       {cumul && <div style={{ color: GREY, fontSize: 10, marginTop: 2 }}>cumul depuis la première semaine</div>}

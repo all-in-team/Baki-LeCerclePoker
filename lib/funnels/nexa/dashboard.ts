@@ -73,6 +73,8 @@ export type NexaDashboard = {
   /** Agrégat par semaine, pour le graph. Même périmètre que les totaux. */
   weeks: {
     week_start: string;
+    /** Rake brut des semaines calculées — l'assiette, pas la rentrée. */
+    gross_rake: number;
     commission: number;
     due: number;
     net_affiliation: number;
@@ -149,11 +151,12 @@ export type PlayerChain = { player_id: number; name: string; weeks: WeekResult[]
 export function aggregateDashboard(chains: PlayerChain[], window: WeekWindow): NexaDashboard {
   const players: NexaDashboardPlayer[] = [];
   const byWeek = new Map<string, {
-    commission: number; due: number; action: number; missing: number; blocked: number;
+    gross_rake: number; commission: number; due: number; action: number;
+    missing: number; blocked: number;
     /** Lignes joueur×semaine CALCULÉES sur cette semaine. 0 = semaine seulement bloquée. */
     ok_lines: number;
   }>();
-  const emptyWeek = () => ({ commission: 0, due: 0, action: 0, missing: 0, blocked: 0, ok_lines: 0 });
+  const emptyWeek = () => ({ gross_rake: 0, commission: 0, due: 0, action: 0, missing: 0, blocked: 0, ok_lines: 0 });
 
   let tCommission = 0, tDue = 0, tAction = 0;
   let anyMissing = false, tMissing = 0, tBlocked = 0, tBlockedCommission = 0;
@@ -218,6 +221,7 @@ export function aggregateDashboard(chains: PlayerChain[], window: WeekWindow): N
     for (const w of ok) {
       const e = byWeek.get(w.week_start) ?? emptyWeek();
       e.ok_lines += 1;
+      e.gross_rake += w.gross_rake;
       e.commission += w.commission;
       e.due += w.due;
       if (w.winloss === null) e.missing += 1; else e.action += w.action_amount ?? 0;
@@ -247,6 +251,7 @@ export function aggregateDashboard(chains: PlayerChain[], window: WeekWindow): N
       const action = e.ok_lines === 0 || e.missing > 0 ? null : e.action;
       return {
         week_start,
+        gross_rake: e.gross_rake,
         commission: e.commission, due: e.due, net_affiliation: net,
         action_amount: action,
         total: action === null ? null : net + action,

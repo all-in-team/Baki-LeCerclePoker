@@ -35,8 +35,14 @@ export default function NexaKpiCards({ dash, rangeLabel }: {
         padding: "22px 20px", marginBottom: 20, textAlign: "center",
         color: "var(--text-dim)", fontSize: 13,
       }}>
-        Aucune semaine saisie sur cette période ({rangeLabel}) — rien à afficher, ce qui n&apos;est
-        pas la même chose que zéro.
+        {/* Formulation exacte : le tableau de bord ne voit QUE les lignes rattachées
+            à un joueur. Un report peut être saisi et n'apparaître nulle part ici
+            parce que ses lignes attendent d'être réconciliées — dire « aucune
+            semaine saisie » serait alors faux, et enverrait chercher le problème
+            au mauvais endroit. La table « à réconcilier » plus bas les porte. */}
+        Aucune semaine rattachée à un joueur sur cette période ({rangeLabel}) — rien à afficher,
+        ce qui n&apos;est pas la même chose que zéro. Si un report vient d&apos;être saisi, ses
+        lignes sont peut-être encore à réconcilier (voir plus bas).
       </div>
     );
   }

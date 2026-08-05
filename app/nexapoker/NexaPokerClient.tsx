@@ -13,7 +13,8 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { createPortal } from "react-dom";
 import { movementColor, netColor, isZeroAmount } from "@/components/ledger/MovementAmount";
-import NexaRevenueChart from "./NexaRevenueChart";
+import NexaRevenueChart, { type NexaChartWeek } from "./NexaRevenueChart";
+import WinlossGrid from "./WinlossGrid";
 
 const CARD: React.CSSProperties = {
   background: "#12141C", border: "1px solid rgba(255,255,255,0.06)", borderRadius: 14, padding: 18,
@@ -114,7 +115,13 @@ type LeadAnomaly = { member_id: string; lead_id: number; lead_handle: string | n
 
 const fmt = (n: number) => n.toLocaleString("fr-FR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
-export default function NexaPokerClient({ currentWeek, today }: { currentWeek: string; today: string }) {
+export default function NexaPokerClient({ currentWeek, today, chartWeeks, periodLabel }: {
+  currentWeek: string;
+  today: string;
+  /** Semaines agrégées ET filtrées sur la période, calculées côté serveur. */
+  chartWeeks: NexaChartWeek[];
+  periodLabel: string;
+}) {
   const router = useRouter();
   const [players, setPlayers] = useState<Player[]>([]);
   const [unrec, setUnrec] = useState<Unreconciled[]>([]);
@@ -500,12 +507,25 @@ export default function NexaPokerClient({ currentWeek, today }: { currentWeek: s
         </div>
       )}
 
+      {/* ── Saisie hebdomadaire des win/loss ────────────────────────────
+          Juste sous la table des joueurs : c'est le geste du lundi, il se fait en
+          regardant les joueurs. Il alimente la part d'action, donc les cartes et
+          le graph — d'où le router.refresh() qu'il déclenche en fin de saisie. */}
+      <WinlossGrid />
+
       {/* ── Graph des gains ──────────────────────────────────────────────
-          Entre la table des joueurs et la vue Agence. Il est alimenté par les
-          MÊMES semaines que le tableau « Par semaine » ci-dessous (agency.weeks) :
-          deux lectures du même agrégat serveur, donc impossible qu'elles divergent. */}
-      {agency && agency.weeks.length > 0 && (
-        <NexaRevenueChart weeks={agency.weeks} />
+          Entre la table des joueurs et la vue Agence. Alimenté par le MÊME agrégat
+          serveur que les cartes du haut (getNexaDashboard), donc il SUIT le filtre
+          de période : le graph et les cartes ne peuvent pas raconter deux périodes
+          différentes. La vue Agence ci-dessous reste, elle, en lifetime — c'est
+          délibéré et dit dans son intitulé. */}
+      {chartWeeks.length > 0 && (
+        <div>
+          <NexaRevenueChart weeks={chartWeeks} />
+          <div style={{ fontSize: 10, color: "#555568", margin: "6px 2px 0" }}>
+            Période affichée : {periodLabel}. La vue Agence ci-dessous couvre, elle, tout l&apos;historique.
+          </div>
+        </div>
       )}
 
       {/* ── Vue agence : la rentrée hebdo, et ma position par joueur ──── */}

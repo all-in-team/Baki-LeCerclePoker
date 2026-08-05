@@ -317,6 +317,21 @@ export function getWeeklyWinlossOn(db: DB, playerId: number): Map<string, number
   return new Map(rows.map(r => [r.week_start, r.amount]));
 }
 
+/**
+ * Win/loss de TOUS les joueurs pour UNE semaine — l'inverse de la fonction
+ * ci-dessus, pour la grille de saisie hebdomadaire.
+ *
+ * Lecture pure : aucun calcul, aucun repli. Une clé absente veut dire « non
+ * saisi » et doit le rester — c'est la distinction que tout le moteur repose
+ * dessus (un zéro saisi n'est pas une absence de saisie).
+ */
+export function getWinlossForWeekOn(db: DB, weekStart: string): Map<number, number> {
+  const rows = db.prepare(
+    `SELECT player_id, amount FROM nexa_player_weekly_winloss WHERE week_start = ?`
+  ).all(weekStart) as { player_id: number; amount: number }[];
+  return new Map(rows.map(r => [r.player_id, r.amount]));
+}
+
 // ── Vue détail d'un joueur ────────────────────────────────────────────────
 
 export type NexaPlayerDetail = {

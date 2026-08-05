@@ -74,7 +74,8 @@ export default async function NexaPokerPage({ searchParams }: {
         basePath="/nexapoker"
       />
 
-      <NexaPokerClient currentWeek={currentWeekMonday()} today={today} />
+      <NexaPokerClient currentWeek={currentWeekMonday()} today={today}
+                       chartWeeks={dash.weeks} periodLabel={weekWindowLabel(window)} />
 
       <div id="saisie" style={{ marginTop: 28, scrollMarginTop: 20 }}>
         <div style={{ fontSize: 15, fontWeight: 700, color: "#E8E8EE", marginBottom: 4 }}>
