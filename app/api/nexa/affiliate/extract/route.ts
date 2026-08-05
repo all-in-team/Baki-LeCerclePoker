@@ -32,23 +32,72 @@ const ACCEPTED = ["image/png", "image/jpeg", "image/webp", "image/gif"];
 // sans multiplier les tentatives à l'insu de tout le monde (3 reprises SDK × 3
 // boucles = 9 appels vision facturés).
 //
-// UNIQUEMENT SUR 529. Un 400 (image invalide) ou un 401 (clé fausse) ne
-// deviendront jamais bons en réessayant : les retenter brûle du temps et de
-// l'argent pour finir sur la même erreur.
+// DEUX CAS SEULEMENT, et pour la même raison : ils sont PASSAGERS.
+//   • 529 overloaded_error — l'API est saturée.
+//   • 429 rate_limit_error — quota momentanément dépassé. Un pic passager mérite
+//     le même traitement ; seul un quota réellement épuisé survivra aux reprises
+//     et finira sur un message clair.
+// Un 400 (image invalide) ou un 401 (clé fausse) ne deviendront jamais bons en
+// réessayant : les retenter brûle du temps et de l'argent pour la même erreur.
 const RETRY_DELAYS_MS = [2_000, 5_000, 10_000];
+/** Le 429 est plus court : au-delà, c'est un vrai quota, pas un pic. */
+const RATE_LIMIT_MAX_RETRIES = 2;
+/** Plafond de l'attente suggérée par l'API — au-delà, autant rendre la main. */
+const MAX_RETRY_AFTER_MS = 60_000;
+
+/** `status` et `type` vivent sur les sous-classes APIStatusError ; on les lit sans
+ *  caster la classe elle-même (elle est exportée comme valeur, pas comme type). */
+function apiErrorFields(e: unknown): { status?: number; type?: string } {
+  return e as unknown as { status?: number; type?: string };
+}
 
 /** 529 / overloaded_error, et rien d'autre. */
 function isOverloaded(e: unknown): boolean {
   if (!(e instanceof Anthropic.APIError)) return false;
-  // `status` et `type` sont portés par les sous-classes APIStatusError ; on les
-  // lit sans caster la classe elle-même (elle est exportée comme valeur, pas type).
-  const { status, type } = e as unknown as { status?: number; type?: string };
+  const { status, type } = apiErrorFields(e);
   return status === 529 || type === "overloaded_error";
+}
+
+/** 429 / rate_limit_error. */
+function isRateLimited(e: unknown): boolean {
+  if (!(e instanceof Anthropic.APIError)) return false;
+  if (e instanceof Anthropic.RateLimitError) return true;
+  const { status, type } = apiErrorFields(e);
+  return status === 429 || type === "rate_limit_error";
+}
+
+/**
+ * Attente demandée par l'API sur un 429, en ms — l'API sait mieux que nous quand
+ * la fenêtre se rouvre. `null` si elle ne dit rien d'exploitable : on retombe
+ * alors sur l'échelle de délais.
+ *
+ * `retry-after` peut aussi être une DATE HTTP ; Number() donne alors NaN et on
+ * retombe proprement sur l'échelle plutôt que d'attendre une valeur absurde.
+ */
+function retryAfterMs(e: unknown): number | null {
+  const headers = (e as { headers?: unknown }).headers;
+  if (!headers) return null;
+  const get = (k: string): string | null => {
+    const h = headers as Headers;
+    if (typeof h?.get === "function") return h.get(k);
+    const rec = headers as Record<string, string>;
+    return rec[k] ?? rec[k.toLowerCase()] ?? null;
+  };
+  const ms = Number(get("retry-after-ms"));
+  if (Number.isFinite(ms) && ms > 0) return Math.min(ms, MAX_RETRY_AFTER_MS);
+  const secs = Number(get("retry-after"));
+  if (Number.isFinite(secs) && secs > 0) return Math.min(secs * 1000, MAX_RETRY_AFTER_MS);
+  return null;
 }
 
 const OVERLOADED_MESSAGE =
   "API saturée, réessaie dans une minute. Rien n'a été perdu : ton screenshot n'est pas encore enregistré, "
   + "il suffit de le redéposer. (Le serveur a déjà réessayé plusieurs fois de son côté.)";
+
+const RATE_LIMIT_MESSAGE =
+  "Quota API atteint, réessaie dans une minute. Rien n'a été perdu : ton screenshot n'est pas encore "
+  + "enregistré, il suffit de le redéposer. (Le serveur a déjà réessayé de son côté — si ça persiste, "
+  + "c'est le quota du jour qui est épuisé.)";
 
 const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
 
@@ -159,21 +208,45 @@ export async function POST(req: NextRequest) {
 
     // `!` : la boucle sort soit par `break` (response assignée), soit par un
     // `return`/`throw`. TypeScript ne sait pas le déduire d'un for(;;).
+    //
+    // Deux budgets de reprise SÉPARÉS : une saturation et un pic de quota sont
+    // deux problèmes distincts, et un compteur commun laisserait l'un consommer
+    // les reprises de l'autre.
     let response!: Anthropic.Message;
-    for (let attempt = 0; ; attempt++) {
+    let overloadRetries = 0;
+    let rateLimitRetries = 0;
+    for (;;) {
       try {
         response = await callVision();
         break;
       } catch (e) {
-        // Toute autre erreur remonte au catch général : on ne retente QUE la saturation.
-        if (!isOverloaded(e)) throw e;
-        if (attempt >= RETRY_DELAYS_MS.length) {
-          console.error(`[NEXA_AFFILIATE_EXTRACT] 529 overloaded après ${attempt + 1} tentative(s) — abandon.`);
-          return NextResponse.json({ error: OVERLOADED_MESSAGE }, { status: 503 });
+        if (isOverloaded(e)) {
+          if (overloadRetries >= RETRY_DELAYS_MS.length) {
+            console.error(`[NEXA_AFFILIATE_EXTRACT] 529 overloaded après ${overloadRetries + 1} tentative(s) — abandon.`);
+            return NextResponse.json({ error: OVERLOADED_MESSAGE }, { status: 503 });
+          }
+          const wait = RETRY_DELAYS_MS[overloadRetries++];
+          console.warn(`[NEXA_AFFILIATE_EXTRACT] 529 overloaded — reprise ${overloadRetries}/${RETRY_DELAYS_MS.length} dans ${wait} ms`);
+          await sleep(wait);
+          continue;
         }
-        const wait = RETRY_DELAYS_MS[attempt];
-        console.warn(`[NEXA_AFFILIATE_EXTRACT] 529 overloaded — reprise ${attempt + 1}/${RETRY_DELAYS_MS.length} dans ${wait} ms`);
-        await sleep(wait);
+        if (isRateLimited(e)) {
+          if (rateLimitRetries >= RATE_LIMIT_MAX_RETRIES) {
+            console.error(`[NEXA_AFFILIATE_EXTRACT] 429 rate limit après ${rateLimitRetries + 1} tentative(s) — abandon.`);
+            return NextResponse.json({ error: RATE_LIMIT_MESSAGE }, { status: 429 });
+          }
+          // L'API sait mieux que nous quand sa fenêtre se rouvre : son retry-after
+          // gagne sur notre échelle quand elle en donne un.
+          const hinted = retryAfterMs(e);
+          const wait = hinted ?? RETRY_DELAYS_MS[rateLimitRetries];
+          rateLimitRetries++;
+          console.warn(`[NEXA_AFFILIATE_EXTRACT] 429 rate limit — reprise ${rateLimitRetries}/${RATE_LIMIT_MAX_RETRIES} dans ${wait} ms`
+                     + `${hinted !== null ? " (retry-after de l'API)" : ""}`);
+          await sleep(wait);
+          continue;
+        }
+        // Tout le reste remonte au catch général : ce n'est pas passager.
+        throw e;
       }
     }
 
@@ -226,10 +299,8 @@ export async function POST(req: NextRequest) {
     if (isOverloaded(e)) {
       return NextResponse.json({ error: OVERLOADED_MESSAGE }, { status: 503 });
     }
-    if (e instanceof Anthropic.RateLimitError) {
-      return NextResponse.json({
-        error: "Quota API atteint (trop de requêtes). Attends une minute avant de redéposer le screenshot.",
-      }, { status: 429 });
+    if (isRateLimited(e)) {
+      return NextResponse.json({ error: RATE_LIMIT_MESSAGE }, { status: 429 });
     }
     if (e instanceof Anthropic.AuthenticationError || e instanceof Anthropic.PermissionDeniedError) {
       return NextResponse.json({

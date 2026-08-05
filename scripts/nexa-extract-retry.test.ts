@@ -126,6 +126,14 @@ function makeRequest(): any {
 const overloaded = () => new InternalServerError(529, "overloaded_error",
   '{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}');
 
+/** 429, avec les en-têtes que l'API peut joindre (retry-after / retry-after-ms). */
+function rateLimited(headers?: Record<string, string>): Error {
+  const e = new RateLimitError(429, "rate_limit_error",
+    '{"type":"error","error":{"type":"rate_limit_error","message":"Rate limited"}}');
+  if (headers) (e as any).headers = headers;
+  return e;
+}
+
 async function run(errors: Error[]) {
   scenario = { throwErrors: errors, calls: 0 };
   waits.length = 0;
@@ -158,6 +166,55 @@ async function run(errors: Error[]) {
     check("aucun JSON brut de l'API", !/overloaded_error|\{"type"/.test(body.error), body.error);
   }
 
+  console.log("\n══ 429 : un pic de quota est passager, on retente ══");
+  {
+    const { res, body, calls, waits: w } = await run([rateLimited(), rateLimited()]);
+    eq("2 échecs puis succès → 3 appels", calls, 3);
+    eq("échelle de délais faute de retry-after", w, [2000, 5000]);
+    eq("HTTP 200", res.status ?? 200, 200);
+    check("la transcription est rendue", body.ok === true, JSON.stringify(body).slice(0, 200));
+  }
+
+  console.log("\n══ 429 : le retry-after de l'API gagne sur notre échelle ══");
+  {
+    // L'API sait quand sa fenêtre se rouvre ; notre échelle n'est qu'un défaut.
+    const { calls, waits: w } = await run([rateLimited({ "retry-after": "7" })]);
+    eq("1 échec puis succès", calls, 2);
+    eq("7 s honorées, pas nos 2 s", w, [7000]);
+
+    // Variante en millisecondes, et plafonnement d'une valeur absurde.
+    const ms = await run([rateLimited({ "retry-after-ms": "3500" })]);
+    eq("retry-after-ms honoré", ms.waits, [3500]);
+    const huge = await run([rateLimited({ "retry-after": "9999" })]);
+    eq("valeur absurde plafonnée à 60 s", huge.waits, [60000]);
+
+    // Une DATE HTTP n'est pas exploitable en l'état : on retombe sur l'échelle
+    // plutôt que d'attendre un NaN.
+    const date = await run([rateLimited({ "retry-after": "Wed, 05 Aug 2026 09:00:00 GMT" })]);
+    eq("date HTTP → repli sur l'échelle", date.waits, [2000]);
+  }
+
+  console.log("\n══ 429 persistant : c'est un vrai quota ══");
+  {
+    const { res, body, calls } = await run([rateLimited(), rateLimited(), rateLimited()]);
+    // 1 tentative + 2 reprises = 3 appels, puis abandon.
+    eq("3 appels au total", calls, 3);
+    eq("HTTP 429", res.status, 429);
+    check("message parle du quota", /[Qq]uota API atteint/.test(body.error), body.error);
+    check("dit que rien n'est perdu", /rien n'a été perdu/i.test(body.error), body.error);
+    check("aucun JSON brut de l'API", !/rate_limit_error|\{"type"/.test(body.error), body.error);
+  }
+
+  console.log("\n══ Les deux budgets de reprise sont séparés ══");
+  {
+    // Un 429 ne doit pas consommer les reprises réservées à la saturation :
+    // sinon une alternance des deux épuiserait tout et abandonnerait trop tôt.
+    const { calls } = await run([
+      rateLimited(), overloaded(), rateLimited(), overloaded(), overloaded(),
+    ]);
+    eq("2 x 429 + 3 x 529 tenus, puis succès", calls, 6);
+  }
+
   console.log("\n══ Ce qui ne doit JAMAIS être retenté ══");
   {
     // Une image invalide ne deviendra pas valide en réessayant : retenter
@@ -169,11 +226,6 @@ async function run(errors: Error[]) {
     const auth = await run([new AuthenticationError(401, "authentication_error", '{"type":"error"}')]);
     eq("401 → un seul appel", auth.calls, 1);
     check("message parle de la clé serveur", /clé API du serveur/.test(auth.body.error), auth.body.error);
-
-    const rate = await run([new RateLimitError(429, "rate_limit_error", '{"type":"error"}')]);
-    eq("429 → un seul appel (hors périmètre du retry)", rate.calls, 1);
-    eq("HTTP 429", rate.res.status, 429);
-    check("message parle du quota", /[Qq]uota/.test(rate.body.error), rate.body.error);
 
     const net = await run([new APIConnectionError(0, "connection_error", "socket hang up")]);
     eq("erreur réseau → un seul appel", net.calls, 1);
