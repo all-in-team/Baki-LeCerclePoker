@@ -63,22 +63,6 @@ export type EngineConfig = {
   /** Appliqués aux semaines qu'aucune période ne couvre (settings). */
   defaultPct: number;
   defaultBasis: Basis;
-  /**
-   * Dernière semaine dont le RAKEBACK a été réglé pour ce joueur, ou null.
-   *
-   * Le makeup REPART DE ZÉRO juste après elle : régler, c'est solder le compte de
-   * la période, y compris le déficit qu'elle laissait. Sans cette borne, le rejeu
-   * — qui recommence toujours à la première semaine — reporterait sur les semaines
-   * suivantes un makeup adossé à des semaines déjà payées, et le joueur paierait
-   * deux fois le même déficit. (Règle tranchée par Hugo, 2026-08-05.)
-   *
-   * Les semaines COUVERTES par le règlement se rejouent inchangées : leur montant
-   * figé vit dans nexa_rakeback_settlement_weeks, et le rejeu doit pouvoir être
-   * confronté à ce figement. Seule la suite repart de zéro.
-   *
-   * Optionnel : absent = comportement d'avant, aucune remise à zéro.
-   */
-  rbSettledThrough?: string | null;
 };
 
 export type WeekResult = {
@@ -201,23 +185,8 @@ export function computeRakeback(
   let makeup = 0;
   let prevPeriodKey: string | null = null;
   let prevBasis: Basis | null = null;
-  // Franchissement de la borne de règlement : on ne remet à zéro QU'UNE FOIS, au
-  // passage de la dernière semaine réglée à la première qui ne l'est pas.
-  const settledThrough = config.rbSettledThrough ?? null;
-  let crossedSettled = false;
 
   for (const w of ordered) {
-    if (settledThrough !== null && !crossedSettled && w.week_start > settledThrough) {
-      crossedSettled = true;
-      if (makeup < -EPS) {
-        warnings.push({
-          week_start: w.week_start,
-          message: `Makeup de ${makeup.toFixed(2)} soldé par le règlement de rakeback couvrant `
-                 + `jusqu'au ${settledThrough} : la chaîne repart de zéro ici.`,
-        });
-      }
-      makeup = 0;
-    }
     const rp = periodAt(rakebackPeriods, w.week_start);
     const ap = periodAt(actionPeriods, w.week_start);
     const basis: Basis = rp?.basis ?? config.defaultBasis;

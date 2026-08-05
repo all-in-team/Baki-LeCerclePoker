@@ -7,10 +7,17 @@
 // au verrouillage. Si le report a changé depuis l'affichage, c'est le calcul qui
 // gagne — même règle que le règlement de la part d'action.
 //
-// LES AVERTISSEMENTS SE VOIENT AVANT, PAS APRÈS. Une semaine en échec de contrôle
-// dans la plage — ou avant elle, puisqu'elle a coupé la chaîne de makeup en amont —
-// bloque le verrouillage tant qu'elle n'a pas été vue et confirmée. Le serveur
-// refuse de son côté : décocher la case ici ne suffit pas à passer outre.
+// CE QUI SE VOIT AVANT LE CLIC, PAS APRÈS. Deux mécanismes distincts :
+//   • le PLAFOND — une semaine en échec de contrôle arrête la plage, et l'écran dit
+//     laquelle et pourquoi. Ce n'est pas négociable : régler au-delà ferait
+//     disparaître son déficit pour toujours.
+//   • les AVERTISSEMENTS du moteur (makeup reporté sur une autre assiette, makeup
+//     abandonné) — ils n'empêchent pas de régler mais changent ce qui est payé,
+//     donc ils exigent une confirmation. Le serveur refuse de son côté : décocher
+//     la case ici ne suffit pas à passer outre.
+//
+// La colonne « Reliquat » montre le déficit qui SURVIT au règlement. Régler paie,
+// ça ne solde pas — et il ne faut pas croire l'inverse au moment de cliquer.
 
 import { useCallback, useEffect, useState } from "react";
 
@@ -45,13 +52,15 @@ export default function RakebackSettlePanel({ playerId, playerName, onSettled }:
   const [busy, setBusy] = useState(false);
   const [loading, setLoading] = useState(true);
   const [msg, setMsg] = useState<{ kind: "ok" | "err"; text: string } | null>(null);
+  /** Semaine en échec qui PLAFONNE la plage — l'écran doit dire pourquoi il s'arrête. */
+  const [blocking, setBlocking] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true); setMsg(null); setAck(false);
     try {
       const j = await (await fetch(`/api/nexapoker/settle-rakeback?player_id=${playerId}`)).json();
       if (!j.ok) { setMsg({ kind: "err", text: j.error ?? "Chargement impossible." }); return; }
-      setWeeks(j.weeks); setWarnings(j.warnings ?? []);
+      setWeeks(j.weeks); setWarnings(j.warnings ?? []); setBlocking(j.blocking_week ?? null);
       // Par défaut on propose de solder TOUT l'ouvert : c'est le geste courant.
       setThrough(j.weeks.length > 0 ? j.weeks[j.weeks.length - 1].week_start : "");
     } finally { setLoading(false); }
@@ -107,8 +116,20 @@ export default function RakebackSettlePanel({ playerId, playerName, onSettled }:
         Le rakeback est de l&apos;argent qui <b>sort</b> : positif = à verser au joueur.
         La plage part forcément de la plus ancienne semaine non réglée ({weeks[0].week_start}) —
         le makeup se chaîne d&apos;une semaine à l&apos;autre, on ne règle pas en sautant.
-        Régler <b>solde le makeup</b> de la période : la chaîne repart de zéro après.
+        Régler <b>paie</b> ce qui est dû, sans effacer le déficit restant : le makeup non
+        récupéré continue de courir sur les semaines suivantes, et aucun montant à venir
+        n&apos;est modifié par ce règlement.
       </div>
+
+      {blocking && (
+        <div style={{ border: "1px solid rgba(239,68,68,0.4)", background: "rgba(239,68,68,0.06)",
+                      borderRadius: 10, padding: 10, marginBottom: 10, fontSize: 11.5, color: "#F87171" }}>
+          ⛔ La plage s&apos;arrête avant le <b>{blocking}</b> : le contrôle de cette semaine a échoué.
+          On ne règle pas au-delà — son déficit serait absorbé par des semaines déjà payées et
+          ne pourrait plus jamais être récupéré, même en corrigeant la semaine ensuite.
+          Corrige le <b>{blocking}</b> pour débloquer la suite.
+        </div>
+      )}
 
       {warnings.length > 0 && (
         <div style={{ border: "1px solid rgba(240,185,11,0.4)", background: "rgba(240,185,11,0.06)",
@@ -126,7 +147,7 @@ export default function RakebackSettlePanel({ playerId, playerName, onSettled }:
       <div style={{ overflowX: "auto", marginBottom: 10 }}>
         <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 520 }}>
           <thead><tr>
-            {["Semaine", "Assiette", "Taux", "Base", "Makeup entrant", "Base nette", "Dû"].map((h, i) => (
+            {["Semaine", "Assiette", "Taux", "Base", "Makeup entrant", "Base nette", "Dû", "Reliquat"].map((h, i) => (
               <th key={h} style={{ textAlign: i === 0 || i === 1 ? "left" : "right", fontSize: 10.5,
                                    color: "#555568", fontWeight: 700, padding: "6px 7px", whiteSpace: "nowrap" }}>{h}</th>
             ))}
@@ -149,6 +170,13 @@ export default function RakebackSettlePanel({ playerId, playerName, onSettled }:
                   <td style={{ fontSize: 12, padding: "6px 7px", textAlign: "right", fontWeight: 600,
                                color: w.due > 0.005 ? "#A78BFA" : "#555568" }}>
                     {w.due > 0.005 ? fmt(w.due) : "—"}
+                  </td>
+                  {/* Reliquat : ce que la semaine laisse à récupérer. Il SURVIT au
+                      règlement — l'afficher évite de croire qu'on solde tout. */}
+                  <td style={{ fontSize: 12, padding: "6px 7px", textAlign: "right",
+                               color: w.makeup_out < -0.005 ? "#F0B90B" : "#555568" }}
+                      title="Déficit restant, reporté sur les semaines suivantes — le règlement ne l'efface pas">
+                    {w.makeup_out < -0.005 ? fmt(w.makeup_out) : "—"}
                   </td>
                 </tr>
               );

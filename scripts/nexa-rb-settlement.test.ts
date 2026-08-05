@@ -3,9 +3,13 @@
  * Run: npx tsx scripts/nexa-rb-settlement.test.ts
  *
  * ┌─ CE QUE CES TESTS PROUVENT ─────────────────────────────────────────────────┐
- * │ • Que régler le rakeback REMET LE MAKEUP À ZÉRO après la période réglée,    │
- * │   et que sans cette remise à zéro le joueur paierait deux fois le même      │
- * │   déficit — l'écart est chiffré, pas affirmé.                               │
+ * │ • Que régler le rakeback NE TOUCHE À AUCUN montant des semaines suivantes   │
+ * │   — le makeup non récupéré survit au règlement (arbitrage Hugo). L'égalité  │
+ * │   avant/après est vérifiée sur une chaîne dont le makeup est NON NUL à la   │
+ * │   bascule : sur une chaîne où il vaut déjà 0, le test ne prouverait rien.   │
+ * │ • Que le montant est écrit NÉGATIF dans manual_settlements : le rakeback    │
+ * │   sort, et cinq agrégats du repo lisent ce signe sans jamais lire `kind`.   │
+ * │ • Que la plage s'ARRÊTE avant une semaine en échec de contrôle.             │
  * │ • Que le snapshot fige les paramètres appliqués (taux, base, makeup         │
  * │   consommé) et survit à une correction ultérieure du report.                │
  * │ • Qu'une semaine en échec dans OU AVANT la plage déclenche un avertissement │
@@ -29,7 +33,7 @@ process.chdir(TMP);
 const Database = require(path.join(REPO, "node_modules/better-sqlite3"));
 
 import {
-  getOpenRbWeeksOn, getRbSettledThroughOn, getRbSettlementWarningsOn,
+  getOpenRbWeeksOn, getBlockingWeekOn, getRbSettlementWarningsOn,
   lockNexaRakebackSettlementOn,
 } from "../lib/funnels/nexa/rakeback-settlement";
 import { getActionSettlementWarningsOn, lockNexaActionSettlementOn } from "../lib/funnels/nexa/action-settlement";
@@ -40,6 +44,10 @@ const failures: string[] = [];
 function check(label: string, cond: boolean, detail = "") {
   if (cond) { passed++; console.log("   ✔", label); }
   else { failures.push(label); console.log("   ✘", label, detail); }
+}
+function eqArr(label: string, got: string[], want: string[]) {
+  const g = JSON.stringify(got), w = JSON.stringify(want);
+  check(label, g === w, g === w ? "" : `attendu ${w}, obtenu ${g}`);
 }
 function near(label: string, got: number | null, want: number | null, eps = 1e-9) {
   const ok = got === null || want === null ? got === want : Math.abs(got - want) < eps;
@@ -120,66 +128,83 @@ function seed(db: any, rakes: number[], checkOk: boolean[] = []) {
   return pid;
 }
 
-// ── 1. Le makeup est soldé par le règlement ────────────────────────────────
-console.log("\n1. Un règlement de rakeback remet le makeup à zéro");
+// ── 1. Régler ne touche pas aux semaines suivantes ────────────────────────
+console.log("\n1. Le makeup survit au règlement");
 {
   const db = freshDb();
-  // S1 −200 (makeup), S2 +300, S3 +400, S4 +100
-  const pid = seed(db, [-200, 300, 400, 100]);
+  // Chaîne CHOISIE pour que le makeup soit NON NUL à la bascule : sans ça, le
+  // test passerait quoi qu'on code — c'est le défaut que l'audit a trouvé dans la
+  // version précédente de ce fichier.
+  //   W1 +300 → dû 150 · W2 −200 → dû 0, makeup −200 (NON NUL)
+  //   W3 +200 → (200−200) = 0 → dû 0 · W4 +200 → dû 100
+  const pid = seed(db, [300, -200, 200, 200]);
 
   const avant = getNexaPlayerDetailOn(db, pid)!;
-  const dus = avant.weeks.map(w => w.due);
-  // S1 dû 0 (makeup −200) · S2 (300−200)×50 % = 50 · S3 200 · S4 50
-  near("dû S1 avant règlement", dus[0], 0);
-  near("dû S2 avant règlement", dus[1], 50);
-  near("dû S3 avant règlement", dus[2], 200);
+  near("dû W1", avant.weeks[0].due, 150);
+  near("dû W2", avant.weeks[1].due, 0);
+  near("makeup sortant de W2 — NON NUL, c'est le point du test", avant.weeks[1].makeup_out, -200);
+  near("dû W3 (le makeup est récupéré ici)", avant.weeks[2].due, 0);
+  near("dû W4", avant.weeks[3].due, 100);
+  const totalAvant = avant.weeks.reduce((s, w) => s + w.due, 0);
+  near("total dû avant règlement", totalAvant, 250);
 
-  // On règle jusqu'à S2 : la plage porte le makeup de S1.
   const lock = lockNexaRakebackSettlementOn(db, { player_id: pid, through_week: W[1] });
-  check("règlement verrouillé", lock.ok, JSON.stringify(lock));
+  check("règlement W1→W2 verrouillé", lock.ok, JSON.stringify(lock));
   if (lock.ok) {
-    near("montant réglé = dû S1 + dû S2", lock.amount_due_usdt, 50);
-    check("deux semaines couvertes, S1 à dû nul comprise", lock.weeks.length === 2,
+    near("montant réglé = 150", lock.amount_due_usdt, 150);
+    check("deux semaines couvertes, W2 à dû nul comprise", lock.weeks.length === 2,
           `obtenu ${lock.weeks.length}`);
   }
 
-  check("borne de makeup posée", getRbSettledThroughOn(db, pid) === W[1],
-        `obtenu ${getRbSettledThroughOn(db, pid)}`);
   const apres = getNexaPlayerDetailOn(db, pid)!;
-  const dusApres = apres.weeks.map(w => w.due);
-  // Rien ne bouge sur les semaines réglées — leur rejeu doit rester confrontable
-  // au figement — mais S3 repart d'un makeup à ZÉRO.
-  near("S1 et S2 rejouées à l'identique", dusApres[0] + dusApres[1], 50);
-  near("S3 après règlement : makeup soldé, dû = 400 × 50 %", dusApres[2], 200);
-  near("S4 inchangée", dusApres[3], 50);
+  // LE POINT : rien ne bouge. Avec une remise à zéro, W3 vaudrait 100 et le total
+  // grimperait à 350 — 100 de plus, offerts au joueur.
+  near("W3 inchangée après règlement", apres.weeks[2].due, 0);
+  near("W4 inchangée après règlement", apres.weeks[3].due, 100);
+  near("makeup entrant de W3 toujours −200", apres.weeks[2].makeup_in, -200);
+  near("total dû inchangé", apres.weeks.reduce((s, w) => s + w.due, 0), 250);
   db.close();
 }
 
-// ── 2. Sans la remise à zéro, le joueur paierait deux fois ─────────────────
-console.log("\n2. L'écart que la remise à zéro évite");
+// ── 1-bis. Le montant est écrit NÉGATIF ────────────────────────────────────
+console.log("\n1-bis. Sens du montant dans manual_settlements");
 {
   const db = freshDb();
-  // S1 −400 (gros makeup), S2 +100, S3 +500
-  const pid = seed(db, [-400, 100, 500, 0]);
-  const avant = getNexaPlayerDetailOn(db, pid)!;
-  // S1 dû 0, makeup −400 · S2 (100−400) = −300 → dû 0, makeup −300
-  // S3 (500−300) × 50 % = 100
-  near("S3 avant règlement — makeup de −300 encore actif", avant.weeks[2].due, 100);
+  const pid = seed(db, [200, 0, 0, 0]);
+  const lock = lockNexaRakebackSettlementOn(db, { player_id: pid, through_week: W[0] });
+  check("verrouillé", lock.ok, JSON.stringify(lock));
+  const ms = db.prepare(`SELECT amount_due_usdt, kind FROM manual_settlements WHERE player_id = ?`)
+    .get(pid) as any;
+  near("amount_due_usdt NÉGATIF — le rakeback sort", ms.amount_due_usdt, -100);
+  check("kind = rakeback", ms.kind === "rakeback", ms.kind);
+  if (lock.ok) near("le montant rendu à l'écran reste positif (dû au joueur)", lock.amount_due_usdt, 100);
+  // Le snapshot, lui, garde le dû BRUT : c'est le montant calculé, pas la convention
+  // de sens de la colonne du hub.
+  const snap = db.prepare(`SELECT due FROM nexa_rakeback_settlement_weeks WHERE player_id = ?`).get(pid) as any;
+  near("le snapshot garde le dû brut, positif", snap.due, 100);
+  db.close();
+}
 
-  const lock = lockNexaRakebackSettlementOn(db, { player_id: pid, through_week: W[1] });
-  // Total réglé = 0 → refusé, un règlement à zéro n'est pas un règlement.
-  check("plage sans rien à payer : refusée", !lock.ok, JSON.stringify(lock));
-  check("et le motif le dit", !lock.ok && /Rien à payer/.test(lock.error), !lock.ok ? lock.error : "");
+// ── 2. La plage s'arrête avant une semaine en échec ───────────────────────
+console.log("\n2. Plafond sur une semaine en échec de contrôle");
+{
+  const db = freshDb();
+  // W2 en échec : la plage ne doit proposer que W1.
+  const pid = seed(db, [200, 300, 400, 100], [true, false, true, true]);
 
-  // On élargit à S3 : là il y a un dû.
-  const lock2 = lockNexaRakebackSettlementOn(db, { player_id: pid, through_week: W[2] });
-  check("plage élargie : verrouillée", lock2.ok, JSON.stringify(lock2));
-  if (lock2.ok) near("montant réglé", lock2.amount_due_usdt, 100);
+  const open = getOpenRbWeeksOn(db, pid);
+  eqArr("seule W1 est réglable", open.map(w => w.week_start), [W[0]]);
+  check("l'écran sait pourquoi", getBlockingWeekOn(db, pid) === W[1],
+        `obtenu ${getBlockingWeekOn(db, pid)}`);
 
-  const apres = getNexaPlayerDetailOn(db, pid)!;
-  // S4 a un rake de 0. Sans remise à zéro, elle hériterait du makeup sortant de S3
-  // (0, ici) — le cas parlant est surtout que la chaîne repart proprement.
-  near("S4 repart d'un makeup nul", apres.weeks[3].makeup_in, 0);
+  const trop = lockNexaRakebackSettlementOn(db, { player_id: pid, through_week: W[3] });
+  // through_week au-delà du plafond : la plage se réduit d'elle-même à W1.
+  check("régler au-delà ne couvre QUE ce qui est réglable", trop.ok, JSON.stringify(trop));
+  if (trop.ok) {
+    eqArr("W3 et W4 ne sont pas emportées", trop.weeks.map(w => w.week_start), [W[0]]);
+  }
+  const reste = getOpenRbWeeksOn(db, pid);
+  eqArr("et rien ne s'ouvre tant que W2 n'est pas corrigée", reste.map(w => w.week_start), []);
   db.close();
 }
 
@@ -210,30 +235,19 @@ console.log("\n3. Le figement des paramètres appliqués");
   db.close();
 }
 
-// ── 4. Garde-fou : semaine en échec dans ou avant la plage ─────────────────
-console.log("\n4. Avertissement sur une semaine en échec");
+// ── 4. kind et note du règlement ──────────────────────────────────────────
+console.log("\n4. Étiquetage de la ligne de règlement");
 {
   const db = freshDb();
-  // S2 en échec de contrôle.
-  const pid = seed(db, [200, 300, 400, 100], [true, false, true, true]);
-
-  const warnAvant = getRbSettlementWarningsOn(db, pid, W[0]);
-  check("aucun avertissement avant la semaine en échec", warnAvant.length === 0,
-        JSON.stringify(warnAvant));
-
-  const warnApres = getRbSettlementWarningsOn(db, pid, W[2]);
-  check("avertissement quand la plage la contient", warnApres.some(w => w.code === "blocked_weeks"),
-        JSON.stringify(warnApres));
-
-  const refus = lockNexaRakebackSettlementOn(db, { player_id: pid, through_week: W[2] });
-  check("règlement REFUSÉ sans confirmation", !refus.ok, JSON.stringify(refus));
-  check("et les avertissements sont rendus", !refus.ok && (refus.warnings?.length ?? 0) > 0);
-
-  const ok = lockNexaRakebackSettlementOn(db, { player_id: pid, through_week: W[2], acknowledge_warnings: true });
-  check("accepté après confirmation explicite", ok.ok, JSON.stringify(ok));
-  const ms = db.prepare(`SELECT kind, notes FROM manual_settlements WHERE player_id = ?`).get(pid) as any;
+  const pid = seed(db, [200, 300, 0, 0]);
+  const ok = lockNexaRakebackSettlementOn(db, { player_id: pid, through_week: W[1] });
+  check("verrouillé", ok.ok, JSON.stringify(ok));
+  const ms = db.prepare(`SELECT kind, notes, action_pct_applied, net_selected_usdt
+                         FROM manual_settlements WHERE player_id = ?`).get(pid) as any;
   check("kind = rakeback", ms.kind === "rakeback", ms.kind);
-  check("la note garde la trace de la confirmation", /avertissement/.test(ms.notes ?? ""), ms.notes);
+  check("la note porte la plage et le taux", /Rakeback .* → .*taux 50 %/.test(ms.notes ?? ""), ms.notes);
+  near("le taux appliqué est reporté", ms.action_pct_applied, 50);
+  near("l'assiette totale est reportée", ms.net_selected_usdt, 500);
   db.close();
 }
 

@@ -11,12 +11,21 @@
 // ── DÉCISION 1 : LA PLAGE EST CONTIGUË, ET COMMENCE À LA PREMIÈRE SEMAINE NON
 // RÉGLÉE. ────────────────────────────────────────────────────────────────────
 // Le rakeback n'est pas une somme de semaines indépendantes : le makeup d'une
-// semaine ENTRE dans l'assiette de la suivante. Régler la semaine 5 en laissant la
-// 4 ouverte n'a donc pas de sens — la 5 a été calculée avec un makeup venu de la 4,
-// et « remettre le makeup à zéro sur la période réglée » deviendrait indéfinissable
-// (à zéro à partir d'où ?). On exige donc une plage qui part de la plus ancienne
-// semaine non réglée. Le règlement d'action, lui, accepte des semaines éparses :
-// il n'a pas de chaînage. (Écart assumé entre les deux flux, il vient du domaine.)
+// semaine ENTRE dans l'assiette de la suivante. Régler la 5 en laissant la 4
+// ouverte laisserait une semaine non réglée derrière une semaine réglée, et le
+// « déjà réglé » cesserait d'être un préfixe de la chaîne — impossible à relire.
+// On exige donc une plage qui part de la plus ancienne semaine non réglée. Le
+// règlement d'action, lui, accepte des semaines éparses : il n'a pas de chaînage.
+// (Écart assumé entre les deux flux, il vient du domaine.)
+//
+// ── CE QUE LE RÈGLEMENT NE FAIT PAS : SOLDER LE MAKEUP. ──────────────────────
+// Régler PAIE ce qui est dû, il n'efface pas le déficit restant. Le makeup non
+// récupéré continue de courir sur les semaines suivantes. Une première version
+// remettait le makeup à zéro après la dernière semaine réglée ; l'audit a montré
+// que sa justification était fausse (makeup_in et makeup_out sont disjoints, la
+// chaîne ne double-compte jamais) et qu'elle faisait donc simplement cadeau du
+// déficit, pour un surcoût de |makeup restant| × taux. Arbitrage d'Hugo : retirée.
+// Corollaire : régler ne modifie AUCUN montant des semaines à venir.
 //
 // ── DÉCISION 2 : LES SEMAINES À DÛ NUL SONT COUVERTES, ET ENREGISTRÉES. ──────
 // Une semaine à 0 ne produit pas de règlement à elle seule — c'est la règle du
@@ -25,9 +34,22 @@
 // ligne la plage aurait un trou que rien n'expliquerait à la relecture. On refuse
 // en revanche un règlement dont le TOTAL est nul : ce n'est pas un paiement.
 //
-// SENS DU MONTANT : positif = à verser au joueur. Le rakeback est de l'argent qui
-// SORT — c'est l'inverse de la part d'action, où positif = le joueur doit au
-// Cercle. Le hub /payments distingue les deux par `kind`, jamais par le signe.
+// ── SENS DU MONTANT : LE RAKEBACK EST STOCKÉ NÉGATIF. ────────────────────────
+// `manual_settlements.amount_due_usdt` a UNE convention dans tout le repo :
+// positif = le joueur doit au Cercle (ça rentre), négatif = on doit au joueur
+// (ça sort). Le rakeback SORT, il est donc écrit en négatif.
+//
+// Ce n'est pas un détail de présentation. Cinq consommateurs lisent ce signe et
+// AUCUN ne lit `kind` : getPaymentsTotals, groupPendingByPlayer, direction() du
+// hub, le résumé Telegram quotidien, et l'outil agent. Une première version
+// écrivait le rakeback en positif en supposant que `kind` suffirait à distinguer
+// les deux flux — il ne suffit pas. Avec une action à +750 et un rakeback à +350
+// sur le même joueur, le hub annonçait « il nous doit 1 100 » au lieu de +400 :
+// 700 d'erreur sur le net à virer, dès le premier règlement. (Constat
+// money-auditor, verdict NO-GO.)
+//
+// Le signe négatif rend justes les cinq consommateurs d'un coup, sans en modifier
+// aucun. `kind` reste utile pour ÉTIQUETER la ligne, jamais pour la compter.
 // ─────────────────────────────────────────────────────────────────────────────
 import { getDb } from "@/lib/db";
 import type BetterSqlite3 from "better-sqlite3";
@@ -54,9 +76,8 @@ export function getSettledRbWeeksOn(db: DB, playerId: number): Map<string, numbe
 }
 
 /**
- * Dernière semaine dont le rakeback est réglé — la borne de remise à zéro du
- * makeup, passée au moteur. C'est CETTE fonction qui ferme la boucle entre le
- * règlement et le calcul.
+ * Dernière semaine dont le rakeback est réglé. INFORMATIF — ne pilote aucun
+ * calcul : le moteur ignore les règlements, il rejoue toujours toute la chaîne.
  */
 export function getRbSettledThroughOn(db: DB, playerId: number): string | null {
   const r = db.prepare(
@@ -96,9 +117,35 @@ export function getOpenRbWeeksOn(db: DB, playerId: number): RbSettleableWeek[] {
   const d = getNexaPlayerDetailOn(db, playerId);
   if (!d) return [];
   const settled = getSettledRbWeeksOn(db, playerId);
+
+  // LA PLAGE S'ARRÊTE À LA PREMIÈRE SEMAINE EN ÉCHEC DE CONTRÔLE.
+  //
+  // Décision d'Hugo (2026-08-05) après l'audit : on ne règle pas AU-DELÀ d'une
+  // semaine bloquée. Régler par-dessus la faisait disparaître pour toujours — son
+  // déficit était absorbé par des semaines déjà payées, et si elle était corrigée
+  // ensuite elle ne pouvait plus être ni réglée ni soldée. Un cas mesuré à
+  // 350 USDT payés pour des semaines qui rejouaient ensuite à 0.
+  //
+  // Corrige la semaine, puis règle la suite. Le blocage est temporaire et visible ;
+  // l'effacement silencieux, lui, ne l'était pas.
+  const firstBlocked = d.weeks.find(w => w.status === "blocked" && !settled.has(w.week_start));
+  const stop = firstBlocked?.week_start ?? null;
+
   return d.weeks
-    .filter(w => w.status === "ok" && !settled.has(w.week_start))
+    .filter(w => w.status === "ok" && !settled.has(w.week_start)
+              && (stop === null || w.week_start < stop))
     .map(toSettleable);
+}
+
+/**
+ * La semaine en échec qui borne la plage, s'il y en a une. L'écran doit pouvoir
+ * dire POURQUOI il ne propose pas d'aller plus loin.
+ */
+export function getBlockingWeekOn(db: DB, playerId: number): string | null {
+  const d = getNexaPlayerDetailOn(db, playerId);
+  if (!d) return null;
+  const settled = getSettledRbWeeksOn(db, playerId);
+  return d.weeks.find(w => w.status === "blocked" && !settled.has(w.week_start))?.week_start ?? null;
 }
 
 export function getOpenRbWeeks(playerId: number): RbSettleableWeek[] {
@@ -112,15 +159,16 @@ export type SettlementWarning = { code: string; message: string };
 /**
  * Ce qu'il faut avoir VU avant de régler.
  *
- * Un règlement ne doit jamais passer en silence au-dessus d'un contrôle en échec :
- * une semaine dont le recalcul ne retombe pas sur le report a une assiette dont on
- * sait qu'elle est fausse, et régler la suite revient à bâtir sur elle. On
- * n'INTERDIT pas — un écart accepté avec motif (arrondi NEXA) est un cas réel et
- * ne doit pas bloquer le joueur à vie — mais on exige que ce soit vu et confirmé.
+ * Depuis que la plage s'ARRÊTE à la première semaine en échec (voir
+ * getOpenRbWeeksOn), un règlement ne peut plus enjamber un contrôle raté : le cas
+ * est traité en amont, par un plafond, et non par une case à cocher. Ce qui reste
+ * ici, ce sont les avertissements du MOTEUR sur la plage réglée — changement
+ * d'assiette avec makeup reporté, makeup abandonné au passage d'une semaine
+ * bloquée. Ils ne bloquent pas le calcul mais ils changent ce qui est payé, donc
+ * ils doivent être vus.
  *
- * « Contient OU SUIT » : une semaine en échec ANTÉRIEURE à la plage compte aussi.
- * C'est elle qui a coupé la chaîne de makeup en amont ; régler ce qui vient après
- * sans le savoir, c'est régler sur une chaîne rompue sans le savoir.
+ * Le plafond lui-même n'est pas un avertissement : c'est une information, rendue
+ * par getBlockingWeekOn et affichée en permanence par l'écran.
  */
 export function getRbSettlementWarningsOn(
   db: DB, playerId: number, rangeEnd: string,
@@ -128,21 +176,6 @@ export function getRbSettlementWarningsOn(
   const d = getNexaPlayerDetailOn(db, playerId);
   if (!d) return [];
   const out: SettlementWarning[] = [];
-
-  const blocked = d.weeks.filter(w => w.status === "blocked" && w.week_start <= rangeEnd);
-  if (blocked.length > 0) {
-    out.push({
-      code: "blocked_weeks",
-      message: `${blocked.length} semaine(s) en échec de contrôle jusqu'au ${rangeEnd} : `
-             + `${blocked.map(w => w.week_start).join(", ")}. Leur assiette n'est pas fiable, `
-             + `elles sont hors du calcul, et elles ont coupé la chaîne de makeup — `
-             + `ce qui est réglé après elles repose sur une chaîne repartie de zéro. `
-             + `Corrige-les d'abord si l'écart n'est pas assumé.`,
-    });
-  }
-
-  // Le moteur signale lui-même les reports de makeup douteux (changement d'assiette,
-  // makeup abandonné). Ces avertissements-là valent pour le règlement aussi.
   for (const w of d.warnings) {
     if (w.week_start <= rangeEnd) {
       out.push({ code: "engine_warning", message: `${w.week_start} — ${w.message}` });
@@ -199,6 +232,10 @@ export function lockNexaRakebackSettlementOn(
     };
   }
 
+  // `due` est le montant BRUT calculé par le moteur (positif = dû au joueur).
+  // Il devient négatif au moment de l'écriture, jamais avant : le moteur, les
+  // snapshots et l'écran raisonnent tous en « montant dû », c'est la colonne du
+  // hub qui porte la convention de sens.
   const due = rows.reduce((s, w) => s + w.due, 0);
   if (due <= EPS) {
     return {
@@ -239,7 +276,9 @@ export function lockNexaRakebackSettlementOn(
         // net_selected_usdt porte ici l'ASSIETTE totale — l'équivalent du « net
         // sélectionné » de l'action : la grandeur sur laquelle le taux s'applique.
         base: rows.reduce((s, w) => s + w.base, 0),
-        pct: uniformPct, due,
+        pct: uniformPct,
+        // NÉGATIF : de l'argent qui sort. Voir l'en-tête du module.
+        due: -due,
         notes: args.notes ? `${args.notes} — ${autoNote}` : autoNote,
       });
       const settlementId = Number(ins.lastInsertRowid);

@@ -346,7 +346,7 @@ export type NexaPlayerDetail = {
   settled_weeks: Record<string, number>;
   /** week_start → id du règlement de RAKEBACK qui a figé cette semaine. */
   rb_settled_weeks: Record<string, number>;
-  /** Dernière semaine dont le rakeback est réglé — la borne de makeup. */
+  /** Dernière semaine dont le rakeback est réglé. INFORMATIF : ne pilote aucun calcul. */
   rb_settled_through: string | null;
   /** Rakeback déjà versé, au montant FIGÉ. */
   rb_settled_total: number;
@@ -412,21 +412,18 @@ export function getNexaPlayerDetailOn(db: DB, playerId: number): NexaPlayerDetai
     `SELECT pct, start_week, end_week FROM nexa_player_action_shares WHERE player_id = ?`
   ).all(playerId) as ActionPeriod[];
 
-  // Borne de remise à zéro du makeup : la dernière semaine dont le RAKEBACK a été
-  // réglé. Régler solde le compte de la période, déficit compris — sans cette borne
-  // le rejeu reporterait sur la suite un makeup adossé à des semaines déjà payées,
-  // et le joueur paierait deux fois le même déficit.
+  // PAS DE BORNE DE MAKEUP. Décision d'Hugo (2026-08-05, second arbitrage) : régler
+  // le rakeback PAIE ce qui est dû, il ne SOLDE pas le déficit restant. Le makeup
+  // non récupéré continue donc de courir sur les semaines suivantes, exactement
+  // comme avant l'introduction du règlement.
   //
-  // Lecture directe plutôt qu'un import de ./rakeback-settlement : ce module-ci est
-  // importé PAR celui-là (getNexaPlayerDetailOn alimente le calcul du réglable), un
-  // import retour créerait un cycle. Même parti que pour ./action-settlement.
-  const rbSettledThrough = (db.prepare(
-    `SELECT MAX(week_start) AS w FROM nexa_rakeback_settlement_weeks WHERE player_id = ?`
-  ).get(playerId) as { w: string | null } | undefined)?.w ?? null;
-
+  // Une première version remettait le makeup à zéro après la dernière semaine
+  // réglée. L'audit a montré que sa justification était fausse — makeup_in et
+  // makeup_out sont disjoints, la chaîne ne double-compte jamais — et que la
+  // remise à zéro ne corrigeait donc rien : elle faisait cadeau du déficit, pour
+  // un surcoût de |makeup restant| × taux à chaque règlement. Elle a été retirée.
   const r = computeRakeback(
-    weeks, getRakebackPeriodsOn(db, playerId), actionPeriods,
-    { ...getNexaRakebackDefaultsOn(db), rbSettledThrough },
+    weeks, getRakebackPeriodsOn(db, playerId), actionPeriods, getNexaRakebackDefaultsOn(db),
   );
 
   const gid = gameId(db);
@@ -471,7 +468,9 @@ export function getNexaPlayerDetailOn(db: DB, playerId: number): NexaPlayerDetai
     weeks: r.weeks,
     settled_weeks: Object.fromEntries(settledRows.map(s => [s.week_start, s.settlement_id])),
     rb_settled_weeks: Object.fromEntries(rbSettledRows.map(s => [s.week_start, s.settlement_id])),
-    rb_settled_through: rbSettledThrough,
+    rb_settled_through: rbSettledRows.length > 0
+      ? rbSettledRows.map(r => r.week_start).sort().slice(-1)[0]
+      : null,
     rb_settled_total: rbSettledRows.reduce((s, w) => s + w.due, 0),
     action_settled: actionSettled,
     action_unsettled: actionUnsettled,

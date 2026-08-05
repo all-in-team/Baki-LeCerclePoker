@@ -3219,9 +3219,9 @@ function initSchema(db: Database.Database) {
   // garanti par le schéma et pas seulement par le code. Supprimer le règlement
   // (ON DELETE CASCADE depuis manual_settlements) libère les semaines.
   try {
-    const fix = db.prepare(`INSERT OR IGNORE INTO _applied_fixes (name) VALUES (?)`)
-      .run("add_nexa_rakeback_settlement_v1");
-    if (fix.changes > 0) {
+    const already = db.prepare(`SELECT 1 FROM _applied_fixes WHERE name = ?`)
+      .get("add_nexa_rakeback_settlement_v1");
+    if (!already) {
       db.exec(`
         CREATE TABLE IF NOT EXISTS nexa_rakeback_settlement_weeks (
           id            INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -3244,6 +3244,12 @@ function initSchema(db: Database.Database) {
         CREATE INDEX IF NOT EXISTS idx_nexa_rb_settle_player
           ON nexa_rakeback_settlement_weeks(player_id, week_start);
       `);
+      // SEULEMENT MAINTENANT on marque la migration comme appliquée. Poser le
+      // marqueur AVANT le db.exec — ce que faisait la première version — le rend
+      // persistant même si la création échoue (SQLITE_BUSY au boot, disque plein) :
+      // la migration serait alors sautée DÉFINITIVEMENT, le catch mentirait en
+      // annonçant « sera rejouée », et HUB_SELECT référencerait une table absente
+      // → /payments en 500 pour TOUTES les rooms. (Constat money-auditor.)
       db.prepare(`INSERT OR IGNORE INTO _applied_fixes (name) VALUES (?)`).run("add_nexa_rakeback_settlement_v1");
       console.log("[MIGRATION] add_nexa_rakeback_settlement_v1 applied");
     }
