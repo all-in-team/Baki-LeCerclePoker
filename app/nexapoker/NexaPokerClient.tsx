@@ -39,6 +39,25 @@ const BASIS_LABEL: Record<Basis, string> = {
   gross_rake: "rake brut",
   affiliate_commission: "commission",
 };
+
+/** Miroir de WeekResult (lib/funnels/nexa/rakeback-engine.ts) — le moteur fait foi. */
+type DetailWeek = {
+  week_start: string; status: "ok" | "blocked"; blocked_reason: string | null;
+  gross_rake: number; commission: number;
+  winloss: number | null; action_pct: number; action_amount: number | null;
+};
+type PlayerDetail = {
+  player_id: number; name: string;
+  weeks: DetailWeek[];
+  totals: {
+    gross_rake: number; commission: number; due: number;
+    action_amount: number | null; net_operator: number | null; weeks_missing_winloss: number;
+  };
+  blocked_weeks: { count: number; week_starts: string[]; gross_rake: number; commission: number };
+  warnings: { week_start: string; message: string }[];
+  deposited: number; withdrawn: number; net_movements: number;
+  net_position: number | null;
+};
 type Movement = { id: number; type: "deposit" | "withdrawal"; amount: number; currency: string;
                   note: string | null; tx_date: string; created_at: string };
 type Unreconciled = {
@@ -73,6 +92,21 @@ export default function NexaPokerClient({ currentWeek, today }: { currentWeek: s
   // Mouvements : saisie d'Hugo, jamais touchée par l'import ni l'extraction.
   const [moving, setMoving] = useState<{ player: Player; kind: "buy_in" | "cash_out"; amount: string; date: string; note: string } | null>(null);
   const [history, setHistory] = useState<{ player: Player; rows: Movement[] } | null>(null);
+  // Détail hebdo d'un joueur + brouillons de saisie du win/loss (par semaine).
+  const [detail, setDetail] = useState<PlayerDetail | null>(null);
+  const [detailBusy, setDetailBusy] = useState(false);
+  const [wlDraft, setWlDraft] = useState<Record<string, string>>({});
+
+  // Vue détail : c'est le MOTEUR qui donne la part d'action, jamais l'écran.
+  // On stocke ce qu'il renvoie tel quel et on ne recalcule rien côté client.
+  const openDetail = useCallback(async (p: Player) => {
+    setDetailBusy(true);
+    try {
+      const j = await (await fetch(`/api/nexapoker/winloss?player_id=${p.player_id}`)).json();
+      if (!j.ok) { setBanner({ kind: "err", text: j.error ?? "Détail indisponible." }); return; }
+      setDetail(j.detail); setWlDraft({});
+    } finally { setDetailBusy(false); }
+  }, []);
 
   const openHistory = useCallback(async (p: Player) => {
     const j = await (await fetch(`/api/nexapoker/movements?player_id=${p.player_id}`)).json();
@@ -312,6 +346,11 @@ export default function NexaPokerClient({ currentWeek, today }: { currentWeek: s
                         Historique
                       </button>
                     )}
+                    <button disabled={busy || detailBusy} onClick={() => void openDetail(p)}
+                            style={{ ...INPUT, cursor: "pointer", padding: "3px 8px", marginLeft: 4,
+                                     borderColor: "rgba(16,185,129,0.4)", color: "#10B981" }}>
+                      Détail
+                    </button>
                   </td>
                   <td style={{ ...TD, textAlign: "right" }}>
                     {p.check_ko > 0 && (
@@ -359,6 +398,129 @@ export default function NexaPokerClient({ currentWeek, today }: { currentWeek: s
               Enregistrer
             </button>
             <button onClick={() => setEditing(null)} style={{ ...INPUT, cursor: "pointer", color: "#8888A0" }}>Annuler</button>
+          </div>
+        </div>
+      )}
+
+      {/* ── Détail hebdo d'un joueur + saisie du win/loss ─────────────── */}
+      {detail && (
+        <div style={{ ...CARD, borderColor: "rgba(16,185,129,0.35)" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 4 }}>
+            <div style={{ fontSize: 13, fontWeight: 600, color: "#E8E8EE" }}>
+              Détail hebdomadaire — {detail.name}
+            </div>
+            <div style={{ flex: 1 }} />
+            <button onClick={() => setDetail(null)} style={{ ...INPUT, cursor: "pointer", color: "#8888A0" }}>
+              Fermer
+            </button>
+          </div>
+          <div style={{ fontSize: 12, color: "#8888A0", marginBottom: 12 }}>
+            La part d'action est calculée par le moteur sur le win/loss saisi ici — jamais déduite du rake.
+            Une semaine non saisie reste vide : elle n'est pas comptée comme un zéro.
+          </div>
+
+          {detail.warnings.length > 0 && (
+            <div style={{ ...CARD, borderColor: "rgba(240,185,11,0.35)", marginBottom: 12, padding: 10 }}>
+              {detail.warnings.map((w, i) => (
+                <div key={i} style={{ fontSize: 11, color: "#F0B90B" }}>⚠️ {w.week_start} — {w.message}</div>
+              ))}
+            </div>
+          )}
+
+          <div style={{ overflowX: "auto" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 720 }}>
+              <thead><tr>
+                <th style={TH}>Semaine</th>
+                <th style={{ ...TH, textAlign: "right" }}>Rake</th>
+                <th style={{ ...TH, textAlign: "right" }}>Commission agence</th>
+                <th style={{ ...TH, textAlign: "right" }}>Win/loss (saisie)</th>
+                <th style={{ ...TH, textAlign: "right" }}>Action %</th>
+                <th style={{ ...TH, textAlign: "right" }}>Part d'action</th>
+                <th style={TH} />
+              </tr></thead>
+              <tbody>
+                {detail.weeks.map(w => {
+                  const draft = wlDraft[w.week_start];
+                  const shown = draft !== undefined ? draft : (w.winloss === null ? "" : String(w.winloss));
+                  const save = async (amount: number | null) => {
+                    const ok = await post("/api/nexapoker/winloss",
+                      { player_id: detail.player_id, week_start: w.week_start, amount },
+                      j => j.cleared ? `Win/loss du ${w.week_start} retiré.` : `Win/loss du ${w.week_start} enregistré.`);
+                    if (ok) { const p = players.find(x => x.player_id === detail.player_id); if (p) await openDetail(p); }
+                  };
+                  return (
+                    <tr key={w.week_start} style={{ borderTop: "1px solid rgba(255,255,255,0.05)" }}>
+                      <td style={{ ...TD, fontWeight: 600 }}>
+                        {w.week_start}
+                        {w.status === "blocked" && (
+                          <span style={{ marginLeft: 6, fontSize: 10, color: "#F87171" }}
+                                title={w.blocked_reason ?? ""}>⚠️ hors calcul</span>
+                        )}
+                      </td>
+                      <td style={{ ...TD, textAlign: "right" }}>{fmt(w.gross_rake)}</td>
+                      <td style={{ ...TD, textAlign: "right", fontWeight: 600, color: "#10B981" }}>{fmt(w.commission)}</td>
+                      <td style={{ ...TD, textAlign: "right" }}>
+                        <input value={shown} inputMode="decimal" placeholder="non saisi"
+                               onChange={e => setWlDraft({ ...wlDraft, [w.week_start]: e.target.value })}
+                               style={{ ...INPUT, width: 100, textAlign: "right" }} />
+                      </td>
+                      <td style={{ ...TD, textAlign: "right", color: "#8888A0" }}>{w.action_pct} %</td>
+                      <td style={{ ...TD, textAlign: "right", fontWeight: 600,
+                                   color: w.action_amount === null ? "#555568" : netColor(w.action_amount) }}>
+                        {w.action_amount === null ? "—" : fmt(w.action_amount)}
+                      </td>
+                      <td style={{ ...TD, textAlign: "right" }}>
+                        <button disabled={busy} onClick={() => {
+                          const v = parseFloat(shown.replace(",", "."));
+                          if (shown.trim() === "" || Number.isNaN(v)) { setBanner({ kind: "err", text: "Montant illisible." }); return; }
+                          void save(v);
+                        }} style={{ ...INPUT, cursor: "pointer", padding: "3px 8px", color: "#10B981" }}>
+                          Enregistrer
+                        </button>
+                        {w.winloss !== null && (
+                          <button disabled={busy} onClick={() => void save(null)}
+                                  title="Repasser la semaine en « non saisie » — ce n'est pas la même chose que zéro"
+                                  style={{ ...INPUT, cursor: "pointer", padding: "3px 8px", marginLeft: 4, color: "#8888A0" }}>
+                            Retirer
+                          </button>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+
+          {/* Pied : les totaux du moteur, plus la trésorerie qui n'entre pas dans le calcul. */}
+          <div style={{ display: "flex", gap: 18, flexWrap: "wrap", marginTop: 14, fontSize: 12, color: "#8888A0" }}>
+            <span>Commission agence <b style={{ color: "#10B981" }}>{fmt(detail.totals.commission)}</b></span>
+            <span>Part d'action{" "}
+              <b style={{ color: detail.totals.action_amount === null ? "#555568" : netColor(detail.totals.action_amount) }}>
+                {detail.totals.action_amount === null ? "incalculable" : fmt(detail.totals.action_amount)}
+              </b>
+            </span>
+            <span>Buy-ins <b style={{ color: movementColor("deposit") }}>{fmt(detail.deposited)}</b></span>
+            <span>Cash-outs <b style={{ color: movementColor("withdrawal") }}>{fmt(detail.withdrawn)}</b></span>
+            <span>Net mouvements <b style={{ color: netColor(detail.net_movements) }}>{fmt(detail.net_movements)}</b></span>
+            <span style={{ color: "#E8E8EE" }}>
+              Position nette{" "}
+              <b style={{ color: detail.net_position === null ? "#555568" : netColor(detail.net_position) }}>
+                {detail.net_position === null ? "incalculable" : fmt(detail.net_position)}
+              </b>
+            </span>
+          </div>
+          <div style={{ fontSize: 11, color: "#555568", marginTop: 6 }}>
+            Position nette = part d'action + net des mouvements. Positif = le joueur te doit.
+            {detail.totals.weeks_missing_winloss > 0 && (
+              <> — <b style={{ color: "#F0B90B" }}>
+                {detail.totals.weeks_missing_winloss} semaine(s) sans win/loss
+              </b>, donc incalculable tant qu'elles ne sont pas saisies.</>
+            )}
+            {detail.blocked_weeks.count > 0 && (
+              <> {detail.blocked_weeks.count} semaine(s) hors calcul (contrôle en échec),
+                 rake exclu {fmt(detail.blocked_weeks.gross_rake)}.</>
+            )}
           </div>
         </div>
       )}

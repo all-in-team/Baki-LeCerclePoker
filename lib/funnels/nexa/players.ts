@@ -24,7 +24,10 @@ import { getDb } from "@/lib/db";
 import type BetterSqlite3 from "better-sqlite3";
 import { insertWalletTransaction } from "@/lib/queries";
 import { NEXA_GAME_NAME, nicknameKey, isMondayISO } from "./affiliate-ingest";
-import type { Basis, MakeupCarry, RakebackPeriod } from "./rakeback-engine";
+import { computeRakeback } from "./rakeback-engine";
+import type {
+  Basis, MakeupCarry, RakebackPeriod, ActionPeriod, WeekInput, WeekResult, EngineResult,
+} from "./rakeback-engine";
 
 type DB = BetterSqlite3.Database;
 
@@ -221,6 +224,160 @@ export function getNexaPlayerWeeksOn(db: DB, playerId: number): NexaPlayerWeek[]
 
 export function getNexaPlayerWeeks(playerId: number): NexaPlayerWeek[] {
   return getNexaPlayerWeeksOn(getDb(), playerId);
+}
+
+// ── Win/loss hebdomadaire : l'ASSIETTE des parts d'action ─────────────────
+//
+// Le report d'affiliation NEXA ne contient AUCUN win/loss : il ne connaît que le
+// rake et la commission. Le win/loss est une saisie manuelle d'Hugo, dans sa
+// propre table, et c'est ce qui le protège : re-saisir une semaine du report ne
+// peut pas l'écraser, il n'y a aucun chemin de l'un vers l'autre.
+//
+// null ≠ 0. Une semaine non saisie n'est pas une semaine à zéro : le moteur
+// refuse d'en déduire une part d'action, et refusera de la régler.
+
+export type WinlossResult = { ok: true; week_start: string } | { ok: false; error: string };
+
+/** Saisit (ou corrige) le win/loss d'une semaine. Montant signé. */
+export function setWeeklyWinlossOn(
+  db: DB, args: { player_id: number; week_start: string; amount: number; note?: string | null },
+): WinlossResult {
+  const { player_id, week_start, amount } = args;
+  if (!Number.isFinite(amount)) {
+    return { ok: false, error: "Le win/loss doit être un nombre (négatif pour une semaine perdante)." };
+  }
+  if (!isMondayISO(week_start)) {
+    return { ok: false, error: `Semaine « ${week_start} » invalide — attendu la date d'un LUNDI.` };
+  }
+  if (!db.prepare(`SELECT 1 FROM players WHERE id = ?`).get(player_id)) {
+    return { ok: false, error: `Joueur ${player_id} introuvable.` };
+  }
+  try {
+    // UPSERT et non append-only : contrairement à une part d'action, un win/loss
+    // n'a pas de période de validité. C'est un fait daté qu'on corrige, pas une
+    // règle qui change à partir d'une date.
+    db.prepare(`
+      INSERT INTO nexa_player_weekly_winloss (player_id, week_start, amount, note)
+      VALUES (?, ?, ?, ?)
+      ON CONFLICT(player_id, week_start) DO UPDATE SET
+        amount = excluded.amount, note = excluded.note, entered_at = datetime('now')
+    `).run(player_id, week_start, amount, args.note ?? null);
+    return { ok: true, week_start };
+  } catch (e: any) {
+    return { ok: false, error: e?.message ?? String(e) };
+  }
+}
+
+/**
+ * Dé-saisit une semaine : elle redevient NON SAISIE, pas « à zéro ».
+ * Écrire 0 dirait « le joueur a fini à l'équilibre » — ce n'est pas la même chose
+ * que « je ne sais pas encore », et le moteur les traite différemment.
+ */
+export function clearWeeklyWinlossOn(db: DB, playerId: number, weekStart: string): WinlossResult {
+  if (!isMondayISO(weekStart)) {
+    return { ok: false, error: `Semaine « ${weekStart} » invalide — attendu la date d'un LUNDI.` };
+  }
+  db.prepare(`DELETE FROM nexa_player_weekly_winloss WHERE player_id = ? AND week_start = ?`)
+    .run(playerId, weekStart);
+  return { ok: true, week_start: weekStart };
+}
+
+export function setWeeklyWinloss(args: { player_id: number; week_start: string; amount: number; note?: string | null }) {
+  return setWeeklyWinlossOn(getDb(), args);
+}
+export function clearWeeklyWinloss(playerId: number, weekStart: string) {
+  return clearWeeklyWinlossOn(getDb(), playerId, weekStart);
+}
+
+/** week_start → montant saisi. Une semaine absente de la Map n'est PAS à zéro. */
+export function getWeeklyWinlossOn(db: DB, playerId: number): Map<string, number> {
+  const rows = db.prepare(
+    `SELECT week_start, amount FROM nexa_player_weekly_winloss WHERE player_id = ?`
+  ).all(playerId) as { week_start: string; amount: number }[];
+  return new Map(rows.map(r => [r.week_start, r.amount]));
+}
+
+// ── Vue détail d'un joueur ────────────────────────────────────────────────
+
+export type NexaPlayerDetail = {
+  player_id: number;
+  name: string;
+  weeks: WeekResult[];
+  totals: EngineResult["totals"];
+  blocked_weeks: EngineResult["blocked_weeks"];
+  warnings: EngineResult["warnings"];
+  makeup_final: number;
+  /** Trésorerie — hors moteur : les mouvements ne sont pas un flux de calcul. */
+  deposited: number;
+  withdrawn: number;
+  /** withdrawn − deposited. Même convention que le hub : positif = le joueur me doit. */
+  net_movements: number;
+  /**
+   * Position nette du joueur = part d'action + mouvements, dans la MÊME convention
+   * de signe (positif = le joueur doit au Cercle). null si un win/loss manque :
+   * un net amputé ne doit pas ressembler à un chiffre juste.
+   */
+  net_position: number | null;
+};
+
+/**
+ * Rejoue toute la chaîne d'un joueur pour l'écran de détail.
+ *
+ * C'est ICI que le moteur est branché sur la base, et nulle part ailleurs : les
+ * semaines viennent de nexa_affiliate_weeks, le win/loss de sa table dédiée, les
+ * pourcentages de nexa_player_action_shares / nexa_player_rakeback, les défauts
+ * de settings. Jamais getPlayerWalletStats, jamais player_game_deals.
+ */
+export function getNexaPlayerDetailOn(db: DB, playerId: number): NexaPlayerDetail | null {
+  const p = db.prepare(`SELECT id, name FROM players WHERE id = ?`).get(playerId) as
+    { id: number; name: string } | undefined;
+  if (!p) return null;
+
+  const winloss = getWeeklyWinlossOn(db, playerId);
+  const weeks: WeekInput[] = getNexaPlayerWeeksOn(db, playerId).map(w => ({
+    week_start: w.week_start,
+    gross_rake: w.rake,
+    affiliate_commission: w.affiliate_payment,
+    check_ok: w.check_ok === 1,
+    // has() et non ?? : un win/loss saisi À ZÉRO est une saisie, pas une absence.
+    winloss: winloss.has(w.week_start) ? winloss.get(w.week_start)! : null,
+  }));
+
+  const actionPeriods: ActionPeriod[] = db.prepare(
+    `SELECT pct, start_week, end_week FROM nexa_player_action_shares WHERE player_id = ?`
+  ).all(playerId) as ActionPeriod[];
+
+  const r = computeRakeback(
+    weeks, getRakebackPeriodsOn(db, playerId), actionPeriods, getNexaRakebackDefaultsOn(db),
+  );
+
+  const gid = gameId(db);
+  const mv = db.prepare(`
+    SELECT COALESCE(SUM(CASE WHEN type = 'deposit'    THEN amount ELSE 0 END), 0) AS deposited,
+           COALESCE(SUM(CASE WHEN type = 'withdrawal' THEN amount ELSE 0 END), 0) AS withdrawn
+    FROM wallet_transactions
+    WHERE player_id = ? AND game_id = ? AND (source IS NULL OR source != 'unknown') AND currency = 'USDT'
+  `).get(playerId, gid) as { deposited: number; withdrawn: number };
+
+  const netMovements = mv.withdrawn - mv.deposited;
+
+  return {
+    player_id: p.id,
+    name: p.name,
+    weeks: r.weeks,
+    totals: r.totals,
+    blocked_weeks: r.blocked_weeks,
+    warnings: r.warnings,
+    makeup_final: r.makeup_final,
+    deposited: mv.deposited,
+    withdrawn: mv.withdrawn,
+    net_movements: netMovements,
+    net_position: r.totals.action_amount === null ? null : r.totals.action_amount + netMovements,
+  };
+}
+
+export function getNexaPlayerDetail(playerId: number): NexaPlayerDetail | null {
+  return getNexaPlayerDetailOn(getDb(), playerId);
 }
 
 // ── Rattrapage rétroactif ─────────────────────────────────────────────────

@@ -29,6 +29,7 @@ import {
   createNexaPlayerOn, getUnreconciledOn, linkRowToPlayerOn, backfillPlayerIdOn,
   previousWeek, currentWeekMonday, addMovementOn, getMovementsOn, deleteMovementOn,
   setRakebackOn, getRakebackPeriodsOn, getNexaRakebackDefaultsOn,
+  setWeeklyWinlossOn, clearWeeklyWinlossOn, getWeeklyWinlossOn, getNexaPlayerDetailOn,
 } from "../lib/funnels/nexa/players";
 import { computeRakeback } from "../lib/funnels/nexa/rakeback-engine";
 import { commitWeekOn } from "../lib/funnels/nexa/affiliate-ingest";
@@ -623,6 +624,113 @@ const lead = (db: any, tg: number, member: string | null, stage = "account_creat
         !/sendMsg|telegram-api|telegram-commands/.test(importsOf(src)));
   const ing = fs.readFileSync(path.join(REPO, "lib/funnels/nexa/affiliate-ingest.ts"), "utf8");
   check("affiliate-ingest non plus", !/sendMsg|telegram-api/.test(importsOf(ing)));
+}
+
+console.log("\n══ Win/loss hebdo — saisie, correction, dé-saisie ══");
+{
+  const db = freshDb();
+  const p = createNexaPlayerOn(db, { nickname: "ImLePAD", action_pct: 50, action_start_week: W1 });
+  if (!p.ok) throw new Error(p.error);
+
+  check("saisie acceptée", setWeeklyWinlossOn(db, { player_id: p.player_id, week_start: W2, amount: 1000 }).ok);
+  eq("montant en base", getWeeklyWinlossOn(db, p.player_id).get(W2), 1000);
+
+  // UPSERT : corriger une semaine ne crée pas de doublon (UNIQUE player_id, week_start).
+  check("correction sur place", setWeeklyWinlossOn(db, { player_id: p.player_id, week_start: W2, amount: -600 }).ok);
+  eq("montant corrigé", getWeeklyWinlossOn(db, p.player_id).get(W2), -600);
+  eq("une seule ligne", (db.prepare(`SELECT COUNT(*) c FROM nexa_player_weekly_winloss WHERE player_id = ?`)
+                          .get(p.player_id) as any).c, 1);
+
+  // ZÉRO SAISI ≠ NON SAISI. C'est toute la doctrine du moteur.
+  check("zéro est une saisie valide", setWeeklyWinlossOn(db, { player_id: p.player_id, week_start: W3, amount: 0 }).ok);
+  check("W3 est présent dans la Map", getWeeklyWinlossOn(db, p.player_id).has(W3));
+  eq("et vaut 0", getWeeklyWinlossOn(db, p.player_id).get(W3), 0);
+
+  clearWeeklyWinlossOn(db, p.player_id, W3);
+  check("après retrait, W3 n'est plus dans la Map", !getWeeklyWinlossOn(db, p.player_id).has(W3));
+
+  check("semaine non-lundi refusée", !setWeeklyWinlossOn(db, { player_id: p.player_id, week_start: "2026-07-28", amount: 10 }).ok);
+  check("montant non fini refusé", !setWeeklyWinlossOn(db, { player_id: p.player_id, week_start: W2, amount: NaN }).ok);
+  check("joueur inexistant refusé", !setWeeklyWinlossOn(db, { player_id: 9999, week_start: W2, amount: 10 }).ok);
+  eq("aucun refus n'a écrit", (db.prepare(`SELECT COUNT(*) c FROM nexa_player_weekly_winloss`).get() as any).c, 1);
+  db.close();
+}
+
+console.log("\n══ Vue détail joueur — le moteur branché sur la base ══");
+{
+  const db = freshDb();
+  const p = createNexaPlayerOn(db, { nickname: "ImLePAD", member_id: "2231053", action_pct: 50, action_start_week: W1 });
+  if (!p.ok) throw new Error(p.error);
+  setRakebackOn(db, { player_id: p.player_id, pct: 40, basis: "gross_rake", makeup_carry: "carry", start_week: W1 });
+
+  // Chaîne réelle d'ImLePAD : 07-20 rake négatif, 07-27 positif.
+  commitWeekOn(db, W2, [{ nickname: "ImLePAD", member_id: "2231053", deal_text: DEAL,
+    nlh: -61.46, mtt: 0, plo: 17.05, spins: 3.01, affiliate_payment: -15.26 }]);
+  commitWeekOn(db, W3, [{ nickname: "ImLePAD", member_id: "2231053", deal_text: DEAL,
+    nlh: 288.87, mtt: 0, plo: 1, spins: 6.25, affiliate_payment: 119.44 }]);
+
+  const d0 = getNexaPlayerDetailOn(db, p.player_id)!;
+  eq("2 semaines rejouées", d0.weeks.length, 2);
+  check("makeup reporté sur l'assiette", Math.abs(d0.weeks[1].base_net - 254.72) < 1e-9);
+  check("dû = 254.72 × 40 %", Math.abs(d0.weeks[1].due - 101.888) < 1e-9);
+
+  // Aucun win/loss saisi : la part d'action et la position nette sont INCALCULABLES,
+  // pas nulles. C'est ce que l'écran doit montrer.
+  eq("action de la semaine : null", d0.weeks[1].action_amount, null);
+  eq("total action : null", d0.totals.action_amount, null);
+  eq("position nette : null", d0.net_position, null);
+  eq("compteur de semaines manquantes", d0.totals.weeks_missing_winloss, 2);
+
+  setWeeklyWinlossOn(db, { player_id: p.player_id, week_start: W2, amount: -600 });
+  setWeeklyWinlossOn(db, { player_id: p.player_id, week_start: W3, amount: 1000 });
+  const d1 = getNexaPlayerDetailOn(db, p.player_id)!;
+  eq("action W2 (−600 × 50 %)", d1.weeks[0].action_amount, -300);
+  eq("action W3 (1000 × 50 %)", d1.weeks[1].action_amount, 500);
+  eq("total action", d1.totals.action_amount, 200);
+  eq("plus aucune semaine manquante", d1.totals.weeks_missing_winloss, 0);
+
+  // Position nette = action + net des mouvements, MÊME convention de signe
+  // (positif = le joueur doit au Cercle). Sans mouvement, elle vaut l'action.
+  eq("net mouvements à vide", d1.net_movements, 0);
+  eq("position nette = action seule", d1.net_position, 200);
+
+  // Un buy-in de 300 : le Cercle détient 300 de plus → la position baisse d'autant.
+  addMovementOn(db, { player_id: p.player_id, kind: "buy_in", amount: 300, tx_date: "2026-07-28" });
+  const d2 = getNexaPlayerDetailOn(db, p.player_id)!;
+  eq("buy-in enregistré", d2.deposited, 300);
+  eq("net mouvements", d2.net_movements, -300);
+  eq("position nette (200 − 300)", d2.net_position, -100);
+
+  // Le rakeback ne se règle pas et n'entre pas dans la position — il reste calculé.
+  check("le dû rakeback reste exposé", d2.totals.due > 0);
+  eq("joueur inconnu → null", getNexaPlayerDetailOn(db, 9999), null);
+  db.close();
+}
+
+console.log("\n══ Vue détail — une semaine en échec de contrôle ══");
+{
+  const db = freshDb();
+  const p = createNexaPlayerOn(db, { nickname: "LeCercle", member_id: "2231053", action_pct: 50, action_start_week: W1 });
+  if (!p.ok) throw new Error(p.error);
+  // affiliate_payment incohérent avec le deal. Sans motif la ligne est REJETÉE ;
+  // avec un motif explicite elle est écrite avec check_ok = 0 — c'est ce cas-là qui
+  // nous intéresse, celui d'un écart accepté en connaissance de cause.
+  commitWeekOn(db, W2, [{ nickname: "LeCercle", member_id: "2231053", deal_text: DEAL,
+    nlh: 1000, mtt: 0, plo: 0, spins: 0, affiliate_payment: 999 }],
+    { overrides: { "2231053": "arrondi NEXA, écart accepté" } });
+  commitWeekOn(db, W3, [row({ nlh: 1000, mtt: 0, plo: 0, spins: 0, affiliate_payment: 400 })]);
+  setWeeklyWinlossOn(db, { player_id: p.player_id, week_start: W2, amount: 200 });
+  setWeeklyWinlossOn(db, { player_id: p.player_id, week_start: W3, amount: 200 });
+
+  const d = getNexaPlayerDetailOn(db, p.player_id)!;
+  const blocked = d.weeks.filter(w => w.status === "blocked");
+  check("la semaine incohérente est hors calcul", blocked.length === 1 && blocked[0].week_start === W2);
+  eq("elle est chiffrée à part", d.blocked_weeks.count, 1);
+  // Flux indépendant : le win/loss saisi reste valable même sur une semaine bloquée.
+  eq("part d'action calculée quand même", blocked[0].action_amount, 100);
+  // Mais elle n'entre pas dans les totaux, qui gardent un périmètre unique.
+  eq("total action = semaines ok seulement", d.totals.action_amount, 100);
+  db.close();
 }
 
 // ══ Garde-fou NEXAPOKER sur player_game_deals — NON TESTÉ ICI, volontairement ══
