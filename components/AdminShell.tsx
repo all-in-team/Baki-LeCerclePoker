@@ -67,8 +67,14 @@ export default function AdminShell({ children }: { children: React.ReactNode }) 
 
       <Sidebar isOpen={sidebarOpen} onClose={() => setSidebarOpen(false)} />
 
-      <main className="pt-14 lg:pt-0 lg:ml-[284px]" style={{ flex: 1, minHeight: "100vh" }}>
-        <div className="p-6 lg:px-10 lg:pt-4 lg:pb-10" style={{ maxWidth: 1400 }}>
+      {/* `minWidth: 0` : sans lui, un enfant flex refuse de passer sous la largeur de
+          son contenu et une table large pousse toute la page en scroll horizontal au
+          lieu de scroller dans son propre conteneur. */}
+      <main className="pt-14 lg:pt-0 lg:ml-[284px]" style={{ flex: 1, minWidth: 0, minHeight: "100vh" }}>
+        {/* Pleine largeur : le plafond à 1400 px laissait un tiers d'écran vide à droite
+            sur 1920 pendant que les tables scrollaient horizontalement dans le cadre
+            étroit. Padding latéral 24 (mobile) / 32 (desktop), plus de maxWidth. */}
+        <div className="p-6 lg:px-8 lg:pt-4 lg:pb-10">
           <Topbar pathname={pathname ?? "/"} />
           {children}
         </div>

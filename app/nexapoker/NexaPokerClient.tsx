@@ -10,6 +10,7 @@
 // réconcilier vient de resolveRows et n'est jamais appliqué seul.
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { createPortal } from "react-dom";
 import { movementColor, netColor, isZeroAmount } from "@/components/ledger/MovementAmount";
 
 const CARD: React.CSSProperties = {
@@ -23,6 +24,34 @@ const TH: React.CSSProperties = {
   textAlign: "left", fontSize: 11, color: "#8888A0", fontWeight: 600, padding: "8px 8px", whiteSpace: "nowrap",
 };
 const TD: React.CSSProperties = { padding: "8px 8px", fontSize: 12, color: "#E8E8EE", whiteSpace: "nowrap" };
+
+/** Fond du CARD — les cellules figées doivent être OPAQUES, sinon le contenu qui
+ *  défile dessous transparaît au travers. */
+const CARD_BG = "#12141C";
+/** Largeur de la colonne Joueur figée : un `left` sticky exige de la connaître. */
+const W_JOUEUR = 146;
+/** Au-dessus, les colonnes de détail chiffré sont affichées d'office. Seuil calé sur
+ *  la largeur mesurée à laquelle la table complète tient sans scroll (≈1400 px). */
+const WIDE_VIEWPORT_PX = 1400;
+
+/** Table joueurs : `separate` est obligatoire pour que `position: sticky` tienne sur
+ *  une cellule (avec `collapse`, Chrome décroche la bordure et la cellule). Les traits
+ *  de ligne passent donc des `<tr>` aux cellules. */
+const P_TH: React.CSSProperties = {
+  ...TH, padding: "8px 7px", borderBottom: "1px solid rgba(255,255,255,0.07)",
+};
+const P_TD: React.CSSProperties = {
+  ...TD, padding: "7px 7px", borderBottom: "1px solid rgba(255,255,255,0.05)", verticalAlign: "middle",
+};
+/** En-tête figé (z 3) au-dessus des cellules figées du corps (z 2). */
+const STICKY_TH: React.CSSProperties = {
+  position: "sticky", left: 0, zIndex: 3, background: CARD_BG,
+  width: W_JOUEUR, minWidth: W_JOUEUR,
+};
+const STICKY_TD: React.CSSProperties = {
+  position: "sticky", left: 0, zIndex: 2, background: CARD_BG,
+  width: W_JOUEUR, minWidth: W_JOUEUR, maxWidth: W_JOUEUR, whiteSpace: "normal",
+};
 
 type Basis = "gross_rake" | "affiliate_commission";
 type MakeupCarry = "carry" | "reset";
@@ -91,6 +120,27 @@ export default function NexaPokerClient({ currentWeek, today }: { currentWeek: s
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [banner, setBanner] = useState<{ kind: "ok" | "err"; text: string } | null>(null);
+  // Colonnes de détail chiffré (semaines, rake, buy-ins, cash-outs) : masquées d'office
+  // sur écran étroit. Le net et la commission suffisent au coup d'œil courant, et leur
+  // seule présence imposait un scroll horizontal à toute la table.
+  const [showExtra, setShowExtra] = useState(false);
+  useEffect(() => { setShowExtra(window.innerWidth >= WIDE_VIEWPORT_PX); }, []);
+  // Menu « + Mouvement » : rendu en position: fixed, ancré au bouton. Un menu en
+  // position: absolute serait rogné par le conteneur à scroll de la table.
+  const [menu, setMenu] = useState<{ player: Player; x: number; y: number } | null>(null);
+  useEffect(() => {
+    if (!menu) return;
+    const close = () => setMenu(null);
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setMenu(null); };
+    document.addEventListener("mousedown", close);
+    document.addEventListener("keydown", onKey);
+    window.addEventListener("scroll", close, true);
+    return () => {
+      document.removeEventListener("mousedown", close);
+      document.removeEventListener("keydown", onKey);
+      window.removeEventListener("scroll", close, true);
+    };
+  }, [menu]);
 
   // Édition de la part d'action : pct + SEMAINE D'EFFET, demandée à chaque fois.
   const [editing, setEditing] = useState<{ player: Player; pct: string; week: string } | null>(null);
@@ -261,6 +311,14 @@ export default function NexaPokerClient({ currentWeek, today }: { currentWeek: s
             Σ rake {fmt(totals.rake)} · Σ commission {fmt(totals.commission)}
             {totals.alerts > 0 && <span style={{ color: "#F87171" }}> · {totals.alerts} semaine(s) en alerte</span>}
           </span>
+          <button onClick={() => setShowExtra(v => !v)}
+                  title="Affiche ou masque Semaines / Rake / Buy-ins / Cash-outs"
+                  style={{ ...INPUT, cursor: "pointer", padding: "6px 11px", borderRadius: 999,
+                           background: showExtra ? "rgba(255,255,255,0.06)" : "#0B0D12",
+                           borderColor: showExtra ? "rgba(255,255,255,0.22)" : "rgba(255,255,255,0.1)",
+                           color: showExtra ? "#E8E8EE" : "#8888A0", fontWeight: 600 }}>
+            Σ Colonnes chiffres
+          </button>
           <button disabled={busy}
                   onClick={() => setAdding({ nickname: "", member_id: "", telegram: "", pct: "0", week: currentWeek })}
                   style={{ padding: "8px 16px", borderRadius: 8, border: "none", background: "#10B981",
@@ -270,117 +328,140 @@ export default function NexaPokerClient({ currentWeek, today }: { currentWeek: s
         </div>
 
         <div style={{ overflowX: "auto" }}>
-          <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 900 }}>
+          <table style={{ width: "100%", borderCollapse: "separate", borderSpacing: 0, minWidth: 700 }}>
             <thead><tr>
-              {/* Action % en PREMIÈRE colonne après le nom, comme demandé. */}
-              <th style={TH}>Joueur</th><th style={{ ...TH, textAlign: "right" }}>Action %</th>
-              <th style={{ ...TH, textAlign: "right" }}>RB %</th>
-              <th style={TH}>Member ID</th><th style={TH}>@ Telegram</th><th style={TH}>Pseudo report</th>
-              <th style={{ ...TH, textAlign: "right" }}>Semaines</th>
-              <th style={{ ...TH, textAlign: "right" }}>Rake</th>
-              <th style={{ ...TH, textAlign: "right" }}>Commission</th>
-              <th style={{ ...TH, textAlign: "right" }}>Buy-ins</th>
-              <th style={{ ...TH, textAlign: "right" }}>Cash-outs</th>
-              <th style={{ ...TH, textAlign: "right" }}>Net</th>
-              <th style={TH}>Mouvements</th>
-              <th style={TH} />
+              {/* Joueur figé à gauche : la ligne reste identifiable quand la table
+                  scrolle, sur écran étroit. Parts d'action en tête, comme demandé. */}
+              <th style={{ ...P_TH, ...STICKY_TH }}>Joueur</th>
+              <th style={P_TH}>Identité</th>
+              <th style={P_TH}>Parts</th>
+              {showExtra && <th style={{ ...P_TH, textAlign: "right" }}>Semaines</th>}
+              {showExtra && <th style={{ ...P_TH, textAlign: "right" }}>Rake</th>}
+              <th style={{ ...P_TH, textAlign: "right" }}>Commission</th>
+              {showExtra && <th style={{ ...P_TH, textAlign: "right" }}>Buy-ins</th>}
+              {showExtra && <th style={{ ...P_TH, textAlign: "right" }}>Cash-outs</th>}
+              <th style={{ ...P_TH, textAlign: "right" }}>Net</th>
+              <th style={{ ...P_TH, textAlign: "right" }} />
             </tr></thead>
             <tbody>
               {players.length === 0 && !loading && (
-                <tr><td colSpan={14} style={{ ...TD, color: "#8888A0", padding: 20, textAlign: "center" }}>
+                <tr><td colSpan={showExtra ? 10 : 6} style={{ ...P_TD, color: "#8888A0", padding: 20, textAlign: "center" }}>
                   Aucun joueur rattaché. Utilise « Ajouter un joueur », ou réconcilie une ligne du report.
                 </td></tr>
               )}
-              {players.map(p => (
-                <tr key={p.player_id} style={{ borderTop: "1px solid rgba(255,255,255,0.05)" }}>
-                  <td style={{ ...TD, fontWeight: 600 }}>
+              {players.map(p => {
+                // Le pseudo du report ne s'affiche que s'il apporte une information :
+                // répété à l'identique sous le nom, il ne fait que manger de la largeur.
+                const nickDiffers = p.report_nickname !== null
+                  && p.report_nickname.trim().toLowerCase() !== p.name.trim().toLowerCase();
+                return (
+                <tr key={p.player_id}>
+                  <td style={{ ...P_TD, ...STICKY_TD, fontWeight: 600 }}>
                     {p.name}
+                    {p.check_ko > 0 && (
+                      <span style={{ color: "#F87171", fontSize: 10, marginLeft: 5 }}
+                            title="Semaine(s) dont le recalcul ne retombe pas sur le report">
+                        ⚠️{p.check_ko}
+                      </span>
+                    )}
                     {p.lead_id === null && (
-                      <span style={{ marginLeft: 6, fontSize: 10, color: "#555568" }} title="Arrivé hors funnel">hors funnel</span>
+                      <div style={{ fontSize: 10, color: "#555568", fontWeight: 400 }} title="Arrivé hors funnel">hors funnel</div>
                     )}
                   </td>
-                  <td style={{ ...TD, textAlign: "right" }}>
-                    <button disabled={busy}
-                            onClick={() => setEditing({ player: p, pct: String(p.action_pct), week: currentWeek })}
-                            title={p.action_since ? `En vigueur depuis le ${p.action_since}` : "Aucune période enregistrée"}
-                            style={{ background: "transparent", border: "1px solid rgba(255,255,255,0.12)",
-                                     borderRadius: 6, padding: "3px 10px", cursor: "pointer",
-                                     color: p.action_pct > 0 ? "#E8E8EE" : "#8888A0", fontSize: 12, fontWeight: 700 }}>
-                      {p.action_pct} %
-                    </button>
+                  {/* Identité — Member ID et @Telegram tiennent sur deux lignes dans une
+                      seule colonne : trois colonnes pour trois identifiants du même
+                      joueur, c'était de la largeur dépensée sans information ajoutée. */}
+                  <td style={{ ...P_TD, whiteSpace: "normal" }}>
+                    <div style={{ fontFamily: "var(--font-jbmono), monospace", fontSize: 11.5,
+                                  color: p.member_id ? "#E8E8EE" : "#555568" }}>
+                      {p.member_id ?? "—"}
+                    </div>
+                    <div style={{ fontSize: 11, color: p.telegram_handle ? "#8888A0" : "#3A3A48" }}>
+                      {p.telegram_handle ?? "—"}
+                    </div>
+                    {nickDiffers && (
+                      <div style={{ fontSize: 10, color: "#555568" }} title="Pseudo sous lequel le report le désigne">
+                        report : {p.report_nickname}
+                      </div>
+                    )}
                   </td>
-                  {/* RB % — l'assiette est affichée avec le taux : 40 % du rake brut
-                      et 40 % de la commission ne sont pas le même montant. */}
-                  <td style={{ ...TD, textAlign: "right" }}>
-                    <button disabled={busy}
-                            onClick={() => setEditingRb({
-                              player: p, pct: String(p.rakeback_pct), basis: p.rakeback_basis,
-                              carry: p.rakeback_makeup_carry, week: currentWeek,
-                            })}
-                            title={p.rakeback_since
-                              ? `${p.rakeback_pct} % sur ${BASIS_LABEL[p.rakeback_basis]}, en vigueur depuis le ${p.rakeback_since}`
-                              : `Aucune période enregistrée — défaut global (settings) : ${p.rakeback_pct} % sur ${BASIS_LABEL[p.rakeback_basis]}`}
-                            style={{ background: "transparent",
-                                     border: `1px solid ${p.rakeback_is_default ? "rgba(255,255,255,0.06)" : "rgba(255,255,255,0.12)"}`,
-                                     borderRadius: 6, padding: "3px 10px", cursor: "pointer",
-                                     color: p.rakeback_is_default ? "#555568" : "#E8E8EE", fontSize: 12, fontWeight: 700 }}>
-                      {p.rakeback_pct} %
-                      <span style={{ fontSize: 10, fontWeight: 500, color: "#8888A0", marginLeft: 4 }}>
-                        {BASIS_LABEL[p.rakeback_basis]}
-                      </span>
-                      {p.rakeback_is_default && (
-                        <span style={{ fontSize: 9, color: "#555568", marginLeft: 4 }}>déf.</span>
-                      )}
-                    </button>
+                  {/* Parts — action / rakeback côte à côte, chaque taux cliquable ouvre
+                      SON éditeur. L'assiette reste affichée : 40 % du rake brut et 40 %
+                      de la commission ne sont pas le même montant. */}
+                  <td style={{ ...P_TD, whiteSpace: "normal" }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 2 }}>
+                      <button disabled={busy}
+                              onClick={() => setEditing({ player: p, pct: String(p.action_pct), week: currentWeek })}
+                              title={p.action_since
+                                ? `Part d'action : ${p.action_pct} %, en vigueur depuis le ${p.action_since}`
+                                : "Part d'action — aucune période enregistrée"}
+                              style={{ background: "transparent", border: "1px solid rgba(255,255,255,0.12)",
+                                       borderRadius: 6, padding: "2px 7px", cursor: "pointer",
+                                       color: p.action_pct > 0 ? "#E8E8EE" : "#8888A0", fontSize: 12, fontWeight: 700 }}>
+                        {p.action_pct} %
+                      </button>
+                      <span style={{ color: "#3A3A48", fontSize: 11 }}>/</span>
+                      <button disabled={busy}
+                              onClick={() => setEditingRb({
+                                player: p, pct: String(p.rakeback_pct), basis: p.rakeback_basis,
+                                carry: p.rakeback_makeup_carry, week: currentWeek,
+                              })}
+                              title={p.rakeback_since
+                                ? `Rakeback : ${p.rakeback_pct} % sur ${BASIS_LABEL[p.rakeback_basis]}, en vigueur depuis le ${p.rakeback_since}`
+                                : `Rakeback — aucune période enregistrée, défaut global (settings) : ${p.rakeback_pct} % sur ${BASIS_LABEL[p.rakeback_basis]}`}
+                              style={{ background: "transparent",
+                                       border: `1px solid ${p.rakeback_is_default ? "rgba(255,255,255,0.06)" : "rgba(255,255,255,0.12)"}`,
+                                       borderRadius: 6, padding: "2px 7px", cursor: "pointer",
+                                       color: p.rakeback_is_default ? "#555568" : "#E8E8EE", fontSize: 12, fontWeight: 700 }}>
+                        {p.rakeback_pct} %
+                      </button>
+                    </div>
+                    <div style={{ fontSize: 10, color: "#555568", marginTop: 2 }}>
+                      action / rb {BASIS_LABEL[p.rakeback_basis]}{p.rakeback_is_default ? " (déf.)" : ""}
+                    </div>
                   </td>
-                  <td style={TD}>{p.member_id ?? <span style={{ color: "#555568" }}>—</span>}</td>
-                  <td style={TD}>{p.telegram_handle ?? <span style={{ color: "#555568" }}>—</span>}</td>
-                  <td style={{ ...TD, color: "#8888A0" }}>{p.report_nickname ?? "—"}</td>
-                  <td style={{ ...TD, textAlign: "right" }}>{p.weeks_count || "—"}</td>
-                  <td style={{ ...TD, textAlign: "right" }}>{fmt(p.total_rake)}</td>
-                  <td style={{ ...TD, textAlign: "right", fontWeight: 600 }}>{fmt(p.total_commission)}</td>
-                  <td style={{ ...TD, textAlign: "right", color: movementColor("deposit") }}>
-                    {isZeroAmount(p.deposited) ? "—" : fmt(p.deposited)}
-                  </td>
-                  <td style={{ ...TD, textAlign: "right", color: movementColor("withdrawal") }}>
-                    {isZeroAmount(p.withdrawn) ? "—" : fmt(p.withdrawn)}
-                  </td>
-                  <td style={{ ...TD, textAlign: "right", fontWeight: 600,
+                  {showExtra && <td style={{ ...P_TD, textAlign: "right" }}>{p.weeks_count || "—"}</td>}
+                  {showExtra && <td style={{ ...P_TD, textAlign: "right" }}>{fmt(p.total_rake)}</td>}
+                  <td style={{ ...P_TD, textAlign: "right", fontWeight: 600 }}>{fmt(p.total_commission)}</td>
+                  {showExtra && (
+                    <td style={{ ...P_TD, textAlign: "right", color: movementColor("deposit") }}>
+                      {isZeroAmount(p.deposited) ? "—" : fmt(p.deposited)}
+                    </td>
+                  )}
+                  {showExtra && (
+                    <td style={{ ...P_TD, textAlign: "right", color: movementColor("withdrawal") }}>
+                      {isZeroAmount(p.withdrawn) ? "—" : fmt(p.withdrawn)}
+                    </td>
+                  )}
+                  <td style={{ ...P_TD, textAlign: "right", fontWeight: 600,
                                color: netColor(p.net_movements) }}
                       title="Cash-outs − buy-ins. Convention du repo : dépôt rouge, retrait vert — un net négatif est dominé par les dépôts.">
                     {Math.abs(p.net_movements) < 0.005 ? "—" : fmt(p.net_movements)}
                   </td>
-                  <td style={TD}>
-                    <button disabled={busy} onClick={() => setMoving({ player: p, kind: "buy_in", amount: "", date: today, note: "" })}
-                            style={{ ...INPUT, cursor: "pointer", padding: "3px 8px", marginRight: 4, borderColor: "rgba(96,165,250,0.4)", color: "#60A5FA" }}>
-                      Buy-in
+                  {/* Un seul bouton pour les mouvements : quatre boutons par ligne
+                      pesaient plus large que les chiffres qu'ils accompagnaient. */}
+                  <td style={{ ...P_TD, textAlign: "right" }}>
+                    <button disabled={busy}
+                            onMouseDown={e => e.stopPropagation()}
+                            onClick={e => {
+                              const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+                              setMenu(menu?.player.player_id === p.player_id
+                                ? null
+                                : { player: p, x: r.right, y: r.bottom + 4 });
+                            }}
+                            style={{ ...INPUT, cursor: "pointer", padding: "3px 8px", marginRight: 4,
+                                     borderColor: "rgba(96,165,250,0.4)", color: "#60A5FA" }}>
+                      + Mouvement ▾
                     </button>
-                    <button disabled={busy} onClick={() => setMoving({ player: p, kind: "cash_out", amount: "", date: today, note: "" })}
-                            style={{ ...INPUT, cursor: "pointer", padding: "3px 8px", marginRight: 4, borderColor: "rgba(240,185,11,0.4)", color: "#F0B90B" }}>
-                      Cash-out
-                    </button>
-                    {(p.deposited > 0 || p.withdrawn > 0) && (
-                      <button disabled={busy} onClick={() => void openHistory(p)}
-                              style={{ ...INPUT, cursor: "pointer", padding: "3px 8px", color: "#8888A0" }}>
-                        Historique
-                      </button>
-                    )}
                     <button disabled={busy || detailBusy} onClick={() => void openDetail(p)}
-                            style={{ ...INPUT, cursor: "pointer", padding: "3px 8px", marginLeft: 4,
+                            style={{ ...INPUT, cursor: "pointer", padding: "3px 8px",
                                      borderColor: "rgba(16,185,129,0.4)", color: "#10B981" }}>
                       Détail
                     </button>
                   </td>
-                  <td style={{ ...TD, textAlign: "right" }}>
-                    {p.check_ko > 0 && (
-                      <span style={{ color: "#F87171", fontSize: 11 }}
-                            title="Semaine(s) dont le recalcul ne retombe pas sur le report">
-                        ⚠️ {p.check_ko}
-                      </span>
-                    )}
-                  </td>
                 </tr>
-              ))}
+                );
+              })}
             </tbody>
           </table>
         </div>
@@ -447,10 +528,13 @@ export default function NexaPokerClient({ currentWeek, today }: { currentWeek: s
             )}
           </div>
 
+          {/* Côte à côte tant que les deux tables tiennent vraiment (base de flex >
+              largeur minimale de chacune) ; en dessous elles s'empilent en pleine
+              largeur plutôt que de se serrer en scrollant chacune de son côté. */}
           <div style={{ display: "flex", gap: 24, flexWrap: "wrap", alignItems: "flex-start" }}>
-            <div style={{ flex: "1 1 320px", overflowX: "auto" }}>
+            <div style={{ flex: "1 1 380px", minWidth: 0, overflowX: "auto" }}>
               <div style={{ fontSize: 11, color: "#8888A0", fontWeight: 600, marginBottom: 6 }}>PAR SEMAINE</div>
-              <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 300 }}>
+              <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 340 }}>
                 <thead><tr>
                   <th style={TH}>Semaine</th>
                   <th style={{ ...TH, textAlign: "right" }}>Rake</th>
@@ -476,11 +560,11 @@ export default function NexaPokerClient({ currentWeek, today }: { currentWeek: s
               </table>
             </div>
 
-            <div style={{ flex: "1 1 320px", overflowX: "auto" }}>
+            <div style={{ flex: "1 1 500px", minWidth: 0, overflowX: "auto" }}>
               <div style={{ fontSize: 11, color: "#8888A0", fontWeight: 600, marginBottom: 6 }}>
                 MA POSITION PAR JOUEUR
               </div>
-              <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 320 }}>
+              <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 470 }}>
                 <thead><tr>
                   <th style={TH}>Joueur</th>
                   <th style={{ ...TH, textAlign: "right" }}>Commission</th>
@@ -951,6 +1035,45 @@ export default function NexaPokerClient({ currentWeek, today }: { currentWeek: s
             </tbody>
           </table>
         </div>
+      )}
+
+      {/* Menu « + Mouvement » — ancré au viewport pour ne pas être rogné par le
+          conteneur à scroll de la table. Il n'ouvre que les formulaires existants :
+          aucune écriture ne passe par ici.
+          Rendu dans <body> via un portail : le conteneur de page (app/template.tsx,
+          classe `animate-page-in`) porte un `transform` et devient donc le bloc
+          conteneur de tout `position: fixed` descendant — les coordonnées viewport
+          renvoyées par getBoundingClientRect() seraient décalées d'autant. */}
+      {menu && createPortal(
+        <div onMouseDown={e => e.stopPropagation()}
+             style={{ position: "fixed", left: menu.x, top: menu.y, transform: "translateX(-100%)",
+                      zIndex: 60, background: "#0B0D12", border: "1px solid rgba(255,255,255,0.12)",
+                      borderRadius: 10, padding: 4, minWidth: 150,
+                      boxShadow: "0 12px 30px rgba(0,0,0,0.5)", display: "flex", flexDirection: "column" }}>
+          {([
+            ["buy_in", "Buy-in", "#60A5FA", "Le joueur met de l'argent : il finance son action."],
+            ["cash_out", "Cash-out", "#F0B90B", "Tu paies le joueur."],
+          ] as const).map(([kind, label, color, title]) => (
+            <button key={kind} title={title}
+                    onClick={() => {
+                      setMoving({ player: menu.player, kind, amount: "", date: today, note: "" });
+                      setMenu(null);
+                    }}
+                    style={{ background: "none", border: "none", cursor: "pointer", textAlign: "left",
+                             padding: "7px 10px", borderRadius: 7, fontSize: 12, fontWeight: 600, color }}>
+              {label}
+            </button>
+          ))}
+          {(menu.player.deposited > 0 || menu.player.withdrawn > 0) && (
+            <button onClick={() => { const p = menu.player; setMenu(null); void openHistory(p); }}
+                    style={{ background: "none", border: "none", cursor: "pointer", textAlign: "left",
+                             padding: "7px 10px", borderRadius: 7, fontSize: 12, color: "#8888A0",
+                             borderTop: "1px solid rgba(255,255,255,0.07)" }}>
+              Historique
+            </button>
+          )}
+        </div>,
+        document.body,
       )}
 
       {banner && (

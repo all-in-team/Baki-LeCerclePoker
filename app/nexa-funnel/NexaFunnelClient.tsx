@@ -8,6 +8,7 @@
 // ancré au viewport (position fixed), donc totalement indépendant du scroll de la
 // table — et la table reste utilisable à côté pour passer d'un lead à l'autre.
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { useRouter } from "next/navigation";
 import type { NexaLeadWithStats, NexaWeeklyStat, NexaLeadEvent } from "@/lib/nexa-funnel";
 import { NEXA_STAGES, NEXA_CARDS } from "@/lib/funnels/nexa/config";
@@ -39,10 +40,11 @@ const OS_LABEL: Record<string, string> = { windows: "🪟", android: "🤖", mac
 
 const DRAWER_WIDTH = 520;
 /** Largeurs FIXES des deux colonnes figées — un `left` sticky exige de les connaître. */
-const W_LEAD = 240;
-const W_UNREAD = 150;
-/** En dessous, les colonnes Σ sont masquées par défaut (toggle « Colonnes chiffres »). */
-const WIDE_VIEWPORT_PX = 1500;
+const W_LEAD = 172;
+const W_UNREAD = 104;
+/** En dessous, les colonnes Σ sont masquées par défaut (toggle « Colonnes chiffres »).
+ *  Seuil calé sur la largeur mesurée à laquelle la table complète tient sans scroll. */
+const WIDE_VIEWPORT_PX = 1300;
 
 const CARD_BG = "#11141A";
 const ROW_BG_SELECTED = "#191D26";
@@ -50,30 +52,43 @@ const ROW_BG_SELECTED = "#191D26";
 type Col = {
   key: string;
   label: string;
+  /** Infobulle de l'en-tête — indispensable quand le libellé est une icône. */
+  title?: string;
   align?: "right";
   /** Décalage sticky en px ; absent = colonne normale. */
   stickyLeft?: number;
   width?: number;
+  /** La cellule peut passer à la ligne (contenu sur deux lignes). */
+  wrap?: boolean;
   /** Colonne chiffrée, masquable par le toggle. */
   numeric?: boolean;
 };
 
+// Douze colonnes ne tenaient pas dans un écran 1440 : la table scrollait toujours,
+// et Relances / ❓ / Semaines tombaient hors champ. Deux regroupements sans perte
+// d'information : l'OS rejoint la cellule Lead (une icône), et Started + Dépôt
+// deviennent une colonne à deux lignes. Les en-têtes verbeux passent en icône ou en
+// abrégé, avec l'intitulé complet en infobulle.
 const COLUMNS: Col[] = [
   { key: "lead", label: "Lead", stickyLeft: 0, width: W_LEAD },
-  { key: "unread", label: "💬", stickyLeft: W_LEAD, width: W_UNREAD },
+  { key: "unread", label: "💬", title: "Dernier message du lead", stickyLeft: W_LEAD, width: W_UNREAD },
   { key: "stage", label: "Étape" },
-  { key: "member", label: "ID joueur" },
-  { key: "os", label: "OS" },
+  { key: "member", label: "ID joueur", width: 136, wrap: true },
   { key: "group", label: "Groupe" },
-  { key: "started", label: "Started" },
-  { key: "deposit", label: "Dépôt" },
-  { key: "relances", label: "Relances" },
-  { key: "questions", label: "❓" },
-  { key: "weeks", label: "Semaines", align: "right" },
+  { key: "dates", label: "Arrivé / dépôt", title: "Date d'arrivée du lead, puis date du dépôt", width: 116, wrap: true },
+  { key: "counts", label: "🔔 / ❓", title: "Relances envoyées / questions posées", align: "right" },
+  { key: "weeks", label: "Sem.", title: "Semaines présentes au report", align: "right" },
   { key: "rake", label: "Σ Rake", align: "right", numeric: true },
   // Σ Dépôts / Σ Retraits / Σ Win-Loss retirés avec la bascule sur le report
   // d'affiliation, qui ne porte pas ces données. Voir WEEKLY_COLUMNS ci-dessus.
 ];
+
+/** Date compacte « MM-JJ hh:mm » — deux dates par cellule, la valeur complète reste
+ *  en infobulle. Découpe de chaîne, aucun parsing : le fuseau ne bouge pas. */
+function fmtDateShort(s: string | null): string {
+  if (!s) return "—";
+  return s.slice(5, 16).replace("T", " ");
+}
 
 /** Lien vers le sujet Telegram du lead — même construction que côté serveur. */
 function topicUrl(lead: NexaLeadWithStats): string | null {
@@ -140,8 +155,9 @@ function UnreadCell({ lead }: { lead: NexaLeadWithStats }) {
         }}
         title={open ? "Question sans réponse" : unread ? "Message non lu" : "Lu"}
       />
-      <span style={{ color: flag ? "#F0B90B" : "#555568", fontWeight: flag ? 700 : 400 }}>
-        {lead.last_lead_msg_at ? fmtDateTime(lead.last_lead_msg_at) : "en attente"}
+      <span style={{ color: flag ? "#F0B90B" : "#555568", fontWeight: flag ? 700 : 400 }}
+            title={lead.last_lead_msg_at ? `Dernier message du lead : ${fmtDateTime(lead.last_lead_msg_at)}` : undefined}>
+        {lead.last_lead_msg_at ? fmtDateShort(lead.last_lead_msg_at) : "en attente"}
       </span>
       {/* 🙋 = le bot est muselé · ❓ = question ouverte mais le bot a repris la main. */}
       {muted && <span title="Le bot est muselé : le lead attend un humain">🙋</span>}
@@ -265,9 +281,9 @@ export default function NexaFunnelClient({ leads, stats, events }: {
           <thead>
             <tr>
               {cols.map(c => (
-                <th key={c.key} style={{
+                <th key={c.key} title={c.title} style={{
                   textAlign: c.align === "right" ? "right" : "left",
-                  padding: "12px 14px", fontSize: 10.5, fontWeight: 700, color: "#555568",
+                  padding: "12px 10px", fontSize: 10.5, fontWeight: 700, color: "#555568",
                   textTransform: "uppercase", letterSpacing: "0.06em", whiteSpace: "nowrap",
                   borderBottom: "1px solid rgba(255,255,255,0.07)",
                   ...(c.width ? { width: c.width, minWidth: c.width } : {}),
@@ -305,7 +321,13 @@ export default function NexaFunnelClient({ leads, stats, events }: {
         </table>
       </div>
 
-      {selectedLead && (
+      {/* Rendu dans <body> via un portail, et NON dans l'arbre de la page : le conteneur
+          de page (app/template.tsx, classe `animate-page-in`) porte un `transform`, ce
+          qui en fait le bloc conteneur de tout `position: fixed` descendant. Le drawer
+          se calait donc sur le cadre de contenu, décalé du padding latéral, au lieu du
+          bord droit de l'écran. Le portail le rend enfant de <body> : `right: 0` vaut
+          de nouveau « bord du viewport ». Idem pour le voile. */}
+      {selectedLead && createPortal(
         <>
           {/* Voile purement décoratif : il ne capte AUCUN clic, pour que la table
               reste utilisable pendant que le drawer est ouvert. */}
@@ -321,7 +343,8 @@ export default function NexaFunnelClient({ leads, stats, events }: {
             onClose={close}
             onChanged={() => router.refresh()}
           />
-        </>
+        </>,
+        document.body,
       )}
     </div>
   );
@@ -342,6 +365,12 @@ function LeadRow({ lead, cols, selected, onSelect }: {
         return (
           <div style={{ overflow: "hidden", textOverflow: "ellipsis" }}>
             <span style={{ color: "#E8E8EE", fontWeight: 600 }}>{leadName(lead)}</span>
+            {/* L'OS tenait une colonne entière pour une icône : il vit ici. */}
+            {lead.os && (
+              <span style={{ marginLeft: 6, fontSize: 11 }} title={`OS : ${lead.os}`}>
+                {OS_LABEL[lead.os] ?? lead.os}
+              </span>
+            )}
             {lead.source !== "direct" && (
               <span style={{ marginLeft: 6, fontSize: 10, padding: "2px 6px", borderRadius: 4, background: "rgba(96,165,250,0.12)", color: "#60A5FA", fontWeight: 600 }}>{lead.source}</span>
             )}
@@ -364,7 +393,6 @@ function LeadRow({ lead, cols, selected, onSelect }: {
             )}
           </span>
         );
-      case "os": return <span style={{ color: "#8888A0" }}>{lead.os ? (OS_LABEL[lead.os] ?? lead.os) : "—"}</span>;
       case "group":
         return lead.group_invite_link ? (
           <>
@@ -376,10 +404,32 @@ function LeadRow({ lead, cols, selected, onSelect }: {
         ) : lead.group_not_joined === 1 ? (
           <span style={{ fontSize: 10, padding: "2px 6px", borderRadius: 4, background: "rgba(240,185,11,0.12)", color: "#F0B90B", fontWeight: 700 }} title="Groupe créé mais jamais rejoint dans les 24 h — il a été nettoyé, le lead est à relancer">⚠️ non rejoint</span>
         ) : <span style={{ color: "#555568" }}>—</span>;
-      case "started": return <span style={{ color: "#8888A0" }}>{fmtDateTime(lead.created_at)}</span>;
-      case "deposit": return <span style={{ color: lead.deposit_at ? "#34D399" : "#555568" }}>{fmtDateTime(lead.deposit_at)}</span>;
-      case "relances": return <span style={{ color: lead.relances_count > 0 ? "#F0B90B" : "#555568" }}>{lead.relances_count}</span>;
-      case "questions": return <span style={{ color: lead.questions_count > 0 ? "#F0B90B" : "#555568" }}>{lead.questions_count || "—"}</span>;
+      // Arrivée et dépôt sur deux lignes dans une seule colonne. La valeur complète
+      // (année comprise) reste accessible en infobulle — rien n'est perdu.
+      case "dates":
+        return (
+          <>
+            <div style={{ color: "#8888A0", whiteSpace: "nowrap" }} title={`Arrivé le ${fmtDateTime(lead.created_at)}`}>
+              🚀 {fmtDateShort(lead.created_at)}
+            </div>
+            <div style={{ color: lead.deposit_at ? "#34D399" : "#3A3A48", whiteSpace: "nowrap" }}
+              title={lead.deposit_at ? `Dépôt le ${fmtDateTime(lead.deposit_at)}` : "Aucun dépôt marqué"}>
+              💰 {fmtDateShort(lead.deposit_at)}
+            </div>
+          </>
+        );
+      // Deux compteurs d'un chiffre chacun tenaient deux colonnes : ils partagent la
+      // même cellule, séparés, chacun avec son infobulle.
+      case "counts":
+        return (
+          <span style={{ whiteSpace: "nowrap" }}>
+            <span style={{ color: lead.relances_count > 0 ? "#F0B90B" : "#555568" }}
+              title={`${lead.relances_count} relance(s) envoyée(s)`}>{lead.relances_count}</span>
+            <span style={{ color: "#3A3A48", margin: "0 4px" }}>/</span>
+            <span style={{ color: lead.questions_count > 0 ? "#F0B90B" : "#555568" }}
+              title={`${lead.questions_count} question(s) posée(s)`}>{lead.questions_count || "—"}</span>
+          </span>
+        );
       case "weeks": return <span style={{ color: "#8888A0" }}>{lead.weeks_count || "—"}</span>;
       case "rake": return <span style={{ color: "#E8E8EE", fontWeight: 600 }}>{lead.weeks_count ? fmtAmount(lead.total_rake) : "—"}</span>;
       default: return null;
@@ -394,7 +444,7 @@ function LeadRow({ lead, cols, selected, onSelect }: {
     >
       {cols.map(c => (
         <td key={c.key} style={{
-          padding: "10px 14px", whiteSpace: "nowrap",
+          padding: "10px 10px", whiteSpace: c.wrap ? "normal" : "nowrap",
           textAlign: c.align === "right" ? "right" : "left",
           borderBottom: "1px solid rgba(255,255,255,0.04)",
           ...(c.width ? { width: c.width, minWidth: c.width, maxWidth: c.width } : {}),
