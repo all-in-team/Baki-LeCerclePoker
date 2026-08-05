@@ -37,6 +37,10 @@ export type AgencyPlayer = {
   commission: number;
   /** null si un win/loss manque — on ne complète pas par un zéro. */
   action_amount: number | null;
+  /** Déjà réglé, au montant figé. */
+  action_settled: number;
+  /** Reste à régler — c'est lui qui porte la position. */
+  action_unsettled: number | null;
   net_movements: number;
   /** action + mouvements. Positif = le joueur doit au Cercle. null si incalculable. */
   net_position: number | null;
@@ -53,8 +57,10 @@ export type NexaAgency = {
     commission: number;
     /** Semaines distinctes dont au moins une ligne est en échec de contrôle. */
     weeks_with_check_ko: number;
-    /** Σ des positions nettes, null dès qu'un joueur est incalculable. */
+    /** Σ des positions nettes (donc du NON RÉGLÉ), null dès qu'un joueur est incalculable. */
     net_position: number | null;
+    /** Part d'action déjà réglée, tous joueurs — ce qui est sorti des comptes. */
+    action_settled: number;
     /** Joueurs dont la position est incalculable faute de win/loss. */
     players_incomplete: number;
   };
@@ -81,6 +87,8 @@ export function getNexaAgencyOn(db: DB): NexaAgency {
       name: p.name,
       commission: d.totals.commission,
       action_amount: d.totals.action_amount,
+      action_settled: d.action_settled,
+      action_unsettled: d.action_unsettled,
       net_movements: d.net_movements,
       net_position: d.net_position,
       weeks_missing_winloss: d.totals.weeks_missing_winloss,
@@ -96,6 +104,7 @@ export function getNexaAgencyOn(db: DB): NexaAgency {
       gross_rake: weeks.reduce((s, w) => s + w.gross_rake, 0),
       commission: weeks.reduce((s, w) => s + w.commission, 0),
       weeks_with_check_ko: weeks.filter(w => w.check_ko > 0).length,
+      action_settled: players.reduce((s, p) => s + p.action_settled, 0),
       // Un seul joueur incalculable rend le total incalculable : le sommer en
       // ignorant les null donnerait un chiffre d'apparence juste, amputé du reste.
       net_position: incomplete.length > 0

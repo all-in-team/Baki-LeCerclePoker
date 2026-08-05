@@ -244,6 +244,69 @@ console.log("\n══ Une semaine réglée ne réapparaît JAMAIS comme due ═�
   db.close();
 }
 
+console.log("\n══ Un joueur soldé affiche une position soldée ══");
+{
+  const db = freshDb();
+  const pid = setup(db);   // W1 +500, W2 −300, W3 +100, aucun mouvement
+
+  const before = getNexaPlayerDetailOn(db, pid)!;
+  approx("avant règlement : rien de réglé", before.action_settled, 0);
+  approx("tout est à régler", before.action_unsettled!, 300);
+  approx("position nette = 300", before.net_position!, 300);
+
+  lockNexaActionSettlementOn(db, { player_id: pid, week_starts: [W1, W2, W3] });
+
+  const after = getNexaPlayerDetailOn(db, pid)!;
+  // LE POINT DU CAS : une fois tout réglé, le joueur ne doit plus rien au titre de
+  // l'action. Sommer toutes les semaines afficherait « il te doit 300 » à vie.
+  approx("après règlement : déjà réglé = 300", after.action_settled, 300);
+  approx("plus rien à régler", after.action_unsettled!, 0);
+  approx("POSITION SOLDÉE", after.net_position!, 0);
+  // Le total brut du moteur, lui, ne bouge pas : il rejoue toute la chaîne. C'est
+  // voulu — c'est la position, pas le rejeu, qui doit tenir compte du règlement.
+  approx("le rejeu du moteur reste complet", after.totals.action_amount!, 300);
+
+  // Un mouvement continue de peser sur la position même quand l'action est soldée.
+  db.prepare(`INSERT INTO wallet_transactions (player_id, game_id, type, amount, currency, tx_date, source)
+              VALUES (?, (SELECT id FROM games WHERE name='NEXAPOKER'), 'withdrawal', 250, 'USDT', '2026-08-03', 'manual')`).run(pid);
+  approx("position = mouvements seuls une fois l'action soldée",
+         getNexaPlayerDetailOn(db, pid)!.net_position!, 250);
+  db.close();
+}
+
+console.log("\n══ Règlement partiel : seul le non réglé porte la position ══");
+{
+  const db = freshDb();
+  const pid = setup(db);
+  lockNexaActionSettlementOn(db, { player_id: pid, week_starts: [W1] });   // +500 réglé
+  const d = getNexaPlayerDetailOn(db, pid)!;
+  approx("déjà réglé", d.action_settled, 500);
+  approx("reste à régler (−300 + 100)", d.action_unsettled!, -200);
+  approx("position = le non réglé", d.net_position!, -200);
+
+  // Corriger une semaine RÉGLÉE ne renfloue pas la position : le montant est figé.
+  setWeeklyWinlossOn(db, { player_id: pid, week_start: W1, amount: 9999 });
+  approx("le réglé reste figé", getNexaPlayerDetailOn(db, pid)!.action_settled, 500);
+  approx("la position ne bouge pas", getNexaPlayerDetailOn(db, pid)!.net_position!, -200);
+  db.close();
+}
+
+console.log("\n══ Un win/loss manquant ne rend incalculable que le NON réglé ══");
+{
+  const db = freshDb();
+  const pid = setup(db);
+  lockNexaActionSettlementOn(db, { player_id: pid, week_starts: [W1] });
+  // On dé-saisit une semaine NON réglée : le reste à régler devient incalculable,
+  // mais ce qui est déjà réglé reste un chiffre — il est sorti des comptes.
+  const { clearWeeklyWinlossOn } = require("../lib/funnels/nexa/players");
+  clearWeeklyWinlossOn(db, pid, W3);
+  const d = getNexaPlayerDetailOn(db, pid)!;
+  approx("le réglé reste chiffré", d.action_settled, 500);
+  eq("le non réglé devient null", d.action_unsettled, null);
+  eq("donc la position aussi", d.net_position, null);
+  db.close();
+}
+
 console.log("\n══ Double règlement — refusé explicitement ET structurellement ══");
 {
   const db = freshDb();

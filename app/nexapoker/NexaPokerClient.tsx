@@ -56,6 +56,7 @@ type PlayerDetail = {
   blocked_weeks: { count: number; week_starts: string[]; gross_rake: number; commission: number };
   warnings: { week_start: string; message: string }[];
   settled_weeks: Record<string, number>;
+  action_settled: number; action_unsettled: number | null;
   deposited: number; withdrawn: number; net_movements: number;
   net_position: number | null;
 };
@@ -63,9 +64,10 @@ type PlayerDetail = {
 type Agency = {
   weeks: { week_start: string; gross_rake: number; commission: number; players_count: number; check_ko: number }[];
   players: { player_id: number; name: string; commission: number; action_amount: number | null;
+             action_settled: number; action_unsettled: number | null;
              net_movements: number; net_position: number | null; weeks_missing_winloss: number }[];
   totals: { gross_rake: number; commission: number; weeks_with_check_ko: number;
-            net_position: number | null; players_incomplete: number };
+            net_position: number | null; action_settled: number; players_incomplete: number };
 };
 type Movement = { id: number; type: "deposit" | "withdrawal"; amount: number; currency: string;
                   note: string | null; tx_date: string; created_at: string };
@@ -434,6 +436,7 @@ export default function NexaPokerClient({ currentWeek, today }: { currentWeek: s
           <div style={{ display: "flex", gap: 20, flexWrap: "wrap", marginBottom: 14, fontSize: 12, color: "#8888A0" }}>
             <span>Rake généré <b style={{ color: "#E8E8EE" }}>{fmt(agency.totals.gross_rake)}</b></span>
             <span>Commission encaissée <b style={{ color: "#10B981", fontSize: 14 }}>{fmt(agency.totals.commission)}</b></span>
+            <span>Action déjà réglée <b style={{ color: "#8888A0" }}>{fmt(agency.totals.action_settled)}</b></span>
             <span>Position nette totale{" "}
               <b style={{ color: agency.totals.net_position === null ? "#555568" : netColor(agency.totals.net_position) }}>
                 {agency.totals.net_position === null ? "incalculable" : fmt(agency.totals.net_position)}
@@ -481,7 +484,8 @@ export default function NexaPokerClient({ currentWeek, today }: { currentWeek: s
                 <thead><tr>
                   <th style={TH}>Joueur</th>
                   <th style={{ ...TH, textAlign: "right" }}>Commission</th>
-                  <th style={{ ...TH, textAlign: "right" }}>Action</th>
+                  <th style={{ ...TH, textAlign: "right" }}>Action à régler</th>
+                  <th style={{ ...TH, textAlign: "right" }}>Déjà réglé</th>
                   <th style={{ ...TH, textAlign: "right" }}>Mouvements</th>
                   <th style={{ ...TH, textAlign: "right" }}>Position</th>
                 </tr></thead>
@@ -491,8 +495,11 @@ export default function NexaPokerClient({ currentWeek, today }: { currentWeek: s
                       <td style={{ ...TD, fontWeight: 600 }}>{p.name}</td>
                       <td style={{ ...TD, textAlign: "right", color: "#10B981" }}>{fmt(p.commission)}</td>
                       <td style={{ ...TD, textAlign: "right",
-                                   color: p.action_amount === null ? "#555568" : netColor(p.action_amount) }}>
-                        {p.action_amount === null ? "—" : fmt(p.action_amount)}
+                                   color: p.action_unsettled === null ? "#555568" : netColor(p.action_unsettled) }}>
+                        {p.action_unsettled === null ? "—" : fmt(p.action_unsettled)}
+                      </td>
+                      <td style={{ ...TD, textAlign: "right", color: "#8888A0" }}>
+                        {Math.abs(p.action_settled) < 0.005 ? "—" : fmt(p.action_settled)}
                       </td>
                       <td style={{ ...TD, textAlign: "right", color: netColor(p.net_movements) }}>
                         {fmt(p.net_movements)}
@@ -670,11 +677,14 @@ export default function NexaPokerClient({ currentWeek, today }: { currentWeek: s
           {/* Pied : les totaux du moteur, plus la trésorerie qui n'entre pas dans le calcul. */}
           <div style={{ display: "flex", gap: 18, flexWrap: "wrap", marginTop: 14, fontSize: 12, color: "#8888A0" }}>
             <span>Commission agence <b style={{ color: "#10B981" }}>{fmt(detail.totals.commission)}</b></span>
-            <span>Part d'action{" "}
-              <b style={{ color: detail.totals.action_amount === null ? "#555568" : netColor(detail.totals.action_amount) }}>
-                {detail.totals.action_amount === null ? "incalculable" : fmt(detail.totals.action_amount)}
+            <span>Action à régler{" "}
+              <b style={{ color: detail.action_unsettled === null ? "#555568" : netColor(detail.action_unsettled) }}>
+                {detail.action_unsettled === null ? "incalculable" : fmt(detail.action_unsettled)}
               </b>
             </span>
+            {Math.abs(detail.action_settled) > 0.005 && (
+              <span>Déjà réglé <b style={{ color: "#8888A0" }}>{fmt(detail.action_settled)}</b></span>
+            )}
             <span>Buy-ins <b style={{ color: movementColor("deposit") }}>{fmt(detail.deposited)}</b></span>
             <span>Cash-outs <b style={{ color: movementColor("withdrawal") }}>{fmt(detail.withdrawn)}</b></span>
             <span>Net mouvements <b style={{ color: netColor(detail.net_movements) }}>{fmt(detail.net_movements)}</b></span>
@@ -686,7 +696,8 @@ export default function NexaPokerClient({ currentWeek, today }: { currentWeek: s
             </span>
           </div>
           <div style={{ fontSize: 11, color: "#555568", marginTop: 6 }}>
-            Position nette = part d'action + net des mouvements. Positif = le joueur te doit.
+            Position nette = part d'action <b>non réglée</b> + net des mouvements. Positif = le joueur te doit.
+            Une semaine réglée en sort : un dû éteint ne doit plus s'afficher comme dû.
             {detail.totals.weeks_missing_winloss > 0 && (
               <> — <b style={{ color: "#F0B90B" }}>
                 {detail.totals.weeks_missing_winloss} semaine(s) sans win/loss

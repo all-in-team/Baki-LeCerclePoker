@@ -309,6 +309,17 @@ export type NexaPlayerDetail = {
    * elle seule. Sans elle, l'écran présenterait comme dû ce qui a déjà été payé.
    */
   settled_weeks: Record<string, number>;
+  /**
+   * Part d'action DÉJÀ RÉGLÉE, au montant FIGÉ dans nexa_action_settlement_weeks —
+   * pas au montant que le rejeu donnerait aujourd'hui. Si la semaine est corrigée
+   * après coup, le rejeu bouge mais ce qui est sorti des comptes ne bouge plus.
+   */
+  action_settled: number;
+  /**
+   * Part d'action qui reste à régler. null si une semaine `ok` non réglée n'a pas
+   * son win/loss — c'est ELLE, et non le total brut, qui porte la position nette.
+   */
+  action_unsettled: number | null;
   totals: EngineResult["totals"];
   blocked_weeks: EngineResult["blocked_weeks"];
   warnings: EngineResult["warnings"];
@@ -319,9 +330,16 @@ export type NexaPlayerDetail = {
   /** withdrawn − deposited. Même convention que le hub : positif = le joueur me doit. */
   net_movements: number;
   /**
-   * Position nette du joueur = part d'action + mouvements, dans la MÊME convention
-   * de signe (positif = le joueur doit au Cercle). null si un win/loss manque :
-   * un net amputé ne doit pas ressembler à un chiffre juste.
+   * Position nette = part d'action NON RÉGLÉE + mouvements, dans la MÊME convention
+   * de signe (positif = le joueur doit au Cercle).
+   *
+   * Portée par le NON RÉGLÉ, pas par le total : une fois les semaines réglées et
+   * payées, ce que le joueur doit encore au titre de l'action est zéro. Sommer
+   * toutes les semaines ferait afficher « il te doit 300 » indéfiniment après un
+   * paiement — un dû éteint qui continue de s'afficher est un chiffre faux.
+   *
+   * null si un win/loss manque sur une semaine non réglée : un net amputé ne doit
+   * pas ressembler à un chiffre juste.
    */
   net_position: number | null;
 };
@@ -371,14 +389,28 @@ export function getNexaPlayerDetailOn(db: DB, playerId: number): NexaPlayerDetai
   // importé PAR celui-là (getNexaPlayerDetailOn y alimente le calcul du réglable),
   // un import retour créerait un cycle.
   const settledRows = db.prepare(
-    `SELECT week_start, settlement_id FROM nexa_action_settlement_weeks WHERE player_id = ?`
-  ).all(playerId) as { week_start: string; settlement_id: number }[];
+    `SELECT week_start, settlement_id, action_amount FROM nexa_action_settlement_weeks WHERE player_id = ?`
+  ).all(playerId) as { week_start: string; settlement_id: number; action_amount: number }[];
+  const settledSet = new Set(settledRows.map(s => s.week_start));
+
+  // Le réglé vaut son montant FIGÉ ; le reste à régler est recalculé par le rejeu.
+  const actionSettled = settledRows.reduce((s, w) => s + w.action_amount, 0);
+  const openWeeks = r.weeks.filter(w => w.status === "ok" && !settledSet.has(w.week_start));
+  // L'exclusion du réglé passe par settledSet, PAS par la présence du win/loss :
+  // clearWeeklyWinlossOn n'interdit pas de dé-saisir une semaine déjà réglée. Une
+  // semaine réglée garde donc son montant figé même sans win/loss, et c'est bien le
+  // non-réglé — et lui seul — qui peut devenir incalculable.
+  const actionUnsettled = openWeeks.some(w => w.winloss === null)
+    ? null
+    : openWeeks.reduce((s, w) => s + (w.action_amount ?? 0), 0);
 
   return {
     player_id: p.id,
     name: p.name,
     weeks: r.weeks,
     settled_weeks: Object.fromEntries(settledRows.map(s => [s.week_start, s.settlement_id])),
+    action_settled: actionSettled,
+    action_unsettled: actionUnsettled,
     totals: r.totals,
     blocked_weeks: r.blocked_weeks,
     warnings: r.warnings,
@@ -386,7 +418,7 @@ export function getNexaPlayerDetailOn(db: DB, playerId: number): NexaPlayerDetai
     deposited: mv.deposited,
     withdrawn: mv.withdrawn,
     net_movements: netMovements,
-    net_position: r.totals.action_amount === null ? null : r.totals.action_amount + netMovements,
+    net_position: actionUnsettled === null ? null : actionUnsettled + netMovements,
   };
 }
 

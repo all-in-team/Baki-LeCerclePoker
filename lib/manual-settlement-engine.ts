@@ -651,7 +651,26 @@ export interface OverdueBucket {
  */
 export function getOverdueBuckets(): OverdueBucket[] {
   const db = getDb();
-  const { ids, byId } = scopedGameIds(db);
+  const { ids: allIds, byId } = scopedGameIds(db);
+  // NEXAPOKER est EXCLU de la détection d'impayés, et c'est structurel, pas un oubli.
+  //
+  // Ce détecteur repose entièrement sur `wallet_transactions.settled` : une tx non
+  // réglée vieillit, passe en retard, puis en critique. Or ce qui se règle sur NEXA
+  // est la PART D'ACTION, dont l'assiette est le win/loss saisi à la main — aucune
+  // transaction n'est back-linkée, et lockNexaActionSettlementOn ne met JAMAIS
+  // settled = 1. Les buy-ins et cash-outs NEXA resteraient donc à `settled = 0`
+  // pour toujours : ils deviendraient un impayé permanent, impossible à éteindre,
+  // répété chaque jour dans le résumé Telegram et dans get_unpaid_settlements — en
+  // dégradant précisément le détecteur anti-oubli qu'ils polluent.
+  //
+  // Une room dont le règlement n'est pas adossé aux transactions n'a pas d'impayé
+  // transactionnel. Ses règlements en attente restent visibles par ailleurs, via
+  // getPendingSettlements (manual_settlements en statut 'locked').
+  const nexaIds = new Set(
+    (db.prepare(`SELECT id FROM games WHERE UPPER(name) = 'NEXAPOKER'`).all() as { id: number }[])
+      .map(g => g.id),
+  );
+  const ids = allIds.filter(id => !nexaIds.has(id));
   if (ids.length === 0) return [];
   const placeholders = ids.map(() => "?").join(", ");
 
