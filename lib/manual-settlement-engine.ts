@@ -760,6 +760,39 @@ export function getOverdueBuckets(): OverdueBucket[] {
   return out;
 }
 
+// ── Libellé du détail d'un règlement ─────────────────────
+//
+// « net X × action Y% » est la formule de l'action, et d'elle seule. L'appliquer à
+// une ligne de rakeback affiche un produit FAUX : l'assiette y est corrigée par le
+// makeup entrant avant l'application du taux, si bien que 100 × 50 % annonce 50
+// quand le montant réellement dû est 150. L'écart a été mesuré à 100 USDT — et il
+// s'affichait juste au-dessus du bouton « Marquer payé », c'est-à-dire au seul
+// endroit où un humain relit avant un mouvement d'argent irréversible.
+//
+// Un libellé qui ne peut pas être exact ne doit donc pas prendre la forme d'un
+// calcul. Pour le rakeback on nomme les deux grandeurs sans les multiplier, et on
+// renvoie au détail par semaine, qui lui est complet.
+export function settlementDetail(
+  s: { kind?: string; net_selected_usdt: number; action_pct_applied: number },
+  fmt: (n: number) => string,
+): string {
+  switch (s.kind) {
+    case "rakeback":
+      // Pas de « × » : le produit ne retombe pas sur le montant dès qu'il y a du makeup.
+      return `(assiette ${fmt(s.net_selected_usdt)} · taux rakeback `
+           + `${s.action_pct_applied === 0 ? "multiple" : `${s.action_pct_applied}%`} `
+           + `· makeup pris en compte, détail par semaine)`;
+    case "rakeback_ack":
+      return `(écart de contrôle acté à 0 — aucun mouvement d'argent)`;
+    default:
+      // action_pct_applied = 0 signifie « taux non uniformes sur la sélection »,
+      // pas « taux nul » : écrire « × 0% » ferait lire un dû de zéro.
+      return s.action_pct_applied === 0
+        ? `(net ${fmt(s.net_selected_usdt)} · taux d'action multiples, détail par semaine)`
+        : `(net ${fmt(s.net_selected_usdt)} × action ${s.action_pct_applied}%)`;
+  }
+}
+
 // ── Regroupements par joueur (vues calculées) ────────────
 //
 // Fonctions PURES sur les tableaux déjà renvoyés par getPendingSettlements() /

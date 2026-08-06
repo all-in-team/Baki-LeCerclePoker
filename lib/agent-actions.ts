@@ -266,6 +266,8 @@ export const ACTIONS: Record<string, ActionDef> = {
     async preview(p) {
       const s = await resolveLockedSettlement(p);
 
+      const { settlementDetail } = await import("./manual-settlement-engine");
+
       const txHash = p?.tx_hash ? String(p.tx_hash).trim() : undefined;
       const paidDate = p?.paid_date ? String(p.paid_date).trim() : undefined;
       if (paidDate) {
@@ -288,7 +290,7 @@ export const ACTIONS: Record<string, ActionDef> = {
         `Semaine  : ${esc(s.week_label ?? "?")} (${esc(periode)})`,
         `Montant  : <b>${signed(s.amount_due_usdt)} USDT</b>`,
         `Sens     : ${sensLabel(s.amount_due_usdt)}`,
-        `Détail   : net ${signed(s.net_selected_usdt)} × action ${s.action_pct_applied}%  ·  ${s.tx_count} tx`,
+        `Détail   : ${esc(settlementDetail(s, signed))}  ·  ${s.tx_count} tx`,
         `État     : ${esc(s.status)} depuis ${s.age_days} j`,
         `Hash     : ${txHash ? esc(txHash) : "(non fourni)"}   Date paiement : ${paidDate ? esc(paidDate) : "(aujourd'hui, par défaut)"}`,
         ``,

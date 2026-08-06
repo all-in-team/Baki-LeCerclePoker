@@ -126,8 +126,20 @@ export function getOpenRbWeeksOn(db: DB, playerId: number): RbSettleableWeek[] {
   // ensuite elle ne pouvait plus être ni réglée ni soldée. Un cas mesuré à
   // 350 USDT payés pour des semaines qui rejouaient ensuite à 0.
   //
-  // Corrige la semaine, puis règle la suite. Le blocage est temporaire et visible ;
-  // l'effacement silencieux, lui, ne l'était pas.
+  // DEUX SORTIES, ET SEULEMENT DEUX (arbitrage d'Hugo, 2026-08-06, après le second
+  // audit adverse) :
+  //   1. corriger le report — le recalcul revient dans ±0,02, check_ok repasse à 1,
+  //      la semaine cesse d'être bloquée et redevient réglable normalement ;
+  //   2. l'ACTER À 0 — ackBlockedRbWeekOn ci-dessous.
+  //
+  // Renseigner `override_reason` n'est PAS une sortie, et c'est le piège que
+  // l'audit a trouvé : `check_ok` est une colonne GÉNÉRÉE depuis le seul
+  // `check_delta` (lib/db.ts), le motif n'y entre pas. Or le schéma EXIGE un motif
+  // sur toute ligne hors tolérance — donc toute semaine bloquée en a déjà un, et
+  // s'il suffisait à débloquer, le plafond n'existerait jamais. Sans la sortie 2,
+  // une semaine dont le report NEXA est durablement incohérent — le cas même pour
+  // lequel `override_reason` a été créé — gelait le rakeback de toutes les
+  // semaines suivantes sans aucune issue. Mesuré : 400 USDT immobilisés.
   const firstBlocked = d.weeks.find(w => w.status === "blocked" && !settled.has(w.week_start));
   const stop = firstBlocked?.week_start ?? null;
 
@@ -150,6 +162,168 @@ export function getBlockingWeekOn(db: DB, playerId: number): string | null {
 
 export function getOpenRbWeeks(playerId: number): RbSettleableWeek[] {
   return getOpenRbWeeksOn(getDb(), playerId);
+}
+
+/**
+ * Détail de la semaine qui plafonne, pour que l'écran puisse la MONTRER avant de
+ * proposer de l'acter : l'écart constaté et le motif saisi. Sans eux, « acter à 0 »
+ * serait un bouton qu'on presse sans savoir sur quoi.
+ */
+export type BlockingWeekDetail = {
+  week_start: string;
+  check_delta: number;
+  override_reason: string | null;
+  /** Rake brut de la semaine — l'ordre de grandeur de ce qu'on renonce à percevoir. */
+  base: number;
+  rakeback_pct: number;
+  makeup_in: number;
+};
+
+export function getBlockingWeekDetailOn(db: DB, playerId: number): BlockingWeekDetail | null {
+  const week = getBlockingWeekOn(db, playerId);
+  if (week === null) return null;
+  const d = getNexaPlayerDetailOn(db, playerId);
+  const w = d?.weeks.find(x => x.week_start === week);
+  if (!w) return null;
+  const row = db.prepare(
+    `SELECT check_delta, override_reason FROM nexa_affiliate_weeks WHERE player_id = ? AND week_start = ?`
+  ).get(playerId, week) as { check_delta: number; override_reason: string | null } | undefined;
+  return {
+    week_start: week,
+    check_delta: row?.check_delta ?? 0,
+    override_reason: row?.override_reason ?? null,
+    base: w.base, rakeback_pct: w.rakeback_pct, makeup_in: w.makeup_in,
+  };
+}
+
+export type RbAckResult =
+  | { ok: true; settlement_id: number; week_start: string; check_delta: number;
+      override_reason: string | null; notes: string }
+  | { ok: false; error: string };
+
+/**
+ * ACTER À 0 une semaine en échec de contrôle — la seconde sortie du plafond.
+ *
+ * ── CE QUE ÇA FAIT, ET CE QUE ÇA COÛTE ───────────────────────────────────────
+ * La semaine est inscrite dans nexa_rakeback_settlement_weeks à dû 0. Elle cesse
+ * donc d'être « bloquée non réglée », le plafond de getOpenRbWeeksOn tombe, et les
+ * semaines suivantes redeviennent réglables.
+ *
+ * Le prix est réel et il est définitif : si le report de cette semaine est corrigé
+ * plus tard, elle sera déjà réglée et son rakeback ne sera plus jamais versé. C'est
+ * exactement la perte que le plafond avait été posé pour empêcher (350 USDT sur le
+ * cas mesuré). La différence, et c'est toute la différence : ici elle est un ACTE
+ * VOLONTAIRE, daté, motivé et relisible, et non l'effet de bord silencieux d'un
+ * règlement de plage qui enjambait la semaine sans le dire.
+ *
+ * ── POURQUOI UNE LIGNE DE RÈGLEMENT PLUTÔT QU'UN SIMPLE MARQUEUR ─────────────
+ * Exigence d'Hugo : l'acte doit apparaître dans l'HISTORIQUE DES RÈGLEMENTS du
+ * joueur, avec qui, quand, quelle semaine, quel écart et quel motif. Un booléen
+ * dans un coin de table ne se relit pas six mois plus tard ; une ligne dans
+ * manual_settlements se relit au même endroit que les paiements, dans le même
+ * ordre chronologique, à côté de ce qu'elle a débloqué.
+ *
+ * D'où :
+ *   kind   = 'rakeback_ack'  — étiquette, jamais comptée (voir l'en-tête du module)
+ *   amount = 0               — rien ne sort, rien ne rentre : ce n'est pas un paiement
+ *   status = 'paid'          — sinon la ligne s'installerait dans /payments comme un
+ *                              dû à honorer, et il n'y a rien à honorer.
+ *
+ * ── LA CONFIRMATION SE RETAPE ────────────────────────────────────────────────
+ * `confirm_week` doit être la date de la semaine, retapée. Un `OK` se clique par
+ * réflexe ; une date se retape en regardant laquelle. Vérifié ici ET dans l'écran :
+ * l'API est atteignable sans passer par le bouton (agent, curl), et la friction ne
+ * vaut que si elle est du côté qui décide.
+ */
+export function ackBlockedRbWeekOn(
+  db: DB,
+  args: { player_id: number; week_start: string; confirm_week: string; actor?: string; notes?: string | null },
+): RbAckResult {
+  const { player_id, week_start } = args;
+  if (!db.prepare(`SELECT 1 FROM players WHERE id = ?`).get(player_id)) {
+    return { ok: false, error: `Joueur ${player_id} introuvable.` };
+  }
+  if (args.confirm_week !== week_start) {
+    return {
+      ok: false,
+      error: `Confirmation invalide : retape exactement la date de la semaine (${week_start}) `
+           + `pour acter cet écart. L'opération est irréversible.`,
+    };
+  }
+
+  // ON N'ACTE QUE LA SEMAINE QUI PLAFONNE ACTUELLEMENT, pas n'importe quelle
+  // semaine bloquée. Acter une semaine bloquée plus lointaine ne débloquerait rien
+  // (le plafond resterait sur la plus ancienne) tout en brûlant son rakeback :
+  // un acte irréversible au prix fort, pour zéro effet. On traite dans l'ordre.
+  const blocking = getBlockingWeekDetailOn(db, player_id);
+  if (!blocking) {
+    return { ok: false, error: "Aucune semaine ne plafonne la plage de ce joueur — il n'y a rien à acter." };
+  }
+  if (blocking.week_start !== week_start) {
+    return {
+      ok: false,
+      error: `La semaine qui plafonne est le ${blocking.week_start}, pas le ${week_start}. `
+           + `Les écarts s'actent dans l'ordre : acter une semaine plus récente ne débloquerait rien `
+           + `et brûlerait son rakeback pour rien.`,
+    };
+  }
+
+  const d = getNexaPlayerDetailOn(db, player_id);
+  const w = d?.weeks.find(x => x.week_start === week_start);
+  // Ceinture et bretelles : getBlockingWeekDetailOn l'a déjà établi, mais on écrit
+  // un snapshot à partir de `w` — on ne l'écrit pas sans l'avoir sous la main.
+  if (!w || w.status !== "blocked") {
+    return { ok: false, error: `La semaine ${week_start} n'est pas en échec de contrôle.` };
+  }
+
+  const gid = gameId(db);
+  const notes = [
+    `Écart ACTÉ À 0 — semaine ${week_start}`,
+    `contrôle en échec (écart ${blocking.check_delta.toFixed(2)}, tolérance ±0,02)`,
+    `motif du report : ${blocking.override_reason ?? "(aucun)"}`,
+    `rake brut ${w.base.toFixed(2)} · taux ${w.rakeback_pct} % · makeup entrant ${w.makeup_in.toFixed(2)}`,
+    `acté par ${args.actor ?? "Baki"}`,
+    `le rakeback de cette semaine ne sera plus jamais réglable ; la plage reprend après elle`,
+  ].join(" · ");
+
+  try {
+    const run = db.transaction((): number => {
+      const ins = db.prepare(`
+        INSERT INTO manual_settlements
+          (game_id, player_id, net_selected_usdt, action_pct_applied, amount_due_usdt,
+           status, notes, locked_at, paid_at, kind)
+        VALUES (@game_id, @player_id, 0, 0, 0, 'paid', @notes, datetime('now'), datetime('now'), 'rakeback_ack')
+      `).run({ game_id: gid, player_id, notes: args.notes ? `${args.notes} — ${notes}` : notes });
+      const settlementId = Number(ins.lastInsertRowid);
+
+      // Le snapshot de la semaine reprend les valeurs que le MOTEUR lui donne
+      // en échec de contrôle : assiette brute et makeup entrant réels, mais
+      // base_net / due / makeup_out à 0 — la semaine est hors calcul, sa chaîne
+      // ne se propage pas. Rien n'est inventé pour faire joli.
+      db.prepare(`
+        INSERT INTO nexa_rakeback_settlement_weeks
+          (settlement_id, player_id, week_start, basis, rakeback_pct, base,
+           makeup_in, base_net, due, makeup_out)
+        VALUES (?, ?, ?, ?, ?, ?, ?, 0, 0, 0)
+      `).run(settlementId, player_id, week_start, w.basis, w.rakeback_pct, w.base, w.makeup_in);
+      return settlementId;
+    });
+    const settlementId = run();
+    return {
+      ok: true, settlement_id: settlementId, week_start,
+      check_delta: blocking.check_delta, override_reason: blocking.override_reason, notes,
+    };
+  } catch (e: any) {
+    // UNIQUE(player_id, week_start) : si la semaine a été actée entre-temps, la
+    // transaction est annulée en bloc — pas de ligne de règlement orpheline.
+    return { ok: false, error: e?.message ?? String(e) };
+  }
+}
+
+export function ackBlockedRbWeek(
+  args: { player_id: number; week_start: string; confirm_week: string; actor?: string; notes?: string | null },
+) {
+  return ackBlockedRbWeekOn(getDb(), args);
 }
 
 // ── Avertissements ────────────────────────────────────────────────────────────

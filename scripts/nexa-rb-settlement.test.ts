@@ -9,7 +9,14 @@
  * │   bascule : sur une chaîne où il vaut déjà 0, le test ne prouverait rien.   │
  * │ • Que le montant est écrit NÉGATIF dans manual_settlements : le rakeback    │
  * │   sort, et cinq agrégats du repo lisent ce signe sans jamais lire `kind`.   │
- * │ • Que la plage s'ARRÊTE avant une semaine en échec de contrôle.             │
+ * │ • Que la plage s'ARRÊTE avant une semaine en échec de contrôle, ET qu'on    │
+ * │   peut en SORTIR — sans quoi le plafond gèle le rakeback d'aval pour        │
+ * │   toujours. Deux sorties, testées toutes les deux : corriger le report, ou  │
+ * │   acter l'écart à 0. Un motif d'écart n'en est PAS une, et c'est vérifié :  │
+ * │   check_ok est généré depuis le seul check_delta.                          │
+ * │ • Que « acter à 0 » exige la date de la semaine RETAPÉE, se refuse hors     │
+ * │   ordre et hors rejeu, laisse une ligne de règlement relisible (semaine,    │
+ * │   écart, motif, auteur) et pèse 0 dans les agrégats.                        │
  * │ • Que le snapshot fige les paramètres appliqués (taux, base, makeup         │
  * │   consommé) et survit à une correction ultérieure du report.                │
  * │ • Qu'une semaine en échec dans OU AVANT la plage déclenche un avertissement │
@@ -33,8 +40,8 @@ process.chdir(TMP);
 const Database = require(path.join(REPO, "node_modules/better-sqlite3"));
 
 import {
-  getOpenRbWeeksOn, getBlockingWeekOn, getRbSettlementWarningsOn,
-  lockNexaRakebackSettlementOn,
+  getOpenRbWeeksOn, getBlockingWeekOn, getBlockingWeekDetailOn, getRbSettlementWarningsOn,
+  lockNexaRakebackSettlementOn, ackBlockedRbWeekOn,
 } from "../lib/funnels/nexa/rakeback-settlement";
 import { getActionSettlementWarningsOn, lockNexaActionSettlementOn } from "../lib/funnels/nexa/action-settlement";
 import { getNexaPlayerDetailOn, setWeeklyWinlossOn } from "../lib/funnels/nexa/players";
@@ -79,10 +86,19 @@ function freshDb() {
       player_id INTEGER NOT NULL REFERENCES players(id) ON DELETE CASCADE,
       game_id INTEGER NOT NULL REFERENCES games(id) ON DELETE CASCADE,
       external_id TEXT NOT NULL, UNIQUE(game_id, external_id));
+    -- CONTRAINTES REPRISES DE LA VRAIE TABLE, pas d'un squelette approchant : le
+    -- CHECK sur status et les deux ON DELETE CASCADE manquaient, et un test qui
+    -- tourne sur un schéma plus permissif que la prod ne prouve rien de la prod.
+    -- (Constat du second audit adverse.) La colonne kind est ajoutée par ALTER en prod
+    -- (add_nexa_affiliate_v1), il est donc écrit en dur ici — c'est la seule
+    -- divergence assumée, et le corollaire est que ce fichier ne peut pas
+    -- détecter une régression sur la colonne kind elle-même.
     CREATE TABLE manual_settlements (id INTEGER PRIMARY KEY AUTOINCREMENT,
-      game_id INTEGER NOT NULL REFERENCES games(id), player_id INTEGER NOT NULL REFERENCES players(id),
+      game_id INTEGER NOT NULL REFERENCES games(id) ON DELETE CASCADE,
+      player_id INTEGER NOT NULL REFERENCES players(id) ON DELETE CASCADE,
       net_selected_usdt REAL NOT NULL DEFAULT 0, action_pct_applied REAL NOT NULL DEFAULT 0,
-      amount_due_usdt REAL NOT NULL DEFAULT 0, status TEXT NOT NULL DEFAULT 'locked',
+      amount_due_usdt REAL NOT NULL DEFAULT 0,
+      status TEXT NOT NULL DEFAULT 'locked' CHECK(status IN ('locked','paid')),
       tx_hash TEXT, notes TEXT, locked_at TEXT NOT NULL DEFAULT (datetime('now')),
       paid_at TEXT, paid_date TEXT, created_at TEXT NOT NULL DEFAULT (datetime('now')),
       kind TEXT NOT NULL DEFAULT 'action');
@@ -205,6 +221,113 @@ console.log("\n2. Plafond sur une semaine en échec de contrôle");
   }
   const reste = getOpenRbWeeksOn(db, pid);
   eqArr("et rien ne s'ouvre tant que W2 n'est pas corrigée", reste.map(w => w.week_start), []);
+  db.close();
+}
+
+// ── 2-bis. LES DEUX SORTIES DU PLAFOND ─────────────────────────────────────
+//
+// Le premier audit avait accepté le plafond sans vérifier qu'on pouvait en sortir.
+// Le second a montré qu'un motif d'écart n'en sort PAS — `check_ok` est généré
+// depuis le seul `check_delta` — et que le schéma exige justement un motif sur
+// toute ligne hors tolérance. Donc : toute semaine bloquée a déjà un motif, aucune
+// ne se débloquait par là, et le rakeback d'aval était gelé sans issue.
+console.log("\n2-bis. Sortir du plafond : le motif ne suffit pas, deux sorties existent");
+{
+  const db = freshDb();
+  const pid = seed(db, [200, 300, 400, 100], [true, false, true, true]);
+  const bloque = () => getBlockingWeekOn(db, pid);
+  const ouvertes = () => getOpenRbWeeksOn(db, pid).map(w => w.week_start);
+
+  // (a) Le motif — déjà présent, et re-saisi — ne rouvre rien.
+  db.prepare(`UPDATE nexa_affiliate_weeks SET override_reason = ? WHERE player_id = ? AND week_start = ?`)
+    .run("écart assumé, screenshot NEXA incohérent", pid, W[1]);
+  eqArr("un motif d'écart NE rouvre PAS la plage", ouvertes(), [W[0]]);
+  check("et la semaine plafonne toujours", bloque() === W[1], `obtenu ${bloque()}`);
+
+  // (b) Sortie 1 — corriger le report : check_delta revient dans la tolérance.
+  {
+    const db2 = freshDb();
+    const p2 = seed(db2, [200, 300, 400, 100], [true, false, true, true]);
+    db2.prepare(`UPDATE nexa_affiliate_weeks SET check_delta = 0, override_reason = NULL
+                 WHERE player_id = ? AND week_start = ?`).run(p2, W[1]);
+    eqArr("corriger le report rouvre toute la suite",
+          getOpenRbWeeksOn(db2, p2).map(w => w.week_start), [W[0], W[1], W[2], W[3]]);
+    check("plus rien ne plafonne", getBlockingWeekOn(db2, p2) === null, `obtenu ${getBlockingWeekOn(db2, p2)}`);
+    db2.close();
+  }
+
+  // (c) Sortie 2 — acter à 0. La confirmation doit être la date RETAPÉE.
+  const detail = getBlockingWeekDetailOn(db, pid);
+  check("l'écran reçoit l'écart constaté", detail !== null && Math.abs(detail.check_delta - 5) < 1e-9,
+        JSON.stringify(detail));
+  check("et le motif saisi", detail?.override_reason === "écart assumé, screenshot NEXA incohérent",
+        JSON.stringify(detail));
+
+  const sansConfirm = ackBlockedRbWeekOn(db, { player_id: pid, week_start: W[1], confirm_week: "" });
+  check("acter sans retaper la date est REFUSÉ", !sansConfirm.ok, JSON.stringify(sansConfirm));
+  const mauvaise = ackBlockedRbWeekOn(db, { player_id: pid, week_start: W[1], confirm_week: W[2] });
+  check("acter avec une AUTRE date est refusé", !mauvaise.ok, JSON.stringify(mauvaise));
+  const horsOrdre = ackBlockedRbWeekOn(db, { player_id: pid, week_start: W[2], confirm_week: W[2] });
+  check("acter une semaine qui ne plafonne pas est refusé", !horsOrdre.ok, JSON.stringify(horsOrdre));
+  eqArr("aucun refus n'a rien débloqué au passage", ouvertes(), [W[0]]);
+
+  const acte = ackBlockedRbWeekOn(db, { player_id: pid, week_start: W[1], confirm_week: W[1] });
+  check("acté après confirmation exacte", acte.ok, JSON.stringify(acte));
+  eqArr("la plage reprend APRÈS la semaine actée", ouvertes(), [W[0], W[2], W[3]]);
+  check("plus rien ne plafonne", bloque() === null, `obtenu ${bloque()}`);
+
+  // L'acte est une ligne de règlement relisible, pas un drapeau caché.
+  if (acte.ok) {
+    const ms = db.prepare(`SELECT kind, amount_due_usdt, status, notes FROM manual_settlements WHERE id = ?`)
+      .get(acte.settlement_id) as any;
+    check("kind = rakeback_ack", ms.kind === "rakeback_ack", JSON.stringify(ms));
+    near("montant 0 — ce n'est pas un paiement", ms.amount_due_usdt, 0);
+    check("status = paid : la ligne ne s'installe pas dans les dus", ms.status === "paid", ms.status);
+    check("la note porte la semaine", String(ms.notes).includes(W[1]), ms.notes);
+    check("la note porte l'écart constaté", String(ms.notes).includes("5.00"), ms.notes);
+    check("la note porte le motif", String(ms.notes).includes("screenshot NEXA incohérent"), ms.notes);
+    check("la note porte qui a acté", String(ms.notes).includes("acté par"), ms.notes);
+    const wk = db.prepare(`SELECT * FROM nexa_rakeback_settlement_weeks WHERE settlement_id = ?`)
+      .all(acte.settlement_id) as any[];
+    check("une seule semaine figée", wk.length === 1, JSON.stringify(wk));
+    near("dû figé à 0", wk[0].due, 0);
+    near("makeup sortant 0 — la chaîne ne se propage pas", wk[0].makeup_out, 0);
+  }
+
+  // Le prix de l'acte est réel : corriger le report ENSUITE ne ressuscite rien.
+  db.prepare(`UPDATE nexa_affiliate_weeks SET check_delta = 0 WHERE player_id = ? AND week_start = ?`)
+    .run(pid, W[1]);
+  eqArr("corriger après coup ne rouvre PAS la semaine actée", ouvertes(), [W[0], W[2], W[3]]);
+
+  // Et l'acte ne se rejoue pas.
+  const rejeu = ackBlockedRbWeekOn(db, { player_id: pid, week_start: W[1], confirm_week: W[1] });
+  check("acter deux fois la même semaine est refusé", !rejeu.ok, JSON.stringify(rejeu));
+  db.close();
+}
+
+// ── 2-ter. Une semaine actée ne fausse aucun agrégat ───────────────────────
+console.log("\n2-ter. La ligne d'acte est neutre pour l'argent");
+{
+  const db = freshDb();
+  const pid = seed(db, [200, 300, 400, 100], [false, true, true, true]);
+  // W1 bloquée dès la première semaine : c'est le cas où l'écran annonçait
+  // « tout ce qui était calculable est réglé » alors que W2..W4 portaient un dû.
+  eqArr("rien n'est proposé tant que W1 plafonne", getOpenRbWeeksOn(db, pid).map(w => w.week_start), []);
+  check("mais le plafond est nommé", getBlockingWeekOn(db, pid) === W[0], `obtenu ${getBlockingWeekOn(db, pid)}`);
+
+  const acte = ackBlockedRbWeekOn(db, { player_id: pid, week_start: W[0], confirm_week: W[0] });
+  check("W1 actée", acte.ok, JSON.stringify(acte));
+  eqArr("les 3 semaines gelées redeviennent réglables",
+        getOpenRbWeeksOn(db, pid).map(w => w.week_start), [W[1], W[2], W[3]]);
+
+  const r = lockNexaRakebackSettlementOn(db, { player_id: pid, through_week: W[3] });
+  check("et elles se règlent", r.ok, JSON.stringify(r));
+  // 300 + 400 + 100 = 800, à 50 % → 400. La semaine actée n'apporte rien et ne coûte rien.
+  if (r.ok) near("montant = 50 % de (300+400+100)", r.amount_due_usdt, 400);
+
+  const somme = db.prepare(`SELECT COALESCE(SUM(amount_due_usdt),0) AS s FROM manual_settlements WHERE player_id = ?`)
+    .get(pid) as any;
+  near("Σ des montants = −400 : l'acte pèse 0, le règlement sort 400", somme.s, -400);
   db.close();
 }
 

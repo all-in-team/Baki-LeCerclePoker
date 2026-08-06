@@ -790,7 +790,7 @@ export async function executeTool(name: string, input: any, ctx?: ToolContext): 
     // weekly_settlements : c'est la même source que la page Paiements, donc une
     // seule vérité. Aucun calcul ici — le moteur porte la math (Baki 2026-07-27).
     if (name === "get_unpaid_settlements") {
-      const { getPendingSettlements, getOverdueBuckets } = await import("./manual-settlement-engine");
+      const { getPendingSettlements, getOverdueBuckets, settlementDetail } = await import("./manual-settlement-engine");
       const pending = getPendingSettlements();
       const overdue = getOverdueBuckets();
 
@@ -803,7 +803,7 @@ export async function executeTool(name: string, input: any, ctx?: ToolContext): 
         out.push(`Règlements lockés en attente de paiement (${pending.length}) — le plus ancien d'abord :`);
         out.push(...pending.map(p =>
           `• #${p.id} · ${p.player_name} · ${p.room_label} · ${fmtAmount(p.amount_due_usdt)} USDT ` +
-          `(net ${fmtAmount(p.net_selected_usdt)} × action ${p.action_pct_applied}%) · ` +
+          `${settlementDetail(p, fmtAmount)} · ` +
           `locké depuis ${p.age_days}j · ${p.week_label ?? "semaine ?"} · ${p.tx_count} tx`
         ));
         out.push(`Net des montants dus : ${fmtAmount(totalDue)} USDT (positif = ça rentre, le joueur doit au Cercle ; négatif = ça sort, le Cercle doit au joueur).`);

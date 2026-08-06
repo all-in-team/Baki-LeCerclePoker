@@ -10,7 +10,12 @@
 // CE QUI SE VOIT AVANT LE CLIC, PAS APRÈS. Deux mécanismes distincts :
 //   • le PLAFOND — une semaine en échec de contrôle arrête la plage, et l'écran dit
 //     laquelle et pourquoi. Ce n'est pas négociable : régler au-delà ferait
-//     disparaître son déficit pour toujours.
+//     disparaître son déficit pour toujours. Il se rend AVANT le retour anticipé
+//     « aucune semaine ouverte » : quand la première semaine est bloquée, il n'y a
+//     rien à proposer ET il y a tout à expliquer. Annoncer « tout est réglé » dans
+//     ce cas est un mensonge chiffrable — 400 USDT invisibles sur le cas mesuré.
+//     Le plafond porte aussi sa propre sortie : « acter à 0 », confirmé en retapant
+//     la date de la semaine, parce qu'un OK se clique sans lire.
 //   • les AVERTISSEMENTS du moteur (makeup reporté sur une autre assiette, makeup
 //     abandonné) — ils n'empêchent pas de régler mais changent ce qui est payé,
 //     donc ils exigent une confirmation. Le serveur refuse de son côté : décocher
@@ -26,6 +31,10 @@ type Week = {
   base: number; makeup_in: number; base_net: number; due: number; makeup_out: number;
 };
 type Warning = { code: string; message: string };
+type BlockingDetail = {
+  week_start: string; check_delta: number; override_reason: string | null;
+  base: number; rakeback_pct: number; makeup_in: number;
+};
 
 const CARD: React.CSSProperties = {
   background: "#12141C", border: "1px solid rgba(255,255,255,0.06)", borderRadius: 14, padding: 14,
@@ -54,13 +63,19 @@ export default function RakebackSettlePanel({ playerId, playerName, onSettled }:
   const [msg, setMsg] = useState<{ kind: "ok" | "err"; text: string } | null>(null);
   /** Semaine en échec qui PLAFONNE la plage — l'écran doit dire pourquoi il s'arrête. */
   const [blocking, setBlocking] = useState<string | null>(null);
+  const [blockingDetail, setBlockingDetail] = useState<BlockingDetail | null>(null);
+  /** Saisie de la confirmation « acter à 0 » : la date de la semaine, retapée. */
+  const [ackWeekInput, setAckWeekInput] = useState("");
+  const [ackOpen, setAckOpen] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true); setMsg(null); setAck(false);
+    setAckOpen(false); setAckWeekInput("");
     try {
       const j = await (await fetch(`/api/nexapoker/settle-rakeback?player_id=${playerId}`)).json();
       if (!j.ok) { setMsg({ kind: "err", text: j.error ?? "Chargement impossible." }); return; }
       setWeeks(j.weeks); setWarnings(j.warnings ?? []); setBlocking(j.blocking_week ?? null);
+      setBlockingDetail(j.blocking_detail ?? null);
       // Par défaut on propose de solder TOUT l'ouvert : c'est le geste courant.
       setThrough(j.weeks.length > 0 ? j.weeks[j.weeks.length - 1].week_start : "");
     } finally { setLoading(false); }
@@ -97,12 +112,108 @@ export default function RakebackSettlePanel({ playerId, playerName, onSettled }:
     } finally { setBusy(false); }
   }
 
+  /** Acter à 0 la semaine qui plafonne — irréversible, d'où la date retapée. */
+  async function ackBlockedWeek() {
+    if (!blocking) return;
+    setBusy(true); setMsg(null);
+    try {
+      const res = await fetch("/api/nexapoker/settle-rakeback", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "ack_blocked_week", player_id: playerId,
+          week_start: blocking, confirm_week: ackWeekInput.trim(),
+        }),
+      });
+      const j = await res.json().catch(() => null);
+      if (!j?.ok) {
+        setMsg({ kind: "err", text: j?.error ?? `Échec (HTTP ${res.status}).` });
+        return;
+      }
+      setMsg({ kind: "ok", text: `Écart de la semaine ${j.week_start} acté à 0 (règlement #${j.settlement_id}, `
+                                + `visible dans l'historique). La plage reprend après cette semaine.` });
+      await load();
+      onSettled();
+    } catch (e: any) {
+      setMsg({ kind: "err", text: e?.message ?? String(e) });
+    } finally { setBusy(false); }
+  }
+
   if (loading) return <div style={{ ...CARD, fontSize: 12, color: "#8888A0" }}>Rakeback — chargement…</div>;
+
+  // LE PLAFOND SE VOIT MÊME QUAND IL NE RESTE RIEN À PROPOSER.
+  //
+  // Ce bloc était rendu APRÈS le retour anticipé « aucune semaine ouverte » : quand
+  // la toute première semaine était bloquée, l'écran annonçait « tout ce qui était
+  // calculable est réglé » alors que les semaines suivantes portaient un dû bien
+  // réel — 400 USDT sur le cas mesuré par l'audit, rendus invisibles par un message
+  // qui affirmait le contraire. Le plafond se rend donc en premier, toujours.
+  const bandeauPlafond = blocking && (
+    <div style={{ border: "1px solid rgba(239,68,68,0.4)", background: "rgba(239,68,68,0.06)",
+                  borderRadius: 10, padding: 10, marginBottom: 10, fontSize: 11.5, color: "#F87171" }}>
+      ⛔ La plage s&apos;arrête avant le <b>{blocking}</b> : le recalcul de cette semaine ne retombe
+      pas sur le report{blockingDetail ? ` (écart ${fmt(blockingDetail.check_delta)}, tolérance ±0,02)` : ""}.
+      On ne règle pas au-delà — son déficit serait absorbé par des semaines déjà payées.
+      {blockingDetail?.override_reason && (
+        <div style={{ marginTop: 6, color: "#FCA5A5" }}>
+          Motif saisi sur le report : « {blockingDetail.override_reason} »
+        </div>
+      )}
+      <div style={{ marginTop: 6, color: "#FCA5A5" }}>
+        <b>Un motif d&apos;écart ne rouvre PAS la plage</b> — le contrôle est calculé sur le seul
+        écart chiffré. Deux sorties, et seulement deux : corriger le report pour que le recalcul
+        revienne dans ±0,02, ou acter cet écart à 0 ci-dessous.
+      </div>
+
+      {!ackOpen ? (
+        <button onClick={() => setAckOpen(true)} disabled={busy}
+                style={{ ...INPUT, marginTop: 8, cursor: "pointer", borderColor: "rgba(239,68,68,0.5)", color: "#F87171" }}>
+          Acter cet écart à 0 et débloquer la suite…
+        </button>
+      ) : (
+        <div style={{ marginTop: 8, paddingTop: 8, borderTop: "1px solid rgba(239,68,68,0.25)" }}>
+          <div style={{ color: "#FCA5A5", marginBottom: 6 }}>
+            ⚠️ <b>Irréversible.</b> Le rakeback de la semaine {blocking}
+            {blockingDetail ? ` (rake brut ${fmt(blockingDetail.base)} · taux ${blockingDetail.rakeback_pct} %)` : ""}
+            {" "}ne sera plus jamais réglable, même si le report est corrigé plus tard.
+            L&apos;acte est enregistré dans l&apos;historique des règlements du joueur, avec l&apos;écart et le motif.
+          </div>
+          <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
+            <span style={{ color: "#FCA5A5" }}>Retape la date de la semaine pour confirmer :</span>
+            <input value={ackWeekInput} onChange={e => setAckWeekInput(e.target.value)}
+                   placeholder={blocking} style={{ ...INPUT, width: 120 }} />
+            <button onClick={() => void ackBlockedWeek()}
+                    disabled={busy || ackWeekInput.trim() !== blocking}
+                    style={{ ...INPUT, cursor: ackWeekInput.trim() === blocking ? "pointer" : "not-allowed",
+                             opacity: ackWeekInput.trim() === blocking ? 1 : 0.45,
+                             borderColor: "rgba(239,68,68,0.5)", color: "#F87171" }}>
+              {busy ? "…" : "Acter à 0"}
+            </button>
+            <button onClick={() => { setAckOpen(false); setAckWeekInput(""); }} disabled={busy}
+                    style={{ ...INPUT, cursor: "pointer" }}>Annuler</button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+
+  const bandeauMessage = msg && (
+    <div style={{ fontSize: 11.5, marginTop: 8, color: msg.kind === "ok" ? "#34D399" : "#F87171" }}>
+      {msg.kind === "ok" ? "✅ " : "❌ "}{msg.text}
+    </div>
+  );
 
   if (weeks.length === 0) {
     return (
-      <div style={{ ...CARD, fontSize: 12, color: "#8888A0" }}>
-        Rakeback — aucune semaine ouverte pour {playerName}. Tout ce qui était calculable est réglé.
+      <div style={{ ...CARD, ...(blocking ? { borderColor: "rgba(239,68,68,0.35)" } : {}) }}>
+        {bandeauPlafond}
+        <div style={{ fontSize: 12, color: "#8888A0" }}>
+          {blocking
+            ? <>Rakeback — <b>aucune semaine réglable pour {playerName} tant que le {blocking} plafonne</b>.
+                Ce n&apos;est pas « tout est réglé » : les semaines suivantes ne sont simplement pas
+                proposées.</>
+            : <>Rakeback — aucune semaine ouverte pour {playerName}. Tout ce qui était calculable est réglé.</>}
+        </div>
+        {bandeauMessage}
       </div>
     );
   }
@@ -121,15 +232,7 @@ export default function RakebackSettlePanel({ playerId, playerName, onSettled }:
         n&apos;est modifié par ce règlement.
       </div>
 
-      {blocking && (
-        <div style={{ border: "1px solid rgba(239,68,68,0.4)", background: "rgba(239,68,68,0.06)",
-                      borderRadius: 10, padding: 10, marginBottom: 10, fontSize: 11.5, color: "#F87171" }}>
-          ⛔ La plage s&apos;arrête avant le <b>{blocking}</b> : le contrôle de cette semaine a échoué.
-          On ne règle pas au-delà — son déficit serait absorbé par des semaines déjà payées et
-          ne pourrait plus jamais être récupéré, même en corrigeant la semaine ensuite.
-          Corrige le <b>{blocking}</b> pour débloquer la suite.
-        </div>
-      )}
+      {bandeauPlafond}
 
       {warnings.length > 0 && (
         <div style={{ border: "1px solid rgba(240,185,11,0.4)", background: "rgba(240,185,11,0.06)",
@@ -216,11 +319,7 @@ export default function RakebackSettlePanel({ playerId, playerName, onSettled }:
         montant-là a été payé ce jour-là.
       </div>
 
-      {msg && (
-        <div style={{ fontSize: 11.5, marginTop: 8, color: msg.kind === "ok" ? "#34D399" : "#F87171" }}>
-          {msg.kind === "ok" ? "✅ " : "❌ "}{msg.text}
-        </div>
-      )}
+      {bandeauMessage}
     </div>
   );
 }

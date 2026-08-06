@@ -8,7 +8,8 @@
 // lib/funnels/nexa/rakeback-settlement.ts.
 import { NextRequest, NextResponse } from "next/server";
 import {
-  getOpenRbWeeks, getBlockingWeekOn, getRbSettlementWarningsOn, lockNexaRakebackSettlement,
+  getOpenRbWeeks, getBlockingWeekOn, getBlockingWeekDetailOn, getRbSettlementWarningsOn,
+  lockNexaRakebackSettlement, ackBlockedRbWeek,
 } from "@/lib/funnels/nexa/rakeback-settlement";
 import { getDb } from "@/lib/db";
 
@@ -26,9 +27,12 @@ export async function GET(req: NextRequest) {
     const warnings = through ? getRbSettlementWarningsOn(getDb(), playerId, through) : [];
     // Le plafond n'est pas un avertissement : c'est une information permanente,
     // l'écran doit pouvoir dire POURQUOI il ne propose pas d'aller plus loin.
+    // `blocking_detail` porte l'écart et le motif : l'écran doit MONTRER sur quoi
+    // il propose d'acter avant de proposer de l'acter.
     return NextResponse.json({
       ok: true, weeks: open, warnings,
       blocking_week: getBlockingWeekOn(getDb(), playerId),
+      blocking_detail: getBlockingWeekDetailOn(getDb(), playerId),
     });
   } catch (e: any) {
     console.error("[NEXAPOKER_SETTLE_RB_GET]", e?.message ?? e);
@@ -39,6 +43,32 @@ export async function GET(req: NextRequest) {
 export async function POST(req: NextRequest) {
   try {
     const b = await req.json().catch(() => null);
+
+    // ── ACTER À 0 une semaine en échec — l'autre sortie du plafond. ───────────
+    // Chemin distinct du règlement de plage, et pas un drapeau sur celui-ci : les
+    // deux gestes n'ont ni le même effet ni le même prix. `confirm_week` est
+    // revérifié par le module, pas seulement ici : l'écran n'est pas le seul
+    // appelant possible.
+    if (b?.action === "ack_blocked_week") {
+      if (typeof b.player_id !== "number" || typeof b.week_start !== "string"
+          || typeof b.confirm_week !== "string") {
+        return NextResponse.json(
+          { error: "Corps invalide : { action:'ack_blocked_week', player_id, week_start, confirm_week } attendu." },
+          { status: 400 },
+        );
+      }
+      const a = ackBlockedRbWeek({
+        player_id: b.player_id,
+        week_start: b.week_start,
+        confirm_week: b.confirm_week,
+        actor: "Baki (écran NEXAPOKER)",
+        notes: b.notes ?? null,
+      });
+      // 409 : un refus de confirmation est une réponse normale du domaine.
+      if (!a.ok) return NextResponse.json({ ok: false, error: a.error }, { status: 409 });
+      return NextResponse.json(a);
+    }
+
     if (!b || typeof b.player_id !== "number" || typeof b.through_week !== "string") {
       return NextResponse.json(
         { error: "Corps invalide : { player_id, through_week, acknowledge_warnings? } attendu." },
