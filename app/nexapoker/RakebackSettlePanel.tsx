@@ -302,14 +302,32 @@ export default function RakebackSettlePanel({ playerId, playerName, onSettled }:
             <span style={{ color: "#F0B90B" }}> · makeup consommé {fmt(makeupConsomme)}</span>
           )}
         </span>
-        <button disabled={busy || through === "" || (warnings.length > 0 && !ack)}
-                onClick={() => void lock()}
-                title={warnings.length > 0 && !ack ? "Confirme d'abord les avertissements" : undefined}
-                style={{ padding: "8px 16px", borderRadius: 8, border: "none", background: "#A78BFA",
-                         color: "#0B0D12", fontSize: 12, fontWeight: 700, cursor: "pointer",
-                         opacity: busy || (warnings.length > 0 && !ack) ? 0.5 : 1 }}>
-          {busy ? "Verrouillage…" : "Verrouiller le règlement"}
-        </button>
+        {/* Le bouton porte SA raison de refus, plutôt que de laisser le serveur la
+            donner après coup. Le seuil est celui de l'AFFICHAGE (0,005) et non l'EPS
+            du moteur : sinon un aperçu à 0,001 s'afficherait « 0,00 USDT » avec un
+            bouton actif, et le règlement verrouillé vaudrait un montant que rien à
+            l'écran ne montrait. L'état du bouton et le chiffre affiché ne doivent
+            jamais pouvoir se contredire. Le serveur refuse toujours de son côté
+            (invariant #2) : ceci ne fait que cesser d'inviter au clic. */}
+        {(() => {
+          const blocage =
+            through === "" ? "Choisis d'abord jusqu'à quelle semaine régler."
+            : apercu <= 0.005 ? "Rien à verser sur cette plage — un règlement à zéro n'est pas un "
+                              + "règlement. Élargis la plage ou attends la semaine suivante."
+            : warnings.length > 0 && !ack ? "Confirme d'abord les avertissements."
+            : null;
+          return (
+            <button disabled={busy || blocage !== null}
+                    onClick={() => void lock()}
+                    title={blocage ?? undefined}
+                    style={{ padding: "8px 16px", borderRadius: 8, border: "none", background: "#A78BFA",
+                             color: "#0B0D12", fontSize: 12, fontWeight: 700,
+                             cursor: busy || blocage !== null ? "not-allowed" : "pointer",
+                             opacity: busy || blocage !== null ? 0.5 : 1 }}>
+              {busy ? "Verrouillage…" : "Verrouiller le règlement"}
+            </button>
+          );
+        })()}
       </div>
 
       <div style={{ fontSize: 11, color: "#555568", marginTop: 8 }}>
