@@ -182,12 +182,25 @@ type ViewMode = "grouped" | "flat";
  */
 function KindBadge({ kind }: { kind: string }) {
   if (!kind || kind === "action") return null;
-  const label = kind === "rakeback" ? "RAKEBACK" : kind.toUpperCase();
+  // Chaque nature porte SON libellé. Un badge générique décrivait toute ligne non
+  // 'action' comme « rakeback dû au joueur, de l'argent qui sort » — faux pour un
+  // acte d'écart, qui ne bouge aucun argent. Une infobulle qui se trompe sur le sens
+  // d'une ligne d'argent est pire que pas d'infobulle.
+  const { label, title, tint, ink } = kind === "rakeback"
+    ? { label: "RAKEBACK",
+        title: "Rakeback dû au joueur — de l'argent qui sort, à ne pas confondre avec une part d'action",
+        tint: "rgba(167,139,250,0.14)", ink: "#A78BFA" }
+    : kind === "rakeback_ack"
+    ? { label: "ÉCART ACTÉ",
+        title: "Écart de contrôle acté à 0 sur une semaine NEXAPOKER — aucun mouvement d'argent. "
+             + "Trace l'acte qui a débloqué le règlement des semaines suivantes ; le détail est dans la note.",
+        tint: "rgba(148,163,184,0.14)", ink: "#94A3B8" }
+    : { label: kind.toUpperCase(), title: `Règlement de nature « ${kind} ».`,
+        tint: "rgba(148,163,184,0.14)", ink: "#94A3B8" };
   return (
-    <span title="Rakeback dû au joueur — de l'argent qui sort, à ne pas confondre avec une part d'action"
+    <span title={title}
           style={{ marginLeft: 6, fontSize: 9.5, fontWeight: 700, letterSpacing: "0.04em",
-                   padding: "2px 6px", borderRadius: 4,
-                   background: "rgba(167,139,250,0.14)", color: "#A78BFA" }}>
+                   padding: "2px 6px", borderRadius: 4, background: tint, color: ink }}>
       {label}
     </span>
   );

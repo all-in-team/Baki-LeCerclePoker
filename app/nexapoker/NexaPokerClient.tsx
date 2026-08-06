@@ -89,6 +89,8 @@ type PlayerDetail = {
   blocked_weeks: { count: number; week_starts: string[]; gross_rake: number; commission: number };
   warnings: { week_start: string; message: string }[];
   settled_weeks: Record<string, number>;
+  rb_settled_weeks: Record<string, number>;
+  rb_settled_total: number; rb_unsettled: number;
   action_settled: number; action_unsettled: number | null;
   deposited: number; withdrawn: number; net_movements: number;
   net_position: number | null;
@@ -833,6 +835,19 @@ export default function NexaPokerClient({ currentWeek, today, chartWeeks, period
             {Math.abs(detail.action_settled) > 0.005 && (
               <span>Déjà réglé <b style={{ color: "#8888A0" }}>{fmt(detail.action_settled)}</b></span>
             )}
+            {/* RAKEBACK — il SORT, d'où la couleur d'une dépense et non celle d'un
+                encaissement. « À verser » est le dû des semaines NON réglées, jamais
+                totals.due : celui-ci inclut les semaines déjà payées et afficherait
+                donc un dû éteint. « Déjà versé » est le montant FIGÉ au verrouillage,
+                pas le rejeu — ce qui est sorti ne rebouge plus si le report change. */}
+            <span>Rakeback à verser{" "}
+              <b style={{ color: detail.rb_unsettled > 0.005 ? "#F0B90B" : "#8888A0" }}>
+                {fmt(detail.rb_unsettled)}
+              </b>
+            </span>
+            {Math.abs(detail.rb_settled_total) > 0.005 && (
+              <span>Rakeback déjà versé <b style={{ color: "#8888A0" }}>{fmt(detail.rb_settled_total)}</b></span>
+            )}
             <span>Buy-ins <b style={{ color: movementColor("deposit") }}>{fmt(detail.deposited)}</b></span>
             <span>Cash-outs <b style={{ color: movementColor("withdrawal") }}>{fmt(detail.withdrawn)}</b></span>
             <span>Net mouvements <b style={{ color: netColor(detail.net_movements) }}>{fmt(detail.net_movements)}</b></span>
@@ -853,7 +868,9 @@ export default function NexaPokerClient({ currentWeek, today, chartWeeks, period
 
           <div style={{ fontSize: 11, color: "#555568", marginTop: 6 }}>
             Position nette = part d'action <b>non réglée</b> + net des mouvements. Positif = le joueur te doit.
-            Une semaine réglée en sort : un dû éteint ne doit plus s'afficher comme dû.
+            Une semaine réglée en sort : un dû éteint ne doit plus s'afficher comme dû. Le rakeback
+            n'y entre <b>pas</b> — il va dans l'autre sens et se règle par son propre flux ; l'additionner
+            compenserait deux dettes qui ne s'éteignent pas ensemble.
             {detail.totals.weeks_missing_winloss > 0 && (
               <> — <b style={{ color: "#F0B90B" }}>
                 {detail.totals.weeks_missing_winloss} semaine(s) sans win/loss

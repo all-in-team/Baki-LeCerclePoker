@@ -270,8 +270,15 @@ export function ackBlockedRbWeekOn(
 
   const d = getNexaPlayerDetailOn(db, player_id);
   const w = d?.weeks.find(x => x.week_start === week_start);
-  // Ceinture et bretelles : getBlockingWeekDetailOn l'a déjà établi, mais on écrit
-  // un snapshot à partir de `w` — on ne l'écrit pas sans l'avoir sous la main.
+  // Le test de statut est REDONDANT aujourd'hui, et volontairement conservé.
+  // getBlockingWeekOn ne renvoie que des semaines `blocked` : passé le contrôle
+  // d'ordre ci-dessus, `w` est nécessairement bloquée. Aucun test ne peut donc le
+  // faire échouer — le retirer ne change aucun comportement observable, et ce n'est
+  // pas un trou de couverture (mutant équivalent, constat du troisième audit).
+  // Il reste parce qu'on écrit un snapshot À PARTIR de `w` : si un jour le contrôle
+  // d'ordre est découplé du statut, c'est cette ligne qui empêchera d'inscrire une
+  // semaine saine à dû 0 — soit exactement la perte que l'ack est censé rendre
+  // délibérée.
   if (!w || w.status !== "blocked") {
     return { ok: false, error: `La semaine ${week_start} n'est pas en échec de contrôle.` };
   }

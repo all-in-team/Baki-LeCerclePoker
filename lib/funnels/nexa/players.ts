@@ -348,8 +348,15 @@ export type NexaPlayerDetail = {
   rb_settled_weeks: Record<string, number>;
   /** Dernière semaine dont le rakeback est réglé. INFORMATIF : ne pilote aucun calcul. */
   rb_settled_through: string | null;
-  /** Rakeback déjà versé, au montant FIGÉ. */
+  /** Rakeback déjà versé, au montant FIGÉ au verrouillage. */
   rb_settled_total: number;
+  /**
+   * Rakeback qui RESTE à verser : dû rejoué des seules semaines ok non réglées.
+   *
+   * C'est lui qu'un écran doit montrer, jamais `totals.due` — celui-ci inclut les
+   * semaines déjà payées et continuerait donc d'afficher un dû éteint.
+   */
+  rb_unsettled: number;
   /**
    * Part d'action DÉJÀ RÉGLÉE, au montant FIGÉ dans nexa_action_settlement_weeks —
    * pas au montant que le rejeu donnerait aujourd'hui. Si la semaine est corrigée
@@ -462,6 +469,31 @@ export function getNexaPlayerDetailOn(db: DB, playerId: number): NexaPlayerDetai
     ? null
     : openWeeks.reduce((s, w) => s + (w.action_amount ?? 0), 0);
 
+  // RAKEBACK : même distinction que pour l'action, et pour la même raison.
+  //
+  // `totals.due` est le dû rejoué sur TOUTES les semaines ok, réglées comprises.
+  // C'est le bon chiffre pour dire « ce que ce joueur a coûté en rakeback », et le
+  // mauvais pour dire « ce que je lui dois » : une fois la semaine payée, son dû
+  // est éteint. Afficher `totals.due` comme un reste à verser ferait réclamer
+  // indéfiniment un rakeback déjà sorti des comptes.
+  //
+  // Les deux moitiés ne se lisent PAS dans la même source, et c'est voulu :
+  //   • rb_settled_total  = Σ des dûs FIGÉS au verrouillage — ce qui est réellement
+  //     sorti, insensible à une correction ultérieure du report ;
+  //   • rb_unsettled      = Σ des dûs REJOUÉS des semaines ok non réglées — ce qui
+  //     reste à payer, au taux et à l'assiette d'aujourd'hui.
+  // Leur somme n'égale donc pas forcément `totals.due` si un report a été corrigé
+  // après un règlement. Ce n'est pas une incohérence : c'est la différence entre ce
+  // qui est sorti et ce que le rejeu dirait aujourd'hui, et elle doit rester visible.
+  //
+  // Pas de `null` ici, contrairement à l'action : le rakeback ne dépend pas du
+  // win/loss, son assiette est le rake du report. Une semaine ok a toujours un dû
+  // calculable.
+  const rbSettledSet = new Set(rbSettledRows.map(s => s.week_start));
+  const rbUnsettled = r.weeks
+    .filter(w => w.status === "ok" && !rbSettledSet.has(w.week_start))
+    .reduce((s, w) => s + w.due, 0);
+
   return {
     player_id: p.id,
     name: p.name,
@@ -472,6 +504,7 @@ export function getNexaPlayerDetailOn(db: DB, playerId: number): NexaPlayerDetai
       ? rbSettledRows.map(r => r.week_start).sort().slice(-1)[0]
       : null,
     rb_settled_total: rbSettledRows.reduce((s, w) => s + w.due, 0),
+    rb_unsettled: rbUnsettled,
     action_settled: actionSettled,
     action_unsettled: actionUnsettled,
     totals: r.totals,

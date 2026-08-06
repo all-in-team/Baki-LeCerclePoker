@@ -268,7 +268,39 @@ console.log("\n2-bis. Sortir du plafond : le motif ne suffit pas, deux sorties e
   const mauvaise = ackBlockedRbWeekOn(db, { player_id: pid, week_start: W[1], confirm_week: W[2] });
   check("acter avec une AUTRE date est refusé", !mauvaise.ok, JSON.stringify(mauvaise));
   const horsOrdre = ackBlockedRbWeekOn(db, { player_id: pid, week_start: W[2], confirm_week: W[2] });
-  check("acter une semaine qui ne plafonne pas est refusé", !horsOrdre.ok, JSON.stringify(horsOrdre));
+  check("acter une semaine SAINE est refusé", !horsOrdre.ok, JSON.stringify(horsOrdre));
+
+  // LA GARDE D'ORDRE, SÉPARÉMENT DE LA GARDE DE STATUT.
+  //
+  // Une semaine SAINE est arrêtée par les deux gardes à la fois : la tester ne
+  // prouve donc rien sur celle d'ordre, et retirer l'une ou l'autre laissait la
+  // suite verte — les deux se masquaient mutuellement. (Constat du troisième audit,
+  // mutations M2 et M15.) Il faut une semaine BLOQUÉE MAIS NON PLAFONNANTE : elle
+  // passe la garde de statut, seule celle d'ordre peut l'arrêter.
+  {
+    const db3 = freshDb();
+    const p3 = seed(db3, [200, 300, 400, 100], [true, false, true, false]);
+    check("deux semaines bloquées, W2 plafonne", getBlockingWeekOn(db3, p3) === W[1],
+          `obtenu ${getBlockingWeekOn(db3, p3)}`);
+    const lointaine = ackBlockedRbWeekOn(db3, { player_id: p3, week_start: W[3], confirm_week: W[3] });
+    check("acter une semaine BLOQUÉE mais non plafonnante est refusé", !lointaine.ok,
+          JSON.stringify(lointaine));
+    check("le refus nomme la semaine qui plafonne vraiment",
+          !lointaine.ok && lointaine.error.includes(W[1]), JSON.stringify(lointaine));
+    const brulees = db3.prepare(`SELECT week_start FROM nexa_rakeback_settlement_weeks WHERE player_id = ?`)
+      .all(p3) as any[];
+    eqArr("et surtout : aucune semaine n'a été brûlée au passage",
+          brulees.map(b => b.week_start), []);
+    // Dans l'ordre, en revanche, les deux s'actent et tout se débloque.
+    check("W2 s'acte", ackBlockedRbWeekOn(db3, { player_id: p3, week_start: W[1], confirm_week: W[1] }).ok);
+    check("puis W4 plafonne à son tour", getBlockingWeekOn(db3, p3) === W[3],
+          `obtenu ${getBlockingWeekOn(db3, p3)}`);
+    check("et s'acte", ackBlockedRbWeekOn(db3, { player_id: p3, week_start: W[3], confirm_week: W[3] }).ok);
+    eqArr("les semaines saines sont enfin toutes réglables",
+          getOpenRbWeeksOn(db3, p3).map(w => w.week_start), [W[0], W[2]]);
+    db3.close();
+  }
+
   eqArr("aucun refus n'a rien débloqué au passage", ouvertes(), [W[0]]);
 
   const acte = ackBlockedRbWeekOn(db, { player_id: pid, week_start: W[1], confirm_week: W[1] });
@@ -328,6 +360,43 @@ console.log("\n2-ter. La ligne d'acte est neutre pour l'argent");
   const somme = db.prepare(`SELECT COALESCE(SUM(amount_due_usdt),0) AS s FROM manual_settlements WHERE player_id = ?`)
     .get(pid) as any;
   near("Σ des montants = −400 : l'acte pèse 0, le règlement sort 400", somme.s, -400);
+  db.close();
+}
+
+// ── 2-quater. « À verser » vs « déjà versé » ───────────────────────────────
+//
+// totals.due rejoue TOUTES les semaines ok, réglées comprises : l'afficher comme un
+// reste à verser ferait réclamer indéfiniment un rakeback déjà sorti des comptes.
+// rb_unsettled est le chiffre que l'écran doit montrer, rb_settled_total ce qui est
+// réellement sorti — et les deux se séparent dès qu'un report est corrigé après coup.
+console.log("\n2-quater. Le rakeback à verser s'éteint quand il est versé");
+{
+  const db = freshDb();
+  const pid = seed(db, [200, 300, 400, 100]);   // 1000 de rake à 50 % → 500 de dû
+  const d0 = getNexaPlayerDetailOn(db, pid)!;
+  near("avant tout règlement : totals.due = 500", d0.totals.due, 500);
+  near("à verser = 500", d0.rb_unsettled, 500);
+  near("déjà versé = 0", d0.rb_settled_total, 0);
+
+  const r = lockNexaRakebackSettlementOn(db, { player_id: pid, through_week: W[1] });
+  check("W1+W2 réglées", r.ok, JSON.stringify(r));
+
+  const d1 = getNexaPlayerDetailOn(db, pid)!;
+  near("totals.due ne bouge PAS — il inclut le réglé", d1.totals.due, 500);
+  near("mais à verser tombe à 250 (W3+W4)", d1.rb_unsettled, 250);
+  near("et déjà versé monte à 250", d1.rb_settled_total, 250);
+  near("à verser + déjà versé = totals.due tant que rien n'est corrigé",
+       d1.rb_unsettled + d1.rb_settled_total, 500);
+
+  // Correction du report APRÈS règlement : le figé ne bouge pas, le rejeu si.
+  db.prepare(`UPDATE nexa_affiliate_weeks SET nlh = 400 WHERE player_id = ? AND week_start = ?`)
+    .run(pid, W[0]);
+  const d2 = getNexaPlayerDetailOn(db, pid)!;
+  near("déjà versé reste au montant FIGÉ", d2.rb_settled_total, 250);
+  near("à verser reste sur les seules semaines non réglées", d2.rb_unsettled, 250);
+  check("et l'écart avec le rejeu est visible, pas escamoté",
+        Math.abs((d2.rb_unsettled + d2.rb_settled_total) - d2.totals.due) > 0.005,
+        `unsettled ${d2.rb_unsettled} + settled ${d2.rb_settled_total} vs due ${d2.totals.due}`);
   db.close();
 }
 
