@@ -77,6 +77,13 @@ CRE_1='48211'   # instant
 CRE_2='48212'   # usdt
 CRE_3='48213'   # antitriche
 
+# Tag de run : rend les click_id uniques d'une exécution à l'autre. Sans lui, un
+# second run rejoue les mêmes click_id et TOUTES les lignes tombent en `duplicate` —
+# le flag ne prouve alors plus rien, puisqu'il ne discrimine plus. Avec le tag,
+# seuls C1/C2 rejouent le A1 DU MÊME RUN, ce qui est le vrai test.
+# `cid` reste CAMP42 en dur pour qu'une purge unique attrape tous les runs.
+RUN_TAG="${RUN_TAG:-r1}"
+
 # Dimensions communes. utm_content double cb : exigé par RichAds pour leur
 # comptage, ignoré par le endpoint — sa présence ne doit rien casser.
 # geo porte un NOM de pays, pas un code ISO (espaces encodés en %20).
@@ -87,27 +94,27 @@ q() { # q <cre> <sid> <app> <geo> <cost> <pu> <cb>
 
 echo
 echo "== A · 4 clics normaux (IP et click_id distincts) ============================"
-hit "A1 cre=$CRE_1" "203.0.113.11" "$UA_MOBILE" "$(q "$CRE_1" PUB_991 APP_77 Malaysia         0.021 premium CB-A1)"
-hit "A2 cre=$CRE_2" "203.0.113.12" "$UA_MOBILE" "$(q "$CRE_2" PUB_992 APP_78 Brazil           0.019 regular CB-A2)"
-hit "A3 cre=$CRE_3" "203.0.113.13" "$UA_MOBILE" "$(q "$CRE_3" PUB_993 APP_77 United%20Kingdom 0.015 premium CB-A3)"
-hit "A4 cre=99999"  "203.0.113.14" "$UA_MOBILE" "$(q 99999    PUB_994 APP_79 Indonesia        0.022 regular CB-A4)"
+hit "A1 cre=$CRE_1" "203.0.113.11" "$UA_MOBILE" "$(q "$CRE_1" PUB_991 APP_77 Malaysia         0.021 premium CB-$RUN_TAG-A1)"
+hit "A2 cre=$CRE_2" "203.0.113.12" "$UA_MOBILE" "$(q "$CRE_2" PUB_992 APP_78 Brazil           0.019 regular CB-$RUN_TAG-A2)"
+hit "A3 cre=$CRE_3" "203.0.113.13" "$UA_MOBILE" "$(q "$CRE_3" PUB_993 APP_77 United%20Kingdom 0.015 premium CB-$RUN_TAG-A3)"
+hit "A4 cre=99999"  "203.0.113.14" "$UA_MOBILE" "$(q 99999    PUB_994 APP_79 Indonesia        0.022 regular CB-$RUN_TAG-A4)"
 
 echo
 echo "== B · 3 cas limites (cre absent, macro non substituée, UA vide) ============="
-hit "B1 cre absent"  "203.0.113.21" "$UA_MOBILE" "cid=CAMP42&sid=PUB_995&app=APP_77&geo=Turkey&cost=0.020&pu=regular&cb=CB-B1&utm_content=CB-B1"
-hit "B2 macro brute" "203.0.113.22" "$UA_MOBILE" "$(q %5BCREATIVE_ID%5D PUB_996 APP_77 Turkey 0.020 regular CB-B2)"
-hit "B3 UA vide"     "203.0.113.23" "EMPTY"      "$(q "$CRE_1" PUB_997 APP_77 Turkey 0.020 regular CB-B3)"
+hit "B1 cre absent"  "203.0.113.21" "$UA_MOBILE" "cid=CAMP42&sid=PUB_995&app=APP_77&geo=Turkey&cost=0.020&pu=regular&cb=CB-$RUN_TAG-B1&utm_content=CB-$RUN_TAG-B1"
+hit "B2 macro brute" "203.0.113.22" "$UA_MOBILE" "$(q %5BCREATIVE_ID%5D PUB_996 APP_77 Turkey 0.020 regular CB-$RUN_TAG-B2)"
+hit "B3 UA vide"     "203.0.113.23" "EMPTY"      "$(q "$CRE_1" PUB_997 APP_77 Turkey 0.020 regular CB-$RUN_TAG-B3)"
 
 echo
 echo "== C · 2 doublons (click_id de A1 rejoué) ===================================="
-hit "C1 dup de A1" "203.0.113.31" "$UA_MOBILE" "$(q "$CRE_1" PUB_991 APP_77 Malaysia 0.021 premium CB-A1)"
-hit "C2 dup de A1" "203.0.113.32" "$UA_MOBILE" "$(q "$CRE_1" PUB_991 APP_77 Malaysia 0.021 premium CB-A1)"
+hit "C1 dup de A1" "203.0.113.31" "$UA_MOBILE" "$(q "$CRE_1" PUB_991 APP_77 Malaysia 0.021 premium CB-$RUN_TAG-A1)"
+hit "C2 dup de A1" "203.0.113.32" "$UA_MOBILE" "$(q "$CRE_1" PUB_991 APP_77 Malaysia 0.021 premium CB-$RUN_TAG-A1)"
 
 echo
 echo "== D · rafale de 13 depuis 198.51.100.77 ===================================="
 echo "   seuil à 10 clics déjà loggés → D11, D12 et D13 doivent être flagués"
 for i in $(seq 1 13); do
-  hit "D$i burst" "198.51.100.77" "$UA_MOBILE" "$(q "$CRE_2" PUB_998 APP_80 Indonesia 0.018 regular "CB-D$i")"
+  hit "D$i burst" "198.51.100.77" "$UA_MOBILE" "$(q "$CRE_2" PUB_998 APP_80 Indonesia 0.018 regular "CB-$RUN_TAG-D$i")"
 done
 
 echo
@@ -162,8 +169,14 @@ Et le contrôle des nouvelles dimensions :
   sqlite3 data/lecercle.db "
     SELECT geo, app, user_type, COUNT(*) FROM richads_clicks GROUP BY geo, app, user_type;"
 
-Relancer le script sans purger la table fera tomber duplicate sur les 22 clics
-(tous les click_id auront déjà été vus). C'est le comportement correct.
+Pour rejouer sans purger, changer de tag : RUN_TAG=r2 ./scripts/test-richads-go.sh
+Les click_id sont alors neufs et `duplicate` retrouve son pouvoir discriminant.
+Sans changer de tag, tout retombe en duplicate — comportement correct, mais le
+test ne prouve plus rien.
+
+En PROD, suspect_ip tombera sur la quasi-totalité des lignes : le proxy Railway
+écrase le X-Forwarded-For injecté, les 22 clics viennent donc d'une seule IP
+réelle. C'est la preuve que la détection de rafale fonctionne, pas un bug.
 EOF
 
 exit $(( fail > 0 ? 1 : 0 ))
