@@ -139,6 +139,68 @@ export function clientIpFromXff(xff: string | null | undefined, trustedHops = 1)
   return hops[idx] ?? null;
 }
 
+/**
+ * En-têtes candidats pour l'IP du visiteur, par ordre de fiabilité décroissante.
+ *
+ * CONSTAT DE PROD (2026-08-08) : lire `x-forwarded-for` à `hops[len-1]` rendait
+ * une IP d'INFRASTRUCTURE Railway, pas celle du client — 44 requêtes émises
+ * depuis un seul poste avec 10 IP simulées produisaient 5 hash distincts. Railway
+ * ajoute plus d'un hop que prévu, donc la dernière entrée est son propre edge.
+ *
+ * Conséquence si on n'y touche pas : le seuil de rafale (10 clics/IP/heure) est
+ * franchi en quelques minutes par chaque nœud edge, donc la quasi-totalité du
+ * trafic réel tombe en `suspect_ip` et la colonne « clics uniques » perd tout
+ * sens — exactement le chiffre qui sert à classer les créas.
+ *
+ * `x-envoy-external-address` est posé par Envoy (le proxy de Railway) et vaut
+ * l'adresse externe réelle : non falsifiable par le client, contrairement à
+ * l'entrée de gauche de `x-forwarded-for` qui reste le repli conventionnel.
+ */
+const IP_HEADERS = [
+  "x-envoy-external-address",
+  "cf-connecting-ip",
+  "true-client-ip",
+  "x-real-ip",
+] as const;
+
+export interface ResolvedIp {
+  ip: string | null;
+  /** Nom de l'en-tête retenu — stocké en base pour que le correctif se prouve. */
+  source: string | null;
+  /** Nombre d'entrées dans x-forwarded-for, pour diagnostiquer la chaîne de proxys. */
+  hops: number | null;
+}
+
+/** Un IPv4/IPv6 plausible, pour écarter les valeurs parasites d'un en-tête. */
+function looksLikeIp(v: string): boolean {
+  return /^[0-9a-fA-F:.]{3,45}$/.test(v) && /[.:]/.test(v);
+}
+
+/**
+ * Résout l'IP du visiteur. `get` est la fonction de lecture d'en-tête (insensible
+ * à la casse côté Next.js). Ne lève jamais : sans IP, le clic est loggé sans
+ * `ip_hash`, jamais perdu.
+ */
+export function resolveClientIp(get: (name: string) => string | null): ResolvedIp {
+  const xff = get("x-forwarded-for");
+  const hops = xff ? xff.split(",").map(s => s.trim()).filter(Boolean).length : null;
+
+  for (const h of IP_HEADERS) {
+    const raw = get(h)?.trim();
+    if (raw && looksLikeIp(raw)) return { ip: raw, source: h, hops };
+  }
+
+  // Repli : entrée la plus à GAUCHE de x-forwarded-for = client d'origine selon
+  // la convention. Falsifiable, mais c'est le seul candidat restant, et une
+  // détection de rafale imparfaite vaut mieux qu'une détection sur IP d'edge.
+  if (xff) {
+    const first = xff.split(",")[0]?.trim();
+    if (first && looksLikeIp(first)) return { ip: first, source: "x-forwarded-for[0]", hops };
+  }
+
+  return { ip: null, source: null, hops };
+}
+
 // ---------------------------------------------------------------- log
 
 export interface RawClick {
@@ -151,6 +213,10 @@ export interface RawClick {
   pu?: string | null;
   cb?: string | null;
   ip?: string | null;
+  /** En-tête qui a fourni `ip` — tracé en base pour prouver l'extraction. */
+  ipSource?: string | null;
+  /** Longueur de la chaîne x-forwarded-for. */
+  ipHops?: number | null;
   userAgent?: string | null;
   // utm_content double cb pour le comptage RichAds : volontairement absent.
 }
@@ -192,9 +258,13 @@ export function logRichAdsClick(raw: RawClick): void {
 
     db.prepare(
       `INSERT INTO richads_clicks
-         (source, cre, cid, sid, app, geo, cost, user_type, click_id, ip_hash, user_agent, flags, is_unique)
-       VALUES (@source, @cre, @cid, @sid, @app, @geo, @cost, @user_type, @click_id, @ip_hash, @user_agent, @flags, @is_unique)`
+         (source, cre, cid, sid, app, geo, cost, user_type, click_id, ip_hash,
+          ip_source, ip_hops, user_agent, flags, is_unique)
+       VALUES (@source, @cre, @cid, @sid, @app, @geo, @cost, @user_type, @click_id, @ip_hash,
+               @ip_source, @ip_hops, @user_agent, @flags, @is_unique)`
     ).run({
+      ip_source: raw.ipSource ?? null,
+      ip_hops: raw.ipHops ?? null,
       source: `${RICHADS_SOURCE_PREFIX}/${cre}`,
       cre,
       cid: cleanToken(raw.cid),

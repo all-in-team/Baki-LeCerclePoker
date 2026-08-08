@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse, after } from "next/server";
-import { getDestUrl, logRichAdsClick, clientIpFromXff } from "@/lib/richads";
+import { getDestUrl, logRichAdsClick, resolveClientIp } from "@/lib/richads";
 
 export const dynamic = "force-dynamic";
 
@@ -47,6 +47,10 @@ export async function GET(req: NextRequest) {
 /** Lecture pure de la requête : aucun accès base, aucune exception possible. */
 function readClick(req: NextRequest) {
   const q = req.nextUrl.searchParams;
+  // Derrière Railway, x-forwarded-for porte plusieurs hops dont le dernier est
+  // l'edge de la plateforme : on interroge des en-têtes candidats et on trace
+  // celui qui a répondu. Cf. resolveClientIp.
+  const { ip, source, hops } = resolveClientIp(n => req.headers.get(n));
   return {
     cre: q.get("cre"),
     cid: q.get("cid"),
@@ -56,7 +60,9 @@ function readClick(req: NextRequest) {
     cost: q.get("cost"),
     pu: q.get("pu"),
     cb: q.get("cb"),
-    ip: clientIpFromXff(req.headers.get("x-forwarded-for")),
+    ip,
+    ipSource: source,
+    ipHops: hops,
     userAgent: req.headers.get("user-agent"),
   };
 }

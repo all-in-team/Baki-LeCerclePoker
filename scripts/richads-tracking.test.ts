@@ -19,7 +19,7 @@
 
 import {
   normalizeCre, cleanToken, cleanGeoName, looksAutomated,
-  clientIpFromXff, hashIp, creLabel, CRE_LABELS,
+  clientIpFromXff, resolveClientIp, hashIp, creLabel, CRE_LABELS,
 } from "../lib/richads";
 
 let passed = 0;
@@ -86,6 +86,42 @@ eq("un seul hop", clientIpFromXff("198.51.100.77", 1), "198.51.100.77");
 eq("local sans proxy", clientIpFromXff("203.0.113.11", 0), "203.0.113.11");
 eq("en-tête absent", clientIpFromXff(null, 1), null);
 eq("en-tête vide", clientIpFromXff("", 1), null);
+
+console.log("\nresolveClientIp — l'IP du visiteur, pas celle de l'edge Railway");
+// Helper : fabrique un lecteur d'en-têtes insensible à la casse.
+const hdr = (h: Record<string, string>) => (n: string) => h[n.toLowerCase()] ?? null;
+
+// LE CAS DE PROD. Chaîne observée : [client, ..., edge Railway]. L'ancien code
+// lisait la DERNIÈRE entrée et rendait donc l'IP d'infrastructure — 10 IP
+// simulées se réduisaient à 5 hash. Ce test échoue si on y revient.
+{
+  const h = hdr({
+    "x-forwarded-for": "203.0.113.11, 10.0.0.7, 100.64.0.3",
+    "x-envoy-external-address": "203.0.113.11",
+  });
+  const r = resolveClientIp(h);
+  eq("envoy prioritaire sur la chaîne xff", r.ip, "203.0.113.11");
+  eq("en-tête retenu tracé", r.source, "x-envoy-external-address");
+  eq("longueur de chaîne tracée", r.hops, 3);
+  // Contre-preuve : l'ancienne lecture rendait bien l'edge, pas le client.
+  eq("ancienne lecture = IP d'edge (le bug)", clientIpFromXff("203.0.113.11, 10.0.0.7, 100.64.0.3", 1), "100.64.0.3");
+}
+
+eq("repli xff[0] si aucun en-tête dédié",
+  resolveClientIp(hdr({ "x-forwarded-for": "203.0.113.11, 10.0.0.7" })).ip, "203.0.113.11");
+eq("repli tracé comme tel",
+  resolveClientIp(hdr({ "x-forwarded-for": "203.0.113.11, 10.0.0.7" })).source, "x-forwarded-for[0]");
+eq("cloudflare devant envoy absent",
+  resolveClientIp(hdr({ "cf-connecting-ip": "198.51.100.5", "x-forwarded-for": "1.2.3.4" })).ip, "198.51.100.5");
+eq("x-real-ip en dernier recours dédié",
+  resolveClientIp(hdr({ "x-real-ip": "198.51.100.9" })).source, "x-real-ip");
+eq("aucun en-tête → pas d'IP, clic loggé quand même",
+  resolveClientIp(hdr({})).ip, null);
+eq("valeur parasite ignorée, repli sur xff",
+  resolveClientIp(hdr({ "x-envoy-external-address": "unknown", "x-forwarded-for": "203.0.113.11" })).ip, "203.0.113.11");
+eq("IPv6 accepté",
+  resolveClientIp(hdr({ "x-envoy-external-address": "2001:db8::1" })).ip, "2001:db8::1");
+eq("hops null si xff absent", resolveClientIp(hdr({ "x-real-ip": "1.2.3.4" })).hops, null);
 
 console.log("\nhashIp — jamais d'IP en clair");
 const h = hashIp("203.0.113.11");

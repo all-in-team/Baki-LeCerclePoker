@@ -3310,4 +3310,30 @@ function initSchema(db: Database.Database) {
   } catch (err: any) {
     console.error(`[MIGRATION:add_richads_clicks_v1] FAILED (sera rejouée au prochain boot):`, err.message);
   }
+
+  // Traçabilité de l'extraction d'IP (constat de prod 2026-08-08).
+  //
+  // Lire x-forwarded-for à hops[len-1] rendait une IP d'INFRASTRUCTURE Railway :
+  // 44 requêtes émises depuis un seul poste avec 10 IP simulées produisaient
+  // 5 ip_hash distincts. Le seuil de rafale se déclenchait donc par nœud edge,
+  // ce qui aurait flagué la quasi-totalité du trafic réel en `suspect_ip` et vidé
+  // la colonne « clics uniques » de son sens.
+  //
+  // On enregistre désormais QUEL en-tête a fourni l'IP (`ip_source`) et la
+  // longueur de la chaîne de proxys (`ip_hops`), pour que la correction se
+  // vérifie sur données réelles au lieu d'être affirmée.
+  try {
+    const already = db.prepare(`SELECT 1 FROM _applied_fixes WHERE name = ?`)
+      .get("richads_ip_source_v1");
+    if (!already) {
+      const cols = db.prepare(`PRAGMA table_info(richads_clicks)`).all() as { name: string }[];
+      const names = new Set(cols.map(c => c.name));
+      if (!names.has("ip_source")) db.exec(`ALTER TABLE richads_clicks ADD COLUMN ip_source TEXT`);
+      if (!names.has("ip_hops")) db.exec(`ALTER TABLE richads_clicks ADD COLUMN ip_hops INTEGER`);
+      db.prepare(`INSERT OR IGNORE INTO _applied_fixes (name) VALUES (?)`).run("richads_ip_source_v1");
+      console.log("[MIGRATION] richads_ip_source_v1 applied");
+    }
+  } catch (err: any) {
+    console.error(`[MIGRATION:richads_ip_source_v1] FAILED (sera rejouée au prochain boot):`, err.message);
+  }
 }
