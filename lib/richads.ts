@@ -29,9 +29,11 @@ export const RICHADS_SOURCE_PREFIX = "richads";
  * ne doit pas réécrire l'historique déjà loggé.
  */
 export const CRE_LABELS: Record<string, string> = {
-  // "48211": "instant",
-  // "48212": "usdt",
-  // "48213": "antitriche",
+  "4001300": "instant",
+  "4001301": "usdt",
+  "4001302": "antitriche",
+  "4001303": "live",
+  "4001304": "club",
 };
 
 export function creLabel(cre: string): string {

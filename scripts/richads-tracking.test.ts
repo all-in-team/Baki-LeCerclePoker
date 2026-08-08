@@ -131,11 +131,18 @@ eq("stable (fenêtre de rafale)", hashIp("203.0.113.11"), h);
 eq("discriminant", hashIp("203.0.113.12") === h, false);
 
 console.log("\ncreLabel — libellé résolu à l'affichage, jamais figé en base");
-eq("table vide → id brut", creLabel("48211"), "48211");
-CRE_LABELS["48211"] = "instant";
-eq("id mappé → nom", creLabel("48211"), "instant");
-eq("id non mappé → brut", creLabel("48299"), "48299");
-delete CRE_LABELS["48211"];
+// Les 5 créas réelles de la campagne dzpk, telles que RichAds les numérote.
+eq("4001300 → instant", creLabel("4001300"), "instant");
+eq("4001301 → usdt", creLabel("4001301"), "usdt");
+eq("4001302 → antitriche", creLabel("4001302"), "antitriche");
+eq("4001303 → live", creLabel("4001303"), "live");
+eq("4001304 → club", creLabel("4001304"), "club");
+eq("id absent de la table → brut", creLabel("4001399"), "4001399");
+// Un id ajouté à chaud est résolu sans redéploiement de la logique.
+CRE_LABELS["4001305"] = "retrait";
+eq("ajout à chaud résolu", creLabel("4001305"), "retrait");
+delete CRE_LABELS["4001305"];
+eq("retrait de la table → retour au brut", creLabel("4001305"), "4001305");
 
 console.log(`\n${failures.length === 0 ? "✅" : "❌"} ${passed} assertions passées, ${failures.length} échec(s)`);
 if (failures.length > 0) { failures.forEach(f => console.log("   -", f)); process.exit(1); }
