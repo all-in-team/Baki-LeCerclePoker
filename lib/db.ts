@@ -3256,4 +3256,58 @@ function initSchema(db: Database.Database) {
   } catch (err: any) {
     console.error(`[MIGRATION:add_nexa_rakeback_settlement_v1] FAILED (sera rejouée au prochain boot):`, err.message);
   }
+
+  // RichAds — tracking des clics d'acquisition payante (GO Baki 2026-08-08).
+  //
+  // Table AUTONOME, sans lien avec players, nexa_leads ni le money engine. Le
+  // trafic acheté atterrit sur un lien d'invitation de groupe Telegram : aucun
+  // /start, donc aucun lead créé, donc rien à quoi rattacher une source côté
+  // funnel. `nexa_leads.source` n'est PAS un référentiel — c'est une colonne
+  // texte libre alimentée au /start du bot. Y écrire des clics fabriquerait des
+  // leads qui n'ont jamais parlé au bot et fausserait les compteurs du funnel.
+  // (Option A tranchée par Baki ; option C — router vers le bot — écartée : le
+  // scénario NEXA est FR/EN, le trafic dzpk est sinophone, mélanger les deux
+  // polluerait nexa_leads.)
+  //
+  //   • source : 'richads/<cre>' — même convention de nommage que le funnel, de
+  //     sorte qu'un vrai référentiel puisse un jour absorber ces lignes sans
+  //     réécriture.
+  //   • flags : CSV trié ('' = clic propre). is_unique en dur pour que les stats
+  //     n'aient pas à parser la chaîne à chaque agrégat.
+  //   • AUCUNE contrainte UNIQUE sur click_id : un doublon doit être LOGGÉ et
+  //     marqué, pas rejeté — RichAds le facture, il doit rester visible.
+  //   • ip_hash : HMAC salé, jamais l'IP en clair.
+  try {
+    const already = db.prepare(`SELECT 1 FROM _applied_fixes WHERE name = ?`)
+      .get("add_richads_clicks_v1");
+    if (!already) {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS richads_clicks (
+          id          INTEGER PRIMARY KEY AUTOINCREMENT,
+          clicked_at  TEXT NOT NULL DEFAULT (datetime('now')),
+          source      TEXT NOT NULL,              -- 'richads/<cre>'
+          cre         TEXT NOT NULL,              -- [CREATIVE_ID] brut, 'unknown' si vide/malformé
+          cid         TEXT,                       -- [CAMPAIGN_ID]
+          sid         TEXT,                       -- [TG_PUB_ID]
+          app         TEXT,                       -- [TG_APP_ID] : mini app d'affichage
+          geo         TEXT,                       -- [COUNTRY] : NOM de pays, pas un code ISO
+          cost        REAL,                       -- [BID_PRICE]
+          user_type   TEXT,                       -- [TG_USER_TYPE], brut
+          click_id    TEXT,                       -- [CLICK_ID]
+          ip_hash     TEXT,
+          user_agent  TEXT,
+          flags       TEXT NOT NULL DEFAULT '',
+          is_unique   INTEGER NOT NULL DEFAULT 1
+        );
+        CREATE INDEX IF NOT EXISTS idx_richads_clicks_at    ON richads_clicks(clicked_at);
+        CREATE INDEX IF NOT EXISTS idx_richads_clicks_cre   ON richads_clicks(cre);
+        CREATE INDEX IF NOT EXISTS idx_richads_clicks_click ON richads_clicks(click_id);
+        CREATE INDEX IF NOT EXISTS idx_richads_clicks_ip    ON richads_clicks(ip_hash, clicked_at);
+      `);
+      db.prepare(`INSERT OR IGNORE INTO _applied_fixes (name) VALUES (?)`).run("add_richads_clicks_v1");
+      console.log("[MIGRATION] add_richads_clicks_v1 applied");
+    }
+  } catch (err: any) {
+    console.error(`[MIGRATION:add_richads_clicks_v1] FAILED (sera rejouée au prochain boot):`, err.message);
+  }
 }

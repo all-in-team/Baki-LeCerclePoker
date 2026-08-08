@@ -7,6 +7,7 @@ import {
   X, LogOut, LayoutDashboard, Users, Network,
   Sliders, Settings, Wallet, BarChart3,
   TrendingUp, ChevronDown, ChevronRight, CalendarDays, Rocket, Banknote, GitMerge,
+  MousePointerClick,
 } from "lucide-react";
 
 type NavItem = { href: string; label: string; icon: React.ComponentType<{ size?: number; strokeWidth?: number }> };
@@ -52,6 +53,11 @@ const GROUPS: NavGroup[] = [
   { label: "FUNNEL", items: [
     { href: "/nexa-funnel", label: "NEXAPOKER", icon: Rocket },
     { href: "/qqpk-funnel", label: "QQPK", icon: Rocket },
+    // Acquisition payante RichAds → groupe dzpk. Ce n'est PAS un funnel bot :
+    // pas de lead, pas de /start, la destination est un lien d'invitation de
+    // groupe. On ne mesure donc que le clic — la conversion vient du report
+    // agent du club, hors système.
+    { href: "/richads", label: "RichAds (dzpk)", icon: MousePointerClick },
   ]},
   { label: "GRINDHOUSE", items: [
     // Sessions / Frais / Settlements stay reachable by direct URL — just not in the nav
