@@ -203,6 +203,14 @@ export function resolveClientIp(get: (name: string) => string | null): ResolvedI
 
 // ---------------------------------------------------------------- log
 
+/** Surface de better-sqlite3 réellement utilisée ici — de quoi injecter une base de test. */
+export interface DbLike {
+  prepare(sql: string): {
+    get(...params: any[]): any;
+    run(...params: any[]): any;
+  };
+}
+
 export interface RawClick {
   cre?: string | null;
   cid?: string | null;
@@ -225,10 +233,15 @@ export interface RawClick {
  * Scoring + insertion. Appelé APRÈS l'envoi du 302, jamais sur le trajet de la
  * réponse. Ne lève jamais : un échec de log ne doit pas remonter dans le
  * endpoint, le clic est déjà parti chez Telegram.
+ *
+ * `dbOverride` n'existe que pour les tests : il permet d'exercer CETTE fonction
+ * — seuil de rafale et fenêtre glissante compris — sur une base temporaire.
+ * Sans lui, la logique du seuil ne serait vérifiable que par une copie de son
+ * SQL dans le test, ce qui ne prouve rien sur le code réellement exécuté.
  */
-export function logRichAdsClick(raw: RawClick): void {
+export function logRichAdsClick(raw: RawClick, dbOverride?: DbLike): void {
   try {
-    const db = getDb();
+    const db = dbOverride ?? getDb();
 
     const cre = normalizeCre(raw.cre);
     const clickId = cleanToken(raw.cb);
