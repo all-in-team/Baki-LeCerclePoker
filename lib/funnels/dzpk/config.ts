@@ -52,6 +52,44 @@ export function dzpkAgentName(): string | null {
 }
 
 /**
+ * Libellé du club tel qu'il apparaît dans les notifs (`德州扑克 ♠️❤️ @dzpk`).
+ *
+ * Sert d'ANCRE d'extraction du nom de joueur, pas de décoration : dans le
+ * gabarit « rattaché », le nom est séparé du club par `从`, qui est un caractère
+ * chinois courant pouvant appartenir à un nom (`从容`). Ancrer sur le libellé
+ * complet supprime cette ambiguïté.
+ *
+ * Absent ⇒ le parseur bascule sur une ancre structurelle de repli (cf. club-parser).
+ */
+export function dzpkClubLabel(): string | null {
+  const l = process.env.DZPK_CLUB_LABEL?.trim();
+  return l ? l : null;
+}
+
+/**
+ * Bot du club qui envoie les notifications en DM.
+ *
+ * C'est le SEUL peer que le userbot interroge. Aucune autre conversation privée
+ * n'est jamais lue : la confidentialité tient à la portée de la requête, pas à
+ * un filtre appliqué après réception.
+ */
+export function dzpkClubBot(): string {
+  return process.env.DZPK_CLUB_BOT?.trim() || "@dp_bot";
+}
+
+/** Nombre de messages demandés par passe d'ingestion. */
+export const INGEST_BATCH = 100;
+
+/**
+ * Au-delà de ce délai sans ingestion réussie, on alerte.
+ *
+ * Une session userbot morte ne produit AUCUN symptôme : elle ressemble trait
+ * pour trait à une journée sans nouveau joueur. Sans cette borne, la panne se
+ * découvre en comptant l'argent, des jours plus tard.
+ */
+export const INGEST_STALE_HOURS = 6;
+
+/**
  * Source retenue quand le deep link n'en porte aucune.
  *
  * Volontairement une valeur RÉELLE et pas NULL : un lead sans source est un

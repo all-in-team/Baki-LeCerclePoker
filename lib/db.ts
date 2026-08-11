@@ -4,7 +4,13 @@ import fs from "fs";
 // DDL du funnel dzpk. Vit dans son propre module pour que la migration et les
 // tests exécutent LA MÊME chaîne SQL — un test qui recopie le schéma valide sa
 // copie, pas la base. Ce module n'importe rien, aucun cycle possible.
-import { DZPK_SCHEMA_SQL, DZPK_MIGRATION_V1 } from "./funnels/dzpk/schema";
+import {
+  DZPK_SCHEMA_SQL, DZPK_MIGRATION_V1,
+  DZPK_INGEST_SCHEMA_SQL, DZPK_MIGRATION_INGEST_V1,
+  DZPK_MATCH_SCHEMA_SQL, DZPK_MATCH_SCHEMA_SQL_2, DZPK_MATCH_SCHEMA_SQL_3, DZPK_MIGRATION_MATCH_V1,
+} from "./funnels/dzpk/schema";
+// Module pur (aucun import) : utilisable depuis une migration sans cycle.
+import { nameKey as dzpkNameKey } from "./funnels/dzpk/name-key";
 
 const DATA_DIR = path.join(process.cwd(), "data");
 const DB_PATH = path.join(DATA_DIR, "lecercle.db");
@@ -3381,5 +3387,79 @@ function initSchema(db: Database.Database) {
     }
   } catch (err: any) {
     console.error(`[MIGRATION:${DZPK_MIGRATION_V1}] FAILED (sera rejouée au prochain boot):`, err.message);
+  }
+
+  // ── Ingestion des notifications du club dzpk (phase 2) ─────────────────────
+  //
+  // Le revenu de l'agent se scelle au PREMIER JEU d'un joueur, événement que le
+  // club annonce par un DM au compte de Baki. Un bot ne peut pas lire les DM
+  // d'un autre bot : la lecture passe par le userbot GramJS, en PULL sur un
+  // seul peer (@dp_bot), avec curseur. Cf. docs/DZPK_BOT.md.
+  //
+  // Aucune de ces tables n'écrit sur `dzpk_leads` à ce stade : l'appariement
+  // nom-de-club ↔ lead est manuel et arrive plus tard. Rien ne peut donc être
+  // mal attribué par cette migration.
+  try {
+    const already = db.prepare(`SELECT 1 FROM _applied_fixes WHERE name = ?`)
+      .get(DZPK_MIGRATION_INGEST_V1);
+    if (!already) {
+      db.exec(DZPK_INGEST_SCHEMA_SQL);
+      db.prepare(`INSERT OR IGNORE INTO _applied_fixes (name) VALUES (?)`).run(DZPK_MIGRATION_INGEST_V1);
+      console.log(`[MIGRATION] ${DZPK_MIGRATION_INGEST_V1} applied`);
+    }
+  } catch (err: any) {
+    console.error(`[MIGRATION:${DZPK_MIGRATION_INGEST_V1}] FAILED (sera rejouée au prochain boot):`, err.message);
+  }
+
+  // ── Matching nom-de-club ↔ lead dzpk (phase 2) ─────────────────────────────
+  //
+  // Le club reprend AUTOMATIQUEMENT le nom du compte Telegram du joueur : le nom
+  // qui apparaît dans « 已绑定为代理 » est donc le display_name capturé au /start.
+  // D'où une colonne dédiée + son index, et un tableau de liens appris pour les
+  // cas que l'exact ne couvre pas (joueur renommé, homonymes).
+  //
+  // Les ALTER sont joués séparément et tolèrent la colonne déjà présente :
+  // SQLite n'a pas d'`ADD COLUMN IF NOT EXISTS`, et une migration doit pouvoir
+  // être rejouée après un échec partiel sans rester bloquée.
+  try {
+    const already = db.prepare(`SELECT 1 FROM _applied_fixes WHERE name = ?`)
+      .get(DZPK_MIGRATION_MATCH_V1);
+    if (!already) {
+      const cols = new Set((db.prepare(`PRAGMA table_info(dzpk_leads)`).all() as { name: string }[]).map(c => c.name));
+      if (!cols.has("display_name")) db.exec(DZPK_MATCH_SCHEMA_SQL);
+      if (!cols.has("display_name_key")) db.exec(DZPK_MATCH_SCHEMA_SQL_2);
+      db.exec(DZPK_MATCH_SCHEMA_SQL_3);
+
+      // Backfill des leads déjà capturés, qui n'ont que first_name/last_name.
+      //
+      // ⚠️ La CLÉ doit être backfillée elle aussi, et en TypeScript.
+      //
+      // `display_name_key` est la seule colonne que le matcher interroge. Remplir
+      // `display_name` sans la clé laissait ces leads invisibles à l'appariement —
+      // et, bien pire, produisait de FAUX POSITIFS : un homonyme plus récent
+      // devenait « nom unique » alors que deux leads portaient le même nom, et le
+      // crédit partait sur la mauvaise source sans la moindre trace d'ambiguïté.
+      // (audit money du 2026-08-12, MA1)
+      //
+      // Un `LOWER(TRIM(...))` en SQL ne convient pas : il ne retire ni emoji ni
+      // pleine chasse, donc il fabriquerait des clés incompatibles avec celles
+      // que `recordStart` écrit via nameKey().
+      db.exec(`
+        UPDATE dzpk_leads
+           SET display_name = TRIM(COALESCE(first_name, '') || ' ' || COALESCE(last_name, ''))
+         WHERE display_name IS NULL
+      `);
+      const aBackfiller = db.prepare(
+        `SELECT id, display_name FROM dzpk_leads WHERE display_name_key IS NULL`
+      ).all() as Array<{ id: number; display_name: string | null }>;
+      const setKey = db.prepare(`UPDATE dzpk_leads SET display_name_key = ? WHERE id = ?`);
+      for (const l of aBackfiller) setKey.run(dzpkNameKey(l.display_name ?? ""), l.id);
+      if (aBackfiller.length) console.log(`[MIGRATION] ${DZPK_MIGRATION_MATCH_V1} — ${aBackfiller.length} clé(s) backfillée(s)`);
+
+      db.prepare(`INSERT OR IGNORE INTO _applied_fixes (name) VALUES (?)`).run(DZPK_MIGRATION_MATCH_V1);
+      console.log(`[MIGRATION] ${DZPK_MIGRATION_MATCH_V1} applied`);
+    }
+  } catch (err: any) {
+    console.error(`[MIGRATION:${DZPK_MIGRATION_MATCH_V1}] FAILED (sera rejouée au prochain boot):`, err.message);
   }
 }

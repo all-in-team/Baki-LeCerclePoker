@@ -8,6 +8,22 @@
 
 import { getDb } from "@/lib/db";
 import { DEFAULT_SOURCE, SOURCE_MAX_LEN } from "./config";
+import { nameKey } from "./name-key";
+
+/**
+ * Nom d'affichage Telegram : `first_name` + `last_name`.
+ *
+ * C'EST la clé d'appariement du funnel. Le club reprend automatiquement le nom
+ * du compte Telegram quand le joueur rejoint — le joueur ne choisit aucun pseudo
+ * séparé. Ce que le club affichera dans « 已绑定为代理 [nom] » est donc, à un
+ * renommage près, exactement cette chaîne.
+ *
+ * Reconstruit ici plutôt que lu d'un champ Telegram : l'API ne fournit pas de
+ * `display_name`, seulement les deux morceaux.
+ */
+export function displayName(identity: Pick<TgIdentity, "first_name" | "last_name">): string {
+  return [identity.first_name, identity.last_name].filter(Boolean).join(" ").trim();
+}
 
 export interface DbLike {
   prepare(sql: string): {
@@ -199,10 +215,13 @@ export function recordStart(
   const existing = db.prepare(`SELECT * FROM dzpk_leads WHERE telegram_id = ?`)
     .get(identity.telegram_id) as DzpkLead | undefined;
 
+  const display = displayName(identity);
+
   if (!existing) {
     const info = db.prepare(
-      `INSERT INTO dzpk_leads (telegram_id, username, first_name, last_name, source, source_raw)
-       VALUES (?, ?, ?, ?, ?, ?)`
+      `INSERT INTO dzpk_leads (telegram_id, username, first_name, last_name, source, source_raw,
+                               display_name, display_name_key)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
     ).run(
       identity.telegram_id,
       identity.username ?? null,
@@ -210,6 +229,8 @@ export function recordStart(
       identity.last_name ?? null,
       observedSource,
       rawPayload,
+      display,
+      nameKey(display),
     );
     const lead = db.prepare(`SELECT * FROM dzpk_leads WHERE id = ?`)
       .get(Number(info.lastInsertRowid)) as DzpkLead;
@@ -221,6 +242,7 @@ export function recordStart(
   db.prepare(
     `UPDATE dzpk_leads
         SET username = ?, first_name = ?, last_name = ?,
+            display_name = ?, display_name_key = ?,
             last_start_at = datetime('now'),
             start_count = start_count + 1,
             updated_at = datetime('now')
@@ -229,6 +251,8 @@ export function recordStart(
     identity.username ?? null,
     identity.first_name ?? null,
     identity.last_name ?? null,
+    display,
+    nameKey(display),
     existing.id,
   );
   logLeadEvent(

@@ -46,6 +46,21 @@ export function isUserbotConfigured(): boolean {
   return getApiCredentials() !== null;
 }
 
+/**
+ * Accès au client GramJS partagé, pour les modules qui ont besoin de LIRE.
+ *
+ * Ajouté pour l'ingestion des notifications du club dzpk (`lib/funnels/dzpk/
+ * ingest.ts`), qui doit interroger l'historique d'un peer. Volontairement un
+ * simple ré-export du singleton plutôt qu'un second client : deux `TelegramClient`
+ * sur le même compte, ce sont deux connexions MTProto concurrentes et un
+ * FLOOD_WAIT partagé qu'aucun des deux ne voit venir.
+ *
+ * Aucun comportement existant n'est modifié — c'est un ajout pur.
+ */
+export async function getUserbotClient(): Promise<TelegramClient | null> {
+  return getClient();
+}
+
 export async function checkUserbotHealth(): Promise<{
   configured: boolean;
   connected: boolean;

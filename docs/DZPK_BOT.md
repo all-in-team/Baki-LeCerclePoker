@@ -158,9 +158,132 @@ contrefactuel : le bug est remis, et le test doit tomber.
 
 ---
 
-## 7. Prévu, pas encore livré
+## 7. Phase 2 — ingestion, parsing, appariement
 
-- **Phase 2** — ingestion des notifs du club, parsing, appariement, réconciliation.
+### Le modèle de revenu
+
+Le revenu se scelle au **premier jeu**, pas au join. Le club envoie quatre types de
+notification en DM au compte de Baki, et **un bot ne peut pas lire les DM d'un autre
+bot** : la lecture passe par le userbot GramJS.
+
+| Gabarit | Marqueur | Effet | Agent nommé ? |
+|---|---|---|---|
+| join | `已进群` | `club_joined_at` | **non** |
+| rattaché | `已绑定为代理` | `bound_at` — **le revenu** | oui |
+| commission | `申请的分佣` | ligne `dzpk_commissions` | oui |
+| banni | `已被封号/冻结` | `banned_at` | oui |
+
+Le gabarit *join* ne porte aucun nom d'agent : son appartenance est **présumée** du
+canal (DM privé), pas prouvée. Le risque est borné par construction — seul le
+gabarit *rattaché* crédite du revenu, et lui porte le filtre.
+
+### Ingestion : pull, jamais listener
+
+`messages.getHistory` sur **un seul peer** (`DZPK_CLUB_BOT`), depuis un curseur.
+
+- **`reverse: true` est obligatoire.** GramJS rend par défaut du plus récent au plus
+  ancien : avec `limit: 100` et un curseur à zéro, on n'aurait ingéré que les 100
+  derniers messages avant de faire sauter le curseur au maximum — enterrant tout
+  l'historique sous `minId`, en silence.
+- **Confidentialité par la portée**, pas par un filtre : aucune autre conversation
+  n'est jamais demandée.
+- **Non-perte** : le curseur n'avance qu'après écriture, et ne recule jamais
+  (`MAX(last_msg_id, ?)`).
+- **Dédup** par `UNIQUE(peer, src_msg_id)`, jamais par contenu : deux commissions du
+  même montant sont deux paiements.
+
+### Parsing : strict, et bruyant quand il échoue
+
+Le nom du joueur est extrait en **ancrant sur le libellé du club**, pas sur le mot
+suivant : `从` est un caractère courant qui peut appartenir à un nom (`从容`).
+
+Un montant ne se devine jamais. Toute virgule est refusée — `811,628` vaut 811628 ou
+811.628 selon la convention, un facteur 1000 que rien dans la chaîne ne tranche. Un
+refus tombe en `unparsed`, donc **visible** ; un montant deviné se comptabilise.
+
+Toute notification non reconnue est stockée en `unparsed` **avec son motif**, comptée
+à l'écran, et **notifiée** — un gabarit qui change doit se voir en heures.
+
+### Appariement
+
+Le club reprend **automatiquement le nom du compte Telegram** du joueur : le nom des
+notifs est donc le `display_name` capturé au `/start`, d'où une colonne dédiée et
+indexée sur `dzpk_leads`.
+
+1. **Lien mémorisé** (`dzpk_name_links`) → auto. L'identité la plus forte : un humain
+   l'a validée.
+2. **Égalité exacte normalisée** sur un lead unique → auto, et le lien est appris.
+3. **Homonymes** → filtre de causalité (`started_at <= posted_at` : on ne peut pas
+   être rattaché avant d'avoir parlé au bot), puis proximité de date **avec une marge
+   de 24 h**. En-deçà, la date ne tranche rien et l'humain décide.
+4. **Renommage entre `/start` et join** → aucun auto, réconciliation.
+
+Aucun rapprochement approximatif : ni distance d'édition, ni sous-chaîne, ni prénom
+seul. Un rattachement faux ne change pas le revenu total — il **déplace le crédit
+d'une source de pub vers une autre**, sans qu'aucun total ne cloche.
+
+Un lien appris dont la clé devient ambiguë (un second lead du même nom apparaît) est
+marqué `contested` et cesse de servir : son unicité d'hier était un accident du volume.
+
+### Commissions
+
+`dzpk_commissions` est **isolée de la comptabilité** : elle n'alimente ni
+`wallet_transactions`, ni les P&L, ni les settlements. Le rapprochement avec les USDT
+réellement reçus est une tâche séparée, à décider explicitement.
+
+Une commission n'est enregistrée **que si l'agent est le nôtre**. Celles des autres
+agents restent lisibles dans `dzpk_club_messages` pour la traçabilité.
+
+Les deux montants sont stockés en REAL **et** en brut ; l'écart d'arrondi n'est jamais
+stocké, il se calcule à la lecture.
+
+### Piloter
+
+```bash
+# État : curseur, fraîcheur, compteurs, unparsed, file de réconciliation,
+# et le taux d'auto-appariement qu'on OBTIENDRAIT (dry run, aucune écriture)
+curl .../api/admin/dzpk-ingest -H "x-admin-token: $ADMIN_RECONCILE_TOKEN"
+
+# Passe d'ingestion immédiate
+curl -X POST .../api/admin/dzpk-ingest -H "x-admin-token: $T" \
+  -H 'Content-Type: application/json' -d '{"action":"ingest"}'
+
+# Appliquer les appariements (ajouter "dry_run":true pour seulement mesurer)
+curl -X POST .../api/admin/dzpk-ingest -H "x-admin-token: $T" \
+  -H 'Content-Type: application/json' -d '{"action":"match"}'
+
+# Rattacher à la main — le lien est mémorisé pour les fois suivantes
+curl -X POST .../api/admin/dzpk-ingest -H "x-admin-token: $T" \
+  -H 'Content-Type: application/json' \
+  -d '{"action":"resolve","club_message_id":42,"lead_id":7,"operator":"baki"}'
+```
+
+`match` n'est **pas** enchaîné après `ingest` : tant que le taux réel n'est pas
+mesuré, appliquer les effets reste un geste délibéré.
+
+### Alarmes
+
+| Situation | Signal |
+|---|---|
+| Aucune ingestion réussie depuis 6 h | notification ops (cron horaire) |
+| Notifications non reconnues dans une passe | notification ops |
+| Des commissions passent, **aucune** n'est retenue | notification ops — signature d'un `DZPK_AGENT_NAME` désaccordé |
+
+Une session userbot morte ne produit **aucun** symptôme : elle ressemble à une journée
+sans nouveau joueur. C'est la raison d'être de la première alarme.
+
+### Tests
+
+```bash
+npx tsx scripts/dzpk-club-parser.test.ts   # 4 gabarits réels, montants, filtre agent
+npx tsx scripts/dzpk-ingest.test.ts        # dédup, curseur, isolation comptable
+npx tsx scripts/dzpk-matcher.test.ts       # exact, homonymes, self-learning
+```
+
+## 8. Prévu, pas encore livré
+
+- **Écran back-office** de réconciliation (aujourd'hui : l'API admin ci-dessus).
+- **Étape « pseudo club »** dans le funnel — à caler avec Baki (copy à valider).
 - **Phase 3** — relais humain vers « Support DZPK » (un sujet par lead).
 - **Phase 4** — relance J+1 unique, broadcasts segmentés throttlés.
 

@@ -7,6 +7,7 @@ import {
 } from "./telegram-commands/cashout-reminder";
 import { notifyOps } from "./ops-notifications";
 import { getDb } from "./db";
+import { initDzpkCrons } from "./funnels/dzpk/crons";
 
 const TZ = "Europe/Paris";
 const opts = { timezone: TZ };
@@ -310,4 +311,14 @@ export function initCronJobs() {
   }, opts);
 
   console.log("[CRON] 8 cashout + 1 pending-alert jobs registered (Europe/Paris)");
+
+  // Funnel dzpk : ingestion des notifs du club + alarme de fraîcheur.
+  // Les définitions vivent dans le module dzpk pour que ce fichier partagé ne
+  // porte que le point d'accroche.
+  try {
+    initDzpkCrons();
+    console.log("[CRON] dzpk jobs registered (ingestion 3 min, alarme horaire)");
+  } catch (e: any) {
+    console.error("[CRON] dzpk jobs KO:", e?.message ?? e);
+  }
 }

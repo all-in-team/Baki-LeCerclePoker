@@ -26,7 +26,10 @@ import {
   isDuplicateDzpkUpdate, getLeadByTelegramId, deriveState, getStatsBySource,
   type DbLike,
 } from "../lib/funnels/dzpk/leads";
-import { DZPK_SCHEMA_SQL } from "../lib/funnels/dzpk/schema";
+import {
+  DZPK_SCHEMA_SQL,
+  DZPK_MATCH_SCHEMA_SQL, DZPK_MATCH_SCHEMA_SQL_2, DZPK_MATCH_SCHEMA_SQL_3,
+} from "../lib/funnels/dzpk/schema";
 
 let passed = 0;
 const failures: string[] = [];
@@ -39,6 +42,11 @@ function eq(label: string, got: unknown, want: unknown) {
 function freshDb(): DbLike & { exec(s: string): void; close(): void } {
   const db = new Database(":memory:");
   db.exec(DZPK_SCHEMA_SQL);
+  // display_name / display_name_key sont ajoutées par la migration de matching :
+  // le /start les renseigne, donc la base de test doit les avoir.
+  db.exec(DZPK_MATCH_SCHEMA_SQL);
+  db.exec(DZPK_MATCH_SCHEMA_SQL_2);
+  db.exec(DZPK_MATCH_SCHEMA_SQL_3);
   return db as any;
 }
 
@@ -77,6 +85,9 @@ console.log("\nrecordStart — création");
   eq("pseudo capturé", r.lead.username, "wang");
   eq("prénom chinois intact", r.lead.first_name, "小王");
   eq("start_count initial", r.lead.start_count, 1);
+  // LA clé d'appariement du funnel : le club reprendra ce nom tel quel.
+  eq("display_name capturé", (r.lead as any).display_name, "小王");
+  eq("clé normalisée stockée", (r.lead as any).display_name_key, "小王");
   eq("aucune date de club", [r.lead.club_joined_at, r.lead.bound_at], [null, null]);
 
   const ev = db.prepare(`SELECT kind, source FROM dzpk_lead_events WHERE lead_id = ?`).all(r.lead.id);
