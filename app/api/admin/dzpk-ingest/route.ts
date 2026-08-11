@@ -3,6 +3,7 @@ import { getDb } from "@/lib/db";
 import { peekIngestState, isIngestStale, runDzpkIngest, getCommissionTotals } from "@/lib/funnels/dzpk/ingest";
 import { runMatching, resolveManually, flagContestedLinks, listPendingReconciliation, checkMatchCoherence } from "@/lib/funnels/dzpk/matcher";
 import { dzpkClubBot, dzpkAgentName, dzpkClubLabel, INGEST_STALE_HOURS } from "@/lib/funnels/dzpk/config";
+import { dzpkUserbotIdentity } from "@/lib/funnels/dzpk/userbot";
 
 /**
  * Pilotage et observation de l'ingestion des notifs du club dzpk.
@@ -54,6 +55,11 @@ export async function GET(req: NextRequest) {
   // intuition. `runMatching({dryRun:true})` ne touche à aucune table.
   const wouldMatch = runMatching({ dryRun: true });
 
+  // QUEL COMPTE est réellement lu. Sans ce champ, une session valide pointée sur
+  // le mauvais compte est indistinguable d'une conversation vide : l'ingestion
+  // tourne, le curseur avance, l'alarme se tait, et rien n'arrive.
+  const readingAs = await dzpkUserbotIdentity();
+
   return NextResponse.json({
     config: {
       peer,
@@ -61,6 +67,7 @@ export async function GET(req: NextRequest) {
       club_label_set: Boolean(dzpkClubLabel()),
       stale_after_hours: INGEST_STALE_HOURS,
     },
+    reading_as: readingAs,
     cursor: state,
     stale: isIngestStale(state),
     messages_by_kind: byKind,

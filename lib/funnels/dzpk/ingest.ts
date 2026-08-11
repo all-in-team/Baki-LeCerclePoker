@@ -387,13 +387,21 @@ export async function runDzpkIngest(): Promise<IngestRunResult> {
   const state = getIngestState(peer);
 
   try {
-    const { getUserbotClient } = await import("@/lib/telegram-userbot");
-    const client = await getUserbotClient();
+    // Client DÉDIÉ (@strawberry5421), pas celui des groupes joueurs
+    // (@Baki77777). Les DM du club n'arrivent que sur le premier ; lire avec le
+    // second rendait `fetched: 0` sans la moindre erreur.
+    const { getDzpkUserbotClient, dzpkUserbotIdentity } = await import("./userbot");
+    const client = await getDzpkUserbotClient();
     if (!client) {
-      const msg = "userbot indisponible (session absente ou connexion échouée)";
+      const msg = "userbot dzpk indisponible (DZPK_USERBOT_SESSION absente ou connexion échouée)";
       recordIngestError(peer, msg);
       return { ok: false, peer, fetched: 0, error: msg };
     }
+
+    // Tracé à chaque passe : le compte lu est la première chose à vérifier
+    // quand l'ingestion « marche » mais ne rapporte rien.
+    const who = await dzpkUserbotIdentity();
+    if (who.username) console.log(`[DZPK INGEST] lecture depuis @${who.username} (id ${who.user_id})`);
 
     // ⚠️ `reverse: true` est OBLIGATOIRE, ce n'est pas une préférence.
     //

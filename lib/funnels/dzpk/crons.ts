@@ -7,6 +7,7 @@
 import cron from "node-cron";
 import { runDzpkIngest, getIngestState, isIngestStale } from "./ingest";
 import { dzpkClubBot, dzpkAgentName, INGEST_STALE_HOURS } from "./config";
+import { isDzpkUserbotConfigured } from "./userbot";
 
 export function initDzpkCrons() {
   // ── Ingestion des notifs du club — toutes les 3 minutes ────────────────────
@@ -20,6 +21,9 @@ export function initDzpkCrons() {
   // tâches à la minute 0 (une seule base SQLite, écritures sérialisées).
   cron.schedule("1-59/3 * * * *", async () => {
     if (!dzpkAgentName()) return; // non configuré : silence, pas d'erreur en boucle
+    // Idem pour la session dédiée : sans elle l'ingestion refuse de tourner, et
+    // relancer toutes les 3 min produirait une erreur en boucle dans les logs.
+    if (!isDzpkUserbotConfigured()) return;
     try {
       await runDzpkIngest();
     } catch (e: any) {
@@ -36,7 +40,7 @@ export function initDzpkCrons() {
   // Ne se déclenche pas si l'agent n'est pas configuré : dans ce cas
   // l'ingestion est volontairement à l'arrêt, ce n'est pas une panne.
   cron.schedule("7 * * * *", async () => {
-    if (!dzpkAgentName()) return;
+    if (!dzpkAgentName() || !isDzpkUserbotConfigured()) return;
     try {
       const peer = dzpkClubBot();
       const state = getIngestState(peer);

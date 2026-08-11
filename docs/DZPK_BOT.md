@@ -29,27 +29,62 @@ webhook différentes.
 | `DZPK_AGENT_NAME` | Identifiant agent dans le club (`🍓`) | 2 |
 | `DZPK_CLUB_LABEL` | Libellé du club (`德州扑克 ♠️❤️ @dzpk`) | 2 |
 | `DZPK_CLUB_BOT` | @username du bot du club qui envoie les notifs en DM | 2 |
+| `DZPK_USERBOT_SESSION` | Session GramJS du compte qui reçoit les DM du club | 2 |
 | `DZPK_INGEST_BATCH` | Taille du lot d'ingestion (défaut 100, borné 1–200) | 2, optionnel |
 | `DZPK_ADMIN_CHAT_ID` | Supergroupe « Support DZPK » (Sujets activés) | 3 |
 
-### La session userbot n'est pas à recréer
+### ⚠️ La session dzpk est une SECONDE session, sur un autre compte
 
-`TELEGRAM_API_ID` / `TELEGRAM_API_HASH` / `TELEGRAM_SESSION` existent déjà et sont
-réutilisées **telles quelles**. L'ingestion appelle `getUserbotClient()`, simple
-ré-export du singleton qui sert déjà à la création des groupes joueurs — pas un
-second client : deux `TelegramClient` sur le même compte, ce sont deux connexions
-MTProto et un FLOOD_WAIT partagé qu'aucune des deux ne voit venir.
+| Session | Compte | Sert à |
+|---|---|---|
+| `TELEGRAM_SESSION` | `@Baki77777` | création et gestion des groupes joueurs |
+| `DZPK_USERBOT_SESSION` | `@strawberry5421` | **lecture des DM du club** (🍓 = strawberry) |
 
-**Vérifier à quel compte la session appartient avant de compter dessus** :
+Deux comptes Telegram distincts, donc deux sessions. `TELEGRAM_API_ID` et
+`TELEGRAM_API_HASH` sont ceux de l'application et se partagent — seule la session
+diffère.
+
+**Aucun repli de `DZPK_USERBOT_SESSION` sur `TELEGRAM_SESSION`.** Session absente ⇒
+l'ingestion refuse de tourner et le dit. Un repli silencieux ferait lire le mauvais
+compte en croyant lire le bon, ce qui est exactement le bug ci-dessous.
+
+> **Constat du 2026-08-12, à ne pas refaire.** L'ingestion a tourné une heure avec la
+> session de `@Baki77777` : peer résolu, aucune erreur, curseur qui avance, alarme de
+> fraîcheur au silence — et `fetched: 0` à chaque passe, parce que les DM du club
+> arrivent sur `@strawberry5421`. Une session valide sur le mauvais compte est
+> **indistinguable d'une conversation vide**. C'est pourquoi le diagnostic expose
+> désormais le compte réellement lu.
 
 ```bash
-curl .../api/admin/userbot-health -H "x-admin-token: $ADMIN_RECONCILE_TOKEN"
-# → {"user_id":1298290355,"username":"Baki77777","session_valid":true}
+curl .../api/admin/dzpk-ingest -H "x-admin-token: $ADMIN_RECONCILE_TOKEN"
+# → "reading_as": {"username":"strawberry5421","user_id":…,"connected":true}
 ```
 
-Ce doit être **le compte qui reçoit les DM du club**. Si la session appartenait à un
-compte technique distinct, elle ne verrait aucun de ces DM et l'ingestion rendrait
-zéro message — sans erreur, sans alerte autre que la fraîcheur à 6 h.
+Si `reading_as.username` n'est pas le compte qui reçoit les notifications, rien
+d'autre n'a d'importance : c'est la première chose à regarder.
+
+### Générer `DZPK_USERBOT_SESSION`
+
+Deux étapes, depuis la racine du dépôt, avec le numéro du compte **strawberry** :
+
+```bash
+# 1. Demander le code (arrive dans Telegram sur @strawberry5421)
+TELEGRAM_API_ID=… TELEGRAM_API_HASH=… PHONE='+33…' npx tsx scripts/send-code.ts
+
+# 2. Fichier de mot de passe 2FA — OBLIGATOIRE même sans 2FA (le script le lit
+#    inconditionnellement). Vide si le compte n'a pas de mot de passe.
+echo 'MON_MOT_DE_PASSE_2FA' > /tmp/tg-2fa-password.txt
+
+# 3. Valider avec le code reçu → imprime SESSION=1Bx...
+TELEGRAM_API_ID=… TELEGRAM_API_HASH=… PHONE='+33…' CODE='12345' npx tsx scripts/verify-code.ts
+
+# 4. Poser la valeur sur Railway, puis effacer le fichier de mot de passe
+rm -f /tmp/tg-2fa-password.txt /tmp/tg-auth-state.json
+```
+
+⚠️ Poser la chaîne dans **`DZPK_USERBOT_SESSION`**, surtout pas dans
+`TELEGRAM_SESSION` — l'écraser repointerait la gestion des groupes joueurs sur un
+compte qui ne les a pas créés.
 
 > **Emoji.** `🍓` et `♠️❤️` se comparent sur une forme normalisée (sélecteurs de
 > variante U+FE0F retirés). Un même emoji arrive avec ou sans VS selon le client
