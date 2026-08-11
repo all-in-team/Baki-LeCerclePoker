@@ -20,7 +20,7 @@
 
 import { getDb } from "@/lib/db";
 import { parseClubNotification, PARSER_VERSION, type ParserConfig } from "./club-parser";
-import { dzpkAgentName, dzpkClubLabel, dzpkClubBot, INGEST_BATCH, INGEST_STALE_HOURS } from "./config";
+import { dzpkAgentName, dzpkClubLabel, dzpkClubBot, ingestBatch, INGEST_STALE_HOURS } from "./config";
 import type { DbLike } from "./leads";
 
 /** Message brut tel que rendu par Telegram, réduit à ce dont on a besoin. */
@@ -408,8 +408,9 @@ export async function runDzpkIngest(): Promise<IngestRunResult> {
     // En mode `reverse`, on remonte du plus ancien au plus récent depuis
     // `offsetId` (exclusif) : le lot est un PRÉFIXE CONTINU, donc « curseur = max
     // reçu » est enfin une affirmation vraie. (audit money du 2026-08-12, F1)
+    const batch = ingestBatch();
     const msgs = await client.getMessages(peer, {
-      limit: INGEST_BATCH,
+      limit: batch,
       reverse: true,
       offsetId: state.last_msg_id,
     });
@@ -440,8 +441,8 @@ export async function runDzpkIngest(): Promise<IngestRunResult> {
     // Lot plein = il reste probablement du retard. Sans cette ligne, un
     // rattrapage de plusieurs milliers de messages est indistinguable d'un
     // régime stable dans les logs.
-    if (rows.length >= INGEST_BATCH) {
-      console.log(`[DZPK INGEST] lot plein (${INGEST_BATCH}) — rattrapage en cours, la passe suivante continuera`);
+    if (rows.length >= batch) {
+      console.log(`[DZPK INGEST] lot plein (${batch}) — rattrapage en cours, la passe suivante continuera`);
     }
 
     await raiseIngestAnomalies(outcome);

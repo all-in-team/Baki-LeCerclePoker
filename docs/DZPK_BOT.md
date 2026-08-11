@@ -29,10 +29,27 @@ webhook différentes.
 | `DZPK_AGENT_NAME` | Identifiant agent dans le club (`🍓`) | 2 |
 | `DZPK_CLUB_LABEL` | Libellé du club (`德州扑克 ♠️❤️ @dzpk`) | 2 |
 | `DZPK_CLUB_BOT` | @username du bot du club qui envoie les notifs en DM | 2 |
+| `DZPK_INGEST_BATCH` | Taille du lot d'ingestion (défaut 100, borné 1–200) | 2, optionnel |
 | `DZPK_ADMIN_CHAT_ID` | Supergroupe « Support DZPK » (Sujets activés) | 3 |
 
-`TELEGRAM_API_ID` / `TELEGRAM_API_HASH` / `TELEGRAM_SESSION` existent déjà (userbot
-GramJS) et sont réutilisées telles quelles en phase 2 — rien à créer.
+### La session userbot n'est pas à recréer
+
+`TELEGRAM_API_ID` / `TELEGRAM_API_HASH` / `TELEGRAM_SESSION` existent déjà et sont
+réutilisées **telles quelles**. L'ingestion appelle `getUserbotClient()`, simple
+ré-export du singleton qui sert déjà à la création des groupes joueurs — pas un
+second client : deux `TelegramClient` sur le même compte, ce sont deux connexions
+MTProto et un FLOOD_WAIT partagé qu'aucune des deux ne voit venir.
+
+**Vérifier à quel compte la session appartient avant de compter dessus** :
+
+```bash
+curl .../api/admin/userbot-health -H "x-admin-token: $ADMIN_RECONCILE_TOKEN"
+# → {"user_id":1298290355,"username":"Baki77777","session_valid":true}
+```
+
+Ce doit être **le compte qui reçoit les DM du club**. Si la session appartenait à un
+compte technique distinct, elle ne verrait aucun de ces DM et l'ingestion rendrait
+zéro message — sans erreur, sans alerte autre que la fraîcheur à 6 h.
 
 > **Emoji.** `🍓` et `♠️❤️` se comparent sur une forme normalisée (sélecteurs de
 > variante U+FE0F retirés). Un même emoji arrive avec ou sans VS selon le client

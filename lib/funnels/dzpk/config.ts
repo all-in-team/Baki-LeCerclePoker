@@ -77,8 +77,23 @@ export function dzpkClubBot(): string {
   return process.env.DZPK_CLUB_BOT?.trim() || "@dp_bot";
 }
 
-/** Nombre de messages demandés par passe d'ingestion. */
-export const INGEST_BATCH = 100;
+/**
+ * Nombre de messages demandés par passe d'ingestion.
+ *
+ * Pilotable par `DZPK_INGEST_BATCH` pour une raison précise : prouver en réel
+ * que la pagination remonte bien les messages les PLUS ANCIENS après le curseur
+ * (`reverse: true`) demande un lot volontairement petit. Sans cette variable, la
+ * vérification imposerait un changement de code et un redéploiement — donc, en
+ * pratique, elle ne serait jamais faite.
+ *
+ * Bornée à [1, 200] : une valeur aberrante dans une variable d'env ne doit pas
+ * se traduire par une requête Telegram absurde.
+ */
+export function ingestBatch(): number {
+  const raw = parseInt(process.env.DZPK_INGEST_BATCH ?? "", 10);
+  if (!Number.isFinite(raw)) return 100;
+  return Math.min(200, Math.max(1, raw));
+}
 
 /**
  * Au-delà de ce délai sans ingestion réussie, on alerte.
