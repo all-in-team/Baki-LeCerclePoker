@@ -14,13 +14,30 @@ webhook différentes.
 
 ## 1. Variables d'environnement
 
+**Nécessaires dès la phase 1** — sans elles le bot ne fonctionne pas :
+
 | Variable | Rôle | Sans elle |
 |---|---|---|
 | `DZPK_BOT_TOKEN` | Token BotFather du bot dzpk | Le bot est **muet**, erreur loggée une fois |
 | `DZPK_CLUB_INVITE_URL` | Lien d'affiliation du club @dzpk | Accueil envoyé **sans bouton** (jamais de silence) |
 | `DZPK_WEBHOOK_SECRET` | Authentifie les appels de Telegram | Webhook **non authentifié**, avertissement au setup |
-| `DZPK_ADMIN_CHAT_ID` | Supergroupe « Support DZPK » | Relais humain désactivé (phase 3) |
-| `DZPK_AGENT_NAME` | Identifiant agent dans le club (🍓) | Filtre des notifs impossible (phase 2) |
+
+**Phases suivantes** :
+
+| Variable | Rôle | Phase |
+|---|---|---|
+| `DZPK_AGENT_NAME` | Identifiant agent dans le club (`🍓`) | 2 |
+| `DZPK_CLUB_LABEL` | Libellé du club (`德州扑克 ♠️❤️ @dzpk`) | 2 |
+| `DZPK_CLUB_BOT` | @username du bot du club qui envoie les notifs en DM | 2 |
+| `DZPK_ADMIN_CHAT_ID` | Supergroupe « Support DZPK » (Sujets activés) | 3 |
+
+`TELEGRAM_API_ID` / `TELEGRAM_API_HASH` / `TELEGRAM_SESSION` existent déjà (userbot
+GramJS) et sont réutilisées telles quelles en phase 2 — rien à créer.
+
+> **Emoji.** `🍓` et `♠️❤️` se comparent sur une forme normalisée (sélecteurs de
+> variante U+FE0F retirés). Un même emoji arrive avec ou sans VS selon le client
+> émetteur : une comparaison brute échouerait un jour sur deux, en silence, et
+> ferait tomber tout le filtre agent. Coller la valeur telle quelle suffit.
 
 Aucune de ces variables ne se replie sur une variable NEXA. Un repli ferait
 atterrir des leads dzpk dans le chat NEXA, ce qui est pire que l'absence de
@@ -143,8 +160,51 @@ contrefactuel : le bug est remis, et le test doit tomber.
 
 ## 7. Prévu, pas encore livré
 
-- **Phase 2** — ingestion des notifs du club via le userbot GramJS (pull par
-  curseur sur un seul peer), parsing des 4 gabarits, appariement prudent par
-  nom, écran de réconciliation.
+- **Phase 2** — ingestion des notifs du club, parsing, appariement, réconciliation.
 - **Phase 3** — relais humain vers « Support DZPK » (un sujet par lead).
 - **Phase 4** — relance J+1 unique, broadcasts segmentés throttlés.
+
+### Décisions de phase 2 déjà arbitrées par Baki
+
+Consignées ici parce qu'elles ne se déduisent d'aucun code et qu'elles ont coûté
+plusieurs allers-retours.
+
+**Le revenu se scelle au premier JEU, pas au join.** Le club poste quatre
+notifications en DM au compte de Baki. Seul le gabarit 2 (`已绑定为代理`) crée du
+revenu ; le gabarit 1 (`已进群`) n'est qu'une étape intermédiaire.
+
+**Ingestion en PULL, jamais en listener.** Le userbot GramJS interroge
+l'historique d'un **seul peer** (`DZPK_CLUB_BOT`) depuis un curseur. Deux
+conséquences voulues : aucune autre conversation privée n'est jamais lue, et une
+coupure réseau ou un redémarrage Railway ne perd rien — le curseur n'a pas
+avancé, le tick suivant rattrape.
+
+**Le gabarit 1 ne porte AUCUN nom d'agent**, contrairement aux trois autres. Un
+join ne peut donc pas être prouvé « à nous » par son texte, seulement présumé du
+fait qu'il arrive dans le DM. Le risque est borné par construction : seul le
+gabarit 2 attribue du revenu, et lui porte le filtre agent.
+
+**Le nom est extrait en ancrant sur le libellé du club**, pas sur le mot qui
+suit. Le caractère `从` du gabarit 2 peut appartenir à un nom de joueur
+(`从容`) : un découpage naïf couperait le nom en deux, silencieusement.
+
+**Démarrage en 100 % réconciliation manuelle.** L'ingestion et le parsing
+tournent, mais aucun rattachement automatique n'est appliqué. Le système affiche
+le taux d'auto-match qu'il **aurait** obtenu ; l'activation se décide sur ce
+chiffre, pas sur une intuition. Sur du revenu, quelques jours de pointage manuel
+coûtent moins cher qu'un auto qui se trompe.
+
+**Aucun auto-rattachement sur le prénom seul**, même unique. L'unicité d'un
+`mark` ou d'un `Rom` est un accident du volume actuel : le prochain homonyme
+rendrait le rattachement d'hier faux rétroactivement.
+
+**`normalizeForMatch` (`lib/normalize.ts`) est INUTILISABLE ici.** Sa classe
+`[^\w\s]` réduit tout nom chinois à la chaîne vide (`"张伟" → ""`), ce qui
+ferait matcher tous les leads chinois entre eux. Un normaliseur dédié conserve
+le CJK.
+
+**`dzpk_commissions` est isolée de la comptabilité.** Elle n'alimente ni
+`wallet_transactions`, ni les P&L, ni les settlements. Rapprocher ces montants
+des USDT réellement reçus est une tâche séparée, à décider explicitement.
+L'écart demandé/payé n'est jamais stocké : il se calcule à la lecture, et les
+chaînes brutes (`requested_raw`, `paid_raw`) restent la source de vérité.
