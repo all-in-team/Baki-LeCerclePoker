@@ -1,6 +1,10 @@
 import Database from "better-sqlite3";
 import path from "path";
 import fs from "fs";
+// DDL du funnel dzpk. Vit dans son propre module pour que la migration et les
+// tests exécutent LA MÊME chaîne SQL — un test qui recopie le schéma valide sa
+// copie, pas la base. Ce module n'importe rien, aucun cycle possible.
+import { DZPK_SCHEMA_SQL, DZPK_MIGRATION_V1 } from "./funnels/dzpk/schema";
 
 const DATA_DIR = path.join(process.cwd(), "data");
 const DB_PATH = path.join(DATA_DIR, "lecercle.db");
@@ -3335,5 +3339,47 @@ function initSchema(db: Database.Database) {
     }
   } catch (err: any) {
     console.error(`[MIGRATION:richads_ip_source_v1] FAILED (sera rejouée au prochain boot):`, err.message);
+  }
+
+  // ── Funnel d'acquisition dzpk (phase 1) ────────────────────────────────────
+  //
+  // Bot Telegram DÉDIÉ, séparé du bot principal et du funnel NEXA : token
+  // distinct, webhook distinct, tables distinctes. Aucune de ces tables n'est
+  // lue ni écrite par le code NEXA, et réciproquement.
+  //
+  // Choix de conception qui méritent d'être écrits, parce qu'ils ne se
+  // déduisent pas du schéma :
+  //
+  //   • `source` est FIRST-TOUCH et ne change jamais (arbitrage Baki). Un
+  //     re-/start avec une autre source loggue un événement mais ne réécrit
+  //     pas la colonne : l'attribution appartient à la pub qui a payé le
+  //     premier contact.
+  //
+  //   • Pas de colonne `state`. Les états ne sont pas ordonnés — un lead peut
+  //     répondre sans avoir rejoint le club, et rejoindre sans jamais écrire.
+  //     Une colonne unique forcerait un ordre faux et casserait tout taux de
+  //     conversion calculé dessus. On stocke des HORODATAGES DE FAITS, et
+  //     l'état affiché se dérive à la lecture.
+  //
+  //   • `dzpk_lead_events` est un journal append-only. Il porte notamment
+  //     l'identité OBSERVÉE à chaque contact (pseudo, prénom, nom) : un lead
+  //     qui renomme son compte Telegram entre son /start et sa première partie
+  //     est le cas d'échec le plus fréquent de l'appariement par nom en phase 2.
+  //     Sans cet historique, son ancien nom serait définitivement perdu.
+  //
+  //   • `dzpk_updates` duplique volontairement `telegram_updates` : deux bots
+  //     ont des séquences d'`update_id` INDÉPENDANTES. Partager la table ferait
+  //     passer un update dzpk pour un doublon parce que le bot principal a déjà
+  //     vu ce numéro — un /start perdu, sans aucune trace.
+  try {
+    const already = db.prepare(`SELECT 1 FROM _applied_fixes WHERE name = ?`)
+      .get(DZPK_MIGRATION_V1);
+    if (!already) {
+      db.exec(DZPK_SCHEMA_SQL);
+      db.prepare(`INSERT OR IGNORE INTO _applied_fixes (name) VALUES (?)`).run(DZPK_MIGRATION_V1);
+      console.log(`[MIGRATION] ${DZPK_MIGRATION_V1} applied`);
+    }
+  } catch (err: any) {
+    console.error(`[MIGRATION:${DZPK_MIGRATION_V1}] FAILED (sera rejouée au prochain boot):`, err.message);
   }
 }
