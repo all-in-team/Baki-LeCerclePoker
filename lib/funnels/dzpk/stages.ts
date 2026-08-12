@@ -56,7 +56,12 @@ export const DZPK_CARDS: FunnelCardSpec<LeadForCards>[] = [
 // d'une décision ? Un rattachement faux déplace du revenu d'une source vers une
 // autre sans que rien ne le signale — d'où une colonne dédiée, pas une nuance
 // cachée dans une infobulle.
-export type DzpkMatchStatus = "pending" | "manual" | "auto" | "none";
+// `observed` = rattachement jugé certain mais PAS appliqué, parce que le
+// drapeau DZPK_AUTO_MATCH est baissé. Sans ce statut, ces leads tombaient sur
+// `none`, dont l'infobulle affirme « aucune notification ne concerne ce lead » —
+// l'inverse exact de la vérité, sur l'écran qui sert à ventiler par source.
+// (audit money du 2026-08-12, F1)
+export type DzpkMatchStatus = "pending" | "observed" | "manual" | "auto" | "none";
 
 export const MATCH_LABELS: Record<DzpkMatchStatus, { label: string; color: string; title: string }> = {
   pending: {
@@ -73,6 +78,11 @@ export const MATCH_LABELS: Record<DzpkMatchStatus, { label: string; color: strin
     label: "🟢 auto-certain",
     color: "#34D399",
     title: "Nom du club identique au display_name capturé au /start, sans homonyme et antérieur à la notification",
+  },
+  observed: {
+    label: "🔍 certain, non appliqué",
+    color: "#F5C518",
+    title: "Rattachement jugé certain, en attente de validation — DZPK_AUTO_MATCH est sur OFF, rien n'est crédité",
   },
   none: {
     label: "—",

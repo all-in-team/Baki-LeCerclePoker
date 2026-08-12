@@ -42,6 +42,8 @@ export interface DzpkDashboardLead {
   /** Notifications du club rattachées à ce lead, par mode de résolution. */
   match_auto: number;
   match_manual: number;
+  /** Rattachements jugés certains mais NON appliqués (drapeau d'observation baissé). */
+  match_observed: number;
   /** Notifications en attente de décision qui citent ce lead parmi leurs candidats. */
   match_pending: number;
 }
@@ -93,10 +95,17 @@ type LeadSqlRow = Omit<DzpkDashboardLead, "state" | "source_label" | "match" | "
  * « auto-certain » masquerait le travail restant, ce qui est exactement ce que
  * la colonne doit empêcher.
  */
-function matchStatus(row: { match_auto: number; match_manual: number }, pending: number): DzpkMatchStatus {
+function matchStatus(
+  row: { match_auto: number; match_manual: number; match_observed: number },
+  pending: number,
+): DzpkMatchStatus {
   if (pending > 0) return "pending";
   if (row.match_manual > 0) return "manual";
   if (row.match_auto > 0) return "auto";
+  // Avant `applied = 1`, mais après les deux états tranchés : un rattachement en
+  // attente de validation n'est pas un fait acquis, et ce n'est surtout pas
+  // « aucune notification ». (audit money du 2026-08-12, F1)
+  if (row.match_observed > 0) return "observed";
   return "none";
 }
 
@@ -118,7 +127,11 @@ export function getDzpkDashboard(dbOverride?: DbLike): DzpkDashboardData {
             (SELECT COUNT(*) FROM dzpk_club_matches x
               WHERE x.lead_id = l.id AND x.status = 'auto'   AND x.applied = 1) AS match_auto,
             (SELECT COUNT(*) FROM dzpk_club_matches x
-              WHERE x.lead_id = l.id AND x.status = 'manual' AND x.applied = 1) AS match_manual
+              WHERE x.lead_id = l.id AND x.status = 'manual' AND x.applied = 1) AS match_manual,
+            -- Certains mais NON appliqués : le drapeau d'observation est baissé.
+            -- Comptés à part pour ne pas se confondre avec un lead sans notification.
+            (SELECT COUNT(*) FROM dzpk_club_matches x
+              WHERE x.lead_id = l.id AND x.status = 'auto'   AND x.applied = 0) AS match_observed
        FROM dzpk_leads l
       ORDER BY l.started_at DESC, l.id DESC`
   ).all() as LeadSqlRow[];

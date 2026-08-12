@@ -18,7 +18,7 @@
 import Database from "better-sqlite3";
 import {
   resolveMatch, runMatching, resolveManually, flagContestedLinks,
-  listPendingReconciliation, checkMatchCoherence, DATE_TIEBREAK_MARGIN_HOURS,
+  listPendingReconciliation, checkMatchCoherence, CERTAIN_WINDOW_DAYS,
 } from "../lib/funnels/dzpk/matcher";
 import { persistClubMessages } from "../lib/funnels/dzpk/ingest";
 import {
@@ -118,40 +118,61 @@ console.log("\nrenommage entre /start et join ⇒ réconciliation, jamais de dev
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-console.log("\nhomonymes — causalité d'abord : un /start postérieur est irrecevable");
+// ── IDENTITÉ FORTE (arbitrage Baki du 2026-08-12) ────────────────────────────
+// Un match n'est CERTAIN que si les TROIS conditions tiennent : nom exact,
+// candidat unique, /start antérieur ET récent. Le départage d'homonymes par
+// écart de date a été RETIRÉ — il produisait un rattachement indiscernable d'un
+// match exact, sur la foi d'une heuristique.
+console.log("\nhomonymes — JAMAIS d'auto, même quand la date semble trancher");
 {
   const db = freshDb();
-  const avant = seedLead(db, 1, "mark", "tgads", "2026-08-01 09:00:00");
-  seedLead(db, 2, "mark", "richads", "2026-08-20 09:00:00"); // après la notif
+  seedLead(db, 1, "mark", "tgads", "2026-08-01 09:00:00");
+  seedLead(db, 2, "mark", "richads", "2026-08-20 09:00:00"); // postérieur à la notif
   const r = resolveMatch("mark", "2026-08-10 12:00:00", db);
-  eq("statut", r.status, "auto");
-  eq("méthode datée", r.method, "display_name_dated");
-  eq("le lead ANTÉRIEUR est retenu", r.leadId, avant);
-  eq("les deux candidats restent affichés", r.candidates.length, 2);
-  db.close();
-}
-
-console.log("\nhomonymes — départage par la date seulement si l'écart est net");
-{
-  const db = freshDb();
-  const proche = seedLead(db, 1, "Rom", "tgads", "2026-08-10 10:00:00");
-  seedLead(db, 2, "Rom", "richads", "2026-08-01 10:00:00"); // 9 jours plus tôt
-  const r = resolveMatch("Rom", "2026-08-10 12:00:00", db);
-  eq("écart largement supérieur à la marge", r.status, "auto");
-  eq("le plus proche l'emporte", r.leadId, proche);
+  eq("statut", r.status, "ambiguous");
+  eq("aucun lead choisi", r.leadId, null);
+  eq("les deux candidats sont affiches", r.candidates.length, 2);
   db.close();
 }
 {
   const db = freshDb();
   seedLead(db, 1, "Rom", "tgads", "2026-08-10 10:00:00");
-  seedLead(db, 2, "Rom", "richads", "2026-08-10 09:00:00"); // 1 h d'écart
+  seedLead(db, 2, "Rom", "richads", "2026-08-01 10:00:00"); // 9 jours d'ecart
   const r = resolveMatch("Rom", "2026-08-10 12:00:00", db);
-  eq("1 h d'écart : la date ne tranche RIEN", r.status, "ambiguous");
+  eq("9 jours d'ecart ne suffisent plus", r.status, "ambiguous");
   eq("aucun lead choisi", r.leadId, null);
-  eq("les deux sont proposés à l'humain", r.candidates.length, 2);
+  eq("motif explicite", r.note.includes("2 leads portent ce nom"), true);
   db.close();
 }
-eq("marge documentée", DATE_TIEBREAK_MARGIN_HOURS, 24);
+{
+  const db = freshDb();
+  seedLead(db, 1, "Rom", "tgads", "2026-08-10 10:00:00");
+  seedLead(db, 2, "Rom", "richads", "2026-08-10 09:00:00"); // 1 h d'ecart
+  const r = resolveMatch("Rom", "2026-08-10 12:00:00", db);
+  eq("1 h d'ecart : humain", r.status, "ambiguous");
+  eq("aucun lead choisi", r.leadId, null);
+  db.close();
+}
+
+console.log("\nfenetre de certitude — un /start trop ancien n'est plus une identite");
+{
+  const db = freshDb();
+  seedLead(db, 1, "Vieux", "tgads", "2026-01-01 09:00:00"); // ~7 mois
+  const r = resolveMatch("Vieux", "2026-08-10 12:00:00", db);
+  eq("nom unique mais /start trop ancien", r.status, "ambiguous");
+  eq("aucun credit automatique", r.leadId, null);
+  eq("motif chiffre", r.note.includes("vieux de"), true);
+  db.close();
+
+  const db2 = freshDb();
+  const id2 = seedLead(db2, 1, "Recent", "tgads", "2026-08-01 09:00:00"); // 9 jours
+  const r2 = resolveMatch("Recent", "2026-08-10 12:00:00", db2);
+  eq("dans la fenetre => auto", r2.status, "auto");
+  eq("methode", r2.method, "display_name");
+  eq("bon lead", r2.leadId, id2);
+  db2.close();
+}
+eq("fenetre documentee", CERTAIN_WINDOW_DAYS, 30);
 
 console.log("\nhomonymes — tous postérieurs ⇒ humain");
 {
@@ -172,7 +193,7 @@ console.log("\nrunMatching — application des effets sur le lead");
     { id: 2, date: "2026-08-11 12:00:00", text: bound("FUN SEONG") },
   ], CFG, db);
 
-  const r = runMatching({}, db);
+  const r = runMatching({ apply: true }, db);
   eq("2 messages examinés", r.examined, 2);
   eq("2 auto", r.auto, 2);
   eq("2 appliqués", r.applied, 2);
@@ -191,15 +212,15 @@ console.log("\nrunMatching — idempotent, et les dates ne reculent jamais");
   const db = freshDb();
   const id = seedLead(db, 1, "FUN SEONG", "tgads", "2026-08-10 09:00:00");
   persistClubMessages(PEER, [{ id: 1, date: "2026-08-11 12:00:00", text: bound("FUN SEONG") }], CFG, db);
-  runMatching({}, db);
+  runMatching({ apply: true }, db);
   const apres1 = db.prepare(`SELECT bound_at FROM dzpk_leads WHERE id = ?`).get(id).bound_at;
 
-  const r2 = runMatching({}, db);
+  const r2 = runMatching({ apply: true }, db);
   eq("rien de neuf au 2e passage", r2.examined, 0);
 
   // Une seconde notification du même type, plus tardive, ne repousse pas la date.
   persistClubMessages(PEER, [{ id: 2, date: "2026-08-15 12:00:00", text: bound("FUN SEONG") }], CFG, db);
-  runMatching({}, db);
+  runMatching({ apply: true }, db);
   eq("bound_at inchangé (première date observée)",
     db.prepare(`SELECT bound_at FROM dzpk_leads WHERE id = ?`).get(id).bound_at, apres1);
   db.close();
@@ -232,7 +253,7 @@ console.log("\nself-learning — un lien validé à la main sert la fois suivant
   const db = freshDb();
   const id = seedLead(db, 1, "Ancien Nom", "tgads", "2026-08-10 09:00:00");
   persistClubMessages(PEER, [{ id: 1, date: "2026-08-11 12:00:00", text: bound("Nouveau Nom") }], CFG, db);
-  runMatching({}, db);
+  runMatching({ apply: true }, db);
   eq("d'abord non apparié",
     db.prepare(`SELECT status FROM dzpk_club_matches WHERE club_message_id = 1`).get().status, "unmatched");
   eq("présent dans la file de réconciliation", listPendingReconciliation(10, db).length, 1);
@@ -244,7 +265,7 @@ console.log("\nself-learning — un lien validé à la main sert la fois suivant
 
   // LA propriété qui compte : la prochaine notification du même nom se rattache seule.
   persistClubMessages(PEER, [{ id: 2, date: "2026-08-12 12:00:00", text: join("Nouveau Nom") }], CFG, db);
-  const r2 = runMatching({}, db);
+  const r2 = runMatching({ apply: true }, db);
   eq("auto grâce au lien mémorisé", r2.auto, 1);
   eq("méthode = lien",
     db.prepare(`SELECT method FROM dzpk_club_matches WHERE club_message_id = 2`).get().method, "link");
@@ -258,7 +279,7 @@ console.log("\nlien devenu ambigu — signalé, pas conservé en silence");
   const db = freshDb();
   const a = seedLead(db, 1, "mark", "tgads", "2026-08-01 09:00:00");
   persistClubMessages(PEER, [{ id: 1, date: "2026-08-05 12:00:00", text: bound("mark") }], CFG, db);
-  runMatching({}, db);
+  runMatching({ apply: true }, db);
   eq("lien auto créé", db.prepare(`SELECT lead_id FROM dzpk_name_links WHERE name_key='mark'`).get().lead_id, a);
 
   // Un second lead homonyme arrive.
@@ -275,7 +296,7 @@ console.log("\nétanchéité — un message d'un AUTRE agent n'est jamais appari
   const id = seedLead(db, 1, "FUN SEONG", "tgads", "2026-08-10 09:00:00");
   const autre = bound("FUN SEONG").replace("已绑定为代理 🍓 的推广", "已绑定为代理 🍔 的推广");
   persistClubMessages(PEER, [{ id: 1, date: "2026-08-11 12:00:00", text: autre }], CFG, db);
-  const r = runMatching({}, db);
+  const r = runMatching({ apply: true }, db);
   eq("aucun message examiné", r.examined, 0);
   eq("bound_at reste nul", db.prepare(`SELECT bound_at FROM dzpk_leads WHERE id = ?`).get(id).bound_at, null);
   db.close();
@@ -295,15 +316,15 @@ console.log("\nMA1 — un lead sans display_name_key ne doit pas fabriquer un fa
 
   const avant = resolveMatch("Marc", "2026-08-25 12:00:00", db);
   eq("AVEC la clé manquante : un seul candidat, crédit sur richads", avant.leadId, recent);
-  eq("et annoncé comme « nom unique »", avant.note, "nom unique");
+  eq("et annoncé comme « nom unique »", avant.note.startsWith("nom unique"), true);
 
   // La migration backfille désormais la clé en TS : on reproduit son effet.
   db.prepare(`UPDATE dzpk_leads SET display_name_key = ? WHERE telegram_id = 1`).run(nameKey("Marc"));
   const apres = resolveMatch("Marc", "2026-08-25 12:00:00", db);
   eq("APRÈS backfill : deux candidats", apres.candidates.length, 2);
-  eq("l'écart de date les départage (7 mois)", apres.status, "auto");
-  eq("mais plus par ignorance d'un homonyme", apres.method, "display_name_dated");
-  eq("aucun lien permanent n'est appris d'un départage", apres.method === "display_name", false);
+  eq("plus aucun auto — l'homonyme est vu", apres.status, "ambiguous");
+  eq("aucun lead crédité", apres.leadId, null);
+  eq("motif explicite", apres.note.includes("2 leads portent ce nom"), true);
   db.close();
 }
 
@@ -316,7 +337,7 @@ console.log("\nMA2 — un départage par date ne devient JAMAIS un lien permanen
     { id: 1, date: "2026-08-10 12:00:00", text: bound("mark") },
     { id: 2, date: "2026-08-10 18:00:00", text: bound("mark") },
   ], CFG, db);
-  runMatching({}, db);
+  runMatching({ apply: true }, db);
 
   eq("AUCUN lien appris depuis un départage",
     db.prepare(`SELECT COUNT(*) AS n FROM dzpk_name_links`).get().n, 0);
@@ -331,7 +352,7 @@ console.log("\nMA2b — un lien auto cesse de servir dès qu'un homonyme appara�
   const db = freshDb();
   const a = seedLead(db, 1, "solo", "tgads", "2026-08-01 09:00:00");
   persistClubMessages(PEER, [{ id: 1, date: "2026-08-05 12:00:00", text: bound("solo") }], CFG, db);
-  runMatching({}, db);
+  runMatching({ apply: true }, db);
   eq("lien auto créé sur nom réellement unique",
     db.prepare(`SELECT lead_id FROM dzpk_name_links WHERE name_key='solo'`).get().lead_id, a);
 
@@ -339,7 +360,7 @@ console.log("\nMA2b — un lien auto cesse de servir dès qu'un homonyme appara�
   // Sans appeler flagContestedLinks : la lecture doit suffire.
   const r = resolveMatch("solo", "2026-08-10 12:00:00", db);
   eq("le lien n'est plus utilisable", r.status, "ambiguous");
-  eq("motif explicite", r.note.includes("homonyme"), true);
+  eq("motif explicite", r.note.includes("autre(s) lead(s) portent ce nom"), true);
   db.close();
 }
 
@@ -378,7 +399,7 @@ console.log("\nMA3 — la causalité s'applique AUSSI au candidat unique");
 
   // Et l'effet ne se pose pas non plus via runMatching.
   persistClubMessages(PEER, [{ id: 1, date: "2026-08-01 12:00:00", text: bound("Marc") }], CFG, db);
-  runMatching({}, db);
+  runMatching({ apply: true }, db);
   eq("bound_at reste nul",
     db.prepare(`SELECT bound_at FROM dzpk_leads WHERE telegram_id = 1`).get().bound_at, null);
   db.close();
@@ -387,13 +408,15 @@ console.log("\nMA3 — la causalité s'applique AUSSI au candidat unique");
 console.log("\nMA4 — corriger à la main RETIRE le crédit du mauvais lead");
 {
   const db = freshDb();
-  const bon = seedLead(db, 1, "Twin", "tgads", "2026-08-01 09:00:00");
+  // Le lead qui porte le nom — donc celui que l'auto va créditer.
   const faux = seedLead(db, 2, "Twin", "richads", "2026-08-08 09:00:00");
+  // Le vrai joueur, qui s'est renommé depuis son /start : invisible à l'auto.
+  const bon = seedLead(db, 1, "Ancien Pseudo", "tgads", "2026-08-01 09:00:00");
   persistClubMessages(PEER, [{ id: 1, date: "2026-08-10 12:00:00", text: bound("Twin") }], CFG, db);
-  runMatching({}, db);
+  runMatching({ apply: true }, db);
 
   const auto = db.prepare(`SELECT lead_id FROM dzpk_club_matches WHERE club_message_id = 1`).get();
-  eq("auto a crédité le plus proche", auto.lead_id, faux);
+  eq("auto a crédité le porteur du nom", auto.lead_id, faux);
   eq("crédité", db.prepare(`SELECT bound_at FROM dzpk_leads WHERE id = ?`).get(faux).bound_at, "2026-08-10 12:00:00");
 
   resolveManually(1, bon, "baki", db);
@@ -412,11 +435,11 @@ console.log("\nMA4b — la date retenue est la PLUS ANCIENNE, pas la première �
   const id = seedLead(db, 1, "Chrono", "tgads", "2026-08-01 09:00:00");
   // Le message le plus RÉCENT est ingéré en premier (rejeu d'historique).
   persistClubMessages(PEER, [{ id: 2, date: "2026-08-20 12:00:00", text: bound("Chrono") }], CFG, db);
-  runMatching({}, db);
+  runMatching({ apply: true }, db);
   eq("première date posée", db.prepare(`SELECT bound_at FROM dzpk_leads WHERE id = ?`).get(id).bound_at, "2026-08-20 12:00:00");
 
   persistClubMessages(PEER, [{ id: 1, date: "2026-08-05 12:00:00", text: bound("Chrono") }], CFG, db);
-  runMatching({}, db);
+  runMatching({ apply: true }, db);
   eq("recalculée sur la plus ancienne",
     db.prepare(`SELECT bound_at FROM dzpk_leads WHERE id = ?`).get(id).bound_at, "2026-08-05 12:00:00");
   db.close();
@@ -431,11 +454,11 @@ console.log("\nreprise — les non-appariés sont réévalués après apprentiss
     { id: 2, date: "2026-08-11 12:00:00", text: join("Nouveau Nom") },
     { id: 3, date: "2026-08-12 12:00:00", text: join("Nouveau Nom") },
   ], CFG, db);
-  runMatching({}, db);
+  runMatching({ apply: true }, db);
   eq("les 3 en attente", listPendingReconciliation(10, db).length, 3);
 
   resolveManually(1, id, "baki", db);
-  const r = runMatching({}, db);
+  const r = runMatching({ apply: true }, db);
   eq("les 2 restants sont REPRIS", r.examined, 2);
   eq("et rattachés par le lien appris", r.auto, 2);
   eq("file vidée", listPendingReconciliation(10, db).length, 0);
@@ -453,12 +476,12 @@ console.log("\nR2 — un lien manuel n'absorbe PAS les notifications d'un homony
     { id: 1, date: "2026-08-10 12:00:00", text: bound("mark") },
     { id: 2, date: "2026-08-10 18:00:00", text: bound("mark") },
   ], CFG, db);
-  runMatching({}, db);
+  runMatching({ apply: true }, db);
   eq("les deux sont ambigus (2 h d'écart < marge)", listPendingReconciliation(10, db).length, 2);
 
   // Baki tranche UN message, pas le nom.
   resolveManually(1, a, "baki", db);
-  runMatching({}, db);
+  runMatching({ apply: true }, db);
 
   const m2 = db.prepare(`SELECT status, lead_id FROM dzpk_club_matches WHERE club_message_id = 2`).get();
   eq("le 2e message N'EST PAS absorbé", m2.status, "ambiguous");
@@ -469,7 +492,10 @@ console.log("\nR2 — un lien manuel n'absorbe PAS les notifications d'un homony
 
   // Le motif doit dire POURQUOI, sinon Baki cherche au mauvais endroit.
   const r = resolveMatch("mark", "2026-08-10 18:00:00", db);
-  eq("motif explicite sur le lien manuel", r.note.includes("un humain a tranché UN message"), true);
+  // Le motif nomme le lead visé ET compte les autres porteurs : c'est cette
+  // dernière information qui dit à Baki pourquoi son arbitrage précédent ne
+  // vaut pas pour cette notification-ci.
+  eq("motif explicite sur le lien manuel", r.note.includes("autre(s) lead(s) portent ce nom"), true);
 
   // Et le recours reste ouvert : trancher le 2e vers l'autre lead fonctionne.
   resolveManually(2, b, "baki", db);
@@ -483,11 +509,11 @@ console.log("\nR2b — sur un nom réellement unique, le lien manuel reste souve
   const db = freshDb();
   const id = seedLead(db, 1, "Renommé", "tgads", "2026-08-01 09:00:00");
   persistClubMessages(PEER, [{ id: 1, date: "2026-08-10 12:00:00", text: bound("Autre Nom") }], CFG, db);
-  runMatching({}, db);
+  runMatching({ apply: true }, db);
   resolveManually(1, id, "baki", db);
 
   persistClubMessages(PEER, [{ id: 2, date: "2026-08-11 12:00:00", text: join("Autre Nom") }], CFG, db);
-  const r = runMatching({}, db);
+  const r = runMatching({ apply: true }, db);
   eq("le renommage reste couvert par le self-learning", r.auto, 1);
   eq("via le lien", db.prepare(`SELECT method FROM dzpk_club_matches WHERE club_message_id = 2`).get().method, "link");
   db.close();
@@ -510,16 +536,18 @@ console.log("\nR3 — un message sans date ne produit jamais un match sans créd
   db.close();
 }
 
-console.log("\ncohérence — une collision d'homonymes devient visible");
+console.log("\ncohérence — deux notifications sur un même lead deviennent visibles");
 {
   const db = freshDb();
-  seedLead(db, 1, "Twin", "tgads", "2026-08-01 09:00:00");
-  seedLead(db, 2, "Twin", "richads", "2026-06-01 09:00:00"); // 2 mois : la date départage
+  seedLead(db, 1, "Solo", "tgads", "2026-08-01 09:00:00");
+  // Deux notifications « rattaché » pour le même joueur. `bound_at` étant une
+  // colonne unique, la seconde est absorbée sans laisser de trace : le funnel
+  // afficherait un rattachement de moins qu'il n'y a eu de notifications.
   persistClubMessages(PEER, [
-    { id: 1, date: "2026-08-10 12:00:00", text: bound("Twin") },
-    { id: 2, date: "2026-08-11 12:00:00", text: bound("Twin") },
+    { id: 1, date: "2026-08-10 12:00:00", text: bound("Solo") },
+    { id: 2, date: "2026-08-11 12:00:00", text: bound("Solo") },
   ], CFG, db);
-  runMatching({}, db);
+  runMatching({ apply: true }, db);
 
   const c = checkMatchCoherence(db).find(x => x.kind === "bound")!;
   eq("2 notifications appliquées", c.applied_matches, 2);

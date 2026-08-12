@@ -91,9 +91,10 @@ export async function GET(req: NextRequest) {
  *   {"action":"resolve","club_message_id":N,
  *    "lead_id":M,"operator":"baki"}            rattachement manuel + mémorisation
  *
- * `match` n'est PAS enchaîné automatiquement après `ingest` : tant que le taux
- * d'auto-appariement n'est pas mesuré sur des données réelles, l'application des
- * effets reste un geste délibéré. Le GET expose ce taux via `matching_dry_run`.
+ * Le cron enchaîne `ingest` puis `match` tout seul — sans quoi la file de
+ * réconciliation resterait vide. Ce qui est sous drapeau, c'est l'APPLICATION
+ * des effets : tant que `DZPK_AUTO_MATCH` n'est pas levé, les matchs certains
+ * sont enregistrés et affichés, mais ne créditent personne.
  */
 export async function POST(req: NextRequest) {
   const denied = guard(req);

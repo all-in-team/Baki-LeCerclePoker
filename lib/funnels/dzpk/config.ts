@@ -105,6 +105,24 @@ export function ingestBatch(): number {
 export const INGEST_STALE_HOURS = 6;
 
 /**
+ * L'auto-rattachement applique-t-il ses effets ?
+ *
+ * DÉFAUT : NON. Le cron ingère, résout, et AFFICHE les matchs qu'il juge
+ * certains — sans créditer personne. Baki regarde un lot sur ses vraies données,
+ * puis pose `DZPK_AUTO_MATCH=on` pour lever le drapeau.
+ *
+ * Le défaut est « observer » et non « appliquer » parce que l'erreur qu'on
+ * cherche à éviter est silencieuse : un crédit sur le mauvais lead ne change pas
+ * le revenu total, il déplace l'attribution d'une source de pub vers une autre,
+ * et rien dans les totaux ne cloche ensuite. Une variable oubliée doit donc
+ * laisser le système en observation, jamais en application.
+ */
+export function dzpkAutoMatchEnabled(): boolean {
+  const v = (process.env.DZPK_AUTO_MATCH ?? "").trim().toLowerCase();
+  return v === "on" || v === "1" || v === "true" || v === "yes";
+}
+
+/**
  * Source retenue quand le deep link n'en porte aucune.
  *
  * Volontairement une valeur RÉELLE et pas NULL : un lead sans source est un

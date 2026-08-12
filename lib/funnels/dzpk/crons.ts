@@ -6,6 +6,7 @@
 
 import cron from "node-cron";
 import { runDzpkIngest, getIngestState, isIngestStale } from "./ingest";
+import { runMatching, flagContestedLinks } from "./matcher";
 import { dzpkClubBot, dzpkAgentName, INGEST_STALE_HOURS } from "./config";
 import { isDzpkUserbotConfigured } from "./userbot";
 
@@ -26,6 +27,27 @@ export function initDzpkCrons() {
     if (!isDzpkUserbotConfigured()) return;
     try {
       await runDzpkIngest();
+
+      // ── Résolution, enchaînée sur l'ingestion ────────────────────────────
+      //
+      // Sans cet appel, RIEN ne crée de ligne dans `dzpk_club_matches` : la file
+      // de réconciliation reste vide, l'écran affiche « Rien à rattacher » et la
+      // tuile « En attente » montre 0 — pendant que les notifications
+      // s'accumulent sans crédit. L'état normal aurait été « tout va bien ».
+      // (audit money du 2026-08-12, F2)
+      //
+      // Les liens devenus ambigus sont recalculés d'abord : un lien appris quand
+      // le nom était unique ne doit pas continuer à rattacher après l'arrivée
+      // d'un homonyme.
+      flagContestedLinks();
+      const m = runMatching();
+      if (m.examined > 0) {
+        console.log(
+          `[DZPK MATCH] ${m.examined} examinés — ${m.auto} certains ` +
+          `(${m.applying ? `${m.applied} appliqués` : `${m.observed} EN OBSERVATION, non appliqués`}), ` +
+          `${m.ambiguous} ambigus, ${m.unmatched} sans correspondance`
+        );
+      }
     } catch (e: any) {
       console.error("[DZPK CRON] ingestion:", e?.message ?? e);
     }

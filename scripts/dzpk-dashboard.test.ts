@@ -101,6 +101,8 @@ console.log("\n2. Étapes dérivées + attribut banni");
   eq("source brute conservée", byId[start].source, "richads_4001300");
 }
 
+// NB : `runMatching({ apply: true })` est explicite depuis l'ajout du drapeau
+// d'observation — par défaut, le matching n'applique plus ses effets.
 console.log("\n3. Statut de matching");
 {
   const db = freshDb() as any;
@@ -111,7 +113,7 @@ console.log("\n3. Statut de matching");
   seedMessage(db, 100, "bound", "Alice", "2026-08-02 10:00:00");
   // (b) nom inconnu du funnel ⇒ unmatched, aucun candidat
   seedMessage(db, 101, "bound", "Zoe", "2026-08-02 11:00:00");
-  runMatching({}, db);
+  runMatching({ apply: true }, db);
 
   let d = getDzpkDashboard(db);
   let byId = Object.fromEntries(d.leads.map(l => [l.id, l]));
@@ -137,7 +139,7 @@ console.log("\n3. Statut de matching");
   //     ALORS QU'ELLE EST DÉJÀ RATTACHÉE. C'est tout l'objet de la priorité.
   const alice2 = seedLead(db, 12, "Alice", "richads_4001300", "2026-08-02 09:00:00");
   seedMessage(db, 102, "bound", "Alice", "2026-08-03 10:00:00");
-  runMatching({}, db);
+  runMatching({ apply: true }, db);
 
   d = getDzpkDashboard(db);
   byId = Object.fromEntries(d.leads.map(l => [l.id, l]));

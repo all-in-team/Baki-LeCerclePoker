@@ -57,6 +57,11 @@ const GROUPS: NavGroup[] = [
     // porte le revenu est le rattachement au club (已绑定为代理), constaté par les
     // notifs DM du club et apparié par nom d'affichage — pas par un report hebdo.
     { href: "/dzpk-funnel", label: "DZPK", icon: Rocket },
+    // File de rattachement manuel des notifications du club. Séparée du funnel
+    // parce que ce sont deux files distinctes : le funnel liste les LEADS, la
+    // réconciliation liste les NOTIFICATIONS sans lead. Les fondre ferait croire
+    // que tout est traité alors que la moitié attend ailleurs.
+    { href: "/dzpk-reconciliation", label: "DZPK · réconciliation", icon: Rocket },
     // Acquisition payante RichAds → groupe dzpk. Ce n'est PAS un funnel bot :
     // pas de lead, pas de /start, la destination est un lien d'invitation de
     // groupe. On ne mesure donc que le clic — la conversion vient du report
