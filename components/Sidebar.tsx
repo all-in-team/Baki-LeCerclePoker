@@ -53,6 +53,10 @@ const GROUPS: NavGroup[] = [
   { label: "FUNNEL", items: [
     { href: "/nexa-funnel", label: "NEXAPOKER", icon: Rocket },
     { href: "/qqpk-funnel", label: "QQPK", icon: Rocket },
+    // DZPK : funnel bot à part entière (bot séparé, tables séparées). L'étape qui
+    // porte le revenu est le rattachement au club (已绑定为代理), constaté par les
+    // notifs DM du club et apparié par nom d'affichage — pas par un report hebdo.
+    { href: "/dzpk-funnel", label: "DZPK", icon: Rocket },
     // Acquisition payante RichAds → groupe dzpk. Ce n'est PAS un funnel bot :
     // pas de lead, pas de /start, la destination est un lien d'invitation de
     // groupe. On ne mesure donc que le clic — la conversion vient du report

@@ -330,11 +330,47 @@ sans nouveau joueur. C'est la raison d'être de la première alarme.
 npx tsx scripts/dzpk-club-parser.test.ts   # 4 gabarits réels, montants, filtre agent
 npx tsx scripts/dzpk-ingest.test.ts        # dédup, curseur, isolation comptable
 npx tsx scripts/dzpk-matcher.test.ts       # exact, homonymes, self-learning
+npx tsx scripts/dzpk-dashboard.test.ts     # étapes, statut de matching, devises
 ```
+
+## 7 bis. Écran back-office — `/dzpk-funnel`
+
+Même gabarit que le funnel Nexa (cards de conversion, chips de filtre, table),
+composants partagés de `components/funnel/`. Tout le SQL vit dans
+`lib/funnels/dzpk/dashboard.ts` ; les étapes et les cards dans
+`lib/funnels/dzpk/stages.ts` (module pur, importable côté client — `config.ts`
+ne l'est pas, il lit `process.env`).
+
+| Compteur | Source |
+|---|---|
+| Started | un lead = un `/start` |
+| A rejoint 已进群 | `club_joined_at` |
+| **Rattaché 已绑定为代理 🍓** | `bound_at` — **le KPI, seul gabarit qui crée du revenu** |
+| Banni | `banned_at` |
+| Commissions encaissées | `dzpk_commissions.paid_amount`, **par devise** (invariant #3) |
+
+Colonne **Matching**, par lead : 🟢 auto-certain · 🔗 lié à la main ·
+🟡 à réconcilier · —. `à réconcilier` prime sur tout le reste : un lead déjà
+rattaché peut être cité dans une AUTRE notification qui, elle, attend une
+décision — afficher « auto-certain » masquerait le travail restant.
+
+Deux choix à connaître avant de lire l'écran :
+
+- **« Banni » n'est pas une étape**, c'est un badge. Un banni a bel et bien été
+  rattaché : le sortir de « Rattaché » ferait baisser le taux de conversion de
+  sa source pour un événement postérieur.
+- **Les notifications sans candidat** (nom inconnu du funnel) ne peuvent avoir
+  aucune ligne dans le tableau. Elles sont donc annoncées à part (bandeau
+  « ⚠️ N notifications ne correspondent à aucun lead »), jamais tues.
+
+L'écran est en **lecture seule** : trancher passe toujours par
+`POST /api/admin/dzpk-ingest` (action `resolve`).
 
 ## 8. Prévu, pas encore livré
 
-- **Écran back-office** de réconciliation (aujourd'hui : l'API admin ci-dessus).
+- **Bouton « rattacher » dans l'écran** — aujourd'hui la file s'affiche mais la
+  décision passe par l'API admin. Attribuer du revenu d'un clic mérite sa passe
+  de revue.
 - **Étape « pseudo club »** dans le funnel — à caler avec Baki (copy à valider).
 - **Phase 3** — relais humain vers « Support DZPK » (un sujet par lead).
 - **Phase 4** — relance J+1 unique, broadcasts segmentés throttlés.

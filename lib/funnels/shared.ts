@@ -48,16 +48,29 @@ export type FunnelCardSpec<L> = {
   label: string;
   match: (lead: L) => boolean;
   sub?: string;
+  /** Card du KPI qui porte le revenu — mise en avant visuellement. */
+  accent?: boolean;
 };
 
-export type ConversionCard = { label: string; count: number; sub: string };
+export type ConversionCard = {
+  label: string;
+  count: number;
+  sub: string;
+  /**
+   * Remplace `count` à l'affichage. Sert aux cards qui portent un MONTANT et non
+   * un effectif : un montant se formate (décimales, devise) et ne se compare pas
+   * aux autres cards. `count` reste renseigné pour ne pas perdre l'effectif.
+   */
+  value?: string;
+  accent?: boolean;
+};
 
 export function buildConversionCards<L>(leads: L[], specs: FunnelCardSpec<L>[]): ConversionCard[] {
   const total = leads.length;
   return specs.map(spec => {
     const count = leads.filter(spec.match).length;
     const sub = spec.sub ?? (total === 0 ? "—" : `${Math.round((count / total) * 100)}%`);
-    return { label: spec.label, count, sub };
+    return { label: spec.label, count, sub, accent: spec.accent };
   });
 }
 
