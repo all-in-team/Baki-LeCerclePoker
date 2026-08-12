@@ -1,10 +1,10 @@
 import { NextRequest, NextResponse, after } from "next/server";
-import { getDestUrl, logRichAdsClick, resolveClientIp } from "@/lib/richads";
+import { getDestUrl, getBotStartUrl, creToStartParam, logRichAdsClick, resolveClientIp } from "@/lib/richads";
 
 export const dynamic = "force-dynamic";
 
 /**
- * GET /go — porte d'entrée du trafic RichAds vers le groupe Telegram dzpk.
+ * GET /go — porte d'entrée du trafic publicitaire vers le BOT dzpk.
  *
  * Contrat, dans cet ordre de priorité :
  *   1. ON NE PERD JAMAIS UN CLIC. Quelle que soit l'anomalie (cre absente,
@@ -24,24 +24,53 @@ export const dynamic = "force-dynamic";
  * middleware.ts). Sans cette exclusion, chaque clic acheté partirait sur /login.
  */
 export async function GET(req: NextRequest) {
-  const dest = getDestUrl();
+  // Lu en premier : la créative détermine désormais la destination, plus
+  // seulement le contenu du log.
+  const click = readClick(req);
+  const dest = resolveDestination(click.cre);
 
   // Sans destination configurée il n'y a nulle part où envoyer le visiteur.
   // On le dit franchement plutôt que de rediriger au hasard, et on log quand
   // même : ces clics sont facturés, ils doivent rester comptés.
   if (!dest) {
-    console.error("[RICHADS] RICHADS_DEST_URL absent — clic reçu, aucune destination");
-    after(() => logRichAdsClick(readClick(req)));
+    console.error("[RICHADS] ni DZPK_BOT_URL ni RICHADS_DEST_URL — clic reçu, aucune destination");
+    after(() => logRichAdsClick(click));
     return NextResponse.json({ error: "destination not configured" }, { status: 503 });
   }
 
-  const click = readClick(req);
   after(() => logRichAdsClick(click));
 
   // 302 explicite : le lien t.me sert lui-même de repli web si l'app Telegram
   // ne prend pas la main. Surtout PAS de redirect vers tg:// — sans Telegram
   // installé, le visiteur tombe sur une erreur de scheme et le clic est perdu.
   return NextResponse.redirect(dest, 302);
+}
+
+/**
+ * Où envoyer le visiteur.
+ *
+ * Le trafic publicitaire passe désormais par le BOT et non plus directement par
+ * le lien de groupe du club. C'est ce détour qui rend l'attribution possible :
+ * le `/start` crée un lead porteur de sa source, alors qu'une entrée directe
+ * dans le groupe n'en laisse aucune trace côté back-office.
+ *
+ * Le prix est réel et assumé : une étape de plus (bot → bouton → groupe), donc
+ * une part de visiteurs perdue en route. Sans elle, on ne sait pas quelle
+ * créative convertit.
+ *
+ * Repli sur l'ancienne destination si `DZPK_BOT_URL` manque — un clic acheté ne
+ * doit jamais tomber dans le vide pour une variable oubliée.
+ */
+function resolveDestination(rawCre: string | null): string | null {
+  const bot = getBotStartUrl();
+  if (bot) {
+    const source = creToStartParam(rawCre);
+    // `creToStartParam` ne rend que [A-Za-z0-9_] : l'encodage est un no-op, il
+    // est là pour que la construction reste sûre si cette garantie évolue.
+    return `${bot}?start=${encodeURIComponent(source)}`;
+  }
+  console.warn("[RICHADS] DZPK_BOT_URL absent — repli sur RICHADS_DEST_URL, aucune source capturée");
+  return getDestUrl();
 }
 
 /** Lecture pure de la requête : aucun accès base, aucune exception possible. */

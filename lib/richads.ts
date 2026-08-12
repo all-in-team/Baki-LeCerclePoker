@@ -46,6 +46,49 @@ export const IP_BURST_WINDOW_MIN = 60;
 
 // ---------------------------------------------------------------- config
 
+/**
+ * Source attribuée quand le lien de pub ne porte aucune créative.
+ *
+ * Volontairement distincte de `unknown` : « pas de cre du tout » et « cre
+ * illisible » sont deux problèmes différents. Le second signale une macro non
+ * substituée, donc une campagne mal configurée — le fondre dans une valeur
+ * neutre effacerait le seul symptôme.
+ */
+export const DEFAULT_AD_SOURCE = "direct";
+
+/**
+ * URL du bot dzpk vers lequel router le trafic publicitaire.
+ *
+ * Absente ⇒ repli sur `RICHADS_DEST_URL`. Le contrat n°1 de /go est qu'un clic
+ * acheté n'est jamais perdu : une variable oubliée doit dégrader la destination,
+ * jamais casser la redirection.
+ */
+export function getBotStartUrl(): string | null {
+  const u = process.env.DZPK_BOT_URL?.trim();
+  return u && u !== "" ? u : null;
+}
+
+/**
+ * Transforme la créative en start param Telegram : `tgads-123` → `tgads_123`.
+ *
+ * Tout ce qui n'est pas `[A-Za-z0-9_]` devient `_`. Le tiret est en principe
+ * toléré par Telegram, mais s'en remettre à cette tolérance ferait dépendre
+ * l'attribution d'un détail d'implémentation d'un tiers : un start param rejeté
+ * ou tronqué, et le lead arrive sans source, silencieusement.
+ *
+ * Trois cas distincts, et c'est voulu :
+ *   • cre absente ou vide       → "direct"   (le lien ne portait pas de créative)
+ *   • macro non substituée      → "unknown"  (via normalizeCre — campagne à corriger)
+ *   • créative valide           → la créative, tirets convertis
+ */
+export function creToStartParam(rawCre: string | null | undefined): string {
+  const raw = (rawCre ?? "").trim();
+  if (raw === "") return DEFAULT_AD_SOURCE;
+  const safe = normalizeCre(raw).replace(/[^A-Za-z0-9_]/g, "_");
+  // Telegram plafonne le start param à 64 ; normalizeCre borne déjà à 32.
+  return safe.slice(0, 64) || DEFAULT_AD_SOURCE;
+}
+
 /** Destination du redirect. Jamais en dur : c'est un paramètre de campagne. */
 export function getDestUrl(): string | null {
   const url = process.env.RICHADS_DEST_URL?.trim();
