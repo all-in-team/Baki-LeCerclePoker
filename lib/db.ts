@@ -8,6 +8,7 @@ import {
   DZPK_SCHEMA_SQL, DZPK_MIGRATION_V1,
   DZPK_INGEST_SCHEMA_SQL, DZPK_MIGRATION_INGEST_V1,
   DZPK_MATCH_SCHEMA_SQL, DZPK_MATCH_SCHEMA_SQL_2, DZPK_MATCH_SCHEMA_SQL_3, DZPK_MIGRATION_MATCH_V1,
+  DZPK_BROADCAST_SCHEMA_SQL, DZPK_MIGRATION_BROADCAST_V1,
 } from "./funnels/dzpk/schema";
 // Module pur (aucun import) : utilisable depuis une migration sans cycle.
 import { nameKey as dzpkNameKey } from "./funnels/dzpk/name-key";
@@ -3461,5 +3462,30 @@ function initSchema(db: Database.Database) {
     }
   } catch (err: any) {
     console.error(`[MIGRATION:${DZPK_MIGRATION_MATCH_V1}] FAILED (sera rejouée au prochain boot):`, err.message);
+  }
+
+  // ── Diffusions vers les leads dzpk (phase 3a) ──────────────────────────────
+  //
+  // `dzpk_broadcast_targets` est à la fois la file d'envoi et le mécanisme de
+  // reprise : un statut par destinataire, commité au fil de l'eau. La diffusion
+  // historique (`lib/telegram-commands/broadcast.ts`) n'a rien de tel — elle
+  // boucle en mémoire, et un redéploiement en cours d'envoi perd sans trace qui
+  // a reçu quoi. Sur quelques joueurs ça ne se voit pas ; sur une liste de
+  // leads achetés à la pub, c'est un budget qu'on ne sait plus rapprocher.
+  //
+  // Aucune de ces tables ne touche aux leads eux-mêmes, à une exception près et
+  // documentée : un 403 marque `dzpk_leads.blocked` (via markBlocked), parce
+  // qu'un compte qui a bloqué le bot doit sortir de TOUS les envois futurs, pas
+  // seulement de celui-ci.
+  try {
+    const already = db.prepare(`SELECT 1 FROM _applied_fixes WHERE name = ?`)
+      .get(DZPK_MIGRATION_BROADCAST_V1);
+    if (!already) {
+      db.exec(DZPK_BROADCAST_SCHEMA_SQL);
+      db.prepare(`INSERT OR IGNORE INTO _applied_fixes (name) VALUES (?)`).run(DZPK_MIGRATION_BROADCAST_V1);
+      console.log(`[MIGRATION] ${DZPK_MIGRATION_BROADCAST_V1} applied`);
+    }
+  } catch (err: any) {
+    console.error(`[MIGRATION:${DZPK_MIGRATION_BROADCAST_V1}] FAILED (sera rejouée au prochain boot):`, err.message);
   }
 }

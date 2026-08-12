@@ -19,6 +19,22 @@ import { buildConversionCards, stageDef, fmtAmount, fmtDateTime, type Conversion
 import ConversionCards from "@/components/funnel/ConversionCards";
 import { BlockedBadge } from "@/components/funnel/Badges";
 import { FUNNEL_CARD } from "@/components/funnel/styles";
+import DzpkBroadcastPanel from "./DzpkBroadcastPanel";
+
+// Formes recopiées plutôt qu'importées de lib/funnels/dzpk/broadcast : ce
+// fichier est un composant client, il ne doit pas tirer better-sqlite3 dans le
+// bundle navigateur. Même parti pris que DzpkReconciliationClient.
+interface Counts { pending: number; sent: number; blocked: number; failed: number }
+interface BroadcastRow {
+  id: number; title: string; body: string; status: string; total: number;
+  last_error: string | null; created_at: string; started_at: string | null;
+  finished_at: string | null; counts: Counts;
+}
+interface Guard {
+  last: { id: number; title: string; sent: number; at: string } | null;
+  hoursSince: number | null;
+  sentLast24h: number; sentLast7d: number; broadcastsLast7d: number;
+}
 
 const CARD_BG = "#11141A";
 
@@ -88,14 +104,17 @@ const COLUMNS = [
   { key: "match", label: "Matching", title: "Fiabilité du rattachement aux notifications du club" },
 ];
 
-export default function DzpkFunnelClient({ leads, commissions, pending, orphans }: {
+export default function DzpkFunnelClient({ leads, commissions, pending, orphans, broadcasts, guard }: {
   leads: DzpkDashboardLead[];
   commissions: CommissionTotalRow[];
   pending: DzpkPendingMatch[];
   orphans: number;
+  broadcasts: BroadcastRow[];
+  guard: Guard;
 }) {
   const [onlyPending, setOnlyPending] = useState(false);
   const [showQueue, setShowQueue] = useState(false);
+  const [tab, setTab] = useState<"leads" | "broadcast">("leads");
 
   const pendingCount = useMemo(() => leads.filter(l => l.match === "pending").length, [leads]);
   const visibleLeads = useMemo(
@@ -105,8 +124,26 @@ export default function DzpkFunnelClient({ leads, commissions, pending, orphans 
 
   const cards = [...buildConversionCards(leads, DZPK_CARDS), commissionCard(commissions)];
 
+  if (tab === "broadcast") {
+    return (
+      <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
+        <Tabs tab={tab} setTab={setTab} leadCount={leads.length} />
+        <DzpkBroadcastPanel
+          // Le panneau ne reçoit QUE ce qu'il segmente. Lui passer la ligne
+          // complète l'exposerait au reste du modèle de lead pour rien.
+          leads={leads.map(l => ({
+            source: l.source, state: l.state, blocked: l.blocked, banned_at: l.banned_at,
+          }))}
+          initialBroadcasts={broadcasts}
+          initialGuard={guard}
+        />
+      </div>
+    );
+  }
+
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
+      <Tabs tab={tab} setTab={setTab} leadCount={leads.length} />
       <ConversionCards cards={cards} />
 
       {/* Dit une fois, en clair, ce que les commissions NE sont pas. Le schéma le
@@ -181,6 +218,24 @@ export default function DzpkFunnelClient({ leads, commissions, pending, orphans 
           </tbody>
         </table>
       </div>
+    </div>
+  );
+}
+
+function Tabs({ tab, setTab, leadCount }: {
+  tab: "leads" | "broadcast";
+  setTab: (t: "leads" | "broadcast") => void;
+  leadCount: number;
+}) {
+  return (
+    <div style={{ display: "flex", gap: 8 }}>
+      <FilterChip active={tab === "leads"} onClick={() => setTab("leads")}>
+        Leads ({leadCount})
+      </FilterChip>
+      <FilterChip active={tab === "broadcast"} onClick={() => setTab("broadcast")}
+        title="Pousser un message à tous les leads ayant fait /start — segmentable par étape et par source">
+        📣 Diffusion
+      </FilterChip>
     </div>
   );
 }

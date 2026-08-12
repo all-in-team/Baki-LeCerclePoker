@@ -85,4 +85,47 @@ export function initDzpkCrons() {
       console.error("[DZPK CRON] alarme de fraîcheur:", e?.message ?? e);
     }
   }, { timezone: "Europe/Paris" });
+
+  // ── File de diffusion — toutes les minutes ─────────────────────────────────
+  //
+  // C'est ce tick QUI EST la reprise. Une diffusion interrompue par un
+  // redéploiement laisse ses destinataires en 'pending' ; la minute suivante,
+  // le drain les retrouve et repart. Aucun état en mémoire à reconstruire,
+  // aucun bouton à recliquer.
+  //
+  // Cadence à la minute, contrairement à l'ingestion décalée en 1-59/3 : le
+  // drain n'ouvre pas de transaction longue — il écrit une ligne courte entre
+  // deux temporisations d'envoi — donc il ne peut pas retenir la base pendant
+  // qu'une ingestion attend son tour.
+  //
+  // Sans diffusion en cours, le tick est un SELECT et rien d'autre.
+  cron.schedule("* * * * *", async () => {
+    try {
+      const { runBroadcastDrain } = await import("./broadcast");
+      const res = await runBroadcastDrain();
+      if (res.broadcastId === null) return;
+
+      const parts = [`envoyés ${res.sent}`];
+      if (res.blocked) parts.push(`bloqués ${res.blocked}`);
+      if (res.failed) parts.push(`échecs ${res.failed}`);
+      if (res.deferred) parts.push(`restants ${res.deferred}`);
+      console.log(`[DZPK BROADCAST] #${res.broadcastId} — ${parts.join(" · ")}`);
+
+      if (res.pausedReason) {
+        console.error(`[DZPK BROADCAST] #${res.broadcastId} EN PAUSE — ${res.pausedReason}`);
+        const { notifyOps } = await import("@/lib/ops-notifications");
+        await notifyOps(
+          `🟠 <b>Diffusion dzpk #${res.broadcastId} en pause</b>\n\n` +
+          `${res.pausedReason}\n\n` +
+          `${res.deferred} destinataire(s) n'ont rien reçu. ` +
+          `Corriger le message puis relancer depuis /dzpk-funnel.`
+        ).catch(() => {});
+      }
+      if (res.finished) {
+        console.log(`[DZPK BROADCAST] #${res.broadcastId} terminée`);
+      }
+    } catch (e: any) {
+      console.error("[DZPK CRON] file de diffusion:", e?.message ?? e);
+    }
+  }, { timezone: "Europe/Paris" });
 }

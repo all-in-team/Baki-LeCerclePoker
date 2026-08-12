@@ -194,3 +194,61 @@ export const DZPK_INGEST_SCHEMA_SQL = `
     last_error      TEXT
   );
 `;
+
+/** Migration des diffusions vers les leads (phase 3a). */
+export const DZPK_MIGRATION_BROADCAST_V1 = "add_dzpk_broadcast_v1";
+
+export const DZPK_BROADCAST_SCHEMA_SQL = `
+  -- Une diffusion. Le CORPS est stocké ici, pas seulement un identifiant de
+  -- message Telegram à recopier : c'est ce qui rend l'envoi auditable après
+  -- coup. Un broadcast qui ne sait pas dire ce qu'il a envoyé ne prouve rien,
+  -- et sur un canal chinois que Baki ne relit pas, c'est la seule trace.
+  --
+  -- segment : JSON FIGÉ à la création, jamais réévalué. Un lead qui change
+  -- d'étape pendant la diffusion sortirait sinon d'un envoi déjà annoncé, sans
+  -- bruit, et les compteurs ne se réconcilieraient plus jamais.
+  CREATE TABLE IF NOT EXISTS dzpk_broadcasts (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    title         TEXT    NOT NULL,          -- libellé interne, jamais envoyé
+    body          TEXT    NOT NULL,          -- HTML Telegram, tel qu'envoyé
+    button_label  TEXT,
+    button_url    TEXT,
+    segment       TEXT    NOT NULL,          -- JSON {sources, stages}
+    status        TEXT    NOT NULL DEFAULT 'draft'
+                  CHECK (status IN ('draft','running','paused','done','cancelled')),
+    total         INTEGER NOT NULL DEFAULT 0,-- destinataires figés à la création
+    last_error    TEXT,                      -- motif d'une pause automatique
+    created_by    TEXT,
+    created_at    TEXT    NOT NULL DEFAULT (datetime('now')),
+    started_at    TEXT,
+    finished_at   TEXT
+  );
+  CREATE INDEX IF NOT EXISTS idx_dzpk_bc_status ON dzpk_broadcasts(status, created_at);
+
+  -- LA file d'envoi ET la reprise, dans la même table.
+  --
+  -- Le statut est commité destinataire par destinataire : un redéploiement en
+  -- pleine diffusion laisse le reste en 'pending', et le tick suivant repart
+  -- exactement là. Rien à reconstruire, aucun curseur à réparer.
+  --
+  -- UNIQUE(broadcast_id, lead_id) : le double-envoi devient impossible par
+  -- construction, même si deux drains se chevauchaient.
+  --
+  -- telegram_id est FIGÉ ici plutôt que relu sur dzpk_leads : si un lead change
+  -- de compte, l'audit doit dire à quel compte le message est réellement parti.
+  CREATE TABLE IF NOT EXISTS dzpk_broadcast_targets (
+    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+    broadcast_id        INTEGER NOT NULL REFERENCES dzpk_broadcasts(id),
+    lead_id             INTEGER NOT NULL REFERENCES dzpk_leads(id),
+    telegram_id         INTEGER NOT NULL,
+    status              TEXT    NOT NULL DEFAULT 'pending'
+                        CHECK (status IN ('pending','sent','blocked','failed')),
+    attempts            INTEGER NOT NULL DEFAULT 0,
+    error               TEXT,
+    telegram_message_id INTEGER,
+    sent_at             TEXT,
+    UNIQUE(broadcast_id, lead_id)
+  );
+  CREATE INDEX IF NOT EXISTS idx_dzpk_bt_drain ON dzpk_broadcast_targets(broadcast_id, status);
+  CREATE INDEX IF NOT EXISTS idx_dzpk_bt_lead  ON dzpk_broadcast_targets(lead_id);
+`;
