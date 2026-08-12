@@ -13,6 +13,10 @@ export interface SendResult {
   /** Le lead a bloqué le bot : définitif, à marquer sur la fiche. */
   blocked: boolean;
   error?: string;
+  /** Id Telegram du message envoyé, pour l'ancrer dans le fil de conversation. */
+  messageId?: number;
+  /** Texte réellement parti — journalisé tel quel, pas reconstruit à la lecture. */
+  text?: string;
 }
 
 /**
@@ -36,14 +40,16 @@ export async function sendWelcome(chatId: number | string): Promise<SendResult> 
     console.error("[DZPK] DZPK_CLUB_INVITE_URL absent — accueil envoyé sans bouton");
   }
 
-  const res = await tgRetrying("sendMessage", {
+  const text = keyboard ? `${WELCOME}\n\n${WELCOME_FOOTER}` : WELCOME_NO_LINK;
+
+  const res = await tgRetrying<{ message_id: number }>("sendMessage", {
     chat_id: chatId,
-    text: keyboard ? `${WELCOME}\n\n${WELCOME_FOOTER}` : WELCOME_NO_LINK,
+    text,
     parse_mode: "HTML",
     disable_web_page_preview: true,
     ...(keyboard ? { reply_markup: keyboard } : {}),
   });
 
-  if (res.ok) return { ok: true, blocked: false };
+  if (res.ok) return { ok: true, blocked: false, messageId: res.result?.message_id, text };
   return { ok: false, blocked: isBlockedError(res), error: res.description };
 }

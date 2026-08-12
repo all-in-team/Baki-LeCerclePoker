@@ -17,8 +17,22 @@ export const WELCOME = [
   "👇 点击下方按钮加入牌局群",
 ].join("\n");
 
-/** Ligne posée sous le bouton : ouvre explicitement la porte à la conversation. */
-export const WELCOME_FOOTER = "有任何问题，直接在这里回复我 💬";
+/**
+ * Ligne posée sous le bouton : ouvre explicitement la porte à la conversation.
+ *
+ * C'est LA phrase dont dépend le fil de conversation du back-office. Le parcours
+ * nominal ne donne aucune raison d'écrire — l'accueil pousse un bouton vers le
+ * club, le lead clique et s'en va. Sans invitation explicite, le bot n'est qu'un
+ * redirecteur et l'écran de conversation reste vide.
+ *
+ * Bilingue, alors que le reste de la copie ne l'est pas : les pseudos observés
+ * ne sont pas tous chinois (« Hakim AMIRUL », « Goon KK »), et une invitation
+ * qu'on ne comprend pas ne produit aucun message.
+ */
+export const WELCOME_FOOTER = [
+  "有任何问题，直接在这里回复我 💬",
+  "🎧 Any question? Just write to me here.",
+].join("\n");
 
 /** Libellé du bouton d'entrée au club. */
 export const JOIN_BUTTON = "♠️ 加入牌局群";

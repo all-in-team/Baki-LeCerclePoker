@@ -22,6 +22,7 @@ import { runMatching, resolveManually } from "../lib/funnels/dzpk/matcher";
 import {
   DZPK_SCHEMA_SQL, DZPK_INGEST_SCHEMA_SQL,
   DZPK_MATCH_SCHEMA_SQL, DZPK_MATCH_SCHEMA_SQL_2, DZPK_MATCH_SCHEMA_SQL_3,
+  DZPK_TAKEOVER_SCHEMA_SQL, DZPK_TAKEOVER_ALTER_READ, DZPK_TAKEOVER_ALTER_RELAY,
 } from "../lib/funnels/dzpk/schema";
 import { nameKey } from "../lib/funnels/dzpk/name-key";
 import type { DbLike } from "../lib/funnels/dzpk/leads";
@@ -41,6 +42,13 @@ function freshDb(): DbLike & { prepare(s: string): any } {
   db.exec(DZPK_MATCH_SCHEMA_SQL);
   db.exec(DZPK_MATCH_SCHEMA_SQL_2);
   db.exec(DZPK_MATCH_SCHEMA_SQL_3);
+  // Le tableau lit désormais les compteurs du fil de conversation : sans ces
+  // tables, getDzpkDashboard échoue. Les ajouter ici plutôt que rendre le
+  // lecteur tolérant — une table absente en prod est une migration ratée, ça
+  // doit rester bruyant.
+  db.exec(DZPK_TAKEOVER_SCHEMA_SQL);
+  db.exec(DZPK_TAKEOVER_ALTER_READ);
+  db.exec(DZPK_TAKEOVER_ALTER_RELAY);
   return db as any;
 }
 

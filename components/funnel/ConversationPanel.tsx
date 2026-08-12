@@ -68,10 +68,26 @@ const LABEL: React.CSSProperties = {
   textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 8,
 };
 
-export default function ConversationPanel({ leadId, onChanged }: {
+export default function ConversationPanel({
+  leadId,
+  onChanged,
+  // Les trois paramètres ci-dessous ont pour valeur par défaut le comportement
+  // Nexa d'origine : le funnel Nexa ne les passe pas et reste donc strictement
+  // inchangé. Ils existent pour que le funnel dzpk réutilise ce panneau au lieu
+  // d'en cloner 200 lignes qui divergeraient au premier correctif d'affichage.
+  endpoint = "/api/nexa-funnel/conversation",
+  emptyHint = "Aucun message enregistré. L'historique démarre au déploiement du live takeover.",
+  // Nexa repousse `takeover_until` à chaque envoi ; dzpk n'a pas de takeover,
+  // afficher la même phrase y serait faux.
+  sendHint = "⌘/Ctrl + Entrée pour envoyer · l'envoi repousse le takeover à +6 h",
+}: {
   leadId: number;
   /** Appelé après un envoi réussi — le tableau rafraîchit sa pastille. */
   onChanged?: () => void;
+  /** Route qui sert `GET ?lead_id=` et `POST { lead_id, text }`. */
+  endpoint?: string;
+  emptyHint?: string;
+  sendHint?: string;
 }) {
   const [messages, setMessages] = useState<ConversationMessage[] | null>(null);
   const [head, setHead] = useState<LeadHead | null>(null);
@@ -82,7 +98,7 @@ export default function ConversationPanel({ leadId, onChanged }: {
 
   const load = useCallback(async () => {
     try {
-      const res = await fetch(`/api/nexa-funnel/conversation?lead_id=${leadId}`, { cache: "no-store" });
+      const res = await fetch(`${endpoint}?lead_id=${leadId}`, { cache: "no-store" });
       const json = await res.json();
       if (!res.ok) { setError(json?.error ?? "Chargement impossible"); return; }
       setMessages(json.messages);
@@ -90,7 +106,7 @@ export default function ConversationPanel({ leadId, onChanged }: {
     } catch (e: any) {
       setError(e?.message ?? String(e));
     }
-  }, [leadId]);
+  }, [leadId, endpoint]);
 
   useEffect(() => { void load(); }, [load]);
 
@@ -104,7 +120,7 @@ export default function ConversationPanel({ leadId, onChanged }: {
     if (!text || sending) return;
     setSending(true); setError(null);
     try {
-      const res = await fetch("/api/nexa-funnel/conversation", {
+      const res = await fetch(endpoint, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ lead_id: leadId, text }),
@@ -146,7 +162,7 @@ export default function ConversationPanel({ leadId, onChanged }: {
         {messages === null && <div style={{ color: "#555568", fontSize: 11.5 }}>Chargement…</div>}
         {messages?.length === 0 && (
           <div style={{ color: "#555568", fontSize: 11.5 }}>
-            Aucun message enregistré. L&apos;historique démarre au déploiement du live takeover.
+            {emptyHint}
           </div>
         )}
         {messages?.map(m => {
@@ -194,7 +210,7 @@ export default function ConversationPanel({ leadId, onChanged }: {
         </button>
       </div>
       <div style={{ fontSize: 10.5, color: "#3A3A48", marginTop: 4, flex: "none" }}>
-        ⌘/Ctrl + Entrée pour envoyer · l&apos;envoi repousse le takeover à +6 h
+        {sendHint}
       </div>
       {error && <div style={{ fontSize: 11.5, color: "#F87171", marginTop: 6, flex: "none" }}>❌ {error}</div>}
     </div>

@@ -252,3 +252,63 @@ export const DZPK_BROADCAST_SCHEMA_SQL = `
   CREATE INDEX IF NOT EXISTS idx_dzpk_bt_drain ON dzpk_broadcast_targets(broadcast_id, status);
   CREATE INDEX IF NOT EXISTS idx_dzpk_bt_lead  ON dzpk_broadcast_targets(lead_id);
 `;
+
+/** Migration du fil de conversation lead ↔ opérateur (phase 3b). */
+export const DZPK_MIGRATION_TAKEOVER_V1 = "add_dzpk_takeover_v1";
+
+export const DZPK_TAKEOVER_SCHEMA_SQL = `
+  -- Le FIL de conversation, distinct de dzpk_lead_events.
+  --
+  -- dzpk_lead_events reste ce qu'il est : un journal d'événements append-only qui
+  -- porte l'identité observée à chaque contact, dont dépend l'appariement par nom.
+  -- Il ne sait pas dire qui a parlé à qui : ni direction, ni message sortant, ni
+  -- id Telegram. Une conversation ne s'en déduit pas — d'où cette table.
+  --
+  -- created_at à la MILLISECONDE (%f) : deux messages envoyés dans la même
+  -- seconde — un lead qui écrit deux lignes d'affilée — s'ordonneraient sinon au
+  -- hasard de l'id, et le fil afficherait la réponse avant la question.
+  CREATE TABLE IF NOT EXISTS dzpk_bot_messages (
+    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+    lead_id             INTEGER NOT NULL REFERENCES dzpk_leads(id),
+    direction           TEXT    NOT NULL CHECK (direction IN ('in','out')),
+    sender              TEXT    NOT NULL,   -- 'lead' | 'bot' | 'operator:<nom>'
+    kind                TEXT    NOT NULL DEFAULT 'text',
+    text                TEXT,
+    telegram_message_id INTEGER,
+    created_at          TEXT    NOT NULL
+                        DEFAULT (strftime('%Y-%m-%d %H:%M:%f','now'))
+  );
+  CREATE INDEX IF NOT EXISTS idx_dzpk_bm_lead ON dzpk_bot_messages(lead_id, created_at);
+
+  -- L'idempotence par MESSAGE, en plus de celle par update (dzpk_updates).
+  --
+  -- Les deux ne couvrent pas la même chose : dzpk_updates protège d'un update
+  -- rejoué par Telegram, cet index protège d'un même message reinjecte par un
+  -- autre chemin. C'est aussi lui qui garantira qu'un relais futur ne poste
+  -- jamais deux fois le meme message — la garantie doit vivre en base, pas dans
+  -- la prudence de l'appelant.
+  CREATE UNIQUE INDEX IF NOT EXISTS idx_dzpk_bm_in_unique
+    ON dzpk_bot_messages(lead_id, telegram_message_id)
+    WHERE direction = 'in' AND telegram_message_id IS NOT NULL;
+`;
+
+/** Curseur de lecture du back-office : pilote la pastille « non lu ». */
+export const DZPK_TAKEOVER_ALTER_READ =
+  `ALTER TABLE dzpk_leads ADD COLUMN last_read_msg_id INTEGER NOT NULL DEFAULT 0`;
+
+/**
+ * Curseur du relais Telegram, posé AVANT que le relais existe.
+ *
+ * Ce n'est pas de l'anticipation gratuite : c'est la seule pièce du dispositif
+ * qui coûte cher à ajouter après coup. NEXA l'a payé — la migration
+ * `add_live_takeover_topics_v1` a dû backfiller ce curseur sur `MAX(id)`, avec
+ * ce motif : « sinon le premier drain reposterait l'historique complet de chaque
+ * lead dans son tout nouveau topic » (lib/db.ts).
+ *
+ * Ici le curseur avance tout seul tant qu'aucun chat admin n'est configuré (cf.
+ * captureInbound). Le jour où DZPK_ADMIN_CHAT_ID est posée, il pointe déjà sur
+ * « maintenant » : le relais démarre sur les messages suivants, sans déversement
+ * d'historique et sans migration de rattrapage à écrire.
+ */
+export const DZPK_TAKEOVER_ALTER_RELAY =
+  `ALTER TABLE dzpk_leads ADD COLUMN last_relayed_msg_id INTEGER NOT NULL DEFAULT 0`;

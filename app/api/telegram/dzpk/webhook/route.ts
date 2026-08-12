@@ -73,6 +73,17 @@ export async function POST(req: NextRequest) {
       const { sendWelcome } = await import("@/lib/funnels/dzpk/welcome");
       const res = await sendWelcome(identity.telegram_id);
       if (res.blocked) markBlocked(lead.id);
+
+      // L'accueil entre dans le fil, comme n'importe quel message du bot. Sans
+      // lui, la conversation d'un lead qui répond s'ouvrirait sur sa réponse,
+      // sans la question — illisible pour qui relit six semaines plus tard.
+      if (res.ok) {
+        const { logMessage } = await import("@/lib/funnels/dzpk/takeover");
+        logMessage({
+          leadId: lead.id, direction: "out", sender: "bot", kind: "text",
+          text: res.text ?? null, telegramMessageId: res.messageId ?? null,
+        });
+      }
       return NextResponse.json({ ok: true });
     }
 
@@ -80,7 +91,13 @@ export async function POST(req: NextRequest) {
     // Le bot dzpk n'a pas de commandes. Répondre « commande inconnue » à un lead
     // chinois n'apporte rien ; le message est journalisé, ça suffit.
     if (typeof text === "string" && text.startsWith("/")) {
-      recordLeadMessage(identity, text, "command");
+      const lead = recordLeadMessage(identity, text, "command");
+      // Une commande inconnue reste un message que le lead a tapé : elle a sa
+      // place dans le fil, sinon l'opérateur voit une conversation trouée.
+      if (lead) {
+        const { captureInbound } = await import("@/lib/funnels/dzpk/takeover");
+        captureInbound(msg, lead.id);
+      }
       return NextResponse.json({ ok: true });
     }
 
@@ -99,7 +116,19 @@ export async function POST(req: NextRequest) {
       // On ne crée PAS de lead — un lead sans /start n'a pas de source, et en
       // fabriquer une fausserait l'attribution. On le trace, c'est tout.
       console.log(`[DZPK] message d'un non-lead tg=${identity.telegram_id} @${identity.username ?? "-"}`);
+      return NextResponse.json({ ok: true });
     }
+
+    // Le fil de conversation, lu par /dzpk-funnel. Écriture SÉPARÉE de
+    // recordLeadMessage ci-dessus : ce dernier tient le journal d'événements et
+    // l'historique d'identité de l'appariement, il ne sait pas ce qu'est une
+    // direction. Les deux coexistent, aucun ne remplace l'autre.
+    const { captureInbound } = await import("@/lib/funnels/dzpk/takeover");
+    const captured = captureInbound(msg, lead.id);
+    console.log(
+      `[DZPK MSG] lead=${lead.id} @${identity.username ?? "-"} ${captured.kind}` +
+      `${captured.duplicate ? " (rejeu ignoré)" : ""}`
+    );
     return NextResponse.json({ ok: true });
   } catch (e: any) {
     console.error(`[DZPK WEBHOOK] erreur sur update ${update?.update_id}:`, e?.message ?? e, e?.stack);

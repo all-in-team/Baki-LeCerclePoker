@@ -5,13 +5,18 @@
 // components/funnel/.
 //
 // Ce qui diffère de Nexa, et pourquoi :
-//   • pas de drawer conversation — le relais humain est la phase 3, il n'existe
-//     pas encore de fil à afficher ;
 //   • une colonne « Matching » à la place des colonnes Σ — sur ce funnel, le
-//     risque n'est pas de rater une réponse mais d'attribuer un rattachement
-//     (donc du revenu) au mauvais lead.
+//     risque n'est pas seulement de rater une réponse mais d'attribuer un
+//     rattachement (donc du revenu) au mauvais lead ;
+//   • deux signaux de conversation au lieu d'un : « ⏳ à répondre » (le dernier
+//     message vient du lead) et « 💬 N » (non lus). Le premier ne s'éteint qu'à
+//     l'envoi — ouvrir un fil sans répondre ne doit pas effacer une question ;
+//   • le fil s'ouvre sur N'IMPORTE quelle ligne, pas seulement sur les leads qui
+//     ont écrit : écrire le premier à un lead est un usage à part entière.
 
-import { useMemo, useState } from "react";
+import { useMemo, useState, useEffect, useCallback } from "react";
+import { useRouter } from "next/navigation";
+import ConversationPanel from "@/components/funnel/ConversationPanel";
 import type { DzpkDashboardLead, DzpkPendingMatch } from "@/lib/funnels/dzpk/dashboard";
 import type { CommissionTotalRow } from "@/lib/funnels/dzpk/ingest";
 import { DZPK_STAGES, DZPK_CARDS, MATCH_LABELS } from "@/lib/funnels/dzpk/stages";
@@ -112,15 +117,30 @@ export default function DzpkFunnelClient({ leads, commissions, pending, orphans,
   broadcasts: BroadcastRow[];
   guard: Guard;
 }) {
-  const [onlyPending, setOnlyPending] = useState(false);
+  const [filter, setFilter] = useState<"all" | "pending" | "awaiting">("all");
   const [showQueue, setShowQueue] = useState(false);
   const [tab, setTab] = useState<"leads" | "broadcast">("leads");
+  const [openLead, setOpenLead] = useState<DzpkDashboardLead | null>(null);
+  const router = useRouter();
+
+  // Rafraîchit les pastilles après un envoi : le serveur recalcule `unread`.
+  const refresh = useCallback(() => router.refresh(), [router]);
+
+  // Échap ferme le fil — même convention que le drawer Nexa.
+  useEffect(() => {
+    if (!openLead) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setOpenLead(null); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [openLead]);
 
   const pendingCount = useMemo(() => leads.filter(l => l.match === "pending").length, [leads]);
-  const visibleLeads = useMemo(
-    () => (onlyPending ? leads.filter(l => l.match === "pending") : leads),
-    [leads, onlyPending],
-  );
+  const awaitingCount = useMemo(() => leads.filter(l => l.awaiting_reply).length, [leads]);
+  const visibleLeads = useMemo(() => {
+    if (filter === "pending") return leads.filter(l => l.match === "pending");
+    if (filter === "awaiting") return leads.filter(l => l.awaiting_reply);
+    return leads;
+  }, [leads, filter]);
 
   const cards = [...buildConversionCards(leads, DZPK_CARDS), commissionCard(commissions)];
 
@@ -156,10 +176,16 @@ export default function DzpkFunnelClient({ leads, commissions, pending, orphans,
       </div>
 
       <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-        <FilterChip active={!onlyPending} onClick={() => setOnlyPending(false)}>
+        <FilterChip active={filter === "all"} onClick={() => setFilter("all")}>
           Tous ({leads.length})
         </FilterChip>
-        <FilterChip active={onlyPending} tone="warn" onClick={() => setOnlyPending(true)}
+        {/* En tête des filtres parce que c'est le seul qui porte une demande
+            adressée à un humain : quelqu'un a écrit et attend. */}
+        <FilterChip active={filter === "awaiting"} tone="warn" onClick={() => setFilter("awaiting")}
+          title="Leads dont le dernier message est le leur — ils attendent une réponse">
+          ⏳ À répondre ({awaitingCount})
+        </FilterChip>
+        <FilterChip active={filter === "pending"} tone="warn" onClick={() => setFilter("pending")}
           title="Leads cités par une notification du club qui n'a pas encore été tranchée">
           🟡 À réconcilier ({pendingCount})
         </FilterChip>
@@ -211,13 +237,78 @@ export default function DzpkFunnelClient({ leads, commissions, pending, orphans,
             )}
             {leads.length > 0 && visibleLeads.length === 0 && (
               <tr><td colSpan={COLUMNS.length} style={{ padding: 24, textAlign: "center", color: "#555568" }}>
-                Aucun lead en attente de réconciliation. 👌
+                {filter === "awaiting"
+                  ? "Personne n'attend de réponse. 👌"
+                  : "Aucun lead en attente de réconciliation. 👌"}
               </td></tr>
             )}
-            {visibleLeads.map(lead => <LeadRow key={lead.id} lead={lead} />)}
+            {visibleLeads.map(lead => (
+              <LeadRow key={lead.id} lead={lead} onOpen={() => setOpenLead(lead)} />
+            ))}
           </tbody>
         </table>
       </div>
+
+      {openLead && (
+        <ConversationDrawer
+          key={openLead.id}
+          lead={openLead}
+          onClose={() => setOpenLead(null)}
+          onChanged={refresh}
+        />
+      )}
+    </div>
+  );
+}
+
+/**
+ * Fil de conversation d'un lead, en tiroir.
+ *
+ * En tiroir plutôt qu'en ligne dépliée dans le tableau, pour la raison déjà
+ * constatée côté Nexa : dans le conteneur du tableau, le panneau sortait de
+ * l'écran avec le reste du défilement et le champ de réponse devenait
+ * inatteignable dès que l'historique s'allongeait.
+ */
+function ConversationDrawer({ lead, onClose, onChanged }: {
+  lead: DzpkDashboardLead;
+  onClose: () => void;
+  onChanged: () => void;
+}) {
+  return (
+    <div style={{
+      position: "fixed", top: 0, right: 0, bottom: 0, width: "min(560px, 92vw)",
+      background: "#0D1015", borderLeft: "1px solid rgba(255,255,255,0.08)",
+      boxShadow: "-24px 0 48px rgba(0,0,0,0.45)", zIndex: 50,
+      display: "flex", flexDirection: "column", padding: 18, gap: 12,
+    }}>
+      <div style={{ display: "flex", alignItems: "baseline", gap: 10, flex: "none" }}>
+        <span style={{ color: "#E8E8EE", fontWeight: 700, fontSize: 15 }}>{leadName(lead)}</span>
+        <span style={{ fontSize: 11, padding: "2px 6px", borderRadius: 4, background: "rgba(96,165,250,0.12)", color: "#60A5FA", fontWeight: 600 }}>
+          {lead.source_label}
+        </span>
+        <span style={{ color: stageDef(DZPK_STAGES, lead.state).color, fontSize: 12, fontWeight: 600 }}>
+          {stageDef(DZPK_STAGES, lead.state).label}
+        </span>
+        <div style={{ flex: 1 }} />
+        <button onClick={onClose} style={{
+          background: "transparent", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 8,
+          color: "#8888A0", padding: "4px 10px", fontSize: 11.5, cursor: "pointer", fontFamily: "inherit",
+        }}>Fermer ✕</button>
+      </div>
+
+      <div style={{ fontSize: 11, color: "#3A3A48", flex: "none" }}>
+        /start le {fmtDateTime(lead.started_at)} · tg:{lead.telegram_id}
+      </div>
+
+      <ConversationPanel
+        leadId={lead.id}
+        endpoint="/api/dzpk-funnel/conversation"
+        emptyHint="Aucun message. Le lead n'a encore rien écrit au bot — l'accueil l'invite à répondre ici."
+        // Pas de takeover côté dzpk : le bot n'a aucun scénario à reprendre,
+        // donc rien n'est « repoussé » par un envoi.
+        sendHint="⌘/Ctrl + Entrée pour envoyer · le lead reçoit le message du bot"
+        onChanged={onChanged}
+      />
     </div>
   );
 }
@@ -240,13 +331,13 @@ function Tabs({ tab, setTab, leadCount }: {
   );
 }
 
-function LeadRow({ lead }: { lead: DzpkDashboardLead }) {
+function LeadRow({ lead, onOpen }: { lead: DzpkDashboardLead; onOpen: () => void }) {
   const stage = stageDef(DZPK_STAGES, lead.state);
   const match = MATCH_LABELS[lead.match];
   const td: React.CSSProperties = { padding: "10px 14px", whiteSpace: "nowrap" };
 
   return (
-    <tr style={{ borderBottom: "1px solid rgba(255,255,255,0.04)", opacity: lead.blocked ? 0.5 : 1 }}>
+    <tr onClick={onOpen} style={{ borderBottom: "1px solid rgba(255,255,255,0.04)", opacity: lead.blocked ? 0.5 : 1, cursor: "pointer" }}>
       <td style={td}>
         <span style={{ color: "#E8E8EE", fontWeight: 600 }}>{leadName(lead)}</span>
         {/* Le display_name est répété à côté du @handle : c'est LUI que le club
@@ -266,6 +357,27 @@ function LeadRow({ lead }: { lead: DzpkDashboardLead }) {
         {lead.start_count > 1 && (
           <span style={{ marginLeft: 6, fontSize: 10, color: "#555568" }} title={`${lead.start_count} /start — la source retenue reste celle du premier`}>
             ×{lead.start_count}
+          </span>
+        )}
+        {/* Deux signaux distincts, et l'écart entre eux est délibéré.
+            « À répondre » ne s'éteint qu'à l'ENVOI : ouvrir un fil sans répondre
+            ne doit pas faire disparaître une question. Le compteur de non-lus,
+            lui, s'éteint à la lecture — il dit « du nouveau », pas « ça
+            attend ». Confondre les deux, c'est perdre les questions lues. */}
+        {lead.awaiting_reply && (
+          <span style={{
+            marginLeft: 6, fontSize: 10, padding: "2px 6px", borderRadius: 999,
+            background: "rgba(240,185,11,0.16)", color: "#F0B90B", fontWeight: 700,
+          }} title="Le dernier message vient du lead — il attend une réponse">
+            ⏳ à répondre
+          </span>
+        )}
+        {lead.unread > 0 && (
+          <span style={{
+            marginLeft: 6, fontSize: 10, padding: "2px 6px", borderRadius: 999,
+            background: "rgba(96,165,250,0.16)", color: "#60A5FA", fontWeight: 700,
+          }} title={`${lead.unread} message(s) non lu(s)`}>
+            💬 {lead.unread}
           </span>
         )}
       </td>

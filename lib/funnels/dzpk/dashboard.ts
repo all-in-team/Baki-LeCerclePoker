@@ -15,6 +15,7 @@ import { deriveState, type DzpkState, type DbLike } from "./leads";
 import { listPendingReconciliation } from "./matcher";
 import { getCommissionTotals, type CommissionTotalRow } from "./ingest";
 import type { DzpkMatchStatus } from "./stages";
+import { getUnreadCounts, getAwaitingReply } from "./takeover";
 
 export interface DzpkDashboardLead {
   id: number;
@@ -46,6 +47,17 @@ export interface DzpkDashboardLead {
   match_observed: number;
   /** Notifications en attente de décision qui citent ce lead parmi leurs candidats. */
   match_pending: number;
+  /** Dernier message ÉCRIT PAR le lead. Null = il n'a jamais rien écrit. */
+  last_message_at: string | null;
+  /** Entrants postérieurs au curseur de lecture — la pastille du tableau. */
+  unread: number;
+  /**
+   * Le dernier message du fil vient du lead : il attend une réponse.
+   *
+   * Ne s'éteint PAS à l'ouverture du panneau, contrairement à `unread` — c'est
+   * ce qui empêche de perdre une question qu'on a lue sans y répondre.
+   */
+  awaiting_reply: boolean;
 }
 
 /** Une notification du club qui attend une décision humaine. */
@@ -85,7 +97,8 @@ export function sourceLabel(source: string): string {
   return m ? `${RICHADS_SOURCE_PREFIX}/${creLabel(m[1])}` : source;
 }
 
-type LeadSqlRow = Omit<DzpkDashboardLead, "state" | "source_label" | "match" | "match_pending">;
+type LeadSqlRow = Omit<DzpkDashboardLead,
+  "state" | "source_label" | "match" | "match_pending" | "unread" | "awaiting_reply">;
 
 /**
  * Décide le statut affiché quand plusieurs signaux coexistent.
@@ -119,7 +132,8 @@ export function getDzpkDashboard(dbOverride?: DbLike): DzpkDashboardData {
 
   const rows = db.prepare(
     `SELECT l.id, l.telegram_id, l.username, l.first_name, l.last_name, l.display_name,
-            l.source, l.started_at, l.first_reply_at, l.club_joined_at, l.bound_at,
+            l.source, l.started_at, l.first_reply_at, l.last_message_at,
+            l.club_joined_at, l.bound_at,
             l.banned_at, l.converted_at, l.blocked, l.start_count,
             -- applied = 1 exigé : une résolution qui n'a rien posé sur le lead ne
             -- prouve aucun rattachement, elle ne doit pas se lire comme tel.
@@ -137,6 +151,10 @@ export function getDzpkDashboard(dbOverride?: DbLike): DzpkDashboardData {
   ).all() as LeadSqlRow[];
 
   const { pending, byLead, orphans } = readPending(dbOverride);
+  // Une seule requête agrégée pour toute la table, pas une par ligne : la
+  // pastille ne doit pas coûter un aller-retour SQL par lead affiché.
+  const unread = getUnreadCounts(dbOverride);
+  const awaiting = getAwaitingReply(dbOverride);
 
   return {
     leads: rows.map(r => ({
@@ -145,6 +163,8 @@ export function getDzpkDashboard(dbOverride?: DbLike): DzpkDashboardData {
       state: deriveState(r),
       match_pending: byLead.get(r.id) ?? 0,
       match: matchStatus(r, byLead.get(r.id) ?? 0),
+      unread: unread.get(r.id) ?? 0,
+      awaiting_reply: awaiting.has(r.id),
     })),
     commissions: getCommissionTotals(dbOverride),
     pending,

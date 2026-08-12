@@ -19,6 +19,7 @@ import { getDzpkDashboard } from "../lib/funnels/dzpk/dashboard";
 import {
   DZPK_SCHEMA_SQL, DZPK_INGEST_SCHEMA_SQL,
   DZPK_MATCH_SCHEMA_SQL, DZPK_MATCH_SCHEMA_SQL_2, DZPK_MATCH_SCHEMA_SQL_3,
+  DZPK_TAKEOVER_SCHEMA_SQL, DZPK_TAKEOVER_ALTER_READ, DZPK_TAKEOVER_ALTER_RELAY,
 } from "../lib/funnels/dzpk/schema";
 import { nameKey } from "../lib/funnels/dzpk/name-key";
 import type { ParserConfig } from "../lib/funnels/dzpk/club-parser";
@@ -38,7 +39,9 @@ const PEER = "@dp_bot";
 function freshDb(): DbLike & { exec(s: string): void; close(): void; prepare(s: string): any } {
   const db = new Database(":memory:");
   for (const sql of [DZPK_SCHEMA_SQL, DZPK_INGEST_SCHEMA_SQL,
-    DZPK_MATCH_SCHEMA_SQL, DZPK_MATCH_SCHEMA_SQL_2, DZPK_MATCH_SCHEMA_SQL_3]) db.exec(sql);
+    DZPK_MATCH_SCHEMA_SQL, DZPK_MATCH_SCHEMA_SQL_2, DZPK_MATCH_SCHEMA_SQL_3,
+    // Le tableau lit les compteurs du fil de conversation depuis la phase 3b.
+    DZPK_TAKEOVER_SCHEMA_SQL, DZPK_TAKEOVER_ALTER_READ, DZPK_TAKEOVER_ALTER_RELAY]) db.exec(sql);
   return db as any;
 }
 function seedLead(db: any, tgId: number, display: string, source: string, startedAt: string) {

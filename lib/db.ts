@@ -9,6 +9,8 @@ import {
   DZPK_INGEST_SCHEMA_SQL, DZPK_MIGRATION_INGEST_V1,
   DZPK_MATCH_SCHEMA_SQL, DZPK_MATCH_SCHEMA_SQL_2, DZPK_MATCH_SCHEMA_SQL_3, DZPK_MIGRATION_MATCH_V1,
   DZPK_BROADCAST_SCHEMA_SQL, DZPK_MIGRATION_BROADCAST_V1,
+  DZPK_TAKEOVER_SCHEMA_SQL, DZPK_TAKEOVER_ALTER_READ, DZPK_TAKEOVER_ALTER_RELAY,
+  DZPK_MIGRATION_TAKEOVER_V1,
 } from "./funnels/dzpk/schema";
 // Module pur (aucun import) : utilisable depuis une migration sans cycle.
 import { nameKey as dzpkNameKey } from "./funnels/dzpk/name-key";
@@ -3487,5 +3489,37 @@ function initSchema(db: Database.Database) {
     }
   } catch (err: any) {
     console.error(`[MIGRATION:${DZPK_MIGRATION_BROADCAST_V1}] FAILED (sera rejouée au prochain boot):`, err.message);
+  }
+
+  // ── Fil de conversation lead ↔ opérateur dzpk (phase 3b) ───────────────────
+  //
+  // Le webhook capte les messages libres depuis la phase 1, mais il les range
+  // dans `dzpk_lead_events`, un journal qui ne connaît pas la notion de
+  // direction et n'enregistre aucun sortant. On ne peut pas en tirer un fil.
+  //
+  // `dzpk_bot_messages` le peut, et porte dès maintenant ce qu'un relais
+  // Telegram exigera plus tard : id de message Telegram, unicité des entrants,
+  // horodatage à la milliseconde. Le curseur `last_relayed_msg_id` est posé
+  // maintenant pour la raison expliquée dans schema.ts — l'ajouter le jour du
+  // relais impose de rejouer le piège du backfill que NEXA a rencontré.
+  //
+  // Ne touche à AUCUNE table de matching, ni au broadcast, ni à NEXA.
+  try {
+    const already = db.prepare(`SELECT 1 FROM _applied_fixes WHERE name = ?`)
+      .get(DZPK_MIGRATION_TAKEOVER_V1);
+    if (!already) {
+      db.exec(DZPK_TAKEOVER_SCHEMA_SQL);
+      // ALTER TABLE n'a pas d'IF NOT EXISTS : on interroge le schéma, comme la
+      // migration de matching juste au-dessus.
+      const cols = new Set(
+        (db.prepare(`PRAGMA table_info(dzpk_leads)`).all() as any[]).map(c => c.name)
+      );
+      if (!cols.has("last_read_msg_id")) db.exec(DZPK_TAKEOVER_ALTER_READ);
+      if (!cols.has("last_relayed_msg_id")) db.exec(DZPK_TAKEOVER_ALTER_RELAY);
+      db.prepare(`INSERT OR IGNORE INTO _applied_fixes (name) VALUES (?)`).run(DZPK_MIGRATION_TAKEOVER_V1);
+      console.log(`[MIGRATION] ${DZPK_MIGRATION_TAKEOVER_V1} applied`);
+    }
+  } catch (err: any) {
+    console.error(`[MIGRATION:${DZPK_MIGRATION_TAKEOVER_V1}] FAILED (sera rejouée au prochain boot):`, err.message);
   }
 }
