@@ -133,7 +133,11 @@ export function periodSubtitle(period: PlayersPeriod): string {
  */
 export function periodRangeLabel(period: PlayersPeriod): string {
   switch (period.kind) {
-    case "lifetime": return "Tout l'historique disponible, depuis le début de chaque deal";
+    case "lifetime":
+      // Avertissement à l'écran, pas seulement dans docs/PLAYERS_PERIOD_RESERVES.md :
+      // le lifetime est retarifé aux deals actuels (pas d'historique dans
+      // player_game_deals) et le CNY converti au taux du jour. Chiffre indicatif.
+      return "Tout l'historique disponible, depuis le début de chaque deal — indicatif : retarifé aux deals actuels, ne pas utiliser pour un règlement";
     case "7d": return "7 derniers jours";
     case "30d": return "30 derniers jours";
     case "custom":

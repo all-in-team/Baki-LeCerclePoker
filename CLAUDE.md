@@ -129,6 +129,7 @@ Internal ops + accounting tool for a single-operator poker affiliation business 
 - Pages → `app/*/page.tsx` · API routes → `app/api/**/route.ts`
 - Shared UI → `components/`
 - **Domain glossary (READ FIRST when touching balance / wallet / report code)** → `docs/DOMAIN.md`
+- Réserves du sélecteur de période /players (lifetime indicatif, custom en UTC) → `docs/PLAYERS_PERIOD_RESERVES.md`
 
 ## Domain — minimum mental model
 
