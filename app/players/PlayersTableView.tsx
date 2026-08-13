@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { Pencil, Archive, RotateCcw, ChevronUp, ChevronDown, EyeOff } from "lucide-react";
-import { agencyColumnLabel, badgeFor, fmtAmt, isActiveStatus, type Deal, type Player, type PlayersPeriodKey } from "./shared";
+import { agencyColumnLabel, badgeFor, fmtAmt, isActiveStatus, type Deal, type Player, type PlayersPeriod } from "./shared";
 
 type SortKey = "name" | "games" | "agency" | "status";
 
@@ -12,13 +12,13 @@ interface Props {
   gamesByPlayer: Record<number, string[]>;
   dealsByPlayer: Record<number, Deal[]>;
   agencyByPlayer: Record<number, number>;
-  periodKey: PlayersPeriodKey;
+  period: PlayersPeriod;
   onEdit: (p: Player) => void;
 }
 
 const TH: React.CSSProperties = { padding: "8px", cursor: "pointer", userSelect: "none", whiteSpace: "nowrap" };
 
-export default function PlayersTableView({ players, gamesByPlayer, agencyByPlayer, periodKey, onEdit }: Props) {
+export default function PlayersTableView({ players, gamesByPlayer, agencyByPlayer, period, onEdit }: Props) {
   const router = useRouter();
   // Défaut : agency cut décroissant — les plus rentables en haut. Le tri porte sur
   // agencyByPlayer, déjà résolu pour la période active côté serveur : changer de
@@ -95,7 +95,7 @@ export default function PlayersTableView({ players, gamesByPlayer, agencyByPlaye
           <tr style={{ borderBottom: "1px solid var(--border)", color: "var(--text-muted)", fontSize: 11, textTransform: "uppercase", letterSpacing: "0.05em" }}>
             <th style={{ ...TH, textAlign: "left" }} onClick={() => clickSort("name")}>Joueur<Arrow k="name" /></th>
             <th style={{ ...TH, textAlign: "center" }} onClick={() => clickSort("games")}>Games<Arrow k="games" /></th>
-            <th style={{ ...TH, textAlign: "right" }} onClick={() => clickSort("agency")}>{agencyColumnLabel(periodKey)}<Arrow k="agency" /></th>
+            <th style={{ ...TH, textAlign: "right" }} onClick={() => clickSort("agency")}>{agencyColumnLabel(period)}<Arrow k="agency" /></th>
             <th style={{ ...TH, textAlign: "center" }} onClick={() => clickSort("status")}>Status<Arrow k="status" /></th>
             <th style={{ padding: "8px", textAlign: "center", whiteSpace: "nowrap" }}>Actions</th>
           </tr>

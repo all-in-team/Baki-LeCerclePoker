@@ -1,14 +1,46 @@
 export const dynamic = "force-dynamic";
 import { getTopContributors, getWalletSummaryByPlayer, getApps, type Period } from "@/lib/queries";
 import { getDb } from "@/lib/db";
+import { computePeriodFilter } from "@/lib/period-filter";
+import { toParisDate } from "@/lib/date-utils";
 import PageHeader from "@/components/PageHeader";
 import PlayersPeriodBar from "./PlayersPeriodBar";
 import PlayersViewToggle from "./PlayersViewToggle";
-import type { App, Deal, Game, Player, PlayersPeriodKey } from "./shared";
+import { periodSubtitle, type App, type Deal, type Game, type Player, type PlayersPeriod } from "./shared";
 
 function daysAgo(n: number): string {
   const d = new Date(); d.setDate(d.getDate() - n);
   return d.toISOString().slice(0, 10);
+}
+
+/**
+ * Résout `?filter=` vers la période de la page. Toute valeur non reconnue —
+ * ou un `custom:` que computePeriodFilter refuse de résoudre — retombe sur 30j,
+ * le défaut historique.
+ *
+ * `custom` est ramené à des dates PARIS nues : la fenêtre est celle que Baki
+ * lit dans la barre, et elle reste comparable aux sources jour (cf. le
+ * commentaire de PlayersPeriod dans shared.ts).
+ */
+function resolvePlayersPeriod(raw: string | undefined, today: string): PlayersPeriod {
+  if (raw === "lifetime") return { key: "lifetime", kind: "lifetime" };
+  if (raw === "7d") return { key: "7d", kind: "7d", from: daysAgo(7), to: today };
+
+  if (raw?.startsWith("custom:")) {
+    const resolved = computePeriodFilter(raw);
+    // computePeriodFilter signale un custom malformé en retombant sur « current »
+    // (semaine en cours) : la clé rendue ne correspond alors plus à la demande.
+    if (resolved.key === raw && resolved.startDate && resolved.endDate) {
+      return {
+        key: raw,
+        kind: "custom",
+        from: toParisDate(resolved.startDate),
+        to: toParisDate(resolved.endDate),
+      };
+    }
+  }
+
+  return { key: "30d", kind: "30d", from: daysAgo(30), to: today };
 }
 
 // Page Joueurs unique — fusion de l'ancien /crm (kanban + agency cut + deals) et de
@@ -18,22 +50,18 @@ export default async function PlayersPage({ searchParams }: {
 }) {
   const db = getDb();
   const today = new Date().toISOString().slice(0, 10);
-  const d30 = daysAgo(30);
 
   // Période — même contrat d'URL que les pages P&L (PeriodFilterBar +
-  // computePeriodFilter), mais restreint à 30j / lifetime : sur un roster, une
-  // borne « semaine ISO » ou « custom » n'a pas de lecture utile. Toute autre
-  // valeur retombe sur 30j, le défaut historique de la page.
+  // computePeriodFilter), restreint à 7j / 30j / lifetime / custom : les bornes
+  // hebdomadaires n'ont pas de lecture utile sur un roster.
   //
   // Les bornes du 30j sont celles d'AVANT ce filtre (`daysAgo(30)` → `today`, en
   // dates nues) et non celles de computePeriodFilter (horodatages ISO complets) :
   // la vue par défaut doit rendre exactement les mêmes chiffres qu'avant. Lifetime
   // = période vide, la forme que getTopContributors traite déjà comme « sans borne »
   // (cf. lib/agent-tools.ts, qui appelle déjà getTopContributors({})).
-  const rawFilter = (await searchParams).filter;
-  const periodKey: PlayersPeriodKey = rawFilter === "lifetime" ? "lifetime" : "30d";
-  const isLifetime = periodKey === "lifetime";
-  const period: Period = isLifetime ? {} : { from: d30, to: today };
+  const period = resolvePlayersPeriod((await searchParams).filter, today);
+  const queryPeriod: Period = period.kind === "lifetime" ? {} : { from: period.from, to: period.to };
 
   // Pas de whitelist de status : l'ancienne page /players affichait TOUS les joueurs alors
   // que le CRM filtrait 4 status. Sans ce SELECT ouvert, un joueur avec un status hors liste
@@ -71,15 +99,19 @@ export default async function PlayersPage({ searchParams }: {
 
   // Limite haute volontaire : getTopContributors fait un slice(limit) et l'agency cut est
   // la colonne de tri par défaut — un cap à 100 ferait afficher "—" au-delà du 100e joueur.
-  const contributors = getTopContributors(period, 100000);
+  const contributors = getTopContributors(queryPeriod, 100000);
   const agencyByPlayer: Record<number, number> = {};
   contributors.forEach(c => { agencyByPlayer[c.player_id] = c.agency_usdt; });
 
   // Le détail par game (Kanban + drawer) suit la même période que la colonne du
   // tableau : deux vues de la même page qui afficheraient des bornes différentes
-  // se liraient comme une incohérence de chiffres.
+  // se liraient comme une incohérence de chiffres. Mêmes bornes, converties dans
+  // la forme horodatée que prend getWalletSummaryByPlayer — journées entières,
+  // exactement la fenêtre que periodToDateRange applique à getTopContributors.
   const pnlRows = getWalletSummaryByPlayer(
-    isLifetime ? {} : { since_date: d30 + "T00:00:00Z", end_date: today + "T23:59:59Z" },
+    period.kind === "lifetime"
+      ? {}
+      : { since_date: period.from + "T00:00:00Z", end_date: period.to + "T23:59:59Z" },
   ) as any[];
   const pnlByPlayerGame: Record<string, { player_net: number; agency_pnl: number }> = {};
   pnlRows.forEach((r: any) => {
@@ -100,13 +132,8 @@ export default async function PlayersPage({ searchParams }: {
 
   return (
     <>
-      <PageHeader
-        title="Joueurs"
-        subtitle={isLifetime
-          ? "Roster, deals par game et contribution agence depuis le début."
-          : "Roster, deals par game et contribution agence sur 30 jours."}
-      />
-      <PlayersPeriodBar periodKey={periodKey} />
+      <PageHeader title="Joueurs" subtitle={periodSubtitle(period)} />
+      <PlayersPeriodBar period={period} />
       <PlayersViewToggle
         players={allPlayers}
         gamesByPlayer={gamesByPlayer}
@@ -116,7 +143,7 @@ export default async function PlayersPage({ searchParams }: {
         activeGames={activeGames}
         apps={apps}
         affiliatedByPlayer={affiliatedByPlayer}
-        periodKey={periodKey}
+        period={period}
       />
     </>
   );

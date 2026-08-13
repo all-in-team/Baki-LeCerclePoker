@@ -3,7 +3,7 @@
 import { useEffect } from "react";
 import Link from "next/link";
 import { X, Pencil } from "lucide-react";
-import { badgeFor, isActiveStatus, type Deal, type Game, type Player, type PlayersPeriodKey } from "./shared";
+import { badgeFor, isActiveStatus, periodShortLabel, type Deal, type Game, type Player, type PlayersPeriod } from "./shared";
 
 interface Props {
   player: Player;
@@ -11,7 +11,7 @@ interface Props {
   pnlByPlayerGame: Record<string, { player_net: number; agency_pnl: number }>;
   activeGames: Game[];
   agencyTotal: number;
-  periodKey: PlayersPeriodKey;
+  period: PlayersPeriod;
   onClose: () => void;
   onEdit: () => void;
 }
@@ -20,7 +20,7 @@ function fmtAmt2(n: number): string {
   return `${n >= 0 ? "+" : ""}${n.toLocaleString("fr-FR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
 
-export default function PlayerDetailDrawer({ player, deals, pnlByPlayerGame, activeGames, periodKey, onClose, onEdit }: Props) {
+export default function PlayerDetailDrawer({ player, deals, pnlByPlayerGame, activeGames, period, onClose, onEdit }: Props) {
   useEffect(() => {
     const handler = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
     document.addEventListener("keydown", handler);
@@ -88,7 +88,7 @@ export default function PlayerDetailDrawer({ player, deals, pnlByPlayerGame, act
         <div style={{ flex: 1, overflowY: "auto", padding: 20 }}>
           {/* P&L by game */}
           <div style={{ fontSize: 12, fontWeight: 700, color: "var(--text-dim)", textTransform: "uppercase", letterSpacing: "0.07em", marginBottom: 12 }}>
-            P&L par game ({periodKey === "lifetime" ? "lifetime" : "30 jours"})
+            P&L par game ({periodShortLabel(period)})
           </div>
 
           {rows.length === 0 && (

@@ -50,19 +50,75 @@ export interface Deal {
 export interface Game { id: number; name: string; default_action_pct: number | null; status: string; }
 export interface App { id: number; name: string; }
 
-/** Bornes de période exposées par la page Joueurs (sous-ensemble du contrat PeriodFilterBar). */
-export type PlayersPeriodKey = "30d" | "lifetime";
+/**
+ * Période active de la page Joueurs. `key` est la valeur brute de `?filter=`
+ * (donc `custom:...` en entier pour une plage libre), `kind` la famille qui
+ * décide des libellés, `from`/`to` les bornes en dates nues.
+ *
+ * Granularité JOUR, y compris pour custom, alors que le sélecteur custom de la
+ * barre propose des heures. Ce n'est pas une approximation par paresse : la
+ * colonne agrège des sources qui n'ont PAS d'horodatage — les reports Wepoker
+ * portent une `report_date` et les sessions grindhouse une `session_date`, deux
+ * dates nues. Couper à l'heure sur les mouvements wallet tout en gardant la
+ * journée entière sur les deux autres sources produirait un total qui ne
+ * correspond à aucune fenêtre réelle. Les heures choisies sont donc arrondies à
+ * la journée, et l'UI affiche les dates effectivement appliquées.
+ */
+export interface PlayersPeriod {
+  key: string;
+  kind: "7d" | "30d" | "lifetime" | "custom";
+  from?: string;
+  to?: string;
+}
 
 export const PLAYERS_PERIOD_STORAGE_KEY = "players_period";
 
+/** `2026-08-01` → `01/08/2026`. */
+function frDate(iso: string): string {
+  const [y, m, d] = iso.split("-");
+  return `${d}/${m}/${y}`;
+}
+
 /** Libellé court de la période, pour les en-têtes secondaires (Kanban, drawer). */
-export function periodShortLabel(periodKey: PlayersPeriodKey): string {
-  return periodKey === "lifetime" ? "lifetime" : "30j";
+export function periodShortLabel(period: PlayersPeriod): string {
+  switch (period.kind) {
+    case "lifetime": return "lifetime";
+    case "7d": return "7j";
+    case "30d": return "30j";
+    case "custom": return `${frDate(period.from!)} → ${frDate(period.to!)}`;
+  }
 }
 
 /** Libellé de la colonne agency cut — dépend de la période active. */
-export function agencyColumnLabel(periodKey: PlayersPeriodKey): string {
-  return periodKey === "lifetime" ? "Agency cut — Lifetime" : "Agency cut 30j";
+export function agencyColumnLabel(period: PlayersPeriod): string {
+  switch (period.kind) {
+    case "lifetime": return "Agency cut — Lifetime";
+    case "7d": return "Agency cut 7j";
+    case "30d": return "Agency cut 30j";
+    case "custom": return `Agency cut — ${frDate(period.from!)} → ${frDate(period.to!)}`;
+  }
+}
+
+/** Sous-titre de la page. */
+export function periodSubtitle(period: PlayersPeriod): string {
+  const base = "Roster, deals par game et contribution agence";
+  switch (period.kind) {
+    case "lifetime": return `${base} depuis le début.`;
+    case "7d": return `${base} sur 7 jours.`;
+    case "30d": return `${base} sur 30 jours.`;
+    case "custom": return `${base} du ${frDate(period.from!)} au ${frDate(period.to!)}.`;
+  }
+}
+
+/** Texte de la ligne de rappel sous les boutons de la barre. */
+export function periodRangeLabel(period: PlayersPeriod): string {
+  switch (period.kind) {
+    case "lifetime": return "Toutes les périodes — depuis le premier mouvement";
+    case "7d": return "7 derniers jours";
+    case "30d": return "30 derniers jours";
+    case "custom":
+      return `Du ${frDate(period.from!)} au ${frDate(period.to!)} inclus — journées entières (heure FR)`;
+  }
 }
 
 export interface PlayersViewProps {
@@ -74,7 +130,7 @@ export interface PlayersViewProps {
   activeGames: Game[];
   apps: App[];
   affiliatedByPlayer: Record<number, { name: string; handle: string | null }>;
-  periodKey: PlayersPeriodKey;
+  period: PlayersPeriod;
 }
 
 // Un joueur "actif" au sens du roster : les deux status que le bot écrit.

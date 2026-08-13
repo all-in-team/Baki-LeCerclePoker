@@ -10,7 +10,7 @@ export interface PeriodFilter {
 /**
  * Server-side resolver for the shared PeriodFilterBar URL contract.
  * Mirrors the filter buttons: Cette semaine (current) / Semaine dernière (last) /
- * week-picker (ISO week) / 30 jours / Lifetime / Custom (Paris date+time range).
+ * week-picker (ISO week) / 7 jours / 30 jours / Lifetime / Custom (Paris date+time range).
  *
  * Default (undefined / unknown) = current week, label spans full Mon→Sun,
  * endDate capped to now.
@@ -20,6 +20,16 @@ export function computePeriodFilter(filter: string | undefined): PeriodFilter {
 
   if (f === "lifetime") {
     return { key: "lifetime", startDate: undefined, endDate: undefined, rangeLabel: "Toutes les transactions" };
+  }
+
+  // 7d n'est PAS rendu par la barre complète (les pages P&L n'ont jamais eu ce
+  // bouton) : il n'apparaît que sur les pages qui le demandent via `only`. Le
+  // résolveur, lui, le connaît — sinon `?filter=7d` retomberait silencieusement
+  // sur « cette semaine », qui n'est pas la même fenêtre.
+  if (f === "7d") {
+    const end = new Date();
+    const start = new Date(end.getTime() - 7 * 86400000);
+    return { key: "7d", startDate: toUTCISO(start), endDate: toUTCISO(end), rangeLabel: formatRangeLabel(start, end) };
   }
 
   if (f === "30d") {

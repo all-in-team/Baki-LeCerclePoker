@@ -6,7 +6,7 @@ import { X, Plus, Archive, RotateCcw } from "lucide-react";
 import Modal from "@/components/Modal";
 import AddPlayerToGameModal from "./AddPlayerToGameModal";
 import PlayerDetailDrawer from "./PlayerDetailDrawer";
-import { badgeFor, fmtAmt, isActiveStatus, periodShortLabel, type Deal, type Game, type Player, type PlayersPeriodKey } from "./shared";
+import { badgeFor, fmtAmt, isActiveStatus, periodShortLabel, type Deal, type Game, type Player, type PlayersPeriod } from "./shared";
 
 interface Props {
   players: Player[];
@@ -14,12 +14,12 @@ interface Props {
   dealsByPlayer: Record<number, Deal[]>;
   agencyByPlayer: Record<number, number>;
   pnlByPlayerGame: Record<string, { player_net: number; agency_pnl: number }>;
-  periodKey: PlayersPeriodKey;
+  period: PlayersPeriod;
   activeGames: Game[];
   onEdit: (p: Player) => void;
 }
 
-export default function PlayersKanbanView({ players, gamesByPlayer, dealsByPlayer, agencyByPlayer, pnlByPlayerGame, activeGames, periodKey, onEdit }: Props) {
+export default function PlayersKanbanView({ players, gamesByPlayer, dealsByPlayer, agencyByPlayer, pnlByPlayerGame, activeGames, period, onEdit }: Props) {
   const router = useRouter();
   const [showInactive, setShowInactive] = useState(false);
   const [addGameModal, setAddGameModal] = useState<Game | null>(null);
@@ -105,7 +105,7 @@ export default function PlayersKanbanView({ players, gamesByPlayer, dealsByPlaye
                 </div>
                 {totalCut !== 0 && (
                   <div style={{ fontSize: 11, color: totalCut > 0 ? "#D4AF37" : "#EF4444", fontWeight: 600 }}>
-                    {fmtAmt(totalCut)} USDT ({periodShortLabel(periodKey)})
+                    {fmtAmt(totalCut)} USDT ({periodShortLabel(period)})
                   </div>
                 )}
               </div>
@@ -213,7 +213,7 @@ export default function PlayersKanbanView({ players, gamesByPlayer, dealsByPlaye
           pnlByPlayerGame={pnlByPlayerGame}
           activeGames={activeGames}
           agencyTotal={agencyByPlayer[drawerPlayer.id] ?? 0}
-          periodKey={periodKey}
+          period={period}
           onClose={() => setDrawerPlayer(null)}
           onEdit={() => { const p = drawerPlayer; setDrawerPlayer(null); onEdit(p); }}
         />

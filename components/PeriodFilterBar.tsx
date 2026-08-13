@@ -7,23 +7,27 @@ import { Calendar, Clock, ChevronDown, Loader2 } from "lucide-react";
 export interface WeekOpt { isoWeek: string; label: string }
 
 /** Contrôles affichables de la barre — clés du prop `only`. */
-export type PeriodControl = "current" | "last" | "weeks" | "30d" | "lifetime" | "custom";
+export type PeriodControl = "current" | "last" | "weeks" | "7d" | "30d" | "lifetime" | "custom";
 
 /**
  * Shared period filter bar: Cette semaine / Semaine dernière / week-picker /
- * 30 jours / Lifetime / Custom (date+time range, Europe/Paris).
+ * 7 jours / 30 jours / Lifetime / Custom (date+time range, Europe/Paris).
+ *
+ * « 7 jours » est OPT-IN : il ne s'affiche que si `only` le demande. Les pages
+ * P&L n'ont jamais eu ce bouton — le rendre par défaut changerait leur barre
+ * sans que personne l'ait demandé.
  *
  * URL contract (paired with `computePeriodFilter` in lib/period-filter.ts):
  *   - "current"        → basePath (no query)
- *   - "last" | "30d" | "lifetime" | ISO week (2026-W18) | "custom:<start>~<end>"
+ *   - "last" | "7d" | "30d" | "lifetime" | ISO week (2026-W18) | "custom:<start>~<end>"
  *
  * Reused by every P&L page so the filters stay identical across games.
  *
  * `only` restreint la barre à un sous-ensemble de contrôles SANS toucher au
- * contrat d'URL : /players n'expose que 30 jours / Lifetime (les autres bornes
- * n'ont pas de sens sur un roster), mais reste lisible par computePeriodFilter
- * comme n'importe quelle page P&L. Omis = barre complète, rendu inchangé pour
- * les pages existantes.
+ * contrat d'URL : /players expose 7j / 30j / Lifetime / Custom (les bornes
+ * hebdomadaires n'ont pas de lecture utile sur un roster), mais reste lisible
+ * par computePeriodFilter comme n'importe quelle page P&L. Omis = barre
+ * historique, rendu inchangé pour les pages existantes.
  */
 export default function PeriodFilterBar({
   activeFilter, rangeLabel, weeks, basePath, only,
@@ -65,9 +69,10 @@ export default function PeriodFilterBar({
   const activeWeekLabel = isWeekPick ? weeks.find(w => w.isoWeek === effectiveFilter)?.label : null;
   const isCustom = effectiveFilter.startsWith("custom:");
 
-  const show = (k: PeriodControl) => !only || only.includes(k);
+  // Sans `only`, on rend la barre HISTORIQUE — donc tout sauf 7d, ajouté après coup.
+  const show = (k: PeriodControl) => only ? only.includes(k) : k !== "7d";
   const showWeekNav = show("current") || show("last") || show("weeks");
-  const showRange = show("30d") || show("lifetime");
+  const showRange = show("7d") || show("30d") || show("lifetime");
   // Séparateurs : uniquement ENTRE deux groupes réellement rendus, sinon la barre
   // restreinte ouvrirait sur un trait vertical orphelin.
   const sepBeforeRange = showWeekNav && (showRange || show("custom"));
@@ -120,6 +125,7 @@ export default function PeriodFilterBar({
         </div>}
         {sepBeforeRange && <div style={{ width: 1, height: 20, background: "var(--border)", margin: "0 4px" }} />}
         {([
+          { key: "7d", label: "7 jours" },
           { key: "30d", label: "30 jours" },
           { key: "lifetime", label: "Lifetime" },
         ] as const).filter(f => show(f.key)).map(f => (
