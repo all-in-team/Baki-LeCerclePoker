@@ -15,12 +15,14 @@ function daysAgo(n: number): string {
 
 /**
  * Résout `?filter=` vers la période de la page. Toute valeur non reconnue —
- * ou un `custom:` que computePeriodFilter refuse de résoudre — retombe sur 30j,
- * le défaut historique.
+ * ou un `custom:` irrésoluble — retombe sur 30j, le défaut historique.
  *
- * `custom` est ramené à des dates PARIS nues : la fenêtre est celle que Baki
- * lit dans la barre, et elle reste comparable aux sources jour (cf. le
- * commentaire de PlayersPeriod dans shared.ts).
+ * `7d` est résolu ICI et pas dans computePeriodFilter : ce résolveur est partagé
+ * avec les pages P&L (lib/games/wallet-ledger.tsx, nutspk/ledger.tsx) qui
+ * n'ont pas de whitelist. Y ajouter une branche `7d` changeait leur réponse à
+ * `?filter=7d` — d'un repli sur « cette semaine » vers une fenêtre glissante,
+ * sans aucun bouton actif dans leur barre. La page Joueurs garde donc sa
+ * borne 7j pour elle.
  */
 function resolvePlayersPeriod(raw: string | undefined, today: string): PlayersPeriod {
   if (raw === "lifetime") return { key: "lifetime", kind: "lifetime" };
@@ -31,12 +33,16 @@ function resolvePlayersPeriod(raw: string | undefined, today: string): PlayersPe
     // computePeriodFilter signale un custom malformé en retombant sur « current »
     // (semaine en cours) : la clé rendue ne correspond alors plus à la demande.
     if (resolved.key === raw && resolved.startDate && resolved.endDate) {
-      return {
-        key: raw,
-        kind: "custom",
-        from: toParisDate(resolved.startDate),
-        to: toParisDate(resolved.endDate),
-      };
+      const from = toParisDate(resolved.startDate);
+      const to = toParisDate(resolved.endDate);
+      // Garde anti-débordement : le contrat d'URL ne valide que la FORME
+      // (`\d{4}-\d{2}-\d{2}`), et Date.UTC normalise silencieusement une date
+      // impossible — `2026-02-30` devient le 2 mars. Sans ce contrôle, une URL
+      // en favori afficherait une fenêtre que personne n'a demandée.
+      const [askedFrom, askedTo] = raw.slice(7).split("~").map(p => p.slice(0, 10));
+      if (from === askedFrom && to === askedTo) {
+        return { key: raw, kind: "custom", from, to };
+      }
     }
   }
 
@@ -49,6 +55,9 @@ export default async function PlayersPage({ searchParams }: {
   searchParams: Promise<{ filter?: string }>;
 }) {
   const db = getDb();
+  // `today` est lu APRÈS l'await : calculé avant, un passage de minuit UTC
+  // pendant la résolution des searchParams rendrait une fenêtre finissant hier.
+  const rawFilter = (await searchParams).filter;
   const today = new Date().toISOString().slice(0, 10);
 
   // Période — même contrat d'URL que les pages P&L (PeriodFilterBar +
@@ -60,8 +69,11 @@ export default async function PlayersPage({ searchParams }: {
   // la vue par défaut doit rendre exactement les mêmes chiffres qu'avant. Lifetime
   // = période vide, la forme que getTopContributors traite déjà comme « sans borne »
   // (cf. lib/agent-tools.ts, qui appelle déjà getTopContributors({})).
-  const period = resolvePlayersPeriod((await searchParams).filter, today);
+  const period = resolvePlayersPeriod(rawFilter, today);
   const queryPeriod: Period = period.kind === "lifetime" ? {} : { from: period.from, to: period.to };
+  // Vrai si l'URL portait une valeur que la page a su résoudre telle quelle.
+  // Sert à ne PAS écraser la période mémorisée avec un repli silencieux.
+  const filterRecognized = rawFilter !== undefined && rawFilter === period.key;
 
   // Pas de whitelist de status : l'ancienne page /players affichait TOUS les joueurs alors
   // que le CRM filtrait 4 status. Sans ce SELECT ouvert, un joueur avec un status hors liste
@@ -133,7 +145,7 @@ export default async function PlayersPage({ searchParams }: {
   return (
     <>
       <PageHeader title="Joueurs" subtitle={periodSubtitle(period)} />
-      <PlayersPeriodBar period={period} />
+      <PlayersPeriodBar period={period} filterRecognized={filterRecognized} />
       <PlayersViewToggle
         players={allPlayers}
         gamesByPlayer={gamesByPlayer}

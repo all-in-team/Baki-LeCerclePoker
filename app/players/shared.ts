@@ -63,6 +63,14 @@ export interface App { id: number; name: string; }
  * journée entière sur les deux autres sources produirait un total qui ne
  * correspond à aucune fenêtre réelle. Les heures choisies sont donc arrondies à
  * la journée, et l'UI affiche les dates effectivement appliquées.
+ *
+ * ⚠️ Ces journées sont des journées UTC, pas des journées Paris. `from`/`to`
+ * repartent en base via `periodToDateRange` sous la forme `date + "T00:00:00Z"`,
+ * comparée à `tx_datetime` qui est stocké en UTC. Une fenêtre « du 1er au 5 août »
+ * couvre donc 01/08 02:00 → 06/08 01:59 heure de Paris en été. Un cashout de
+ * 00:30 tombe dans le mauvais jour. Corriger vraiment ce point demande de
+ * toucher `periodToDateRange` dans lib/queries.ts (chemin money, accord de Baki
+ * requis) — en attendant, l'UI annonce des journées UTC plutôt que de mentir.
  */
 export interface PlayersPeriod {
   key: string;
@@ -110,14 +118,26 @@ export function periodSubtitle(period: PlayersPeriod): string {
   }
 }
 
-/** Texte de la ligne de rappel sous les boutons de la barre. */
+/**
+ * Texte de la ligne de rappel sous les boutons de la barre.
+ *
+ * Deux formulations sont volontairement prudentes, parce que la requête ne tient
+ * pas ce que la version précédente promettait :
+ * - lifetime n'est PAS « depuis le premier mouvement » : getWalletSummaryByPlayer
+ *   borne à `pgd.start_date` sur toutes les périodes, donc les mouvements
+ *   antérieurs au deal sont exclus. Et la part grindhouse est plafonnée à
+ *   [2020-01-01, aujourd'hui] par getGrinderProfitability.
+ * - les bornes custom sont des journées UTC, pas des journées Paris : elles
+ *   partent en base sous la forme `date + "T00:00:00Z"`. En été, la fenêtre est
+ *   donc décalée de 2 h par rapport à l'heure de Paris.
+ */
 export function periodRangeLabel(period: PlayersPeriod): string {
   switch (period.kind) {
-    case "lifetime": return "Toutes les périodes — depuis le premier mouvement";
+    case "lifetime": return "Tout l'historique disponible, depuis le début de chaque deal";
     case "7d": return "7 derniers jours";
     case "30d": return "30 derniers jours";
     case "custom":
-      return `Du ${frDate(period.from!)} au ${frDate(period.to!)} inclus — journées entières (heure FR)`;
+      return `Du ${frDate(period.from!)} au ${frDate(period.to!)} inclus — journées calendaires UTC`;
   }
 }
 
