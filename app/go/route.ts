@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse, after } from "next/server";
-import { getDestUrl, getBotStartUrl, creToStartParam, logRichAdsClick, resolveClientIp } from "@/lib/richads";
+import { getDestUrl, getBotStartUrl, buildStartParam, logRichAdsClick, resolveClientIp } from "@/lib/richads";
 
 export const dynamic = "force-dynamic";
 
@@ -27,7 +27,7 @@ export async function GET(req: NextRequest) {
   // Lu en premier : la créative détermine désormais la destination, plus
   // seulement le contenu du log.
   const click = readClick(req);
-  const dest = resolveDestination(click.cre);
+  const dest = resolveDestination(click.cre, click.cb);
 
   // Sans destination configurée il n'y a nulle part où envoyer le visiteur.
   // On le dit franchement plutôt que de rediriger au hasard, et on log quand
@@ -58,16 +58,22 @@ export async function GET(req: NextRequest) {
  * une part de visiteurs perdue en route. Sans elle, on ne sait pas quelle
  * créative convertit.
  *
+ * Le start param porte DEUX choses : la source (pour l'attribution interne) et
+ * le click id (pour le postback S2S au réseau). Le second ne transite par aucun
+ * autre canal — `richads_clicks` connaît le click id mais rien ne le relie au
+ * compte Telegram qui fera `/start`. Ce qui n'est pas mis dans ce lien est
+ * définitivement perdu pour la remontée de conversion.
+ *
  * Repli sur l'ancienne destination si `DZPK_BOT_URL` manque — un clic acheté ne
  * doit jamais tomber dans le vide pour une variable oubliée.
  */
-function resolveDestination(rawCre: string | null): string | null {
+function resolveDestination(rawCre: string | null, rawCb: string | null): string | null {
   const bot = getBotStartUrl();
   if (bot) {
-    const source = creToStartParam(rawCre);
-    // `creToStartParam` ne rend que [A-Za-z0-9_] : l'encodage est un no-op, il
+    const start = buildStartParam(rawCre, rawCb);
+    // `buildStartParam` ne rend que [A-Za-z0-9_-] : l'encodage est un no-op, il
     // est là pour que la construction reste sûre si cette garantie évolue.
-    return `${bot}?start=${encodeURIComponent(source)}`;
+    return `${bot}?start=${encodeURIComponent(start)}`;
   }
   console.warn("[RICHADS] DZPK_BOT_URL absent — repli sur RICHADS_DEST_URL, aucune source capturée");
   return getDestUrl();

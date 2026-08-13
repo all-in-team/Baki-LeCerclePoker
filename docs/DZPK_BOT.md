@@ -32,6 +32,12 @@ webhook différentes.
 | `DZPK_USERBOT_SESSION` | Session GramJS du compte qui reçoit les DM du club | 2 |
 | `DZPK_INGEST_BATCH` | Taille du lot d'ingestion (défaut 100, borné 1–200) | 2, optionnel |
 | `DZPK_ADMIN_CHAT_ID` | Supergroupe « Support DZPK » (Sujets activés) | 3 |
+| `PROPELLER_POSTBACK_URL` | Postback de conversion PropellerAds, avec `{CB}` | 5 |
+| `RICHADS_POSTBACK_URL` | Postback de conversion RichAds, avec `{CB}` | 5 |
+
+Les deux dernières sont **sans repli l'une sur l'autre** : une source `tgads-`
+ne poste que sur Propeller. Absente ⇒ la conversion n'est pas remontée et
+`[DZPK POSTBACK]` le dit en erreur (cf. § 7 ter).
 
 ### ⚠️ La session dzpk est une SECONDE session, sur un autre compte
 
@@ -195,12 +201,20 @@ dernière identité subsistait.
 séquences d'`update_id` indépendantes. Partager la table ferait passer un
 `/start` dzpk pour un doublon parce que le bot principal a déjà vu ce numéro.
 
+**`click_id` suit exactement la règle de `source`** — écrit à la création, jamais
+réécrit. `postback_sent_at` est un **verrou**, pas un accusé de réception : il
+est posé avant l'appel réseau, et `postback_result` dit seul si l'envoi a abouti
+(cf. § 7 ter).
+
 ---
 
 ## 6. Tests
 
 ```bash
-npx tsx scripts/dzpk-leads.test.ts
+npx tsx scripts/dzpk-leads.test.ts      # /start, first-touch, idempotence
+npx tsx scripts/dzpk-go-bridge.test.ts  # clic pub → start param
+npx tsx scripts/dzpk-matcher.test.ts    # appariement nom-de-club ↔ lead
+npx tsx scripts/dzpk-postback.test.ts   # postbacks de conversion (§ 7 ter)
 ```
 
 Base SQLite en mémoire, alimentée par `DZPK_SCHEMA_SQL` — **la chaîne SQL de la
@@ -365,6 +379,125 @@ Deux choix à connaître avant de lire l'écran :
 
 L'écran est en **lecture seule** : trancher passe toujours par
 `POST /api/admin/dzpk-ingest` (action `resolve`).
+
+---
+
+## 7 ter. Postbacks S2S de conversion
+
+Quand un lead **rejoint le club** (`已进群`), le réseau qui a vendu le clic est
+prévenu par un GET sortant portant le **click id** de ce lead. C'est ce qui
+permet à Propeller et RichAds d'optimiser leurs enchères sur notre budget.
+
+| Variable | Réseau | Déclenchée par une source |
+|---|---|---|
+| `PROPELLER_POSTBACK_URL` | PropellerAds | `tgads-…` ou `tgads_…` |
+| `RICHADS_POSTBACK_URL` | RichAds | `richads-…` ou `richads_…` |
+
+Chacune contient `{CB}`, remplacé par le click id (URL-encodé). Toute autre
+source — `organic`, `direct`, achat direct, source inventée — **n'envoie rien**,
+et ce n'est pas une anomalie.
+
+### Le click id voyage dans le deep link
+
+C'est le point qui n'existait pas avant, et sans lequel rien du reste ne
+fonctionne. `richads_clicks` connaît le click id, mais **rien ne le relie au
+compte Telegram** qui fera `/start` : il n'y a aucune requête de rattrapage
+possible. Le seul canal est donc le lien lui-même.
+
+```
+/go?cre=tgads-26845722&cb=A1b2C3d4
+   → https://t.me/Poker5A_bot?start=tgads_26845722--A1b2C3d4
+                                     └── source ──┘  └ click id ┘
+```
+
+- Séparateur `--` : `creToStartParam` ne produit **jamais** de tiret (les siens
+  deviennent `_`), donc la première occurrence est forcément le séparateur.
+  Les liens écrits à la main (`?start=tgads_cn_video3`, `?start=tgads-cn`) sont
+  intacts — pas de `--`, donc pas de découpe.
+- Plafond Telegram de 64 caractères : si les deux ne tiennent pas, c'est la
+  **source** qui est rognée, jamais le click id. Une source tronquée dégrade un
+  libellé ; un click id tronqué casse la conversion en silence.
+- Le click id garde sa **casse** et ses tirets — c'est une clé opaque, elle doit
+  arriver au réseau à l'octet près.
+
+### `click_id` est FIRST-TOUCH, comme la source
+
+Écrit à la création du lead, jamais réécrit par un re-`/start`. La raison est
+plus dure que la symétrie : le réseau à qui l'on poste est déduit de `source`
+(first-touch). Un click id remplissable plus tard enverrait un click id RichAds
+à l'endpoint Propeller — réponse 200, aucun crédit, aucun symptôme.
+
+> **Conséquence à connaître : les leads créés avant le 2026-08-13 n'ont pas de
+> click id et ne posteront jamais.** Il n'y a pas de rattrapage — l'information
+> n'existait nulle part côté lead au moment de leur `/start`.
+
+### Un lead ne poste qu'une fois, par construction
+
+`postback_sent_at` est posé par un `UPDATE … WHERE postback_sent_at IS NULL`
+**avant** l'appel réseau. Deux passes du cron sur le même join ne peuvent pas
+envoyer deux fois.
+
+Le prix est assumé : **un envoi qui échoue n'est pas rejoué automatiquement.**
+Un postback manquant se voit (`postback_result`, logs) et se rejoue à la main ;
+un postback en double ne se voit nulle part et fausse le chiffre sur lequel on
+achète du trafic. Un rejeu automatique après timeout est précisément ce qui
+produit des doublons quand l'échec était un succès mal accusé.
+
+### Vérifier dans les logs Railway
+
+```
+railway logs 2>&1 | grep "DZPK POSTBACK"
+```
+
+```
+[DZPK START]    lead=42 tg=…  source=tgads_26845722 cb=A1b2C3d4 nouveau
+[DZPK POSTBACK] lead=42 réseau=propeller cb=A1b2C3d4 url=ad.propellerads.com/conversion.php http=200 ✅
+```
+
+`cb=aucun` au `/start` = le click id n'a pas voyagé : vérifier que la campagne
+passe bien `cb=` à `/go` (macro `${SUBID}` côté Propeller, `[CLICK_ID]` côté
+RichAds). Le constater au join serait trop tard.
+
+### Tester sans attendre un vrai join
+
+`POST /api/admin/dzpk-postback` avec un click id factice — celui que fournit
+l'outil **« Test conversion »** de PropellerAds. Ne touche à **aucun lead** :
+impossible de consommer le verrou d'un lead réel ou de marquer envoyée une
+conversion qui n'a pas eu lieu.
+
+```bash
+BASE=https://lecerclepoker-production.up.railway.app
+TOK=$ADMIN_RECONCILE_TOKEN
+
+# 1. Ce que le serveur voit : URL configurées, {CB} présent, état des leads
+curl -s $BASE/api/admin/dzpk-postback -H "x-admin-token: $TOK" | jq
+
+# 2. Envoi de test avec un cb factice
+curl -s -X POST $BASE/api/admin/dzpk-postback -H "x-admin-token: $TOK" \
+     -H 'content-type: application/json' \
+     -d '{"network":"propeller","cb":"TEST-CONV-1"}' | jq
+
+# 3. Rejeu explicite pour un lead réel (lève le verrou — à faire en connaissance)
+curl -s -X POST $BASE/api/admin/dzpk-postback -H "x-admin-token: $TOK" \
+     -H 'content-type: application/json' \
+     -d '{"leadId":42,"retry":true}' | jq
+```
+
+Le `GET` expose `joins_sans_postback` : les leads attribuables qui ont rejoint
+sans qu'aucun postback ne parte. Zéro ailleurs peut être normal (pas encore de
+trafic) ; une valeur **ici** ne l'est jamais.
+
+> Un `2xx` prouve que l'appel est parti et a été accepté. Qu'il ait été
+> **compté** se lit chez le réseau — répondre 200 est le comportement par défaut
+> d'un pixel de tracking.
+
+### Tests
+
+```bash
+npx tsx scripts/dzpk-postback.test.ts    # 68 assertions
+```
+
+---
 
 ## 8. Prévu, pas encore livré
 

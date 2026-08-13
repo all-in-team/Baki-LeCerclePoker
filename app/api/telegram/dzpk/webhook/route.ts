@@ -63,10 +63,14 @@ export async function POST(req: NextRequest) {
       const parts = text.split(/\s+/);
       const payload = parts.length > 1 ? parts.slice(1).join(" ") : null;
 
-      const { lead, created, observedSource } = recordStart(identity, payload);
+      const { lead, created, observedSource, observedClickId } = recordStart(identity, payload);
       console.log(
         `[DZPK START] lead=${lead.id} tg=${identity.telegram_id} @${identity.username ?? "-"} ` +
         `source=${lead.source}${observedSource !== lead.source ? ` (vue: ${observedSource}, first-touch conservée)` : ""} ` +
+        // Le click id est tracé dès le /start : c'est ici, et nulle part
+        // ailleurs, qu'on voit si le lien de pub l'a bien transporté. Le
+        // constater au moment du join serait trop tard — le clic est passé.
+        `cb=${lead.click_id ?? "aucun"}${observedClickId && observedClickId !== lead.click_id ? ` (vu: ${observedClickId}, first-touch conservé)` : ""} ` +
         `${created ? "nouveau" : `re-start #${lead.start_count}`}`
       );
 

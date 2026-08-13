@@ -11,6 +11,8 @@ import {
   DZPK_BROADCAST_SCHEMA_SQL, DZPK_MIGRATION_BROADCAST_V1,
   DZPK_TAKEOVER_SCHEMA_SQL, DZPK_TAKEOVER_ALTER_READ, DZPK_TAKEOVER_ALTER_RELAY,
   DZPK_MIGRATION_TAKEOVER_V1,
+  DZPK_POSTBACK_ALTER_CLICK, DZPK_POSTBACK_ALTER_SENT, DZPK_POSTBACK_ALTER_RESULT,
+  DZPK_MIGRATION_POSTBACK_V1,
 } from "./funnels/dzpk/schema";
 // Module pur (aucun import) : utilisable depuis une migration sans cycle.
 import { nameKey as dzpkNameKey } from "./funnels/dzpk/name-key";
@@ -3521,5 +3523,37 @@ function initSchema(db: Database.Database) {
     }
   } catch (err: any) {
     console.error(`[MIGRATION:${DZPK_MIGRATION_TAKEOVER_V1}] FAILED (sera rejouée au prochain boot):`, err.message);
+  }
+
+  // ── Postbacks S2S de conversion dzpk (phase 5) ─────────────────────────────
+  //
+  // Trois colonnes sur `dzpk_leads`, aucune table nouvelle : le postback est un
+  // ATTRIBUT du lead (son click id, l'instant où on a posté, ce que le réseau a
+  // répondu), pas un objet de domaine avec un cycle de vie propre.
+  //
+  // `postback_sent_at` fait office de verrou : il est posé par un UPDATE
+  // conditionnel avant l'appel réseau, ce qui rend le double-envoi impossible
+  // même si deux passes du cron tombaient ensemble sur le même join.
+  //
+  // Rien ici ne touche à NEXA, aux tables d'argent, ni au matching : ces trois
+  // colonnes ne sont lues que par `lib/funnels/dzpk/postback.ts`.
+  try {
+    const already = db.prepare(`SELECT 1 FROM _applied_fixes WHERE name = ?`)
+      .get(DZPK_MIGRATION_POSTBACK_V1);
+    if (!already) {
+      // Même parti pris que les migrations dzpk précédentes : SQLite n'a pas
+      // d'`ADD COLUMN IF NOT EXISTS`, donc on interroge le schéma pour qu'un
+      // échec partiel puisse être rejoué au boot suivant sans rester coincé.
+      const cols = new Set(
+        (db.prepare(`PRAGMA table_info(dzpk_leads)`).all() as any[]).map(c => c.name)
+      );
+      if (!cols.has("click_id")) db.exec(DZPK_POSTBACK_ALTER_CLICK);
+      if (!cols.has("postback_sent_at")) db.exec(DZPK_POSTBACK_ALTER_SENT);
+      if (!cols.has("postback_result")) db.exec(DZPK_POSTBACK_ALTER_RESULT);
+      db.prepare(`INSERT OR IGNORE INTO _applied_fixes (name) VALUES (?)`).run(DZPK_MIGRATION_POSTBACK_V1);
+      console.log(`[MIGRATION] ${DZPK_MIGRATION_POSTBACK_V1} applied`);
+    }
+  } catch (err: any) {
+    console.error(`[MIGRATION:${DZPK_MIGRATION_POSTBACK_V1}] FAILED (sera rejouée au prochain boot):`, err.message);
   }
 }

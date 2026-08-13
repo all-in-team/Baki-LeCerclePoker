@@ -312,3 +312,54 @@ export const DZPK_TAKEOVER_ALTER_READ =
  */
 export const DZPK_TAKEOVER_ALTER_RELAY =
   `ALTER TABLE dzpk_leads ADD COLUMN last_relayed_msg_id INTEGER NOT NULL DEFAULT 0`;
+
+/** Migration des postbacks S2S de conversion (phase 5). */
+export const DZPK_MIGRATION_POSTBACK_V1 = "add_dzpk_postback_v1";
+
+/**
+ * Click id du réseau publicitaire, capté au /start via le deep link.
+ *
+ * C'est la SEULE clé que Propeller et RichAds savent lire : sans elle, un
+ * postback part dans le vide — le réseau répond 200 et ne crédite rien. Elle est
+ * donc figée à la CRÉATION du lead, exactement comme `source`, et jamais
+ * réécrite par un re-/start.
+ *
+ * Le figeage n'est pas de la prudence, c'est une contrainte de cohérence : le
+ * réseau à qui l'on poste est déduit de `source` (first-touch), et le click id
+ * doit provenir du MÊME clic. Remplir cette colonne plus tard, sur un re-/start
+ * venu d'une autre campagne, enverrait un click id RichAds à l'endpoint
+ * Propeller — accepté, compté nulle part, et introuvable ensuite.
+ *
+ * Conséquence assumée : un lead créé AVANT cette migration n'a pas de click id
+ * et ne postera jamais. Il n'y a pas de rattrapage possible — le click id
+ * n'existait nulle part côté lead au moment de son /start.
+ */
+export const DZPK_POSTBACK_ALTER_CLICK =
+  `ALTER TABLE dzpk_leads ADD COLUMN click_id TEXT`;
+
+/**
+ * Horodatage du postback — et, du même coup, LE verrou d'unicité.
+ *
+ * Posé AVANT l'appel réseau, par un UPDATE conditionnel
+ * (`WHERE postback_sent_at IS NULL`) : c'est la seule façon de garantir qu'un
+ * lead ne poste jamais deux fois. Le poser après la réponse laisserait deux
+ * passes du cron entrer ensemble dans la fenêtre d'appel — et un doublon de
+ * conversion, côté réseau, corrompt un chiffre sur lequel on achète du trafic.
+ *
+ * Le prix : un envoi qui échoue n'est PAS rejoué automatiquement. C'est le
+ * compromis voulu — un postback manquant se voit dans `postback_result` et se
+ * rejoue à la main ; un postback en double ne se voit pas du tout.
+ */
+export const DZPK_POSTBACK_ALTER_SENT =
+  `ALTER TABLE dzpk_leads ADD COLUMN postback_sent_at TEXT`;
+
+/**
+ * Ce que le réseau a répondu : `propeller 200`, `richads 502`, `propeller
+ * timeout`… Une colonne de diagnostic, jamais lue par la logique.
+ *
+ * Sans elle, « envoyé » et « tenté puis échoué » sont indistinguables : les deux
+ * portent un `postback_sent_at`. C'est précisément la différence qui décide s'il
+ * faut rejouer à la main.
+ */
+export const DZPK_POSTBACK_ALTER_RESULT =
+  `ALTER TABLE dzpk_leads ADD COLUMN postback_result TEXT`;

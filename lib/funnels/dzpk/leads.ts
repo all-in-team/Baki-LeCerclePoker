@@ -9,6 +9,7 @@
 import { getDb } from "@/lib/db";
 import { DEFAULT_SOURCE, SOURCE_MAX_LEN } from "./config";
 import { nameKey } from "./name-key";
+import { splitStartParam } from "@/lib/richads";
 
 /**
  * Nom d'affichage Telegram : `first_name` + `last_name`.
@@ -53,6 +54,12 @@ export interface DzpkLead {
   last_followup_at: string | null;
   blocked: number;
   notes: string | null;
+  /** Click id du réseau de pub, figé au premier /start. NULL = non attribuable. */
+  click_id: string | null;
+  /** Posé AVANT l'appel réseau : c'est le verrou anti-doublon, pas un accusé de réception. */
+  postback_sent_at: string | null;
+  /** Diagnostic seul : `propeller 200`, `richads timeout`… */
+  postback_result: string | null;
 }
 
 /** Identité Telegram telle qu'observée sur un contact donné. */
@@ -190,6 +197,8 @@ export interface RecordStartResult {
   created: boolean;
   /** Source portée par CE /start, même quand elle est ignorée au profit du first-touch. */
   observedSource: string;
+  /** Click id porté par CE /start, même quand il est ignoré au profit du first-touch. */
+  observedClickId: string | null;
 }
 
 /**
@@ -202,6 +211,14 @@ export interface RecordStartResult {
  *
  * L'identité, elle, EST rafraîchie : c'est la plus récente qui sert à joindre
  * le lead. L'ancienne n'est pas perdue pour autant, elle reste dans le journal.
+ *
+ * LE CLICK ID SUIT LA MÊME RÈGLE, et pour une raison plus dure que la symétrie :
+ * le réseau à qui l'on postera est déduit de `source`. Si le click id pouvait
+ * être rempli plus tard, un lead `source=tgads` (first-touch) revenu par une
+ * pub RichAds enverrait un click id RichAds à l'endpoint Propeller. Le réseau
+ * répondrait 200, ne créditerait rien, et le seul symptôme serait un taux de
+ * conversion qui baisse sans cause apparente. Les deux colonnes viennent du
+ * même clic, ou d'aucun.
  */
 export function recordStart(
   identity: TgIdentity,
@@ -209,7 +226,13 @@ export function recordStart(
   dbOverride?: DbLike,
 ): RecordStartResult {
   const db = dbOverride ?? getDb();
-  const observedSource = normalizeSource(payload);
+  // Le payload porte deux choses collées : `tgads_123--A1b2C3`. Le click id est
+  // extrait AVANT normalisation — `normalizeSource` plie la casse, ce qui
+  // détruirait une clé opaque sensible à la casse.
+  const { source: sourcePart, clickId: observedClickId } = splitStartParam(payload ?? null);
+  const observedSource = normalizeSource(sourcePart);
+  // Le BRUT reste le payload entier, séparateur et click id compris : c'est la
+  // seule trace consultable si le découpage se révèle faux un jour.
   const rawPayload = payload == null || payload === "" ? null : String(payload).slice(0, 256);
 
   const existing = db.prepare(`SELECT * FROM dzpk_leads WHERE telegram_id = ?`)
@@ -220,8 +243,8 @@ export function recordStart(
   if (!existing) {
     const info = db.prepare(
       `INSERT INTO dzpk_leads (telegram_id, username, first_name, last_name, source, source_raw,
-                               display_name, display_name_key)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+                               display_name, display_name_key, click_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
     ).run(
       identity.telegram_id,
       identity.username ?? null,
@@ -231,11 +254,17 @@ export function recordStart(
       rawPayload,
       display,
       nameKey(display),
+      observedClickId,
     );
     const lead = db.prepare(`SELECT * FROM dzpk_leads WHERE id = ?`)
       .get(Number(info.lastInsertRowid)) as DzpkLead;
-    logLeadEvent(lead.id, "start", { source: observedSource, identity, payload: { raw: rawPayload } }, dbOverride);
-    return { lead, created: true, observedSource };
+    logLeadEvent(
+      lead.id,
+      "start",
+      { source: observedSource, identity, payload: { raw: rawPayload, click_id: observedClickId } },
+      dbOverride,
+    );
+    return { lead, created: true, observedSource, observedClickId };
   }
 
   // Re-/start : identité rafraîchie, source NON touchée.
@@ -258,11 +287,23 @@ export function recordStart(
   logLeadEvent(
     existing.id,
     "restart",
-    { source: observedSource, identity, payload: { raw: rawPayload, kept_source: existing.source } },
+    {
+      source: observedSource,
+      identity,
+      payload: {
+        raw: rawPayload,
+        kept_source: existing.source,
+        // Le click id observé est JOURNALISÉ sans être écrit sur le lead. C'est
+        // ce qui rendra explicable, six semaines plus tard, qu'un lead ait
+        // cliqué une seconde pub sans qu'aucun postback ne soit parti.
+        observed_click_id: observedClickId,
+        kept_click_id: existing.click_id ?? null,
+      },
+    },
     dbOverride,
   );
   const lead = db.prepare(`SELECT * FROM dzpk_leads WHERE id = ?`).get(existing.id) as DzpkLead;
-  return { lead, created: false, observedSource };
+  return { lead, created: false, observedSource, observedClickId };
 }
 
 // ── Messages entrants ─────────────────────────────────────

@@ -15,6 +15,7 @@
 import { getDb } from "@/lib/db";
 import { nameKey } from "./name-key";
 import { dzpkAutoMatchEnabled } from "./config";
+import { fireConversionPostback } from "./postback";
 import type { DbLike } from "./leads";
 
 export type MatchStatus = "auto" | "manual" | "ambiguous" | "unmatched";
@@ -365,6 +366,23 @@ function recomputeLeadEffect(db: DbLike, leadId: number, kind: string): void {
   ).run(leadId, kind, leadId);
 }
 
+/**
+ * Le join vient d'être crédité : c'est LE moment de prévenir le réseau de pub.
+ *
+ * Pourquoi ici et pas dans le webhook : « rejoindre le groupe » n'est pas un
+ * événement que le bot observe. Le bot ne voit que le /start ; l'entrée dans le
+ * club arrive plus tard, par une notification `已进群` du club, ingérée puis
+ * appariée. Ce point du code est le seul endroit où « ce lead-ci a rejoint »
+ * devient vrai — et il l'est pour les DEUX chemins, l'auto et la main.
+ *
+ * L'appel ne bloque rien et ne peut rien casser : tout est décidé et loggué
+ * dans postback.ts, y compris les refus (pas de click id, source organique).
+ */
+function notifyNetworkOnJoin(db: DbLike, leadId: number, kind: string): void {
+  if (kind !== "join") return;
+  fireConversionPostback(leadId, db);
+}
+
 export interface MatchRunOutcome {
   examined: number;
   auto: number;
@@ -475,6 +493,7 @@ export function runMatching(
     if (!msg.name_key) continue;
 
     recomputeLeadEffect(db, r.leadId!, msg.parsed_kind);
+    notifyNetworkOnJoin(db, r.leadId!, msg.parsed_kind);
 
     // Le lien n'est mémorisé QUE sur une unicité réelle du nom.
     //
@@ -580,6 +599,11 @@ export function resolveManually(
   if (EFFECT.has(msg.parsed_kind)) {
     recomputeLeadEffect(db, leadId, msg.parsed_kind);
     if (ancienLeadId !== null) recomputeLeadEffect(db, ancienLeadId, msg.parsed_kind);
+    // Le lead nouvellement crédité peut déclencher un postback ; l'ancien, lui,
+    // ne se « dé-poste » pas. Un postback parti est parti — le réseau n'a pas
+    // d'annulation, et en fabriquer une (seconde requête « ignore la
+    // précédente ») serait plus risqué que la conversion en trop qu'on corrige.
+    notifyNetworkOnJoin(db, leadId, msg.parsed_kind);
   }
 
   if (msg.name_key) {

@@ -89,6 +89,102 @@ export function creToStartParam(rawCre: string | null | undefined): string {
   return safe.slice(0, 64) || DEFAULT_AD_SOURCE;
 }
 
+/**
+ * Séparateur source ↔ click id dans le start param : `tgads_123--A1b2C3`.
+ *
+ * Le choix n'est pas cosmétique. `creToStartParam` n'émet QUE `[A-Za-z0-9_]` —
+ * jamais de tiret, les siens sont convertis en `_`. Un `--` ne peut donc pas
+ * apparaître dans une source produite par le pont /go : la première occurrence
+ * est forcément notre séparateur, et le click id (qui peut, lui, contenir des
+ * tirets) se récupère entier en prenant tout ce qui suit.
+ *
+ * Un seul tiret aurait suffi côté machine, mais pas côté humain : les liens
+ * écrits à la main (`?start=tgads-cn-video3`, cf. docs/DZPK_BOT.md) se seraient
+ * fait découper en « source tgads + click id cn-video3 ». Deux tirets rendent la
+ * collision improbable au lieu de probable.
+ */
+export const CLICK_SEP = "--";
+
+/** Plafond Telegram du start param (Bot API : 1-64 caractères). */
+export const START_PARAM_MAX = 64;
+
+/**
+ * Click id du réseau (`cb`), validé pour VOYAGER dans un deep link Telegram.
+ *
+ * Charset volontairement plus large que celui de `creToStartParam` : la Bot API
+ * autorise `A-Z a-z 0-9 _ -` dans le start param, et un click id ne se réécrit
+ * pas — c'est une clé opaque que le réseau doit retrouver à l'octet près.
+ * Convertir ses tirets comme on convertit ceux d'une créative produirait un id
+ * accepté partout et reconnu nulle part.
+ *
+ * Hors charset ⇒ `null`, jamais de troncature : un click id amputé déclenche un
+ * postback que le réseau ignore en silence, ce qui est le pire des cas — on
+ * croit mesurer, on ne mesure rien. Mieux vaut ne rien envoyer et le voir.
+ */
+export function cleanClickId(v: string | null | undefined): string | null {
+  if (v == null) return null;
+  const t = v.trim();
+  if (t === "") return null;
+  return /^[A-Za-z0-9_-]{1,64}$/.test(t) ? t : null;
+}
+
+/**
+ * Start param complet du deep link : source, puis click id s'il y en a un.
+ *
+ * ┌─ CE QUI SE JOUE ICI ───────────────────────────────────────────────────────┐
+ * │ C'est le SEUL chemin par lequel un click id atteint le bot. Le lead qui    │
+ * │ arrive sans lui est définitivement non-attribuable : aucune requête, aucun │
+ * │ rattrapage ne pourra le relier au clic acheté, et sa conversion ne sera    │
+ * │ jamais remontée au réseau qui l'a vendue.                                  │
+ * └────────────────────────────────────────────────────────────────────────────┘
+ *
+ * Arbitrage de troncature, quand les deux ne tiennent pas dans les 64
+ * caractères : c'est la SOURCE qui est rognée, jamais le click id. Une source
+ * tronquée dégrade un libellé de campagne (visible, réparable) ; un click id
+ * tronqué casse la conversion en silence. Les deux ne coûtent pas le même prix.
+ *
+ * Si le click id à lui seul ne tient pas, il est ABANDONNÉ et l'anomalie est
+ * loggée en erreur : le clic part quand même vers le bot — contrat n°1 de /go,
+ * on ne perd jamais un clic — mais sans espoir de postback.
+ */
+export function buildStartParam(rawCre: string | null | undefined, rawCb: string | null | undefined): string {
+  const source = creToStartParam(rawCre);
+  const cb = cleanClickId(rawCb);
+  if (!cb) return source.slice(0, START_PARAM_MAX);
+
+  const budget = START_PARAM_MAX - CLICK_SEP.length - cb.length;
+  if (budget < 1) {
+    console.error(
+      `[RICHADS] click id de ${cb.length} caractères — ne tient pas dans le start param ` +
+      `(${START_PARAM_MAX} max avec la source) : clic redirigé SANS click id, aucun postback possible`
+    );
+    return source.slice(0, START_PARAM_MAX);
+  }
+  return `${source.slice(0, budget)}${CLICK_SEP}${cb}`;
+}
+
+/**
+ * Découpe l'inverse : `tgads_123--A1b2C3` → source `tgads_123`, click id `A1b2C3`.
+ *
+ * Découpe à la PREMIÈRE occurrence — un click id peut lui-même contenir `--`, la
+ * source non (cf. CLICK_SEP). Aucun payload n'est rejeté : un deep link écrit à
+ * la main, sans séparateur, rend simplement `{ source: <tout>, clickId: null }`.
+ */
+export function splitStartParam(payload: string | null | undefined): {
+  source: string | null;
+  clickId: string | null;
+} {
+  if (payload == null) return { source: null, clickId: null };
+  const i = payload.indexOf(CLICK_SEP);
+  if (i < 0) return { source: payload, clickId: null };
+  return {
+    source: payload.slice(0, i),
+    // Revalidé : ce qui suit le séparateur vient d'une URL publique, et rien ne
+    // garantit que c'est bien ce que /go y a mis.
+    clickId: cleanClickId(payload.slice(i + CLICK_SEP.length)),
+  };
+}
+
 /** Destination du redirect. Jamais en dur : c'est un paramètre de campagne. */
 export function getDestUrl(): string | null {
   const url = process.env.RICHADS_DEST_URL?.trim();

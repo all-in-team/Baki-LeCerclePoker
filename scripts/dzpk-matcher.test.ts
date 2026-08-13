@@ -24,6 +24,7 @@ import { persistClubMessages } from "../lib/funnels/dzpk/ingest";
 import {
   DZPK_SCHEMA_SQL, DZPK_INGEST_SCHEMA_SQL,
   DZPK_MATCH_SCHEMA_SQL, DZPK_MATCH_SCHEMA_SQL_2, DZPK_MATCH_SCHEMA_SQL_3,
+  DZPK_POSTBACK_ALTER_CLICK, DZPK_POSTBACK_ALTER_SENT, DZPK_POSTBACK_ALTER_RESULT,
 } from "../lib/funnels/dzpk/schema";
 import { nameKey } from "../lib/funnels/dzpk/name-key";
 import type { ParserConfig } from "../lib/funnels/dzpk/club-parser";
@@ -47,6 +48,10 @@ function freshDb(): DbLike & { exec(s: string): void; close(): void; prepare(s: 
   db.exec(DZPK_MATCH_SCHEMA_SQL);
   db.exec(DZPK_MATCH_SCHEMA_SQL_2);
   db.exec(DZPK_MATCH_SCHEMA_SQL_3);
+  // Le crédit d'un join déclenche désormais la lecture des colonnes de postback.
+  db.exec(DZPK_POSTBACK_ALTER_CLICK);
+  db.exec(DZPK_POSTBACK_ALTER_SENT);
+  db.exec(DZPK_POSTBACK_ALTER_RESULT);
   return db as any;
 }
 

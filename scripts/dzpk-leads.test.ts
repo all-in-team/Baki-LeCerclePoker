@@ -29,6 +29,7 @@ import {
 import {
   DZPK_SCHEMA_SQL,
   DZPK_MATCH_SCHEMA_SQL, DZPK_MATCH_SCHEMA_SQL_2, DZPK_MATCH_SCHEMA_SQL_3,
+  DZPK_POSTBACK_ALTER_CLICK, DZPK_POSTBACK_ALTER_SENT, DZPK_POSTBACK_ALTER_RESULT,
 } from "../lib/funnels/dzpk/schema";
 
 let passed = 0;
@@ -47,6 +48,10 @@ function freshDb(): DbLike & { exec(s: string): void; close(): void } {
   db.exec(DZPK_MATCH_SCHEMA_SQL);
   db.exec(DZPK_MATCH_SCHEMA_SQL_2);
   db.exec(DZPK_MATCH_SCHEMA_SQL_3);
+  // click_id est renseignée par le /start depuis la migration des postbacks.
+  db.exec(DZPK_POSTBACK_ALTER_CLICK);
+  db.exec(DZPK_POSTBACK_ALTER_SENT);
+  db.exec(DZPK_POSTBACK_ALTER_RESULT);
   return db as any;
 }
 
