@@ -66,6 +66,7 @@ export default function PlayersPeriodBar({
       weeks={[]}
       basePath="/players"
       only={["7d", "30d", "lifetime", "custom"]}
+      dayGranularCustom
     />
   );
 }

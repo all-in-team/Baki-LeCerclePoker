@@ -23,6 +23,12 @@ export type PeriodControl = "current" | "last" | "weeks" | "7d" | "30d" | "lifet
  *
  * Reused by every P&L page so the filters stay identical across games.
  *
+ * `dayGranularCustom` s'adresse aux pages dont la fenêtre custom est arrondie à
+ * la journée (/players) : les champs d'heure y seraient des contrôles morts —
+ * deux clés d'URL différentes pour des données identiques — et la mention
+ * « Heure France » y contredirait la ligne de rappel juste en dessous. Défaut
+ * `false` : les pages P&L gardent leur sélecteur date+heure inchangé.
+ *
  * `only` restreint la barre à un sous-ensemble de contrôles SANS toucher au
  * contrat d'URL : /players expose 7j / 30j / Lifetime / Custom (les bornes
  * hebdomadaires n'ont pas de lecture utile sur un roster), mais reste lisible
@@ -30,13 +36,14 @@ export type PeriodControl = "current" | "last" | "weeks" | "7d" | "30d" | "lifet
  * historique, rendu inchangé pour les pages existantes.
  */
 export default function PeriodFilterBar({
-  activeFilter, rangeLabel, weeks, basePath, only,
+  activeFilter, rangeLabel, weeks, basePath, only, dayGranularCustom = false,
 }: {
   activeFilter: string;
   rangeLabel: string;
   weeks: WeekOpt[];
   basePath: string;
   only?: PeriodControl[];
+  dayGranularCustom?: boolean;
 }) {
   const router = useRouter();
   const [weekOpen, setWeekOpen] = useState(false);
@@ -80,7 +87,9 @@ export default function PeriodFilterBar({
 
   function applyCustomRange() {
     if (!customStart || !customEnd) return;
-    navigate(`custom:${customStart}T${customStartTime}~${customEnd}T${customEndTime}`);
+    const st = dayGranularCustom ? "00:00" : customStartTime;
+    const et = dayGranularCustom ? "23:59" : customEndTime;
+    navigate(`custom:${customStart}T${st}~${customEnd}T${et}`);
     setCustomOpen(false);
   }
 
@@ -154,14 +163,16 @@ export default function PeriodFilterBar({
         <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 10, flexWrap: "wrap" }}>
           <label style={{ fontSize: 11, color: "var(--text-muted)", fontWeight: 600 }}>Du</label>
           <input type="date" value={customStart} onChange={e => setCustomStart(e.target.value)} style={{ padding: "5px 8px", borderRadius: 6, fontSize: 12, background: "var(--bg-surface)", color: "var(--text)", border: "1px solid var(--border)", outline: "none" }} />
-          <input type="time" value={customStartTime} onChange={e => setCustomStartTime(e.target.value)} style={{ padding: "5px 8px", borderRadius: 6, fontSize: 12, background: "var(--bg-surface)", color: "var(--text)", border: "1px solid var(--border)", outline: "none", width: 90 }} />
+          {!dayGranularCustom && <input type="time" value={customStartTime} onChange={e => setCustomStartTime(e.target.value)} style={{ padding: "5px 8px", borderRadius: 6, fontSize: 12, background: "var(--bg-surface)", color: "var(--text)", border: "1px solid var(--border)", outline: "none", width: 90 }} />}
           <label style={{ fontSize: 11, color: "var(--text-muted)", fontWeight: 600 }}>Au</label>
           <input type="date" value={customEnd} onChange={e => setCustomEnd(e.target.value)} style={{ padding: "5px 8px", borderRadius: 6, fontSize: 12, background: "var(--bg-surface)", color: "var(--text)", border: "1px solid var(--border)", outline: "none" }} />
-          <input type="time" value={customEndTime} onChange={e => setCustomEndTime(e.target.value)} style={{ padding: "5px 8px", borderRadius: 6, fontSize: 12, background: "var(--bg-surface)", color: "var(--text)", border: "1px solid var(--border)", outline: "none", width: 90 }} />
+          {!dayGranularCustom && <input type="time" value={customEndTime} onChange={e => setCustomEndTime(e.target.value)} style={{ padding: "5px 8px", borderRadius: 6, fontSize: 12, background: "var(--bg-surface)", color: "var(--text)", border: "1px solid var(--border)", outline: "none", width: 90 }} />}
           <button onClick={applyCustomRange} disabled={!customStart || !customEnd} style={{ padding: "5px 14px", borderRadius: 7, fontSize: 12, fontWeight: 600, cursor: customStart && customEnd ? "pointer" : "not-allowed", border: "1px solid var(--green)", background: "rgba(34,197,94,0.12)", color: "var(--green)", opacity: customStart && customEnd ? 1 : 0.4 }}>
             Appliquer
           </button>
-          <span style={{ fontSize: 10, color: "var(--text-dim)" }}>Heure France (Europe/Paris)</span>
+          <span style={{ fontSize: 10, color: "var(--text-dim)" }}>
+            {dayGranularCustom ? "Journées entières (UTC)" : "Heure France (Europe/Paris)"}
+          </span>
         </div>
       )}
       <div style={{ marginTop: 10, fontSize: 12, color: "var(--text-dim)", display: "flex", alignItems: "center", gap: 6 }}>

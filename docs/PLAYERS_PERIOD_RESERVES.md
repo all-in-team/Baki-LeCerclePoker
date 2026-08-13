@@ -56,8 +56,8 @@ ce cas ; `getWepokerPnL` n'en a pas.
 Décision assumée pour ce merge (Baki, 2026-08-13) : on reste en UTC, l'UI l'annonce.
 
 Le sélecteur custom propose des heures ; elles sont **ignorées**, la fenêtre est arrondie à la
-journée. Et ces journées sont des journées UTC : `page.tsx` passe `date + "T00:00:00Z"`, comparé à
-`tx_datetime` stocké en UTC. En été, « du 1er au 5 août » couvre donc 01/08 02:00 → 06/08 01:59
+journée. Et ces journées sont des journées UTC : `periodToDateRange` (`lib/queries.ts:1556`) envoie
+`from + "T00:00:00Z"` et `to + "T23:59:59Z"`, comparés à `tx_datetime` stocké en UTC. En été, « du 1er au 5 août » couvre donc 01/08 02:00 → 06/08 01:59
 heure de Paris. **Un cashout de 00:30 tombe dans le mauvais jour.**
 
 Le passage en journées Paris est un chantier séparé, avec son propre audit : il impose de toucher
@@ -85,10 +85,10 @@ structurellement différents pour le même game (reports CNY vs wallets USDT).
 
 ---
 
-## ❓ Inconnue non levée — devises dans `wallet_transactions`
+## ✅ Levée le 2026-08-13 — devises dans `wallet_transactions`
 
 `getWalletSummaryByPlayer` (`lib/queries.ts:653-656`) somme `wt.amount` **brut**, sans `toUsdt()`.
-En pratique tous les écrivains épinglent USDT, sauf `app/api/wallets/route.ts:16`
+En pratique tous les écrivains épinglent USDT, sauf `app/api/wallets/route.ts:17`
 (`body.currency || "USDT"`). Le money-auditor conditionne son PASS à cette vérification :
 
 ```sql
@@ -99,8 +99,15 @@ FROM wallet_transactions
 GROUP BY currency;
 ```
 
-**Statut : non exécuté en prod à ce jour.** La base locale est vide, et l'endpoint admin n'est pas
-atteignable depuis la session Claude Code (bloqué par le classifieur de permissions).
+**Exécuté en prod le 2026-08-13 par Baki :**
+
+```json
+{"ok":true,"rows":[{"currency":"USDT","n":2363}]}
+```
+
+Une seule devise, 2 363 lignes. L'invariant #3 n'est pas menacé sur le chemin wallet, y compris en
+Lifetime. À ré-exécuter si une intégration se met un jour à écrire une autre devise — le seul point
+d'entrée qui le permettrait est `app/api/wallets/route.ts:17`.
 
 ---
 
@@ -113,11 +120,14 @@ lifetime : la jointure est pilotée par `(game_id, player_id)` et la borne de da
 résiduel appliqué à des lignes déjà lues. Le 30 jours lisait donc déjà tout et jetait ; lifetime lit
 les mêmes pages et en garde davantage.
 
-**Ni cache ni index nouveau ne sont justifiés par ce changement.** Ordre de grandeur absolu en prod :
-non mesuré.
+**Ni cache ni index nouveau ne sont justifiés par ce changement.** Ordre de grandeur mesuré en prod
+le 2026-08-13 : **2 363 lignes** dans `wallet_transactions`, tout l'historique confondu — trois
+ordres de grandeur sous le seuil où la question se poserait.
 
 Point de vigilance non lié à la période — le bloc grindhouse de `getTopContributors`
-(`lib/queries.ts:2343-2351`) émet 3 requêtes par grinder et son `catch` avale **toute** erreur : une
-erreur en cours de boucle ferait disparaître silencieusement la contribution de tous les grinders
-restants au lieu d'échouer bruyamment. Sur une page d'argent, ce `catch` devrait être restreint au
-cas « table absente ».
+(`lib/queries.ts:2343-2351`) émet 3 requêtes par grinder, et l'échec est avalé sur **deux** niveaux :
+`getGrinderProfitability` a son propre `try/catch` qui renvoie `empty` (`lib/queries.ts:1892`,
+`1921-1923`), donc un grinder en erreur compte 0 et la boucle continue ; le `catch` externe ne se
+déclenche que sur le `SELECT` des grinders ou l'accumulation. Dans les deux cas, une page d'argent
+affiche 0 au lieu d'échouer bruyamment. Ces `catch` devraient être restreints au cas
+« table absente ».

@@ -64,9 +64,9 @@ export interface App { id: number; name: string; }
  * correspond à aucune fenêtre réelle. Les heures choisies sont donc arrondies à
  * la journée, et l'UI affiche les dates effectivement appliquées.
  *
- * ⚠️ Ces journées sont des journées UTC, pas des journées Paris. `from`/`to`
- * repartent en base via `periodToDateRange` sous la forme `date + "T00:00:00Z"`,
- * comparée à `tx_datetime` qui est stocké en UTC. Une fenêtre « du 1er au 5 août »
+ * ⚠️ Ces journées sont des journées UTC, pas des journées Paris. `periodToDateRange`
+ * renvoie `from + "T00:00:00Z"` et `to + "T23:59:59Z"`, comparés à `tx_datetime`
+ * qui est stocké en UTC. Une fenêtre « du 1er au 5 août »
  * couvre donc 01/08 02:00 → 06/08 01:59 heure de Paris en été. Un cashout de
  * 00:30 tombe dans le mauvais jour. Corriger vraiment ce point demande de
  * toucher `periodToDateRange` dans lib/queries.ts (chemin money, accord de Baki
@@ -128,8 +128,8 @@ export function periodSubtitle(period: PlayersPeriod): string {
  *   antérieurs au deal sont exclus. Et la part grindhouse est plafonnée à
  *   [2020-01-01, aujourd'hui] par getGrinderProfitability.
  * - les bornes custom sont des journées UTC, pas des journées Paris : elles
- *   partent en base sous la forme `date + "T00:00:00Z"`. En été, la fenêtre est
- *   donc décalée de 2 h par rapport à l'heure de Paris.
+ *   partent en base sous la forme `from + "T00:00:00Z"` / `to + "T23:59:59Z"`.
+ *   En été, la fenêtre est donc décalée de 2 h par rapport à l'heure de Paris.
  */
 export function periodRangeLabel(period: PlayersPeriod): string {
   switch (period.kind) {
