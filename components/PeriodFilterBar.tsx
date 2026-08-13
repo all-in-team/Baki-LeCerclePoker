@@ -6,6 +6,9 @@ import { Calendar, Clock, ChevronDown, Loader2 } from "lucide-react";
 
 export interface WeekOpt { isoWeek: string; label: string }
 
+/** Contrôles affichables de la barre — clés du prop `only`. */
+export type PeriodControl = "current" | "last" | "weeks" | "30d" | "lifetime" | "custom";
+
 /**
  * Shared period filter bar: Cette semaine / Semaine dernière / week-picker /
  * 30 jours / Lifetime / Custom (date+time range, Europe/Paris).
@@ -15,14 +18,21 @@ export interface WeekOpt { isoWeek: string; label: string }
  *   - "last" | "30d" | "lifetime" | ISO week (2026-W18) | "custom:<start>~<end>"
  *
  * Reused by every P&L page so the filters stay identical across games.
+ *
+ * `only` restreint la barre à un sous-ensemble de contrôles SANS toucher au
+ * contrat d'URL : /players n'expose que 30 jours / Lifetime (les autres bornes
+ * n'ont pas de sens sur un roster), mais reste lisible par computePeriodFilter
+ * comme n'importe quelle page P&L. Omis = barre complète, rendu inchangé pour
+ * les pages existantes.
  */
 export default function PeriodFilterBar({
-  activeFilter, rangeLabel, weeks, basePath,
+  activeFilter, rangeLabel, weeks, basePath, only,
 }: {
   activeFilter: string;
   rangeLabel: string;
   weeks: WeekOpt[];
   basePath: string;
+  only?: PeriodControl[];
 }) {
   const router = useRouter();
   const [weekOpen, setWeekOpen] = useState(false);
@@ -55,6 +65,14 @@ export default function PeriodFilterBar({
   const activeWeekLabel = isWeekPick ? weeks.find(w => w.isoWeek === effectiveFilter)?.label : null;
   const isCustom = effectiveFilter.startsWith("custom:");
 
+  const show = (k: PeriodControl) => !only || only.includes(k);
+  const showWeekNav = show("current") || show("last") || show("weeks");
+  const showRange = show("30d") || show("lifetime");
+  // Séparateurs : uniquement ENTRE deux groupes réellement rendus, sinon la barre
+  // restreinte ouvrirait sur un trait vertical orphelin.
+  const sepBeforeRange = showWeekNav && (showRange || show("custom"));
+  const sepBeforeCustom = (showWeekNav || showRange) && show("custom");
+
   function applyCustomRange() {
     if (!customStart || !customEnd) return;
     navigate(`custom:${customStart}T${customStartTime}~${customEnd}T${customEndTime}`);
@@ -68,7 +86,7 @@ export default function PeriodFilterBar({
         {([
           { key: "current", label: "Cette semaine" },
           { key: "last", label: "Semaine dernière" },
-        ] as const).map(f => (
+        ] as const).filter(f => show(f.key)).map(f => (
           <button key={f.key} onClick={() => navigate(f.key)} style={{
             padding: "6px 14px", borderRadius: 7, fontSize: 12, fontWeight: 600, cursor: "pointer",
             border: effectiveFilter === f.key ? "1px solid var(--green)" : "1px solid var(--border)",
@@ -78,7 +96,7 @@ export default function PeriodFilterBar({
             {f.label}
           </button>
         ))}
-        <div style={{ position: "relative" }}>
+        {show("weeks") && <div style={{ position: "relative" }}>
           <button onClick={() => setWeekOpen(!weekOpen)} style={{
             padding: "6px 14px", borderRadius: 7, fontSize: 12, fontWeight: 600, cursor: "pointer",
             border: isWeekPick ? "1px solid var(--green)" : "1px solid var(--border)",
@@ -99,12 +117,12 @@ export default function PeriodFilterBar({
               ))}
             </div>
           )}
-        </div>
-        <div style={{ width: 1, height: 20, background: "var(--border)", margin: "0 4px" }} />
+        </div>}
+        {sepBeforeRange && <div style={{ width: 1, height: 20, background: "var(--border)", margin: "0 4px" }} />}
         {([
           { key: "30d", label: "30 jours" },
           { key: "lifetime", label: "Lifetime" },
-        ] as const).map(f => (
+        ] as const).filter(f => show(f.key)).map(f => (
           <button key={f.key} onClick={() => navigate(f.key)} style={{
             padding: "6px 14px", borderRadius: 7, fontSize: 12, fontWeight: 600, cursor: "pointer",
             border: effectiveFilter === f.key ? "1px solid var(--green)" : "1px solid var(--border)",
@@ -114,8 +132,8 @@ export default function PeriodFilterBar({
             {f.label}
           </button>
         ))}
-        <div style={{ width: 1, height: 20, background: "var(--border)", margin: "0 4px" }} />
-        <button onClick={() => setCustomOpen(!customOpen)} style={{
+        {sepBeforeCustom && <div style={{ width: 1, height: 20, background: "var(--border)", margin: "0 4px" }} />}
+        {show("custom") && <button onClick={() => setCustomOpen(!customOpen)} style={{
           padding: "6px 14px", borderRadius: 7, fontSize: 12, fontWeight: 600, cursor: "pointer",
           border: isCustom ? "1px solid var(--green)" : "1px solid var(--border)",
           background: isCustom ? "rgba(34,197,94,0.12)" : "var(--bg-surface)",
@@ -124,9 +142,9 @@ export default function PeriodFilterBar({
         }}>
           <Clock size={12} />
           {isCustom ? "Custom" : "Custom…"}
-        </button>
+        </button>}
       </div>
-      {customOpen && (
+      {customOpen && show("custom") && (
         <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 10, flexWrap: "wrap" }}>
           <label style={{ fontSize: 11, color: "var(--text-muted)", fontWeight: 600 }}>Du</label>
           <input type="date" value={customStart} onChange={e => setCustomStart(e.target.value)} style={{ padding: "5px 8px", borderRadius: 6, fontSize: 12, background: "var(--bg-surface)", color: "var(--text)", border: "1px solid var(--border)", outline: "none" }} />

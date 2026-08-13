@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { Pencil, Archive, RotateCcw, ChevronUp, ChevronDown, EyeOff } from "lucide-react";
-import { badgeFor, fmtAmt, isActiveStatus, type Deal, type Player } from "./shared";
+import { agencyColumnLabel, badgeFor, fmtAmt, isActiveStatus, type Deal, type Player, type PlayersPeriodKey } from "./shared";
 
 type SortKey = "name" | "games" | "agency" | "status";
 
@@ -12,14 +12,17 @@ interface Props {
   gamesByPlayer: Record<number, string[]>;
   dealsByPlayer: Record<number, Deal[]>;
   agencyByPlayer: Record<number, number>;
+  periodKey: PlayersPeriodKey;
   onEdit: (p: Player) => void;
 }
 
 const TH: React.CSSProperties = { padding: "8px", cursor: "pointer", userSelect: "none", whiteSpace: "nowrap" };
 
-export default function PlayersTableView({ players, gamesByPlayer, agencyByPlayer, onEdit }: Props) {
+export default function PlayersTableView({ players, gamesByPlayer, agencyByPlayer, periodKey, onEdit }: Props) {
   const router = useRouter();
-  // Défaut : agency cut 30j décroissant — les plus rentables en haut.
+  // Défaut : agency cut décroissant — les plus rentables en haut. Le tri porte sur
+  // agencyByPlayer, déjà résolu pour la période active côté serveur : changer de
+  // période change les valeurs, pas la clé de tri, donc l'ordre choisi est conservé.
   const [sort, setSort] = useState<{ key: SortKey; dir: "asc" | "desc" }>({ key: "agency", dir: "desc" });
   const [archiving, setArchiving] = useState<number | null>(null);
 
@@ -92,7 +95,7 @@ export default function PlayersTableView({ players, gamesByPlayer, agencyByPlaye
           <tr style={{ borderBottom: "1px solid var(--border)", color: "var(--text-muted)", fontSize: 11, textTransform: "uppercase", letterSpacing: "0.05em" }}>
             <th style={{ ...TH, textAlign: "left" }} onClick={() => clickSort("name")}>Joueur<Arrow k="name" /></th>
             <th style={{ ...TH, textAlign: "center" }} onClick={() => clickSort("games")}>Games<Arrow k="games" /></th>
-            <th style={{ ...TH, textAlign: "right" }} onClick={() => clickSort("agency")}>Agency cut 30j<Arrow k="agency" /></th>
+            <th style={{ ...TH, textAlign: "right" }} onClick={() => clickSort("agency")}>{agencyColumnLabel(periodKey)}<Arrow k="agency" /></th>
             <th style={{ ...TH, textAlign: "center" }} onClick={() => clickSort("status")}>Status<Arrow k="status" /></th>
             <th style={{ padding: "8px", textAlign: "center", whiteSpace: "nowrap" }}>Actions</th>
           </tr>
@@ -102,7 +105,7 @@ export default function PlayersTableView({ players, gamesByPlayer, agencyByPlaye
             <tr><td colSpan={5} style={{ textAlign: "center", color: "var(--text-dim)", padding: 32 }}>Aucun joueur</td></tr>
           )}
           {sorted.map(p => {
-            const agency30 = agencyByPlayer[p.id] ?? 0;
+            const agency = agencyByPlayer[p.id] ?? 0;
             const playerGames = gamesByPlayer[p.id] ?? [];
             return (
               <tr
@@ -127,8 +130,8 @@ export default function PlayersTableView({ players, gamesByPlayer, agencyByPlaye
                     return <span key={gn} style={{ background: b.bg, color: b.color, padding: "2px 6px", borderRadius: 4, fontSize: 10, fontWeight: 600, marginRight: 4, display: "inline-block" }}>{b.short}</span>;
                   })}
                 </td>
-                <td style={{ textAlign: "right", padding: "10px 8px", fontWeight: 600, whiteSpace: "nowrap", color: agency30 > 0 ? "#D4AF37" : agency30 < 0 ? "#EF4444" : "var(--text-muted)" }}>
-                  {agency30 !== 0 ? `${fmtAmt(agency30)} USDT` : "—"}
+                <td style={{ textAlign: "right", padding: "10px 8px", fontWeight: 600, whiteSpace: "nowrap", color: agency > 0 ? "#D4AF37" : agency < 0 ? "#EF4444" : "var(--text-muted)" }}>
+                  {agency !== 0 ? `${fmtAmt(agency)} USDT` : "—"}
                 </td>
                 <td style={{ textAlign: "center", padding: "10px 8px" }}>
                   {p.archived_at

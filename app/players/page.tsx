@@ -1,9 +1,10 @@
 export const dynamic = "force-dynamic";
-import { getTopContributors, getWalletSummaryByPlayer, getApps } from "@/lib/queries";
+import { getTopContributors, getWalletSummaryByPlayer, getApps, type Period } from "@/lib/queries";
 import { getDb } from "@/lib/db";
 import PageHeader from "@/components/PageHeader";
+import PlayersPeriodBar from "./PlayersPeriodBar";
 import PlayersViewToggle from "./PlayersViewToggle";
-import type { App, Deal, Game, Player } from "./shared";
+import type { App, Deal, Game, Player, PlayersPeriodKey } from "./shared";
 
 function daysAgo(n: number): string {
   const d = new Date(); d.setDate(d.getDate() - n);
@@ -12,10 +13,27 @@ function daysAgo(n: number): string {
 
 // Page Joueurs unique — fusion de l'ancien /crm (kanban + agency cut + deals) et de
 // l'ancien /players (roster + add/edit). /crm redirige ici.
-export default function PlayersPage() {
+export default async function PlayersPage({ searchParams }: {
+  searchParams: Promise<{ filter?: string }>;
+}) {
   const db = getDb();
   const today = new Date().toISOString().slice(0, 10);
   const d30 = daysAgo(30);
+
+  // Période — même contrat d'URL que les pages P&L (PeriodFilterBar +
+  // computePeriodFilter), mais restreint à 30j / lifetime : sur un roster, une
+  // borne « semaine ISO » ou « custom » n'a pas de lecture utile. Toute autre
+  // valeur retombe sur 30j, le défaut historique de la page.
+  //
+  // Les bornes du 30j sont celles d'AVANT ce filtre (`daysAgo(30)` → `today`, en
+  // dates nues) et non celles de computePeriodFilter (horodatages ISO complets) :
+  // la vue par défaut doit rendre exactement les mêmes chiffres qu'avant. Lifetime
+  // = période vide, la forme que getTopContributors traite déjà comme « sans borne »
+  // (cf. lib/agent-tools.ts, qui appelle déjà getTopContributors({})).
+  const rawFilter = (await searchParams).filter;
+  const periodKey: PlayersPeriodKey = rawFilter === "lifetime" ? "lifetime" : "30d";
+  const isLifetime = periodKey === "lifetime";
+  const period: Period = isLifetime ? {} : { from: d30, to: today };
 
   // Pas de whitelist de status : l'ancienne page /players affichait TOUS les joueurs alors
   // que le CRM filtrait 4 status. Sans ce SELECT ouvert, un joueur avec un status hors liste
@@ -51,15 +69,20 @@ export default function PlayersPage() {
 
   const activeGames = db.prepare(`SELECT id, name, default_action_pct, status FROM games WHERE status IN ('active', 'archived') ORDER BY CASE status WHEN 'active' THEN 0 ELSE 1 END, id`).all() as Game[];
 
-  // Limite haute volontaire : getTopContributors fait un slice(limit) et l'agency cut 30j est
+  // Limite haute volontaire : getTopContributors fait un slice(limit) et l'agency cut est
   // la colonne de tri par défaut — un cap à 100 ferait afficher "—" au-delà du 100e joueur.
-  const contributors = getTopContributors({ from: d30, to: today }, 100000);
+  const contributors = getTopContributors(period, 100000);
   const agencyByPlayer: Record<number, number> = {};
   contributors.forEach(c => { agencyByPlayer[c.player_id] = c.agency_usdt; });
 
-  const pnl30dRows = getWalletSummaryByPlayer({ since_date: d30 + "T00:00:00Z", end_date: today + "T23:59:59Z" }) as any[];
+  // Le détail par game (Kanban + drawer) suit la même période que la colonne du
+  // tableau : deux vues de la même page qui afficheraient des bornes différentes
+  // se liraient comme une incohérence de chiffres.
+  const pnlRows = getWalletSummaryByPlayer(
+    isLifetime ? {} : { since_date: d30 + "T00:00:00Z", end_date: today + "T23:59:59Z" },
+  ) as any[];
   const pnlByPlayerGame: Record<string, { player_net: number; agency_pnl: number }> = {};
-  pnl30dRows.forEach((r: any) => {
+  pnlRows.forEach((r: any) => {
     pnlByPlayerGame[`${r.player_id}_${r.game_id}`] = { player_net: r.net ?? 0, agency_pnl: r.my_pnl ?? 0 };
   });
 
@@ -77,7 +100,13 @@ export default function PlayersPage() {
 
   return (
     <>
-      <PageHeader title="Joueurs" subtitle="Roster, deals par game et contribution agence sur 30 jours." />
+      <PageHeader
+        title="Joueurs"
+        subtitle={isLifetime
+          ? "Roster, deals par game et contribution agence depuis le début."
+          : "Roster, deals par game et contribution agence sur 30 jours."}
+      />
+      <PlayersPeriodBar periodKey={periodKey} />
       <PlayersViewToggle
         players={allPlayers}
         gamesByPlayer={gamesByPlayer}
@@ -87,6 +116,7 @@ export default function PlayersPage() {
         activeGames={activeGames}
         apps={apps}
         affiliatedByPlayer={affiliatedByPlayer}
+        periodKey={periodKey}
       />
     </>
   );

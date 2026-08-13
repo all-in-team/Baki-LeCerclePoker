@@ -50,6 +50,21 @@ export interface Deal {
 export interface Game { id: number; name: string; default_action_pct: number | null; status: string; }
 export interface App { id: number; name: string; }
 
+/** Bornes de période exposées par la page Joueurs (sous-ensemble du contrat PeriodFilterBar). */
+export type PlayersPeriodKey = "30d" | "lifetime";
+
+export const PLAYERS_PERIOD_STORAGE_KEY = "players_period";
+
+/** Libellé court de la période, pour les en-têtes secondaires (Kanban, drawer). */
+export function periodShortLabel(periodKey: PlayersPeriodKey): string {
+  return periodKey === "lifetime" ? "lifetime" : "30j";
+}
+
+/** Libellé de la colonne agency cut — dépend de la période active. */
+export function agencyColumnLabel(periodKey: PlayersPeriodKey): string {
+  return periodKey === "lifetime" ? "Agency cut — Lifetime" : "Agency cut 30j";
+}
+
 export interface PlayersViewProps {
   players: Player[];
   gamesByPlayer: Record<number, string[]>;
@@ -59,6 +74,7 @@ export interface PlayersViewProps {
   activeGames: Game[];
   apps: App[];
   affiliatedByPlayer: Record<number, { name: string; handle: string | null }>;
+  periodKey: PlayersPeriodKey;
 }
 
 // Un joueur "actif" au sens du roster : les deux status que le bot écrit.

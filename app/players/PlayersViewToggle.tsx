@@ -12,7 +12,7 @@ import type { Player, PlayersViewProps } from "./shared";
 // par les deux vues. Avant la fusion : la recherche n'existait qu'en Kanban et le bouton
 // "Add Player" n'existait que sur l'ancienne page /players.
 export default function PlayersViewToggle(props: PlayersViewProps) {
-  const { players, apps, dealsByPlayer, activeGames, affiliatedByPlayer } = props;
+  const { players, apps, dealsByPlayer, activeGames, affiliatedByPlayer, periodKey } = props;
   const [view, setView] = useState<"kanban" | "table">("kanban");
   const [search, setSearch] = useState("");
   const [editPlayer, setEditPlayer] = useState<Player | null>(null);
@@ -100,6 +100,7 @@ export default function PlayersViewToggle(props: PlayersViewProps) {
             gamesByPlayer={props.gamesByPlayer}
             dealsByPlayer={dealsByPlayer}
             agencyByPlayer={props.agencyByPlayer}
+            periodKey={periodKey}
             onEdit={setEditPlayer}
           />
         : <PlayersKanbanView
@@ -108,6 +109,7 @@ export default function PlayersViewToggle(props: PlayersViewProps) {
             dealsByPlayer={dealsByPlayer}
             agencyByPlayer={props.agencyByPlayer}
             pnlByPlayerGame={props.pnlByPlayerGame}
+            periodKey={periodKey}
             activeGames={activeGames}
             onEdit={setEditPlayer}
           />
