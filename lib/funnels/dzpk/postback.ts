@@ -1,4 +1,14 @@
-// Postbacks S2S de conversion : « ce lead a rejoint le club » → réseau de pub.
+// Postbacks S2S de conversion : « ce lead a converti » → réseau de pub.
+//
+// DEUX GOALS, deux événements (étape 2 de l'optimisation, 2026-08-14) :
+//  • goal PRINCIPAL — le /start. C'est le seul événement avec assez de volume
+//    pour nourrir le SmartCPC ; un goal « rattaché » à une occurrence par
+//    semaine n'apprendra jamais rien à l'algorithme d'enchères.
+//    Variables : PROPELLER_POSTBACK_URL / RICHADS_POSTBACK_URL.
+//  • goal SECONDAIRE — le join au club, remonté séparément quand le réseau
+//    supporte plusieurs goals (colonnes de conversion Propeller).
+//    Variables : PROPELLER_POSTBACK_URL_JOIN / RICHADS_POSTBACK_URL_JOIN,
+//    OPTIONNELLES — absentes, le join ne remonte simplement pas.
 //
 // ┌─ CE QUE FAIT CE MODULE, ET POURQUOI IL EST FRAGILE PAR NATURE ─────────────┐
 // │ Un postback est un GET vers Propeller ou RichAds portant le click id du    │
@@ -23,7 +33,7 @@
 // fait du domaine.
 
 import { getDb } from "@/lib/db";
-import { DZPK_MIGRATION_POSTBACK_V1 } from "./schema";
+import { DZPK_MIGRATION_POSTBACK_V1, DZPK_MIGRATION_POSTBACK_V2 } from "./schema";
 import type { DbLike } from "./leads";
 
 /** Les deux réseaux achetés. La source du lead décide lequel. */
@@ -70,6 +80,18 @@ export function postbackTemplate(network: PostbackNetwork): string | null {
   const raw = network === "propeller"
     ? process.env.PROPELLER_POSTBACK_URL
     : process.env.RICHADS_POSTBACK_URL;
+  const t = raw?.trim();
+  return t ? t : null;
+}
+
+/**
+ * Gabarit du goal SECONDAIRE (join). Optionnel par contrat : un réseau sans
+ * second goal configuré n'est pas une anomalie, c'est l'état par défaut.
+ */
+export function joinPostbackTemplate(network: PostbackNetwork): string | null {
+  const raw = network === "propeller"
+    ? process.env.PROPELLER_POSTBACK_URL_JOIN
+    : process.env.RICHADS_POSTBACK_URL_JOIN;
   const t = raw?.trim();
   return t ? t : null;
 }
@@ -259,6 +281,124 @@ export function fireConversionPostback(leadId: number, dbOverride?: DbLike): voi
   });
 }
 
+// ── Goal secondaire : le join ────────────────────────────────────────────────
+
+/** Ce qui compte pour décider du postback de join. */
+interface JoinPostbackSubject {
+  id: number;
+  source: string;
+  click_id: string | null;
+  join_postback_sent_at: string | null;
+}
+
+/**
+ * Envoie le postback du goal SECONDAIRE (join). Même architecture que
+ * `sendConversionPostback` — relecture, décisions locales, verrou conditionnel,
+ * appel borné, résultat tracé — sur des colonnes DISTINCTES
+ * (`join_postback_sent_at` / `join_postback_result`) : les deux goals d'un même
+ * lead vivent et échouent indépendamment.
+ *
+ * Différence assumée avec le goal principal : un gabarit absent est un refus
+ * SILENCIEUX (`no_url` sans console.error). Le goal join est optionnel par
+ * contrat ; crier à chaque join tant que Baki n'a pas créé le goal 2 côté
+ * Propeller noierait les vrais problèmes.
+ */
+export async function sendJoinPostback(
+  leadId: number,
+  opts: { dbOverride?: DbLike; fetcher?: Fetcher } = {},
+): Promise<PostbackOutcome> {
+  const db = opts.dbOverride ?? getDb();
+  const nothing = (skipped: PostbackSkip, network: PostbackNetwork | null = null): PostbackOutcome =>
+    ({ sent: false, skipped, network, status: null, error: null });
+
+  let lead: JoinPostbackSubject | undefined;
+  try {
+    lead = db.prepare(
+      `SELECT id, source, click_id, join_postback_sent_at FROM dzpk_leads WHERE id = ?`
+    ).get(leadId) as JoinPostbackSubject | undefined;
+  } catch (e: any) {
+    console.error(
+      `[DZPK POSTBACK JOIN] lead=${leadId} — lecture impossible (migration ${DZPK_MIGRATION_POSTBACK_V2} jouée ?):`,
+      e?.message ?? e
+    );
+    return nothing("lead_not_found");
+  }
+  if (!lead) return nothing("lead_not_found");
+
+  if (lead.join_postback_sent_at) return nothing("already_sent");
+  if (!lead.click_id) return nothing("no_click_id");
+  const network = resolveNetwork(lead.source);
+  if (!network) return nothing("no_network");
+
+  const template = joinPostbackTemplate(network);
+  if (!template) return nothing("no_url", network); // optionnel : silence voulu
+  const url = buildPostbackUrl(template, lead.click_id);
+  if (!url) {
+    console.error(
+      `[DZPK POSTBACK JOIN] lead=${lead.id} réseau=${network} — gabarit sans ${CB_PLACEHOLDER}, ` +
+      `postback annulé (une URL sans click id ne crédite rien)`
+    );
+    return nothing("bad_template", network);
+  }
+
+  const claimed = db.prepare(
+    `UPDATE dzpk_leads
+        SET join_postback_sent_at = datetime('now'), join_postback_result = 'en cours',
+            updated_at = datetime('now')
+      WHERE id = ? AND join_postback_sent_at IS NULL`
+  ).run(lead.id);
+  if (claimed.changes === 0) return nothing("already_sent", network);
+
+  const doFetch: Fetcher = opts.fetcher ?? ((u, init) => fetch(u, { method: "GET", ...init }));
+  let status: number | null = null;
+  let error: string | null = null;
+  try {
+    const res = await doFetch(url, { signal: AbortSignal.timeout(POSTBACK_TIMEOUT_MS) });
+    status = res.status;
+  } catch (e: any) {
+    error = e?.name === "TimeoutError" || e?.name === "AbortError"
+      ? `timeout ${POSTBACK_TIMEOUT_MS} ms`
+      : (e?.message ?? String(e));
+  }
+
+  const result = error ? `${network} échec: ${error}` : `${network} ${status}`;
+  try {
+    db.prepare(`UPDATE dzpk_leads SET join_postback_result = ?, updated_at = datetime('now') WHERE id = ?`)
+      .run(result.slice(0, 200), lead.id);
+  } catch (e: any) {
+    console.error(`[DZPK POSTBACK JOIN] lead=${lead.id} — écriture du résultat impossible:`, e?.message ?? e);
+  }
+
+  const ok = status !== null && status >= 200 && status < 400;
+  const line =
+    `[DZPK POSTBACK JOIN] lead=${lead.id} réseau=${network} cb=${lead.click_id} ` +
+    `url=${briefUrl(url)} ${error ? `ERREUR ${error}` : `http=${status}`}`;
+  if (ok) console.log(`${line} ✅`);
+  else console.error(`${line} ❌ (verrou posé : aucun rejeu automatique)`);
+
+  return { sent: true, skipped: null, network, status, error };
+}
+
+/** Déclenchement du goal join depuis le chemin d'un join : on n'attend pas. */
+export function fireJoinPostback(leadId: number, dbOverride?: DbLike): void {
+  void sendJoinPostback(leadId, { dbOverride }).catch(e => {
+    console.error(`[DZPK POSTBACK JOIN] lead=${leadId} — exception non rattrapée:`, e?.message ?? e);
+  });
+}
+
+/** Rejeu explicite du goal join, réservé à l'humain (route d'admin). */
+export async function retryJoinPostback(
+  leadId: number,
+  opts: { dbOverride?: DbLike; fetcher?: Fetcher } = {},
+): Promise<PostbackOutcome> {
+  const db = opts.dbOverride ?? getDb();
+  db.prepare(
+    `UPDATE dzpk_leads SET join_postback_sent_at = NULL, join_postback_result = NULL WHERE id = ?`
+  ).run(leadId);
+  console.warn(`[DZPK POSTBACK JOIN] lead=${leadId} — verrou levé à la main, rejeu demandé`);
+  return sendJoinPostback(leadId, opts);
+}
+
 /**
  * Rejeu EXPLICITE d'un postback, réservé à l'humain (route d'admin).
  *
@@ -291,10 +431,14 @@ export async function sendTestPostback(
   network: PostbackNetwork,
   clickId: string,
   fetcher?: Fetcher,
+  goal: "start" | "join" = "start",
 ): Promise<{ ok: boolean; url: string | null; status: number | null; error: string | null }> {
-  const template = postbackTemplate(network);
+  const template = goal === "join" ? joinPostbackTemplate(network) : postbackTemplate(network);
   if (!template) {
-    return { ok: false, url: null, status: null, error: `URL de postback ${network} absente (variable Railway)` };
+    const varName = network === "propeller"
+      ? (goal === "join" ? "PROPELLER_POSTBACK_URL_JOIN" : "PROPELLER_POSTBACK_URL")
+      : (goal === "join" ? "RICHADS_POSTBACK_URL_JOIN" : "RICHADS_POSTBACK_URL");
+    return { ok: false, url: null, status: null, error: `URL de postback absente (variable Railway ${varName})` };
   }
   const url = buildPostbackUrl(template, clickId);
   if (!url) {

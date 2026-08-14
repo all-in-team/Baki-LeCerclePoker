@@ -32,8 +32,10 @@ webhook différentes.
 | `DZPK_USERBOT_SESSION` | Session GramJS du compte qui reçoit les DM du club | 2 |
 | `DZPK_INGEST_BATCH` | Taille du lot d'ingestion (défaut 100, borné 1–200) | 2, optionnel |
 | `DZPK_ADMIN_CHAT_ID` | Supergroupe « Support DZPK » (Sujets activés) | 3 |
-| `PROPELLER_POSTBACK_URL` | Postback de conversion PropellerAds, avec `{CB}` | 5 |
-| `RICHADS_POSTBACK_URL` | Postback de conversion RichAds, avec `{CB}` | 5 |
+| `PROPELLER_POSTBACK_URL` | Postback de conversion PropellerAds (goal principal, /start), avec `{CB}` | 5 |
+| `RICHADS_POSTBACK_URL` | Postback de conversion RichAds (goal principal, /start), avec `{CB}` | 5 |
+| `PROPELLER_POSTBACK_URL_JOIN` | Goal SECONDAIRE (join) PropellerAds, avec `{CB}` — optionnelle | 5 |
+| `RICHADS_POSTBACK_URL_JOIN` | Goal SECONDAIRE (join) RichAds, avec `{CB}` — optionnelle | 5 |
 
 Les deux dernières sont **sans repli l'une sur l'autre** : une source `tgads-`
 ne poste que sur Propeller. Absente ⇒ la conversion n'est pas remontée et
@@ -384,14 +386,29 @@ L'écran est en **lecture seule** : trancher passe toujours par
 
 ## 7 ter. Postbacks S2S de conversion
 
-Quand un lead **rejoint le club** (`已进群`), le réseau qui a vendu le clic est
-prévenu par un GET sortant portant le **click id** de ce lead. C'est ce qui
-permet à Propeller et RichAds d'optimiser leurs enchères sur notre budget.
+Le réseau qui a vendu le clic est prévenu par un GET sortant portant le
+**click id** du lead. C'est ce qui permet à Propeller et RichAds d'optimiser
+leurs enchères sur notre budget.
 
-| Variable | Réseau | Déclenchée par une source |
-|---|---|---|
-| `PROPELLER_POSTBACK_URL` | PropellerAds | `tgads-…` ou `tgads_…` |
-| `RICHADS_POSTBACK_URL` | RichAds | `richads-…` ou `richads_…` |
+**Depuis l'étape 2 de l'optimisation (2026-08-14), le goal PRINCIPAL part au
+`/start`** — déclenché dans le webhook dzpk, juste après `recordStart`. C'est le
+seul événement avec assez de volume pour nourrir le SmartCPC ; un goal
+« rattaché » à une occurrence par semaine n'apprend rien à l'algorithme.
+
+Le **join** (`已进群`) devient un goal **SECONDAIRE**, remonté sur ses propres
+colonnes (`join_postback_sent_at` / `join_postback_result`, migration
+`add_dzpk_postback_v2`) via des variables dédiées, **optionnelles** — absentes,
+le join ne remonte simplement rien. Le point de déclenchement du join reste le
+matcher (seul endroit où « ce lead a rejoint » devient vrai), qui déclenche
+aussi le goal principal en FILET pour les leads entrés avant la mise en service
+du déclenchement au /start (verrou inerte pour tous les autres).
+
+| Variable | Réseau | Goal | Déclenchée par une source |
+|---|---|---|---|
+| `PROPELLER_POSTBACK_URL` | PropellerAds | principal (/start) | `tgads-…` ou `tgads_…` |
+| `RICHADS_POSTBACK_URL` | RichAds | principal (/start) | `richads-…` ou `richads_…` |
+| `PROPELLER_POSTBACK_URL_JOIN` | PropellerAds | secondaire (join) | `tgads-…` ou `tgads_…` |
+| `RICHADS_POSTBACK_URL_JOIN` | RichAds | secondaire (join) | `richads-…` ou `richads_…` |
 
 Chacune contient `{CB}`, remplacé par le click id (URL-encodé). Toute autre
 source — `organic`, `direct`, achat direct, source inventée — **n'envoie rien**,
@@ -481,6 +498,11 @@ curl -s -X POST $BASE/api/admin/dzpk-postback -H "x-admin-token: $TOK" \
 curl -s -X POST $BASE/api/admin/dzpk-postback -H "x-admin-token: $TOK" \
      -H 'content-type: application/json' \
      -d '{"leadId":42,"retry":true}' | jq
+
+# 4. Goal secondaire (join) : ajouter "goal":"join" au test ou au rejeu
+curl -s -X POST $BASE/api/admin/dzpk-postback -H "x-admin-token: $TOK" \
+     -H 'content-type: application/json' \
+     -d '{"network":"propeller","cb":"TEST-JOIN-1","goal":"join"}' | jq
 ```
 
 Le `GET` expose `joins_sans_postback` : les leads attribuables qui ont rejoint

@@ -24,6 +24,7 @@ import {
 } from "../lib/richads";
 import {
   resolveNetwork, buildPostbackUrl, sendConversionPostback, retryPostback,
+  sendJoinPostback, retryJoinPostback,
   sendTestPostback, CB_PLACEHOLDER, type Fetcher,
 } from "../lib/funnels/dzpk/postback";
 import { recordStart } from "../lib/funnels/dzpk/leads";
@@ -31,6 +32,7 @@ import {
   DZPK_SCHEMA_SQL,
   DZPK_MATCH_SCHEMA_SQL, DZPK_MATCH_SCHEMA_SQL_2, DZPK_MATCH_SCHEMA_SQL_3,
   DZPK_POSTBACK_ALTER_CLICK, DZPK_POSTBACK_ALTER_SENT, DZPK_POSTBACK_ALTER_RESULT,
+  DZPK_POSTBACK_ALTER_JOIN_SENT, DZPK_POSTBACK_ALTER_JOIN_RESULT,
 } from "../lib/funnels/dzpk/schema";
 import type { DbLike } from "../lib/funnels/dzpk/leads";
 
@@ -51,6 +53,8 @@ function freshDb(): DbLike & { exec(s: string): void; close(): void; prepare(s: 
   db.exec(DZPK_POSTBACK_ALTER_CLICK);
   db.exec(DZPK_POSTBACK_ALTER_SENT);
   db.exec(DZPK_POSTBACK_ALTER_RESULT);
+  db.exec(DZPK_POSTBACK_ALTER_JOIN_SENT);
+  db.exec(DZPK_POSTBACK_ALTER_JOIN_RESULT);
   return db as any;
 }
 
@@ -273,6 +277,59 @@ async function run() {
     eq("test : cb factice dans l'URL", calls[0].endsWith("visitor_id=TEST-CONV-1"), true);
     const row = db.prepare(`SELECT postback_sent_at FROM dzpk_leads WHERE id = ?`).get(lead.id);
     eq("aucun verrou consommé sur un lead réel", row.postback_sent_at, null);
+    db.close();
+  }
+
+  console.log("\ngoal join — optionnel, verrouillé à part, indépendant du goal principal");
+  {
+    // Variables join ABSENTES : le join ne remonte rien, en silence — c'est
+    // l'état par défaut tant que le goal 2 n'existe pas côté réseau.
+    delete process.env.PROPELLER_POSTBACK_URL_JOIN;
+    delete process.env.RICHADS_POSTBACK_URL_JOIN;
+    const db = freshDb();
+    const lead = startedLead(db, 6001, "tgads-26845722", "CB-JOIN-0");
+    const { f, calls } = stubFetcher(200);
+    const off = await sendJoinPostback(lead.id, { dbOverride: db, fetcher: f });
+    eq("join sans gabarit : rien", [off.sent, off.skipped], [false, "no_url"]);
+    eq("join sans gabarit : aucun appel", calls.length, 0);
+    const r0 = db.prepare(`SELECT join_postback_sent_at FROM dzpk_leads WHERE id = ?`).get(lead.id);
+    eq("join sans gabarit : aucun verrou", r0.join_postback_sent_at, null);
+
+    // Gabarit posé : le join part sur SES colonnes, sans toucher au principal.
+    process.env.PROPELLER_POSTBACK_URL_JOIN =
+      "https://ad.propellerads.com/conversion.php?aid=3918067&pid=&tid=999999&visitor_id={CB}";
+    const on = await sendJoinPostback(lead.id, { dbOverride: db, fetcher: f });
+    eq("join : envoyé", on.sent, true);
+    eq("join : URL du goal 2", calls[0], "https://ad.propellerads.com/conversion.php?aid=3918067&pid=&tid=999999&visitor_id=CB-JOIN-0");
+    const r1 = db.prepare(
+      `SELECT postback_sent_at, join_postback_sent_at, join_postback_result FROM dzpk_leads WHERE id = ?`
+    ).get(lead.id);
+    eq("join : verrou join posé", r1.join_postback_sent_at !== null, true);
+    eq("join : résultat tracé", r1.join_postback_result, "propeller 200");
+    eq("join : goal principal INTACT", r1.postback_sent_at, null);
+
+    // Unicité du goal join, même garantie que le principal.
+    const again = await sendJoinPostback(lead.id, { dbOverride: db, fetcher: f });
+    eq("join : second appel refusé", [again.sent, again.skipped], [false, "already_sent"]);
+    eq("join : un seul appel réseau", calls.length, 1);
+
+    // Les deux goals coexistent : le principal part ensuite normalement.
+    const main = await sendConversionPostback(lead.id, { dbOverride: db, fetcher: f });
+    eq("principal après join : envoyé", main.sent, true);
+    eq("deux appels réseau au total", calls.length, 2);
+
+    // Rejeu explicite du join seul.
+    const ok = stubFetcher(200);
+    const re = await retryJoinPostback(lead.id, { dbOverride: db, fetcher: ok.f });
+    eq("rejeu join : envoyé", re.sent, true);
+    eq("rejeu join : un appel", ok.calls.length, 1);
+
+    // Test de transport du goal join, sans lead.
+    const t = stubFetcher(200);
+    const test = await sendTestPostback("propeller", "TEST-JOIN-1", t.f, "join");
+    eq("test join : ok", test.ok, true);
+    eq("test join : URL du goal 2", t.calls[0].endsWith("tid=999999&visitor_id=TEST-JOIN-1"), true);
+    delete process.env.PROPELLER_POSTBACK_URL_JOIN;
     db.close();
   }
 

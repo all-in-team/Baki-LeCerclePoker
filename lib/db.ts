@@ -13,6 +13,8 @@ import {
   DZPK_MIGRATION_TAKEOVER_V1,
   DZPK_POSTBACK_ALTER_CLICK, DZPK_POSTBACK_ALTER_SENT, DZPK_POSTBACK_ALTER_RESULT,
   DZPK_MIGRATION_POSTBACK_V1,
+  DZPK_POSTBACK_ALTER_JOIN_SENT, DZPK_POSTBACK_ALTER_JOIN_RESULT,
+  DZPK_MIGRATION_POSTBACK_V2,
 } from "./funnels/dzpk/schema";
 // Module pur (aucun import) : utilisable depuis une migration sans cycle.
 import { nameKey as dzpkNameKey } from "./funnels/dzpk/name-key";
@@ -3555,5 +3557,30 @@ function initSchema(db: Database.Database) {
     }
   } catch (err: any) {
     console.error(`[MIGRATION:${DZPK_MIGRATION_POSTBACK_V1}] FAILED (sera rejouée au prochain boot):`, err.message);
+  }
+
+  // ── Goal secondaire de conversion dzpk : le join (étape 2 optimisation) ────
+  //
+  // Depuis cette étape, le goal PRINCIPAL part au /start (webhook dzpk). Le
+  // join devient un goal séparé, sur SES colonnes de verrou/résultat : les deux
+  // goals d'un même lead se déclenchent, échouent et se rejouent indépendamment.
+  //
+  // Même parti pris que la v1 : deux colonnes sur `dzpk_leads`, aucune table
+  // nouvelle, rien de NEXA ni d'argent touché — colonnes lues uniquement par
+  // `lib/funnels/dzpk/postback.ts`.
+  try {
+    const already = db.prepare(`SELECT 1 FROM _applied_fixes WHERE name = ?`)
+      .get(DZPK_MIGRATION_POSTBACK_V2);
+    if (!already) {
+      const cols = new Set(
+        (db.prepare(`PRAGMA table_info(dzpk_leads)`).all() as any[]).map(c => c.name)
+      );
+      if (!cols.has("join_postback_sent_at")) db.exec(DZPK_POSTBACK_ALTER_JOIN_SENT);
+      if (!cols.has("join_postback_result")) db.exec(DZPK_POSTBACK_ALTER_JOIN_RESULT);
+      db.prepare(`INSERT OR IGNORE INTO _applied_fixes (name) VALUES (?)`).run(DZPK_MIGRATION_POSTBACK_V2);
+      console.log(`[MIGRATION] ${DZPK_MIGRATION_POSTBACK_V2} applied`);
+    }
+  } catch (err: any) {
+    console.error(`[MIGRATION:${DZPK_MIGRATION_POSTBACK_V2}] FAILED (sera rejouée au prochain boot):`, err.message);
   }
 }

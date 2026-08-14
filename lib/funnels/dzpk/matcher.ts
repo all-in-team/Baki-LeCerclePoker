@@ -15,7 +15,7 @@
 import { getDb } from "@/lib/db";
 import { nameKey } from "./name-key";
 import { dzpkAutoMatchEnabled } from "./config";
-import { fireConversionPostback } from "./postback";
+import { fireConversionPostback, fireJoinPostback } from "./postback";
 import type { DbLike } from "./leads";
 
 export type MatchStatus = "auto" | "manual" | "ambiguous" | "unmatched";
@@ -375,12 +375,21 @@ function recomputeLeadEffect(db: DbLike, leadId: number, kind: string): void {
  * appariée. Ce point du code est le seul endroit où « ce lead-ci a rejoint »
  * devient vrai — et il l'est pour les DEUX chemins, l'auto et la main.
  *
+ * Depuis l'étape 2 de l'optimisation, le goal PRINCIPAL part au /start
+ * (webhook dzpk). Ici il reste deux déclenchements :
+ *  • le goal JOIN (secondaire), sur ses propres colonnes de verrou — inerte
+ *    tant que les variables *_POSTBACK_URL_JOIN ne sont pas posées ;
+ *  • le goal principal en FILET : seul un lead entré AVANT la mise en service
+ *    du déclenchement au /start peut encore avoir un click id sans postback —
+ *    pour tous les autres, le verrou `postback_sent_at` rend l'appel inerte.
+ *
  * L'appel ne bloque rien et ne peut rien casser : tout est décidé et loggué
  * dans postback.ts, y compris les refus (pas de click id, source organique).
  */
 function notifyNetworkOnJoin(db: DbLike, leadId: number, kind: string): void {
   if (kind !== "join") return;
   fireConversionPostback(leadId, db);
+  fireJoinPostback(leadId, db);
 }
 
 export interface MatchRunOutcome {

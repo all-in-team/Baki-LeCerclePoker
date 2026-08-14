@@ -74,6 +74,15 @@ export async function POST(req: NextRequest) {
         `${created ? "nouveau" : `re-start #${lead.start_count}`}`
       );
 
+      // Le /start EST la conversion remontée au réseau (goal principal, étape 2
+      // de l'optimisation) : c'est le seul événement avec assez de volume pour
+      // nourrir le SmartCPC. Toute la décision — click id présent, réseau
+      // déduit de la source, verrou anti-doublon — vit dans postback.ts ; un
+      // re-/start retombe sur le verrou et ne renvoie rien. Fire-and-forget :
+      // l'accueil du lead ne doit jamais attendre un tiers.
+      const { fireConversionPostback } = await import("@/lib/funnels/dzpk/postback");
+      fireConversionPostback(lead.id);
+
       const { sendWelcome } = await import("@/lib/funnels/dzpk/welcome");
       const res = await sendWelcome(identity.telegram_id);
       if (res.blocked) markBlocked(lead.id);

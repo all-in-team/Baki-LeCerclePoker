@@ -363,3 +363,20 @@ export const DZPK_POSTBACK_ALTER_SENT =
  */
 export const DZPK_POSTBACK_ALTER_RESULT =
   `ALTER TABLE dzpk_leads ADD COLUMN postback_result TEXT`;
+
+/**
+ * Migration du goal SECONDAIRE de conversion (join), étape 2 de l'optimisation.
+ *
+ * Depuis cette étape, le goal PRINCIPAL part au /start (webhook) — c'est le
+ * seul événement avec assez de volume pour nourrir le SmartCPC. Le join devient
+ * un goal séparé, remonté sur ses propres colonnes : les deux goals d'un même
+ * lead se verrouillent et se rejouent indépendamment, avec le même schéma de
+ * verrou conditionnel que le goal principal.
+ */
+export const DZPK_MIGRATION_POSTBACK_V2 = "add_dzpk_postback_v2";
+
+export const DZPK_POSTBACK_ALTER_JOIN_SENT =
+  `ALTER TABLE dzpk_leads ADD COLUMN join_postback_sent_at TEXT`;
+
+export const DZPK_POSTBACK_ALTER_JOIN_RESULT =
+  `ALTER TABLE dzpk_leads ADD COLUMN join_postback_result TEXT`;

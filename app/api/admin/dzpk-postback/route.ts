@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getDb } from "@/lib/db";
 import {
-  sendTestPostback, retryPostback, resolveNetwork, postbackTemplate,
+  sendTestPostback, retryPostback, retryJoinPostback, resolveNetwork,
+  postbackTemplate, joinPostbackTemplate,
   CB_PLACEHOLDER, POSTBACK_TIMEOUT_MS,
   type PostbackNetwork,
 } from "@/lib/funnels/dzpk/postback";
@@ -14,9 +15,12 @@ import {
  *   POST → { network, cb }     : envoi de TEST avec un click id fourni à la main.
  *                                Ne touche à aucun lead. C'est ce qui permet de
  *                                valider avec « Test conversion » de PropellerAds
- *                                sans attendre un vrai join.
+ *                                sans attendre un vrai /start.
  *          { leadId, retry }   : rejeu explicite pour un lead réel (lève le
  *                                verrou `postback_sent_at` puis renvoie).
+ *          + goal: "join"      : sur l'un ou l'autre mode, vise le goal
+ *                                SECONDAIRE (join) — gabarit *_POSTBACK_URL_JOIN
+ *                                et verrou `join_postback_sent_at`.
  *
  * Même garde que les autres routes api/admin : `x-admin-token`, fail-closed.
  *
@@ -44,8 +48,8 @@ function guard(req: NextRequest): NextResponse | null {
  * ticket, un log. On renvoie de quoi diagnostiquer — présence, hôte, `{CB}`
  * substituable — et rien de plus.
  */
-function templateStatus(network: PostbackNetwork) {
-  const t = postbackTemplate(network);
+function templateStatus(network: PostbackNetwork, goal: "start" | "join" = "start") {
+  const t = goal === "join" ? joinPostbackTemplate(network) : postbackTemplate(network);
   if (!t) return { configured: false, host: null, has_cb_placeholder: false };
   let host: string | null = null;
   try { host = new URL(t).host; } catch { host = "url illisible"; }
@@ -66,7 +70,8 @@ export async function GET(req: NextRequest) {
             SUM(CASE WHEN club_joined_at IS NOT NULL THEN 1 ELSE 0 END)     AS ont_rejoint,
             SUM(CASE WHEN club_joined_at IS NOT NULL
                       AND click_id IS NOT NULL THEN 1 ELSE 0 END)           AS joins_attribuables,
-            SUM(CASE WHEN postback_sent_at IS NOT NULL THEN 1 ELSE 0 END)   AS postbacks_tentes
+            SUM(CASE WHEN postback_sent_at IS NOT NULL THEN 1 ELSE 0 END)   AS postbacks_tentes,
+            SUM(CASE WHEN join_postback_sent_at IS NOT NULL THEN 1 ELSE 0 END) AS join_postbacks_tentes
        FROM dzpk_leads`
   ).get() as Record<string, number>;
 
@@ -81,16 +86,21 @@ export async function GET(req: NextRequest) {
   ).all() as Array<{ id: number; source: string; club_joined_at: string }>;
 
   const derniers = db.prepare(
-    `SELECT id, source, postback_sent_at, postback_result
+    `SELECT id, source, postback_sent_at, postback_result,
+            join_postback_sent_at, join_postback_result
        FROM dzpk_leads
-      WHERE postback_sent_at IS NOT NULL
-      ORDER BY postback_sent_at DESC LIMIT 20`
+      WHERE postback_sent_at IS NOT NULL OR join_postback_sent_at IS NOT NULL
+      ORDER BY COALESCE(join_postback_sent_at, postback_sent_at) DESC LIMIT 20`
   ).all();
 
   return NextResponse.json({
     config: {
+      // Goal principal : déclenché au /start (webhook), filet au join.
       propeller: templateStatus("propeller"),
       richads: templateStatus("richads"),
+      // Goal secondaire : le join. Optionnel — non configuré n'est pas une anomalie.
+      propeller_join: templateStatus("propeller", "join"),
+      richads_join: templateStatus("richads", "join"),
       timeout_ms: POSTBACK_TIMEOUT_MS,
     },
     leads,
@@ -120,6 +130,12 @@ export async function POST(req: NextRequest) {
   // Explicitement demandé (`retry: true`), jamais déduit : lever le verrou d'un
   // lead est la seule opération de cette route capable de produire une
   // conversion en double côté réseau.
+  // `goal` : "start" (défaut, goal principal) ou "join" (goal secondaire).
+  const goal = String(body?.goal ?? "start").trim().toLowerCase();
+  if (goal !== "start" && goal !== "join") {
+    return NextResponse.json({ error: "goal doit valoir 'start' ou 'join'" }, { status: 400 });
+  }
+
   if (body?.leadId != null) {
     const leadId = Number(body.leadId);
     if (!Number.isInteger(leadId) || leadId <= 0) {
@@ -131,8 +147,8 @@ export async function POST(req: NextRequest) {
         { status: 400 },
       );
     }
-    const out = await retryPostback(leadId);
-    return NextResponse.json({ mode: "rejeu", leadId, ...out });
+    const out = goal === "join" ? await retryJoinPostback(leadId) : await retryPostback(leadId);
+    return NextResponse.json({ mode: "rejeu", goal, leadId, ...out });
   }
 
   // ── Envoi de test ─────────────────────────────────────────────────────────
@@ -153,9 +169,10 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  const out = await sendTestPostback(network as PostbackNetwork, cb);
+  const out = await sendTestPostback(network as PostbackNetwork, cb, undefined, goal);
   return NextResponse.json({
     mode: "test",
+    goal,
     network,
     cb,
     ...out,
