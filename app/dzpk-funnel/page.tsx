@@ -1,6 +1,7 @@
 export const dynamic = "force-dynamic";
 import PageHeader from "@/components/PageHeader";
 import { getDzpkDashboard } from "@/lib/funnels/dzpk/dashboard";
+import { getDzpkWeeklyReport, getWelcomeAbStats } from "@/lib/funnels/dzpk/report";
 import { listBroadcasts, getGuard } from "@/lib/funnels/dzpk/broadcast";
 import DzpkFunnelClient from "./DzpkFunnelClient";
 
@@ -24,6 +25,8 @@ export default function DzpkFunnelPage() {
         // par-dessus sans l'avoir lu.
         broadcasts={listBroadcasts(20)}
         guard={getGuard()}
+        weekly={getDzpkWeeklyReport()}
+        abStats={getWelcomeAbStats()}
       />
     </>
   );

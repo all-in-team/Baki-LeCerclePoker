@@ -83,8 +83,24 @@ export async function POST(req: NextRequest) {
       const { fireConversionPostback } = await import("@/lib/funnels/dzpk/postback");
       fireConversionPostback(lead.id);
 
-      const { sendWelcome } = await import("@/lib/funnels/dzpk/welcome");
-      const res = await sendWelcome(identity.telegram_id);
+      // Test A/B d'accueil (étape 5) : variante dérivée de la parité de l'id,
+      // ÉCRITE sur le lead à la première exposition seulement — un re-/start
+      // retombe sur la même variante et n'écrase rien. L'écriture précède
+      // l'envoi : un lead qui bloque le bot sur l'accueil B doit compter dans
+      // les stats de B, c'est précisément la métrique du test.
+      const { sendWelcome, pickWelcomeVariant } = await import("@/lib/funnels/dzpk/welcome");
+      const variant = pickWelcomeVariant(lead.id);
+      try {
+        const { getDb } = await import("@/lib/db");
+        getDb().prepare(
+          `UPDATE dzpk_leads SET welcome_variant = ?, updated_at = datetime('now')
+            WHERE id = ? AND welcome_variant IS NULL`
+        ).run(variant, lead.id);
+      } catch (e: any) {
+        // Migration pas encore jouée : l'accueil part quand même, sans stat A/B.
+        console.error(`[DZPK] welcome_variant non écrite (lead=${lead.id}):`, e?.message ?? e);
+      }
+      const res = await sendWelcome(identity.telegram_id, variant);
       if (res.blocked) markBlocked(lead.id);
 
       // L'accueil entre dans le fil, comme n'importe quel message du bot. Sans

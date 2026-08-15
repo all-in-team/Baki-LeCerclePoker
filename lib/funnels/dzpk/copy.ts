@@ -38,6 +38,39 @@ export const WELCOME_FOOTER = [
 export const JOIN_BUTTON = "♠️ 加入牌局群";
 
 /**
+ * Variante B de l'accueil — test A/B (étape 5 de l'optimisation).
+ *
+ * Trois partis pris face à la variante A, dérivés des données du 14/08 :
+ *  • ANGLE OBSERVATION d'abord (« entre regarder, tu joues si tu veux ») — la
+ *    créative 26845723 qui porte cet angle convertit, et 3 leads sur 10 ont
+ *    bloqué le bot après un accueil A qui pousse directement au join ;
+ *  • valeur immédiate CONCRÈTE (retraits 3 minutes — l'angle de la créative
+ *    26845720, meilleur coût par lead) plutôt qu'une liste d'arguments ;
+ *  • moins de pression : pas de « 担保 » (caution), ton de bienvenue, un seul
+ *    appel à l'action.
+ *
+ * Traduction FR, pour relecture :
+ *   « 🃏 Salut ! Bienvenue au club de Texas Hold'em
+ *     ♠️ Sans téléchargement ni inscription — tu ouvres, tu joues. USDT
+ *        dépôt/retrait, gains versés en 3 minutes
+ *     ♥️ 700+ joueurs en ligne en ce moment, des tables à tous les niveaux
+ *     👀 Entre d'abord jeter un œil aux parties — tu ne joues que si tu veux,
+ *        zéro pression
+ *     👇 Clique ici pour entrer et regarder »
+ */
+export const WELCOME_B = [
+  "🃏 你好！欢迎来到德州扑克俱乐部",
+  "♠️ 免下载免注册，点开就能玩 — USDT上下分，赢了3分钟到账",
+  "♥️ 现在700+人在线，各级别都有桌",
+  "👀 可以先进群看看牌局，想玩再上桌，没有压力",
+  "",
+  "👇 点击下方按钮进群围观",
+].join("\n");
+
+/** Bouton de la variante B — « Entrer et regarder les parties ». */
+export const JOIN_BUTTON_B = "👀 进群围观牌局";
+
+/**
  * Relance unique à J+1 (phase 4). Vit ici dès maintenant pour que la totalité
  * de la copie chinoise soit relisible d'un seul coup d'œil par Baki.
  */

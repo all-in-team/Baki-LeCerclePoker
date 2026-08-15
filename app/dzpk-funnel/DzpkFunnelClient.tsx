@@ -18,6 +18,7 @@ import { useMemo, useState, useEffect, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import ConversationPanel from "@/components/funnel/ConversationPanel";
 import type { DzpkDashboardLead, DzpkPendingMatch } from "@/lib/funnels/dzpk/dashboard";
+import type { DzpkWeeklyRow, DzpkAbStatsRow } from "@/lib/funnels/dzpk/report";
 import type { CommissionTotalRow } from "@/lib/funnels/dzpk/ingest";
 import { DZPK_STAGES, DZPK_CARDS, MATCH_LABELS } from "@/lib/funnels/dzpk/stages";
 import { buildConversionCards, stageDef, fmtAmount, fmtDateTime, type ConversionCard } from "@/lib/funnels/shared";
@@ -109,16 +110,19 @@ const COLUMNS = [
   { key: "match", label: "Matching", title: "Fiabilité du rattachement aux notifications du club" },
 ];
 
-export default function DzpkFunnelClient({ leads, commissions, pending, orphans, broadcasts, guard }: {
+export default function DzpkFunnelClient({ leads, commissions, pending, orphans, broadcasts, guard, weekly, abStats }: {
   leads: DzpkDashboardLead[];
   commissions: CommissionTotalRow[];
   pending: DzpkPendingMatch[];
   orphans: number;
   broadcasts: BroadcastRow[];
   guard: Guard;
+  weekly: DzpkWeeklyRow[];
+  abStats: DzpkAbStatsRow[];
 }) {
   const [filter, setFilter] = useState<"all" | "pending" | "awaiting">("all");
   const [showQueue, setShowQueue] = useState(false);
+  const [showWeekly, setShowWeekly] = useState(false);
   const [tab, setTab] = useState<"leads" | "broadcast">("leads");
   const [openLead, setOpenLead] = useState<DzpkDashboardLead | null>(null);
   const router = useRouter();
@@ -195,6 +199,10 @@ export default function DzpkFunnelClient({ leads, commissions, pending, orphans,
             📥 File de réconciliation ({pending.length})
           </FilterChip>
         )}
+        <FilterChip active={showWeekly} onClick={() => setShowWeekly(v => !v)}
+          title="Clic → start → join → rattaché, par semaine de /start et par source">
+          📊 Rapport hebdo
+        </FilterChip>
         <span style={{ fontSize: 11, color: "#3A3A48" }}>
           Lecture seule — le rattachement manuel passe par l&apos;API admin.
         </span>
@@ -215,6 +223,8 @@ export default function DzpkFunnelClient({ leads, commissions, pending, orphans,
       )}
 
       {showQueue && <ReconciliationQueue rows={pending} />}
+
+      {showWeekly && <WeeklyReport rows={weekly} abStats={abStats} />}
 
       <div style={{ ...FUNNEL_CARD, padding: 0, overflowX: "auto" }}>
         <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5 }}>
@@ -405,6 +415,102 @@ function LeadRow({ lead, onOpen }: { lead: DzpkDashboardLead; onOpen: () => void
         )}
       </td>
     </tr>
+  );
+}
+
+/** `n/d` en pourcentage lisible — « — » plutôt qu'un NaN quand le dénominateur est nul. */
+function pct(n: number, d: number): string {
+  if (!d) return "—";
+  return `${Math.round((n / d) * 100)}%`;
+}
+
+/**
+ * Rapport hebdo : cohortes par semaine de /start × source. La dépense vit chez
+ * les réseaux — le coût par étape se lit en rapprochant ce tableau des stats de
+ * campagne (cf. lib/funnels/dzpk/report.ts).
+ */
+function WeeklyReport({ rows, abStats }: { rows: DzpkWeeklyRow[]; abStats: DzpkAbStatsRow[] }) {
+  const th: React.CSSProperties = {
+    textAlign: "left", padding: "8px 12px", fontSize: 10.5, fontWeight: 700,
+    color: "#555568", textTransform: "uppercase", letterSpacing: "0.06em", whiteSpace: "nowrap",
+  };
+  const td: React.CSSProperties = { padding: "7px 12px", whiteSpace: "nowrap", color: "#8888A0" };
+
+  // Une ligne de séparation visuelle à chaque changement de semaine.
+  let lastWeek: string | null = null;
+
+  return (
+    <div style={{ ...FUNNEL_CARD, padding: 14 }}>
+      <div style={{ fontSize: 10.5, fontWeight: 700, color: "#555568", textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 10 }}>
+        Rapport hebdo — cohortes par semaine de /start
+      </div>
+
+      {abStats.length > 0 && (
+        <div style={{ marginBottom: 12, fontSize: 12, display: "flex", gap: 18, flexWrap: "wrap" }}>
+          {abStats.map(v => (
+            <div key={v.variant} style={{ color: "#8888A0" }}>
+              <span style={{ fontWeight: 700, color: v.variant === "B" ? "#F0B90B" : "#60A5FA" }}>
+                Accueil {v.variant}
+              </span>{" "}
+              · {v.leads} leads · bloqués {v.blocked} ({pct(v.blocked, v.leads)}) ·
+              join {v.joined} ({pct(v.joined, v.leads)}) · rattachés {v.bound}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {rows.length === 0 ? (
+        <div style={{ fontSize: 12, color: "#555568" }}>Aucune donnée sur la période.</div>
+      ) : (
+        <div style={{ overflowX: "auto" }}>
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+            <thead>
+              <tr style={{ borderBottom: "1px solid rgba(255,255,255,0.07)" }}>
+                <th style={th}>Semaine du</th>
+                <th style={th}>Source</th>
+                <th style={th} title="Clics uniques captés par /go cette semaine-là">Clics</th>
+                <th style={th}>Starts</th>
+                <th style={th} title="starts / clics">Clic→start</th>
+                <th style={th}>Joins</th>
+                <th style={th} title="joins / starts (cohorte)">Start→join</th>
+                <th style={th}>Rattachés</th>
+                <th style={th}>Bloqués</th>
+                <th style={th} title="Leads de la cohorte ayant reçu la relance J+1">Relancés</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map(r => {
+                const newWeek = r.week !== lastWeek;
+                lastWeek = r.week;
+                return (
+                  <tr key={`${r.week}|${r.source}`} style={{
+                    borderTop: newWeek ? "1px solid rgba(255,255,255,0.10)" : "1px solid rgba(255,255,255,0.03)",
+                  }}>
+                    <td style={{ ...td, color: newWeek ? "#E8E8EE" : "#3A3A48", fontWeight: newWeek ? 600 : 400 }}>
+                      {r.week}
+                    </td>
+                    <td style={{ ...td, color: "#60A5FA" }}>{r.source_label}</td>
+                    <td style={td}>{r.clicks || "—"}</td>
+                    <td style={{ ...td, color: "#E8E8EE", fontWeight: 600 }}>{r.starts || "—"}</td>
+                    <td style={td}>{pct(r.starts, r.clicks)}</td>
+                    <td style={{ ...td, color: r.joined ? "#F0B90B" : undefined }}>{r.joined || "—"}</td>
+                    <td style={td}>{pct(r.joined, r.starts)}</td>
+                    <td style={{ ...td, color: r.bound ? "#34D399" : undefined }}>{r.bound || "—"}</td>
+                    <td style={{ ...td, color: r.blocked ? "#F87171" : undefined }}>{r.blocked || "—"}</td>
+                    <td style={td}>{r.followups || "—"}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+      <div style={{ fontSize: 11, color: "#3A3A48", marginTop: 10 }}>
+        Joins et rattachements comptés dans la semaine du /start de leur lead (cohorte) — les
+        chiffres d&apos;une semaine récente bougent tant que sa cohorte vit. La dépense reste chez
+        les réseaux : rapprocher ce tableau des stats de campagne pour le coût par étape.
+      </div>
+    </div>
   );
 }
 

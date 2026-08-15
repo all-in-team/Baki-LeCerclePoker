@@ -380,3 +380,16 @@ export const DZPK_POSTBACK_ALTER_JOIN_SENT =
 
 export const DZPK_POSTBACK_ALTER_JOIN_RESULT =
   `ALTER TABLE dzpk_leads ADD COLUMN join_postback_result TEXT`;
+
+/**
+ * Migration du test A/B d'accueil (étape 5 de l'optimisation).
+ *
+ * La variante est DÉRIVABLE de la parité de l'id (cf. pickWelcomeVariant), mais
+ * elle est quand même ÉCRITE au moment de l'envoi : c'est ce qui distingue les
+ * leads réellement exposés au test des leads antérieurs, et ce qui restera vrai
+ * si la règle d'affectation change un jour. NULL = accueilli avant le test.
+ */
+export const DZPK_MIGRATION_WELCOME_AB_V1 = "add_dzpk_welcome_ab_v1";
+
+export const DZPK_WELCOME_AB_ALTER =
+  `ALTER TABLE dzpk_leads ADD COLUMN welcome_variant TEXT`;

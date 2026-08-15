@@ -86,6 +86,30 @@ export function initDzpkCrons() {
     }
   }, { timezone: "Europe/Paris" });
 
+  // ── Relance J+1 — toutes les 30 minutes ────────────────────────────────────
+  //
+  // La demi-heure suffit largement : la fenêtre d'éligibilité fait 52 h de
+  // large, rater un tick ne perd personne. Le module gère lui-même les heures
+  // de silence (envois uniquement 10h–22h heure de l'audience, UTC+8) et le
+  // verrou d'unicité par lead — ce tick ne fait que déclencher.
+  //
+  // Décalé aux minutes 11 et 41 : jamais en même temps que l'ingestion (1-59/3)
+  // à la même seconde, et jamais à la minute 0.
+  cron.schedule("11,41 * * * *", async () => {
+    try {
+      const { runFollowupD1 } = await import("./followup");
+      const r = await runFollowupD1();
+      if (r.quiet || r.examined === 0) return;
+      console.log(
+        `[DZPK FOLLOWUP] ${r.examined} éligibles — ${r.sent} relancés` +
+        `${r.blocked ? `, ${r.blocked} bloqués découverts` : ""}` +
+        `${r.failed ? `, ${r.failed} échecs (rejeu manuel)` : ""}`
+      );
+    } catch (e: any) {
+      console.error("[DZPK CRON] relance J+1:", e?.message ?? e);
+    }
+  }, { timezone: "Europe/Paris" });
+
   // ── File de diffusion — toutes les minutes ─────────────────────────────────
   //
   // C'est ce tick QUI EST la reprise. Une diffusion interrompue par un

@@ -516,7 +516,47 @@ trafic) ; une valeur **ici** ne l'est jamais.
 ### Tests
 
 ```bash
-npx tsx scripts/dzpk-postback.test.ts    # 68 assertions
+npx tsx scripts/dzpk-postback.test.ts    # 84 assertions
+```
+
+---
+
+## 7 quater. Test A/B d'accueil et relance J+1 (phase 4)
+
+### Accueil A/B
+
+Deux variantes du message d'accueil (`copy.ts` : `WELCOME` / `WELCOME_B`),
+affectées par parité de l'id du lead (`pickWelcomeVariant`) — déterministe : un
+re-/start retombe sur la même variante. La variante est **écrite** sur le lead
+(`welcome_variant`, migration `add_dzpk_welcome_ab_v1`) à la première
+exposition ; NULL = lead accueilli avant le test, exclu des stats.
+
+Les stats par variante (leads, bloqués, joins, rattachés) se lisent dans
+`/dzpk-funnel` → « 📊 Rapport hebdo » (`getWelcomeAbStats`).
+
+### Relance J+1
+
+`lib/funnels/dzpk/followup.ts`, cron toutes les 30 min (`crons.ts`). UNE
+relance, une seule (`FOLLOWUP_D1` + le bouton du club, dans la variante vue à
+l'accueil), aux leads en « Started » depuis 20 à 72 h — jamais aux bloqués,
+joints, rattachés ou bannis. Envois uniquement 10h–22h heure de l'audience
+(UTC+8). `last_followup_at` est le verrou d'unicité, posé par UPDATE
+conditionnel AVANT l'envoi — même asymétrie que les postbacks : pas de rejeu
+automatique après échec (`followup_failed` dans le journal pour le rejeu
+manuel). Un lead découvert bloqué à la relance est marqué `blocked`.
+
+### Rapport hebdo
+
+`lib/funnels/dzpk/report.ts` → section « 📊 Rapport hebdo » de `/dzpk-funnel` :
+clic → start → join → rattaché par **cohorte de semaine de /start** × source
+(les joins comptent dans la semaine du /start de leur lead ; les chiffres d'une
+semaine récente bougent tant que sa cohorte vit). Les clics viennent de
+`richads_clicks` (uniques seulement), rapprochés par `creToStartParam` — la
+dépense reste chez les réseaux, le coût par étape se lit en rapprochant ce
+tableau des stats de campagne.
+
+```bash
+npx tsx scripts/dzpk-followup.test.ts    # relance + rapport + A/B
 ```
 
 ---

@@ -15,6 +15,7 @@ import {
   DZPK_MIGRATION_POSTBACK_V1,
   DZPK_POSTBACK_ALTER_JOIN_SENT, DZPK_POSTBACK_ALTER_JOIN_RESULT,
   DZPK_MIGRATION_POSTBACK_V2,
+  DZPK_WELCOME_AB_ALTER, DZPK_MIGRATION_WELCOME_AB_V1,
 } from "./funnels/dzpk/schema";
 // Module pur (aucun import) : utilisable depuis une migration sans cycle.
 import { nameKey as dzpkNameKey } from "./funnels/dzpk/name-key";
@@ -3582,5 +3583,25 @@ function initSchema(db: Database.Database) {
     }
   } catch (err: any) {
     console.error(`[MIGRATION:${DZPK_MIGRATION_POSTBACK_V2}] FAILED (sera rejouée au prochain boot):`, err.message);
+  }
+
+  // ── Test A/B d'accueil dzpk (étape 5 optimisation) ─────────────────────────
+  //
+  // Une colonne, écrite à la première exposition d'un lead au test. NULL =
+  // lead accueilli avant la mise en service — exclu des stats A/B. Lue par
+  // report.ts (stats) et followup.ts (la relance reprend la variante vue).
+  try {
+    const already = db.prepare(`SELECT 1 FROM _applied_fixes WHERE name = ?`)
+      .get(DZPK_MIGRATION_WELCOME_AB_V1);
+    if (!already) {
+      const cols = new Set(
+        (db.prepare(`PRAGMA table_info(dzpk_leads)`).all() as any[]).map(c => c.name)
+      );
+      if (!cols.has("welcome_variant")) db.exec(DZPK_WELCOME_AB_ALTER);
+      db.prepare(`INSERT OR IGNORE INTO _applied_fixes (name) VALUES (?)`).run(DZPK_MIGRATION_WELCOME_AB_V1);
+      console.log(`[MIGRATION] ${DZPK_MIGRATION_WELCOME_AB_V1} applied`);
+    }
+  } catch (err: any) {
+    console.error(`[MIGRATION:${DZPK_MIGRATION_WELCOME_AB_V1}] FAILED (sera rejouée au prochain boot):`, err.message);
   }
 }
