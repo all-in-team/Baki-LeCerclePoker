@@ -5,6 +5,7 @@ import {
   type Step,
 } from "@/lib/telegram-commands/helpers";
 import { addPlayerCashout, addPlayerGameWallet, recordDealAcceptance } from "@/lib/queries";
+import { WalletAddressError } from "@/lib/wallet-address";
 import { KKPOKER_GAME_NAME, KKPOKER_GAME_LINK } from "./config";
 
 const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
@@ -179,7 +180,18 @@ export async function handleKkpokerRawMessage(
     }
 
     // Save cashout wallet
-    addPlayerCashout(session.player_id, text, gameId);
+    try {
+      addPlayerCashout(session.player_id, text, gameId);
+    } catch (e) {
+      // Adresse refusée par la garde (contrat de token connu, ou checksum
+      // invalide). Le joueur doit pouvoir corriger : on répond et on reste
+      // sur la même étape, au lieu de laisser remonter et casser le webhook.
+      if (e instanceof WalletAddressError) {
+        await reply(`❌ ${e.message}`);
+        return true;
+      }
+      throw e;
+    }
 
     // Store address in session context for duplicate check later
     const db = getDb();
@@ -231,7 +243,18 @@ export async function handleKkpokerRawMessage(
     }
 
     // Save game wallet
-    addPlayerGameWallet(session.player_id, text, gameId);
+    try {
+      addPlayerGameWallet(session.player_id, text, gameId);
+    } catch (e) {
+      // Adresse refusée par la garde (contrat de token connu, ou checksum
+      // invalide). Le joueur doit pouvoir corriger : on répond et on reste
+      // sur la même étape, au lieu de laisser remonter et casser le webhook.
+      if (e instanceof WalletAddressError) {
+        await reply(`❌ ${e.message}`);
+        return true;
+      }
+      throw e;
+    }
 
     setSession(chatId, "onboarding_complete" as Step, session.player_id, session.expected_tg_id);
 

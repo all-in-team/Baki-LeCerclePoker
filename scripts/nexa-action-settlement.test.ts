@@ -103,7 +103,9 @@ function freshDb() {
       amount REAL NOT NULL, currency TEXT NOT NULL DEFAULT 'USDT', note TEXT,
       tron_tx_hash TEXT, tx_date TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT (datetime('now')),
       counterparty_address TEXT, source TEXT DEFAULT 'unknown', tx_datetime TEXT,
-      settled INTEGER NOT NULL DEFAULT 0, settlement_id INTEGER);
+      settled INTEGER NOT NULL DEFAULT 0, settlement_id INTEGER,
+      -- Quarantaine (add_wallet_tx_quarantine_v1), cf. lib/db.ts.
+      status TEXT NOT NULL DEFAULT 'active');
     CREATE TABLE player_game_deals (id INTEGER PRIMARY KEY AUTOINCREMENT,
       player_id INTEGER NOT NULL REFERENCES players(id) ON DELETE CASCADE,
       game_id INTEGER NOT NULL REFERENCES games(id) ON DELETE CASCADE,

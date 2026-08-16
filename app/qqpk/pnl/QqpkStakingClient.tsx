@@ -163,7 +163,9 @@ export default function QqpkStakingClient({
     setSavingWallet(true);
     try {
       const gamePayload = walletInlineVals.game_wallets.map((a) => ({ address: a.trim() })).filter((a) => a.address.length > 0);
-      await fetch(`/api/players/${pid}/game-wallets`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ addresses: gamePayload, game_id: gameId }) });
+      const gameRes = await fetch(`/api/players/${pid}/game-wallets`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ addresses: gamePayload, game_id: gameId }) });
+      // Un refus de la garde d'adresse doit remonter : sans ça, la saisie paraît réussie.
+      if (!gameRes.ok) { const e = await gameRes.json().catch(() => null); alert(e?.error ?? "Erreur sauvegarde wallets de dépôt"); return; }
       const cashoutPayload = walletInlineVals.cashouts.map((a) => ({ address: a.trim() })).filter((a) => a.address.length > 0);
       const res = await fetch(`/api/players/${pid}/cashouts`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ addresses: cashoutPayload, game_id: gameId }) });
       if (res.ok) { setExpandedWallet(null); router.refresh(); }

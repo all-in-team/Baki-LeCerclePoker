@@ -5,6 +5,7 @@ import {
   type Step,
 } from "@/lib/telegram-commands/helpers";
 import { addPlayerCashout, addPlayerGameWallet, recordDealAcceptance, upsertPlayerGameDeal } from "@/lib/queries";
+import { WalletAddressError } from "@/lib/wallet-address";
 import { QQPK_GAME_NAME, QQPK_GAME_LINK } from "./config";
 
 // QQPK onboarding — mirror of AKS, but the deal is a FIXED 70/30 STAKING arrangement
@@ -164,7 +165,18 @@ export async function handleQqpkRawMessage(
       return true;
     }
 
-    addPlayerCashout(session.player_id, text, gameId);
+    try {
+      addPlayerCashout(session.player_id, text, gameId);
+    } catch (e) {
+      // Adresse refusée par la garde (contrat de token connu, ou checksum
+      // invalide). Le joueur doit pouvoir corriger : on répond et on reste
+      // sur la même étape, au lieu de laisser remonter et casser le webhook.
+      if (e instanceof WalletAddressError) {
+        await reply(`❌ ${e.message}`);
+        return true;
+      }
+      throw e;
+    }
 
     const db = getDb();
     db.prepare(`UPDATE telegram_sessions SET pending_cmd = ? WHERE chat_id = ?`).run(text, String(chatId));
@@ -205,7 +217,18 @@ export async function handleQqpkRawMessage(
       return true;
     }
 
-    addPlayerGameWallet(session.player_id, text, gameId);
+    try {
+      addPlayerGameWallet(session.player_id, text, gameId);
+    } catch (e) {
+      // Adresse refusée par la garde (contrat de token connu, ou checksum
+      // invalide). Le joueur doit pouvoir corriger : on répond et on reste
+      // sur la même étape, au lieu de laisser remonter et casser le webhook.
+      if (e instanceof WalletAddressError) {
+        await reply(`❌ ${e.message}`);
+        return true;
+      }
+      throw e;
+    }
 
     setSession(chatId, "onboarding_complete" as Step, session.player_id, session.expected_tg_id);
 

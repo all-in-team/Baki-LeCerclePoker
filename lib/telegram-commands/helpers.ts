@@ -286,6 +286,7 @@ export function getPlayerPnl(playerId?: number) {
     JOIN player_game_deals pgd ON pgd.player_id = p.id
     JOIN games g ON g.id = pgd.game_id
     LEFT JOIN wallet_transactions wt ON wt.player_id = p.id AND wt.game_id = pgd.game_id
+      AND (wt.status IS NULL OR wt.status = 'active')
   `;
   if (playerId !== undefined)
     return getDb().prepare(base + ` WHERE p.id = ? GROUP BY p.id, pgd.game_id`).all(playerId) as any[];

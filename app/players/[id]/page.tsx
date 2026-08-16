@@ -2,7 +2,7 @@ export const dynamic = "force-dynamic";
 import { notFound } from "next/navigation";
 import {
   getPlayerById, getCrmNotes, getWalletTransactions, getPlayerPnLAllGames, getPlayerAgencyCutSeries,
-  getGrinderProfitability, getPlayerGameDeals, getGames, getPlayerWalletStats, type PlayerGamePnL,
+  getGrinderProfitability, getPlayerGameDeals, getGames, getPlayerWalletStats, getQuarantinedTransactions, type PlayerGamePnL,
 } from "@/lib/queries";
 import { getPlayerAffiliation } from "@/lib/queries/affiliate";
 import { getCnyRate } from "@/lib/currency";
@@ -12,6 +12,7 @@ import PageHeader from "@/components/PageHeader";
 import NetPnlChart from "@/app/akpoker/pnl/NetPnlChart";
 import PlayerDetailClient from "./PlayerDetailClient";
 import PlayerDangerZone from "./PlayerDangerZone";
+import QuarantinePanel from "@/components/QuarantinePanel";
 
 function daysAgo(n: number): string {
   const d = new Date(); d.setDate(d.getDate() - n);
@@ -85,11 +86,17 @@ export default async function PlayerDetailPage({ params, searchParams }: { param
     ORDER BY g.name, pgi.external_id
   `).all(playerId) as { id: number; game_id: number; game_name: string; external_id: string }[];
 
+  // Mouvements mis de côté par le sync — hors de tout solde tant qu'ils ne sont
+  // pas arbitrés. Affichés en tête de fiche : c'est là qu'on regarde un solde.
+  const quarantined = getQuarantinedTransactions(playerId);
+
   const accent = (label: string) => GAME_COLOR[label] ?? "#9CA3AF";
 
   return (
     <div>
       <PageHeader title={player.name} subtitle={`${player.telegram_handle ? `@${player.telegram_handle}` : ""} ${player.telegram_id ? `· ID ${player.telegram_id}` : ""} · ${player.status}`} />
+
+      <QuarantinePanel transactions={quarantined} />
 
       {/* Affiliation — éligibilité du deal affilié (texte simple), seulement si affilié */}
       {affiliation.affiliated && (

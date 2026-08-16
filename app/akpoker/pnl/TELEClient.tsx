@@ -170,7 +170,9 @@ export default function TELEClient({
 
   async function saveInlineWallet(playerId: number) {
     const gamePayload = walletInlineVals.game_wallets.map(a => ({ address: a.trim() })).filter(a => a.address.length > 0);
-    await fetch(`/api/players/${playerId}/game-wallets`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ addresses: gamePayload, game_id: gameId }) });
+    const gameRes = await fetch(`/api/players/${playerId}/game-wallets`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ addresses: gamePayload, game_id: gameId }) });
+    // Un refus de la garde d'adresse doit remonter : sans ça, la saisie paraît réussie.
+    if (!gameRes.ok) { const e = await gameRes.json().catch(() => null); alert(e?.error ?? "Erreur sauvegarde wallets de dépôt"); return; }
     const cashoutPayload = walletInlineVals.cashouts.map(a => ({ address: a.trim() })).filter(a => a.address.length > 0);
     const res = await fetch(`/api/players/${playerId}/cashouts`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ addresses: cashoutPayload, game_id: gameId }) });
     if (res.ok) { window.location.reload(); } else {
@@ -246,11 +248,16 @@ export default function TELEClient({
         const json = await playerRes.json();
         playerId = json.id;
       }
+      // Création de joueur : une adresse refusée par la garde ne doit pas passer
+      // inaperçue. Le joueur est déjà créé, on signale et on laisse corriger via
+      // le panneau Wallets plutôt que de faire échouer toute la création.
       if (newPlayer.wallet_game.trim()) {
-        await fetch(`/api/players/${playerId}/game-wallets`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ addresses: [{ address: newPlayer.wallet_game.trim() }], game_id: gameId }) });
+        const r = await fetch(`/api/players/${playerId}/game-wallets`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ addresses: [{ address: newPlayer.wallet_game.trim() }], game_id: gameId }) });
+        if (!r.ok) { const e = await r.json().catch(() => null); alert(`Wallet de dépôt non enregistrée — ${e?.error ?? "erreur"}`); }
       }
       if (newPlayer.wallet_cashout.trim()) {
-        await fetch(`/api/players/${playerId}/cashouts`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ addresses: [{ address: newPlayer.wallet_cashout.trim() }], game_id: gameId }) });
+        const r = await fetch(`/api/players/${playerId}/cashouts`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ addresses: [{ address: newPlayer.wallet_cashout.trim() }], game_id: gameId }) });
+        if (!r.ok) { const e = await r.json().catch(() => null); alert(`Wallet de retrait non enregistrée — ${e?.error ?? "erreur"}`); }
       }
       await fetch("/api/games/deals", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ player_id: playerId, game_id: teleGame.id, action_pct: action, rakeback_pct: rb, start_date: newPlayer.start_date || null }) });
       window.location.reload();

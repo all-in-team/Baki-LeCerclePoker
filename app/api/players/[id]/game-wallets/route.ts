@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getPlayerGameWallets, setPlayerGameWallets } from "@/lib/queries";
+import { WalletAddressError } from "@/lib/wallet-address";
 
 export async function GET(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
@@ -17,6 +18,16 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
     .filter((a: any) => typeof a === "object" && typeof a.address === "string")
     .map((a: any) => ({ address: a.address.trim(), label: a.label?.trim() || null }))
     .filter((a: any) => a.address.length > 0);
-  setPlayerGameWallets(Number(id), cleaned, gameId);
+  try {
+    setPlayerGameWallets(Number(id), cleaned, gameId);
+  } catch (e) {
+    // Adresse refusée par la garde : c'est une erreur de saisie, pas une panne.
+    // 400 + message exploitable, et AUCUNE adresse n'a été touchée (la garde
+    // tourne avant le DELETE du setter).
+    if (e instanceof WalletAddressError) {
+      return NextResponse.json({ error: e.message, code: e.code, address: e.address }, { status: 400 });
+    }
+    throw e;
+  }
   return NextResponse.json({ ok: true, count: cleaned.length });
 }

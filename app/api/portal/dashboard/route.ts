@@ -85,7 +85,7 @@ function buildAgentDashboard(agentPlayerId: number, db: any) {
   if (refIds.length > 0) {
     const ph = refIds.map(() => "?").join(",");
     const ts = `COALESCE(wt.tx_datetime, wt.tx_date)`;
-    const guard = `(wt.source IS NULL OR wt.source != 'unknown')`;
+    const guard = `(wt.source IS NULL OR wt.source != 'unknown') AND (wt.status IS NULL OR wt.status = 'active')`;
 
     activity = db.prepare(`
       SELECT ${ts} AS ts, wt.type, wt.amount, wt.currency, p.name AS player_name

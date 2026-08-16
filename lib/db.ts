@@ -20,6 +20,9 @@ import {
 // Module pur (aucun import) : utilisable depuis une migration sans cycle.
 import { nameKey as dzpkNameKey } from "./funnels/dzpk/name-key";
 
+// Quarantaine des mouvements wallet — cf. la migration en bas de ce fichier.
+export const WALLET_TX_QUARANTINE_V1 = "add_wallet_tx_quarantine_v1";
+
 const DATA_DIR = path.join(process.cwd(), "data");
 const DB_PATH = path.join(DATA_DIR, "lecercle.db");
 
@@ -3603,5 +3606,37 @@ function initSchema(db: Database.Database) {
     }
   } catch (err: any) {
     console.error(`[MIGRATION:${DZPK_MIGRATION_WELCOME_AB_V1}] FAILED (sera rejouée au prochain boot):`, err.message);
+  }
+
+  // ── Quarantaine des mouvements wallet invraisemblables ─────────────────────
+  //
+  // Une colonne d'état sur wallet_transactions. 'active' = compté partout, comme
+  // avant. 'quarantined' = importé, visible, mais EXCLU de tous les calculs de
+  // solde et de règlement jusqu'à arbitrage manuel sur /wallets/quarantine.
+  //
+  // Pourquoi : les 29/07 et 16/08/2026, un lot de transactions fantômes a
+  // corrompu un solde sans que rien ne s'y oppose. Les gardes amont (adresse,
+  // type d'événement) traitent les causes connues ; cette colonne est le filet
+  // pour celles qu'on n'a pas encore vues. Le seuil vit dans
+  // lib/wallet-address.ts (PLAUSIBILITY_THRESHOLD_USDT = 100 000).
+  //
+  // Défaut 'active' : les 4 420 lignes existantes gardent leur comportement,
+  // la migration ne déplace aucun solde.
+  try {
+    const already = db.prepare(`SELECT 1 FROM _applied_fixes WHERE name = ?`)
+      .get(WALLET_TX_QUARANTINE_V1);
+    if (!already) {
+      const cols = new Set(
+        (db.prepare(`PRAGMA table_info(wallet_transactions)`).all() as any[]).map(c => c.name)
+      );
+      if (!cols.has("status")) {
+        db.exec(`ALTER TABLE wallet_transactions ADD COLUMN status TEXT NOT NULL DEFAULT 'active'`);
+      }
+      db.exec(`CREATE INDEX IF NOT EXISTS idx_wallet_tx_status ON wallet_transactions(status) WHERE status != 'active'`);
+      db.prepare(`INSERT OR IGNORE INTO _applied_fixes (name) VALUES (?)`).run(WALLET_TX_QUARANTINE_V1);
+      console.log(`[MIGRATION] ${WALLET_TX_QUARANTINE_V1} applied`);
+    }
+  } catch (err: any) {
+    console.error(`[MIGRATION:${WALLET_TX_QUARANTINE_V1}] FAILED (sera rejouée au prochain boot):`, err.message);
   }
 }

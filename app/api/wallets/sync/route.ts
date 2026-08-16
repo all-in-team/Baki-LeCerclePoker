@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getDb } from "@/lib/db";
 import { insertWalletTransactionByHash, getActiveWalletMeresForGame, getAllWalletMereAddressesAnyStatus, getAllGameWalletsByPlayer, getAllCashoutsByPlayer, getOwnCashoutAddrsByPlayer, getPlayersOnGame, getPlayerIdsWithDealOnGame, isGameArchived } from "@/lib/queries";
+import { isKnownTokenContract, tokenContractLabel, PLAUSIBILITY_THRESHOLD_USDT } from "@/lib/wallet-address";
 
 const USDT_CONTRACT = "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t";
 
@@ -54,6 +55,7 @@ async function fetchAllTronTxs(address: string): Promise<any[]> {
   const all: any[] = [];
   let fingerprint: string | undefined;
   let page = 0;
+  let droppedNonTransfer = 0;
 
   do {
     const params = new URLSearchParams({
@@ -66,11 +68,29 @@ async function fetchAllTronTxs(address: string): Promise<any[]> {
     const url = `https://api.trongrid.io/v1/accounts/${address}/transactions/trc20?${params}`;
     const json = await fetchTronGrid(url, headers);
 
-    all.push(...(json.data ?? []));
+    // ⚠️ MONEY-CRITICAL — ne garder QUE les Transfer.
+    //
+    // Cet endpoint TronGrid ne renvoie pas que des transferts : il mélange les
+    // événements `Approval` du même contrat. Un `approve` illimité porte une
+    // valeur de 2^256−1, que `toAmt()` divise par 10^6 et transforme en un dépôt
+    // de 1,157920892373162e+71 USDT. C'est exactement l'origine des montants
+    // astronomiques du 16/08/2026 : sur les 2 000 événements lus, 21 étaient des
+    // Approval, dont 3 au montant max-uint — à eux seuls −3,47e+71 sur le solde.
+    //
+    // Ce filtre est indépendant de la garde d'adresse : une approbation signée
+    // depuis la VRAIE wallet d'un joueur produirait le même dégât.
+    for (const ev of json.data ?? []) {
+      if (ev?.type && ev.type !== "Transfer") { droppedNonTransfer++; continue; }
+      all.push(ev);
+    }
     fingerprint = json.meta?.fingerprint ?? undefined;
     page++;
     if (page >= 10) break;
   } while (fingerprint);
+
+  if (droppedNonTransfer > 0) {
+    console.warn(`[SYNC] ${address.slice(0, 10)}… : ${droppedNonTransfer} événement(s) non-Transfer ignoré(s) (Approval, etc.)`);
+  }
 
   return all;
 }
@@ -169,6 +189,30 @@ export async function POST(req: NextRequest) {
   let totalDeposits = 0;
   let totalCashouts = 0;
   let skippedFromMere = 0;
+  let skippedTokenContract = 0;
+  let quarantined = 0;
+
+  // Garde n°4 — la contrepartie est-elle un contrat de token connu ?
+  // Un transfert dont l'autre bout est le contrat USDT n'est jamais un mouvement
+  // de joueur. Doublon volontaire de la garde à l'enregistrement : celle-ci
+  // couvre aussi les wallets entrées AVANT la mise en place des gardes.
+  function skipIfTokenContract(addr: string | null | undefined, ctx: string): boolean {
+    if (!addr || !isKnownTokenContract(addr)) return false;
+    skippedTokenContract++;
+    console.warn(`[SYNC ${gameName}] skip: contrepartie = contrat ${tokenContractLabel(addr)} (${addr}) — ${ctx}`);
+    return true;
+  }
+
+  // Garde n°5 — seuil de vraisemblance.
+  // Au-delà, la ligne est importée mais NON comptabilisée (status='quarantined')
+  // et attend un arbitrage manuel dans le back-office. On n'ignore pas : une
+  // vraie grosse transaction existe, elle doit rester visible et validable.
+  function statusFor(amount: number, ctx: string): "active" | "quarantined" {
+    if (!Number.isFinite(amount) || Math.abs(amount) <= PLAUSIBILITY_THRESHOLD_USDT) return "active";
+    quarantined++;
+    console.warn(`[SYNC ${gameName}] QUARANTAINE ${amount} USDT (> ${PLAUSIBILITY_THRESHOLD_USDT}) — ${ctx}`);
+    return "quarantined";
+  }
 
   // ── Pass 1 : scan WALLET GAME — deposits; withdrawal ONLY if sender is a mère of THIS game;
   //    incoming from another game's mère is skipped (that game's Pass 2 owns it)
@@ -197,16 +241,23 @@ export async function POST(req: NextRequest) {
             console.warn(`[SYNC ${gameName}] skip tx ${tx.transaction_id}: from mère ${fromLower.slice(0, 10)}… (another game or retired) → not a ${gameName} tx (player=${player.name})`);
             continue;
           }
+          // Garde n°4 : l'expéditeur ET la wallet scannée. Scanner le contrat USDT
+          // lui-même (l'incident) tombe sur le second test — chaque transfert reçu
+          // par le contrat aurait `to` = contrat.
+          if (skipIfTokenContract(tx.from, `pass 1 expéditeur, tx ${tx.transaction_id}, player=${player.name}`)) continue;
+          if (skipIfTokenContract(walletAddr, `pass 1 wallet game scannée, player=${player.name}`)) break;
+          const amount = toAmt(tx);
           const changed = insertWalletTransactionByHash({
             player_id: player.id,
             game_id: fromGameMere ? gameId : depositGameId(player.id, fromLower),
             type: fromGameMere ? "withdrawal" : "deposit",
-            amount: toAmt(tx),
+            amount,
             currency: "USDT",
             tx_date: toDate(tx),
             tx_datetime: toDatetime(tx),
             tron_tx_hash: tx.transaction_id,
             counterparty_address: tx.from ?? null,
+            status: statusFor(amount, `pass 1, tx ${tx.transaction_id}, player=${player.name}`),
           });
           if (changed) {
             if (fromGameMere) cashouts++;
@@ -245,6 +296,9 @@ export async function POST(req: NextRequest) {
           if ((tx.to ?? "").toLowerCase() !== addrLower) continue;
           // Invariant #1: withdrawal ONLY if sender is a known wallet mère
           if (!mereAddrs.has((tx.from ?? "").toLowerCase())) continue;
+          // Garde n°4, pass 2 : expéditeur et wallet cashout scannée.
+          if (skipIfTokenContract(tx.from, `pass 2 expéditeur, tx ${tx.transaction_id}`)) continue;
+          if (skipIfTokenContract(original, `pass 2 wallet cashout scannée`)) break;
 
           // ANTI-DOUBLE-COUNT (money-critical): a shared cashout address = same entity/team
           // (alias). The withdrawal must be counted ONCE, under a SINGLE player — never once
@@ -255,16 +309,18 @@ export async function POST(req: NextRequest) {
           // holding the address on the mère's game". INSERT OR IGNORE keeps prior rows intact
           // (no reattribution of already-imported tx).
           const attributedPid = Math.min(...playerIds);
+          const amount = toAmt(tx);
           const changed = insertWalletTransactionByHash({
             player_id: attributedPid,
             game_id: gameId,
             type: "withdrawal",
-            amount: toAmt(tx),
+            amount,
             currency: "USDT",
             tx_date: toDate(tx),
             tx_datetime: toDatetime(tx),
             tron_tx_hash: tx.transaction_id,
             counterparty_address: tx.from ?? null,
+            status: statusFor(amount, `pass 2, tx ${tx.transaction_id}, player_id=${attributedPid}`),
           });
           if (changed) {
             totalCashouts++;
@@ -298,6 +354,11 @@ export async function POST(req: NextRequest) {
     // of THIS game (another game's cashout, or a retired mère) — deliberately not
     // imported. Surfaced so a mis-registered cashout wallet doesn't fail silently.
     skipped_from_mere: skippedFromMere,
+    // Transferts écartés parce que leur contrepartie (ou la wallet scannée) est un
+    // contrat de token connu. > 0 = une wallet douteuse est encore enregistrée.
+    skipped_token_contract: skippedTokenContract,
+    // Lignes importées mais NON comptabilisées, en attente d'arbitrage sur /wallets/quarantine.
+    quarantined,
     wallet_meres_configured: mereAddrs.size,
     cashout_wallets_configured: cashoutOwners.size,
     results,

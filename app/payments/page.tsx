@@ -13,6 +13,8 @@ import {
   SETTLE_ROOMS,
   OVERDUE_GRACE_DAYS,
 } from "@/lib/manual-settlement-engine";
+import { getQuarantinedTransactions } from "@/lib/queries";
+import QuarantinePanel from "@/components/QuarantinePanel";
 
 /**
  * Paiements — cockpit de règlement centralisé, toutes rooms confondues.
@@ -34,6 +36,11 @@ export default async function PaymentsPage() {
   // Vues calculées (fonctions pures du moteur, aucune écriture) : solde net par joueur toutes
   // rooms compensées, et semaines impayées regroupées par (joueur, room). Les tableaux plats
   // restent passés tels quels — la vue « Détaillé » et les actions unitaires s'appuient dessus.
+  // Vue globale de la quarantaine. La fiche joueur montre déjà les lignes du
+  // joueur concerné, mais une ligne sur un joueur qu'on ne consulte jamais y
+  // resterait invisible : ce cockpit est le point de passage obligé.
+  const quarantined = getQuarantinedTransactions();
+
   const pendingGroups = groupPendingByPlayer(pending);
   const overdueGroups = groupOverdueByPlayer(overdue);
 
@@ -43,6 +50,7 @@ export default async function PaymentsPage() {
         title="Paiements"
         subtitle="Tous les règlements en attente, toutes rooms — plus aucun joueur oublié"
       />
+      <QuarantinePanel transactions={quarantined} showPlayer />
       <PaymentsClient
         pending={pending}
         pendingGroups={pendingGroups}

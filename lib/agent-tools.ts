@@ -54,7 +54,7 @@ export function buildSnapshot(): string {
   const txToday = db.prepare(
     `SELECT type, COALESCE(SUM(amount), 0) AS amt, COUNT(*) AS n
      FROM wallet_transactions
-     WHERE date(created_at) = ? AND (source IS NULL OR source != 'unknown')
+     WHERE date(created_at) = ? AND (source IS NULL OR source != 'unknown') AND (status IS NULL OR status = 'active')
      GROUP BY type`
   ).all(today) as Array<{ type: string; amt: number; n: number }>;
 

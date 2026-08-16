@@ -20,7 +20,7 @@ export async function sendDailySummary(): Promise<void> {
       COALESCE(SUM(CASE WHEN type='withdrawal' THEN amount ELSE 0 END), 0) AS withdrawals,
       COUNT(*) AS tx_count
     FROM wallet_transactions
-    WHERE date(created_at) = ? AND (source IS NULL OR source != 'unknown')
+    WHERE date(created_at) = ? AND (source IS NULL OR source != 'unknown') AND (status IS NULL OR status = 'active')
   `).get(yesterdayStr) as { deposits: number; withdrawals: number; tx_count: number };
 
   const yesterdayPnl = db.prepare(`
@@ -29,7 +29,7 @@ export async function sendDailySummary(): Promise<void> {
     * pgd.action_pct / 100.0), 0) AS my_pnl
     FROM wallet_transactions wt
     JOIN player_game_deals pgd ON pgd.player_id = wt.player_id AND pgd.game_id = wt.game_id
-    WHERE date(wt.created_at) = ? AND (wt.source IS NULL OR wt.source != 'unknown')
+    WHERE date(wt.created_at) = ? AND (wt.source IS NULL OR wt.source != 'unknown') AND (wt.status IS NULL OR wt.status = 'active')
   `).get(yesterdayStr) as { my_pnl: number };
 
   const { start, end } = getWeekBounds(0);
@@ -45,7 +45,7 @@ export async function sendDailySummary(): Promise<void> {
     FROM wallet_transactions wt
     JOIN player_game_deals pgd ON pgd.player_id = wt.player_id AND pgd.game_id = wt.game_id
     WHERE wt.tx_datetime >= ? AND wt.tx_datetime <= ?
-      AND (wt.source IS NULL OR wt.source != 'unknown')
+      AND (wt.source IS NULL OR wt.source != 'unknown') AND (wt.status IS NULL OR wt.status = 'active')
   `).get(weekSince, weekUntil) as { deposited: number; withdrawn: number; my_pnl: number };
 
   const activeCount = (db.prepare(

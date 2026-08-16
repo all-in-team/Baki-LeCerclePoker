@@ -1,6 +1,7 @@
 import { getDb } from "./db";
 import { toParisDate, toUTCISO, parisLocalToUTC, addMonthsParis } from "./date-utils";
 import { computeStakingBlock, projectStakingBlock, operatorPnlFromReglement } from "./qqpk-staking-engine";
+import { assertWalletAddress } from "./wallet-address";
 
 // ── Players ──────────────────────────────────────────────
 // Les lignes archivées (soft-delete, audit 2026-07-25) sont exclues : cette fonction
@@ -237,6 +238,14 @@ export function getPlayerCashouts(playerId: number, gameId?: number) {
 
 export function setPlayerCashouts(playerId: number, addresses: { address: string; label?: string | null }[], gameId?: number) {
   const db = getDb();
+  // Garde d'adresse AVANT le DELETE : ce setter remplace le jeu d'adresses du
+  // joueur. Valider dans la boucle d'INSERT laisserait une fenêtre où les
+  // anciennes adresses sont déjà supprimées et la nouvelle refusée — le joueur
+  // se retrouverait sans wallet. On refuse le lot entier, rien n'est touché.
+  for (const c of addresses) {
+    if (!(c.address ?? "").trim()) continue;
+    assertWalletAddress(c.address);
+  }
   const teleGameId = (db.prepare(`SELECT id FROM games WHERE name = 'TELE'`).get() as { id: number } | undefined)?.id;
   const tx = db.transaction(() => {
     if (gameId != null) {
@@ -271,6 +280,13 @@ export function getPlayerGameWallets(playerId: number, gameId?: number) {
 
 export function setPlayerGameWallets(playerId: number, addresses: { address: string; label?: string | null }[], gameId?: number) {
   const db = getDb();
+  // Garde d'adresse AVANT le DELETE — même raison que setPlayerCashouts.
+  // C'est CE setter qu'a traversé le contrat USDT les 29/07 et 16/08 : la route
+  // /api/players/[id]/game-wallets ne validait rien, pas même le format.
+  for (const c of addresses) {
+    if (!(c.address ?? "").trim()) continue;
+    assertWalletAddress(c.address);
+  }
   const teleGameId = (db.prepare(`SELECT id FROM games WHERE name = 'TELE'`).get() as { id: number } | undefined)?.id;
   const tx = db.transaction(() => {
     if (gameId != null) {
@@ -295,16 +311,20 @@ export function setPlayerGameWallets(playerId: number, addresses: { address: str
   tx();
 }
 
+// Chemin des 9 funnels d'onboarding bot. Le regex TRC20 côté bot ne filtre que la
+// forme : il accepte le contrat USDT sans broncher. La garde est donc ici aussi.
 export function addPlayerGameWallet(playerId: number, address: string, gameId: number, label?: string | null) {
+  const addr = assertWalletAddress(address);
   getDb().prepare(
     `INSERT OR IGNORE INTO player_wallet_games (player_id, address, game_id, label) VALUES (?, ?, ?, ?)`
-  ).run(playerId, address.trim(), gameId, label ?? null);
+  ).run(playerId, addr, gameId, label ?? null);
 }
 
 export function addPlayerCashout(playerId: number, address: string, gameId: number, label?: string | null) {
+  const addr = assertWalletAddress(address);
   getDb().prepare(
     `INSERT OR IGNORE INTO player_wallet_cashouts (player_id, address, game_id, label) VALUES (?, ?, ?, ?)`
-  ).run(playerId, address.trim(), gameId, label ?? null);
+  ).run(playerId, addr, gameId, label ?? null);
 }
 
 export function getAllGameWalletsByPlayer(gameName: string) {
@@ -600,7 +620,7 @@ export function getWalletTransactions(filters?: { player_id?: number; game_id?: 
     JOIN players p ON p.id = wt.player_id
     LEFT JOIN games g ON g.id = wt.game_id
     LEFT JOIN poker_apps pa ON pa.id = wt.app_id
-    WHERE (wt.source IS NULL OR wt.source != 'unknown')
+    WHERE (wt.source IS NULL OR wt.source != 'unknown') AND (wt.status IS NULL OR wt.status = 'active')
   `;
   const params: Record<string, unknown> = {};
   if (filters?.player_id) { q += ` AND wt.player_id = @player_id`; params.player_id = filters.player_id; }
@@ -635,7 +655,7 @@ export function getWalletSummaryByPlayer(filters?: { game_name?: string; game_na
   const conditions: string[] = [];
   const params: Record<string, unknown> = {};
   pushGameCondition(conditions, params, filters);
-  const srcFilter = `AND (wt.source IS NULL OR wt.source != 'unknown')`;
+  const srcFilter = `AND (wt.source IS NULL OR wt.source != 'unknown') AND (wt.status IS NULL OR wt.status = 'active')`;
   const startDateCond = `AND (pgd.start_date IS NULL OR wt.tx_datetime >= pgd.start_date)`;
   const dealEndCond = `AND (pgd.end_date IS NULL OR wt.tx_datetime <= pgd.end_date)`;
   const endDateCond = filters?.end_date ? `AND wt.tx_datetime <= @end_date` : "";
@@ -669,7 +689,7 @@ export function getWalletKPIs(filters?: { game_name?: string; game_names?: strin
   const conditions: string[] = [];
   const params: Record<string, unknown> = {};
   pushGameCondition(conditions, params, filters);
-  const srcF = `AND (wt.source IS NULL OR wt.source != 'unknown')`;
+  const srcF = `AND (wt.source IS NULL OR wt.source != 'unknown') AND (wt.status IS NULL OR wt.status = 'active')`;
   const sdCond = `AND (pgd.start_date IS NULL OR wt.tx_datetime >= pgd.start_date)`;
   const deCond = `AND (pgd.end_date IS NULL OR wt.tx_datetime <= pgd.end_date)`;
   const edCond = filters?.end_date ? `AND wt.tx_datetime <= @end_date` : "";
@@ -725,7 +745,7 @@ export function getVolumeByGame(filters?: { since_date?: string; end_date?: stri
     FROM wallet_transactions wt
     LEFT JOIN games g ON g.id = wt.game_id
     LEFT JOIN poker_apps pa ON pa.id = wt.app_id
-    WHERE (wt.source IS NULL OR wt.source != 'unknown') ${dateCond}
+    WHERE (wt.source IS NULL OR wt.source != 'unknown') AND (wt.status IS NULL OR wt.status = 'active') ${dateCond}
     GROUP BY game_name, wt.currency
   `).all(params) as { game_name: string; currency: string; raw_volume: number }[];
 
@@ -752,7 +772,7 @@ export function getNetPnlSeries(filters?: { game_name?: string; game_names?: str
   const params: Record<string, unknown> = {};
   pushGameCondition(conditions, params, filters);
   if (filters?.player_id) { conditions.push(`p.id = @player_id`); params.player_id = filters.player_id; }
-  const srcF = `AND (wt.source IS NULL OR wt.source != 'unknown')`;
+  const srcF = `AND (wt.source IS NULL OR wt.source != 'unknown') AND (wt.status IS NULL OR wt.status = 'active')`;
   const sdCond = `AND (pgd.start_date IS NULL OR wt.tx_datetime >= pgd.start_date)`;
   const deCond = `AND (pgd.end_date IS NULL OR wt.tx_datetime <= pgd.end_date)`;
   const sinceCond = filters?.since_date ? `AND wt.tx_datetime >= @since_date` : "";
@@ -788,7 +808,7 @@ export function getPlayerWalletStats(playerId: number) {
     FROM wallet_transactions wt
     JOIN player_game_deals pgd ON pgd.player_id = wt.player_id AND pgd.game_id = wt.game_id
     WHERE wt.player_id = ?
-      AND (wt.source IS NULL OR wt.source != 'unknown')
+      AND (wt.source IS NULL OR wt.source != 'unknown') AND (wt.status IS NULL OR wt.status = 'active')
       AND (pgd.start_date IS NULL OR wt.tx_datetime >= pgd.start_date)
       AND (pgd.end_date IS NULL OR wt.tx_datetime <= pgd.end_date)
   `).get(playerId) as { deposited: number; withdrawn: number; net: number; my_pnl: number } | undefined;
@@ -903,7 +923,7 @@ export function getTelePlayers(startDate?: string, endDate?: string) {
     FROM players p
     JOIN player_game_deals pgd ON pgd.player_id = p.id
     JOIN games g ON g.id = pgd.game_id AND g.name = 'TELE'
-    LEFT JOIN wallet_transactions wt ON wt.player_id = p.id AND wt.game_id = g.id AND (wt.source IS NULL OR wt.source != 'unknown') ${dateFilter}
+    LEFT JOIN wallet_transactions wt ON wt.player_id = p.id AND wt.game_id = g.id AND (wt.source IS NULL OR wt.source != 'unknown') AND (wt.status IS NULL OR wt.status = 'active') ${dateFilter}
     GROUP BY p.id
     ORDER BY p.name
   `).all(startDate && endDate ? { startDate, endDate } : {}) as {
@@ -1234,7 +1254,7 @@ export function getWalletPnL(playerId?: number): PnLWalletRow[] {
     JOIN games g ON g.id = wt.game_id
     LEFT JOIN player_game_deals pgd ON pgd.player_id = wt.player_id AND pgd.game_id = wt.game_id
     WHERE wt.game_id IS NOT NULL
-      AND (wt.source IS NULL OR wt.source != 'unknown')
+      AND (wt.source IS NULL OR wt.source != 'unknown') AND (wt.status IS NULL OR wt.status = 'active')
       AND (pgd.start_date IS NULL OR wt.tx_datetime >= pgd.start_date)
       AND (pgd.end_date IS NULL OR wt.tx_datetime <= pgd.end_date)
   `;
@@ -1307,9 +1327,12 @@ export function insertWalletTransactionByHash(data: {
   player_id: number; game_id: number; type: "deposit" | "withdrawal";
   amount: number; currency: string; tx_date: string; tx_datetime: string; tron_tx_hash: string;
   counterparty_address?: string | null;
+  // 'quarantined' = importée mais exclue de tous les calculs jusqu'à arbitrage
+  // manuel. Défaut 'active' : les appelants qui ne passent rien sont inchangés.
+  status?: "active" | "quarantined";
 }) {
   const db = getDb();
-  const params = { note: "auto-sync", counterparty_address: null, ...data };
+  const params = { note: "auto-sync", counterparty_address: null, status: "active", ...data };
   // Reassignment guard (money-critical): an on-chain tx already attributed to
   // ANOTHER player is never imported a second time. When a game wallet changes
   // owner, its history stays with the owner of the time — only NEW txs land on
@@ -1332,8 +1355,8 @@ export function insertWalletTransactionByHash(data: {
   }
   // First: try insert. INSERT OR IGNORE returns 0 changes on conflict (existing hash).
   const ins = db.prepare(`
-    INSERT OR IGNORE INTO wallet_transactions (player_id, game_id, type, amount, currency, tx_date, tx_datetime, tron_tx_hash, counterparty_address, note, source)
-    VALUES (@player_id, @game_id, @type, @amount, @currency, @tx_date, @tx_datetime, @tron_tx_hash, @counterparty_address, @note, 'sync')
+    INSERT OR IGNORE INTO wallet_transactions (player_id, game_id, type, amount, currency, tx_date, tx_datetime, tron_tx_hash, counterparty_address, note, source, status)
+    VALUES (@player_id, @game_id, @type, @amount, @currency, @tx_date, @tx_datetime, @tron_tx_hash, @counterparty_address, @note, 'sync', @status)
   `).run(params);
   if (ins.changes > 0) return ins.changes; // new transaction inserted
   // Existing row — backfill counterparty_address if it's still NULL (one-time fill, never overwrite)
@@ -1345,6 +1368,57 @@ export function insertWalletTransactionByHash(data: {
     `).run(params);
   }
   return 0; // no new row imported (caller's "deposits++" counter stays accurate)
+}
+
+// ── Quarantaine des mouvements wallet ─────────────────────────────────────────
+//
+// `status` : 'active' (compté partout) · 'quarantined' (en attente d'arbitrage)
+// · 'rejected' (refusé, conservé pour l'audit). Le filtre des requêtes d'argent
+// est `(status IS NULL OR status = 'active')` — fail-closed : tout état autre
+// qu'actif est exclu, y compris un état futur qu'on n'aurait pas encore prévu.
+export type QuarantinedTx = {
+  id: number; player_id: number; player_name: string; game_name: string | null;
+  type: string; amount: number; currency: string; tx_datetime: string | null;
+  tx_date: string; counterparty_address: string | null; tron_tx_hash: string | null;
+  created_at: string;
+};
+
+export function getQuarantinedTransactions(playerId?: number): QuarantinedTx[] {
+  return getDb().prepare(`
+    SELECT wt.id, wt.player_id, p.name AS player_name, g.name AS game_name,
+           wt.type, wt.amount, wt.currency, wt.tx_datetime, wt.tx_date,
+           wt.counterparty_address, wt.tron_tx_hash, wt.created_at
+    FROM wallet_transactions wt
+    JOIN players p ON p.id = wt.player_id
+    LEFT JOIN games g ON g.id = wt.game_id
+    WHERE wt.status = 'quarantined'
+      AND (@player_id IS NULL OR wt.player_id = @player_id)
+    ORDER BY wt.amount DESC, wt.id DESC
+  `).all({ player_id: playerId ?? null }) as QuarantinedTx[];
+}
+
+export function countQuarantinedTransactions(): number {
+  return (getDb().prepare(
+    `SELECT COUNT(*) AS n FROM wallet_transactions WHERE status = 'quarantined'`
+  ).get() as { n: number }).n;
+}
+
+/**
+ * Arbitrage manuel d'une ligne en quarantaine.
+ *
+ * Ne touche QUE des lignes 'quarantined' : impossible de repasser en quarantaine
+ * une transaction déjà comptabilisée et potentiellement réglée, ni de « valider »
+ * deux fois. Retourne le nombre de lignes affectées (0 = déjà arbitrée).
+ */
+export function arbitrateQuarantinedTransaction(id: number, decision: "approve" | "reject"): number {
+  const next = decision === "approve" ? "active" : "rejected";
+  const res = getDb().prepare(
+    `UPDATE wallet_transactions SET status = ? WHERE id = ? AND status = 'quarantined'`
+  ).run(next, id);
+  if (res.changes > 0) {
+    console.log(`[QUARANTAINE] tx ${id} → ${next}`);
+  }
+  return res.changes;
 }
 
 // ── Report Schedule Tracking ────────────────────────────────
@@ -2044,7 +2118,7 @@ export function getActivePlayersCount(period: Period): number {
       FROM wallet_transactions wt
       JOIN games g ON g.id = wt.game_id AND LOWER(g.name) = 'tele'
       WHERE wt.tx_datetime >= ? AND wt.tx_datetime <= ?
-        AND (wt.source IS NULL OR wt.source != 'unknown')
+        AND (wt.source IS NULL OR wt.source != 'unknown') AND (wt.status IS NULL OR wt.status = 'active')
     `).get(since, until) as { n: number }).n;
   }
 
@@ -2064,7 +2138,7 @@ export function getActivePlayersCount(period: Period): number {
     const walletPlayers = db.prepare(`
       SELECT DISTINCT wt.player_id FROM wallet_transactions wt
       WHERE wt.tx_datetime >= ? AND wt.tx_datetime <= ?
-        AND (wt.source IS NULL OR wt.source != 'unknown')
+        AND (wt.source IS NULL OR wt.source != 'unknown') AND (wt.status IS NULL OR wt.status = 'active')
     `).all(since, until) as { player_id: number }[];
     walletPlayers.forEach(r => combined.add(r.player_id));
   }
@@ -2258,7 +2332,7 @@ export function getPlayerAgencyCutSeries(playerId: number, period?: Period): { d
       JOIN player_game_deals pgd ON pgd.player_id = wt.player_id AND pgd.game_id = wt.game_id
       JOIN games g ON g.id = wt.game_id AND g.name = ?
       WHERE wt.player_id = ?
-        AND (wt.source IS NULL OR wt.source != 'unknown')
+        AND (wt.source IS NULL OR wt.source != 'unknown') AND (wt.status IS NULL OR wt.status = 'active')
         AND (pgd.start_date IS NULL OR wt.tx_datetime >= pgd.start_date)
         AND (pgd.end_date IS NULL OR wt.tx_datetime <= pgd.end_date)
         ${since ? "AND wt.tx_datetime >= ?" : ""}
@@ -2367,7 +2441,7 @@ export function getPnLOverTime(period: Period): PnLTimePoint[] {
     FROM wallet_transactions wt
     JOIN player_game_deals pgd ON pgd.player_id = wt.player_id AND pgd.game_id = wt.game_id
     JOIN games g ON g.id = wt.game_id AND LOWER(g.name) = LOWER(?)
-    WHERE (wt.source IS NULL OR wt.source != 'unknown')
+    WHERE (wt.source IS NULL OR wt.source != 'unknown') AND (wt.status IS NULL OR wt.status = 'active')
       AND (pgd.start_date IS NULL OR wt.tx_datetime >= pgd.start_date)
       AND (pgd.end_date IS NULL OR wt.tx_datetime <= pgd.end_date)
       ${since ? "AND wt.tx_datetime >= ?" : ""}
@@ -2841,7 +2915,7 @@ export function getQqpkCycleTransactions(playerId: number, startIso: string, end
     JOIN games g ON g.id = wt.game_id AND g.name = 'QQPK'
     JOIN player_game_deals pgd ON pgd.player_id = wt.player_id AND pgd.game_id = g.id
     WHERE wt.player_id = ?
-      AND (wt.source IS NULL OR wt.source != 'unknown')
+      AND (wt.source IS NULL OR wt.source != 'unknown') AND (wt.status IS NULL OR wt.status = 'active')
       AND (pgd.start_date IS NULL OR wt.tx_datetime >= pgd.start_date)
       AND (pgd.end_date IS NULL OR wt.tx_datetime <= pgd.end_date)
       AND wt.tx_datetime >= ? AND wt.tx_datetime <= ?
@@ -2975,7 +3049,7 @@ function getQqpkCycleTxEvents(playerId: number, startIso: string, endIso: string
      JOIN player_game_deals pgd ON pgd.player_id = wt.player_id AND pgd.game_id = wt.game_id
      JOIN games g ON g.id = pgd.game_id AND g.name = 'QQPK'
      WHERE wt.player_id = @pid
-       AND (wt.source IS NULL OR wt.source != 'unknown')
+       AND (wt.source IS NULL OR wt.source != 'unknown') AND (wt.status IS NULL OR wt.status = 'active')
        AND wt.tx_datetime >= @start AND wt.tx_datetime <= @end
        AND (pgd.start_date IS NULL OR wt.tx_datetime >= pgd.start_date)
        AND (pgd.end_date IS NULL OR wt.tx_datetime <= pgd.end_date)

@@ -185,7 +185,7 @@ export function getNexaPlayersOn(db: DB): NexaPlayerRow[] {
       -- currency = 'USDT' : invariant #3, on ne somme jamais des devises
       -- différentes sans toUsdt(). addMovementOn force USDT, mais d'autres
       -- chemins du repo peuvent écrire une autre devise sur ce game_id.
-      WHERE game_id = @gid AND (source IS NULL OR source != 'unknown') AND currency = 'USDT'
+      WHERE game_id = @gid AND (source IS NULL OR source != 'unknown') AND (status IS NULL OR status = 'active') AND currency = 'USDT'
       GROUP BY player_id
     ) m ON m.player_id = p.id
     LEFT JOIN nexa_leads l ON l.player_id = p.id
@@ -438,7 +438,7 @@ export function getNexaPlayerDetailOn(db: DB, playerId: number): NexaPlayerDetai
     SELECT COALESCE(SUM(CASE WHEN type = 'deposit'    THEN amount ELSE 0 END), 0) AS deposited,
            COALESCE(SUM(CASE WHEN type = 'withdrawal' THEN amount ELSE 0 END), 0) AS withdrawn
     FROM wallet_transactions
-    WHERE player_id = ? AND game_id = ? AND (source IS NULL OR source != 'unknown') AND currency = 'USDT'
+    WHERE player_id = ? AND game_id = ? AND (source IS NULL OR source != 'unknown') AND (status IS NULL OR status = 'active') AND currency = 'USDT'
   `).get(playerId, gid) as { deposited: number; withdrawn: number };
 
   const netMovements = mv.withdrawn - mv.deposited;

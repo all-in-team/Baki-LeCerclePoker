@@ -216,6 +216,7 @@ function getAgencyPnLDisclosed(
     `wt.player_id = ?`,
     `wt.game_id = ?`,
     `(wt.source IS NULL OR wt.source != 'unknown')`,
+    `(wt.status IS NULL OR wt.status = 'active')`,
   ];
   const params: unknown[] = [referredPlayerId, gameId];
 

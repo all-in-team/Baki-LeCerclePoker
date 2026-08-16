@@ -197,7 +197,7 @@ function _computeWeekInternal(weekStart: string, weekEnd: string, startISO: stri
       FROM wallet_transactions
       WHERE player_id = @player_id
         AND tx_datetime >= @start AND tx_datetime <= @end
-        AND (source IS NULL OR source != 'unknown')
+        AND (source IS NULL OR source != 'unknown') AND (status IS NULL OR status = 'active')
     `).get({ player_id: player.player_id, start: startISO, end: endISO }) as { deposited: number; withdrawn: number };
 
     const pnlPlayer = txData.withdrawn - txData.deposited;
@@ -209,7 +209,7 @@ function _computeWeekInternal(weekStart: string, weekEnd: string, startISO: stri
       WHERE player_id = @player_id
         AND type = 'withdrawal'
         AND tx_datetime >= @start AND tx_datetime <= @end
-        AND (source IS NULL OR source != 'unknown')
+        AND (source IS NULL OR source != 'unknown') AND (status IS NULL OR status = 'active')
       ORDER BY tx_datetime DESC
       LIMIT 1
     `).get({ player_id: player.player_id, start: startISO, end: endISO }) as { id: number; tx_datetime: string } | undefined;
@@ -271,7 +271,7 @@ export function getSettlementTransactions(settlementId: number): TxRow[] {
     FROM wallet_transactions
     WHERE player_id = @player_id
       AND tx_datetime >= @start AND tx_datetime <= @end
-      AND (source IS NULL OR source != 'unknown')
+      AND (source IS NULL OR source != 'unknown') AND (status IS NULL OR status = 'active')
   `).all({ player_id: settlement.player_id, start: startISO, end: endISO }) as any[];
 
   // Get overrides
@@ -293,6 +293,7 @@ export function getSettlementTransactions(settlementId: number): TxRow[] {
     const includedTxs = db.prepare(`
       SELECT id, tx_datetime, type, amount, source, tron_tx_hash
       FROM wallet_transactions WHERE id IN (${includeIds.map(() => '?').join(',')})
+        AND (status IS NULL OR status = 'active')
     `).all(...includeIds) as any[];
     for (const tx of includedTxs) {
       result.push({ ...tx, is_override: true, override_action: "include" });
@@ -331,7 +332,7 @@ export function getAvailableTransactions(playerId: number, weekStart: string, se
     FROM wallet_transactions
     WHERE player_id = ?
       AND tx_datetime >= ? AND tx_datetime <= ?
-      AND (source IS NULL OR source != 'unknown')
+      AND (source IS NULL OR source != 'unknown') AND (status IS NULL OR status = 'active')
     ORDER BY tx_datetime DESC
   `).all(playerId, broaderStart, broaderEnd) as any[];
 

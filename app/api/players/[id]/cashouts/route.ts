@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getPlayerCashouts, setPlayerCashouts } from "@/lib/queries";
 import { getDb } from "@/lib/db";
+import { WalletAddressError } from "@/lib/wallet-address";
 
 export async function GET(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
@@ -34,7 +35,15 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
   }
 
   const gameId = typeof body.game_id === "number" ? body.game_id : undefined;
-  setPlayerCashouts(playerId, cleaned, gameId);
+  try {
+    setPlayerCashouts(playerId, cleaned, gameId);
+  } catch (e) {
+    // Cf. game-wallets : erreur de saisie → 400, aucune adresse touchée.
+    if (e instanceof WalletAddressError) {
+      return NextResponse.json({ error: e.message, code: e.code, address: e.address }, { status: 400 });
+    }
+    throw e;
+  }
 
   // Shared cashout → (re)build aliases immediately so the grouping shows without a full sync.
   if (sharedWith.length > 0) {

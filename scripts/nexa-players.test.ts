@@ -103,7 +103,10 @@ function freshDb() {
       tron_tx_hash TEXT, tx_date TEXT NOT NULL,
       created_at TEXT NOT NULL DEFAULT (datetime('now')),
       counterparty_address TEXT, source TEXT DEFAULT 'unknown', tx_datetime TEXT,
-      settled INTEGER NOT NULL DEFAULT 0, settlement_id INTEGER);
+      settled INTEGER NOT NULL DEFAULT 0, settlement_id INTEGER,
+      -- Quarantaine (add_wallet_tx_quarantine_v1) : la fixture doit refléter le
+      -- schéma réel, sinon elle valide une base que la prod n'a pas.
+      status TEXT NOT NULL DEFAULT 'active');
     CREATE TRIGGER wallet_tx_source_check BEFORE INSERT ON wallet_transactions
       BEGIN
         SELECT RAISE(ABORT, 'wallet_transactions: source must be sync (with tron_tx_hash) or manual')

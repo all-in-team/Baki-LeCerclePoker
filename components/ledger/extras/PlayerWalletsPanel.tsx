@@ -70,12 +70,51 @@ export default function PlayerWalletsPanel({
   });
   const [savingWallet, setSavingWallet] = useState(false);
 
+  /**
+   * Inspection avant écriture — avertissement NON bloquant.
+   *
+   * La garde dure (contrat de token connu, checksum invalide) est appliquée par
+   * l'API de toute façon. Ce passage n'ajoute qu'une chose : signaler qu'une
+   * adresse est un compte de type Contract sur TronGrid. C'est légitime dans la
+   * plupart des cas (adresses de dépôt d'apps, wallets de trésorerie), donc on
+   * demande confirmation au lieu de refuser. Retourne false si l'humain annule.
+   */
+  async function confirmContractAddresses(addresses: string[]): Promise<boolean> {
+    for (const address of addresses) {
+      try {
+        const res = await fetch("/api/wallets/inspect-address", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ address }),
+        });
+        if (!res.ok) continue; // inspection indisponible → on laisse l'API trancher
+        const info = await res.json();
+        if (info.accepted && info.is_contract && info.warning) {
+          if (!confirm(`⚠️ ${address}\n\n${info.warning}\n\nEnregistrer quand même ?`)) return false;
+        }
+      } catch {
+        // Confort uniquement : une inspection en échec ne bloque pas la saisie.
+      }
+    }
+    return true;
+  }
+
   async function saveInlineWallet() {
     setSavingWallet(true);
     try {
       const gamePayload = walletInlineVals.game_wallets.map(a => ({ address: a.trim() })).filter(a => a.address.length > 0);
-      await fetch(`/api/players/${playerId}/game-wallets`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ addresses: gamePayload, game_id: gameId }) });
       const cashoutPayload = walletInlineVals.cashouts.map(a => ({ address: a.trim() })).filter(a => a.address.length > 0);
+
+      const ok = await confirmContractAddresses([...gamePayload, ...cashoutPayload].map(a => a.address));
+      if (!ok) return;
+
+      const gameRes = await fetch(`/api/players/${playerId}/game-wallets`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ addresses: gamePayload, game_id: gameId }) });
+      if (!gameRes.ok) {
+        // Réponse ignorée jusqu'ici : un refus de la garde partait en silence et
+        // la saisie semblait avoir réussi. Aucune adresse n'a été touchée.
+        const err = await gameRes.json().catch(() => null);
+        alert(err?.error ?? "Erreur sauvegarde wallets de dépôt");
+        return;
+      }
       const res = await fetch(`/api/players/${playerId}/cashouts`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ addresses: cashoutPayload, game_id: gameId }) });
       if (res.ok) {
         // Shared cashout address is allowed (same address = same entity → alias). Non-blocking info.
