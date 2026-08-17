@@ -3278,6 +3278,265 @@ function initSchema(db: Database.Database) {
     console.error(`[MIGRATION:add_nexa_rakeback_settlement_v1] FAILED (sera rejouée au prochain boot):`, err.message);
   }
 
+  // ── Règlement hebdomadaire sur BANKROLL (NEXAPOKER) ───────────────────────
+  //
+  // Le règlement des joueurs stakés ne part pas d'un win/loss connu : il part de
+  // la photo de bankroll envoyée en fin de semaine, et le win/loss en est DÉDUIT.
+  //   résultat = (BR fin + cash-outs) − (BR début + dépôts)
+  //
+  // CETTE TABLE NE PORTE PAS UN SECOND RÉSULTAT. Le résultat calculé est écrit
+  // dans `nexa_player_weekly_winloss`, qui reste la SEULE table de résultat du
+  // repo, et dont l'UNIQUE(player_id, week_start) rend structurellement
+  // impossible qu'une semaine porte deux chiffres différents. Ici on garde la
+  // PROVENANCE : les entrées figées du calcul, pour pouvoir le rejouer et le
+  // justifier. (Arbitrage Hugo, 2026-08-17.)
+  //
+  // C'est aussi cette table qui dit « cette semaine est pilotée par la BR » :
+  // setWeeklyWinlossOn refuse alors d'écraser la cellule depuis la grille, et
+  // addMovementOn refuse un mouvement daté dans une semaine verrouillée. Pas de
+  // colonne `source` dupliquée dans la table de win/loss — une seule source pour
+  // une seule question, sinon les deux dérivent.
+  //
+  // settlement_id NULLABLE, et c'est délibéré : une semaine à part d'action nulle
+  // (« BR inchangée ») ne produit AUCUNE ligne de règlement — un règlement à zéro
+  // est du bruit dans le hub /payments, c'est déjà la doctrine du flux d'action.
+  // La semaine reste figée par cette table-ci, qui suffit.
+  //
+  // transfer_movement_id : LE MOUVEMENT QUI SOLDE LA SEMAINE, dans un sens ou dans
+  // l'autre — 'withdrawal' quand je verse ma part (semaine perdante), 'deposit'
+  // quand le joueur me règle la sienne (semaine gagnante). Écrit au « marquer
+  // payé », jamais au verrouillage : tant que le règlement est 'locked', l'argent
+  // n'a pas bougé et l'inscrire fausserait tous les agrégats.
+  //
+  // Cette colonne sert à DISTINGUER leur effet sur la bankroll, qui n'est pas
+  // celui de leur sens au grand livre (cf. getWeekMovementsOn) :
+  //   • le versement est un 'withdrawal' qui ENTRE dans sa bankroll — il compte
+  //     comme un dépôt dans la semaine de sa date de paiement ;
+  //   • l'encaissement est un 'deposit' qui ne TOUCHE PAS sa bankroll — il me
+  //     paie de sa poche, donc hors calcul.
+  try {
+    const already = db.prepare(`SELECT 1 FROM _applied_fixes WHERE name = ?`)
+      .get("add_nexa_bankroll_weeks_v1");
+    if (!already) {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS nexa_player_bankroll_weeks (
+          id                   INTEGER PRIMARY KEY AUTOINCREMENT,
+          player_id            INTEGER NOT NULL REFERENCES players(id) ON DELETE CASCADE,
+          week_start           TEXT NOT NULL,
+          -- Entrées du calcul, FIGÉES à la clôture. Le rejeu du moteur ne doit
+          -- jamais pouvoir réécrire une semaine close (invariant #9).
+          br_open              REAL NOT NULL,
+          -- 'carry' = repris de la semaine précédente · 'manual' = première semaine
+          -- du joueur, saisie à la main. Jamais un 0 par défaut : une BR de départ
+          -- inconnue se demande, elle ne se suppose pas.
+          br_open_source       TEXT NOT NULL CHECK(br_open_source IN ('carry','manual')),
+          br_close             REAL NOT NULL,
+          deposits             REAL NOT NULL,
+          cashouts             REAL NOT NULL,
+          -- Sorties du calcul, arrondies au centime (demi-supérieur en valeur
+          -- absolue). result EST le win/loss écrit dans nexa_player_weekly_winloss.
+          result               REAL NOT NULL,
+          action_pct           REAL NOT NULL CHECK(action_pct > 0 AND action_pct <= 100),
+          action_amount        REAL NOT NULL,
+          transfer_movement_id INTEGER REFERENCES wallet_transactions(id),
+          -- ⚠️ CE "ON DELETE CASCADE" EST UNE ERREUR, CORRIGÉE PAR
+          -- add_nexa_bankroll_weeks_fk_v2 juste en dessous. Il est laissé tel quel
+          -- ici parce que c'est ce que cette migration a RÉELLEMENT créé sur les
+          -- bases où elle a déjà tourné : le texte d'une migration doit décrire ce
+          -- qu'elle a fait, sinon plus rien ne dit dans quel état est une base
+          -- donnée (invariant #6 — le critère est « a déjà tourné », pas « a déjà
+          -- été committé »). Voir la v2 pour le pourquoi de la correction.
+          settlement_id        INTEGER REFERENCES manual_settlements(id) ON DELETE CASCADE,
+          note                 TEXT,
+          locked_at            TEXT NOT NULL DEFAULT (datetime('now')),
+          UNIQUE(player_id, week_start)
+        );
+        CREATE INDEX IF NOT EXISTS idx_nexa_br_player
+          ON nexa_player_bankroll_weeks(player_id, week_start);
+        -- Sert l'exclusion des versements de règlement du calcul de la semaine :
+        -- la requête part de l'id du mouvement, pas du joueur.
+        CREATE INDEX IF NOT EXISTS idx_nexa_br_transfer
+          ON nexa_player_bankroll_weeks(transfer_movement_id)
+          WHERE transfer_movement_id IS NOT NULL;
+      `);
+      // Marqueur posé SEULEMENT après le db.exec — même raison que ci-dessus :
+      // le poser avant le rendrait persistant malgré un échec de création, et la
+      // migration serait sautée définitivement en annonçant l'inverse.
+      db.prepare(`INSERT OR IGNORE INTO _applied_fixes (name) VALUES (?)`).run("add_nexa_bankroll_weeks_v1");
+      console.log("[MIGRATION] add_nexa_bankroll_weeks_v1 applied");
+    }
+  } catch (err: any) {
+    console.error(`[MIGRATION:add_nexa_bankroll_weeks_v1] FAILED (sera rejouée au prochain boot):`, err.message);
+  }
+
+  // ── Correction de la FK settlement_id des semaines de bankroll ────────────
+  //
+  // POURQUOI. La v1 a posé `settlement_id … ON DELETE CASCADE`, par mimétisme avec
+  // nexa_action_settlement_weeks — où la cascade est JUSTE : déverrouiller un
+  // règlement doit libérer les semaines qu'il portait. Ici c'est l'inverse. La
+  // ligne de bankroll est la PROVENANCE FIGÉE du calcul, et les deux écritures
+  // qu'elle justifie — le win/loss et le versement — vivent dans d'autres tables.
+  //
+  // Le chemin dangereux n'est pas le nôtre : c'est le bouton « délock » de
+  // /payments, qui fait DELETE FROM manual_settlements sans rien savoir de la
+  // bankroll (PaymentsClient l'affiche pour toutes les rooms, NEXAPOKER comprise,
+  // cf. SETTLE_ROOMS). Avec la cascade, ce clic effaçait la semaine figée ET son
+  // ancrage en laissant DERRIÈRE lui le win/loss et le versement : semaine
+  // dé-figée, résultat orphelin, et versement qui redevenait un cash-out ordinaire
+  // — donc résultat de la semaine suivante faux du montant du versement, et
+  // re-clôturer la semaine créait un SECOND versement pour la même dette.
+  //
+  // En NO ACTION, ce DELETE échoue au niveau du SCHÉMA : la garde ne dépend plus
+  // de la vigilance de l'appelant. unlockSettlement porte en plus un refus nommé,
+  // pour que l'écran dise où aller au lieu d'afficher une erreur de contrainte.
+  // Le déverrouillage légitime (unlockBankrollWeekOn) retire la ligne de bankroll
+  // AVANT le règlement — c'est le seul ordre qui passe, et c'est voulu.
+  //
+  // POURQUOI UNE MIGRATION SÉPARÉE plutôt qu'une correction du DDL de la v1 :
+  // parce que la v1 a DÉJÀ TOURNÉ. Éditer son texte ne rejoue rien — son garde
+  // `_applied_fixes` la saute — et laisserait les bases existantes en CASCADE tout
+  // en prétendant l'inverse dans le code. C'est exactement ce que l'invariant #6
+  // interdit, et le critère est « a déjà tourné », pas « a déjà été committé ».
+  // (Constat money-auditor 2026-08-17 : l'édition du DDL de la v1 ne protégeait
+  // aucune base réelle.)
+  //
+  // Rebuild complet plutôt qu'un ALTER : SQLite ne sait pas modifier une clé
+  // étrangère en place. Procédure OFFICIELLE SQLite, dans cet ordre exact :
+  //   PRAGMA foreign_keys=OFF → BEGIN → échange → foreign_key_check → COMMIT
+  //   → PRAGMA foreign_keys=ON
+  // Le PRAGMA doit être HORS transaction (il est sans effet dedans) ; le DDL, lui,
+  // DOIT être dedans. Une première version les mettait tous les deux dehors, en
+  // confondant les deux contraintes : le db.exec multi-instructions n'était alors
+  // pas atomique, et trois états dégradés en découlaient, tous démontrés par
+  // l'audit (2026-08-17) :
+  //   • un reliquat `_new` d'un rebuild interrompu faisait échouer la migration à
+  //     CHAQUE boot, pour toujours, en console.error seulement — donc FK restée en
+  //     cascade, en silence ;
+  //   • un crash entre le DROP et le RENAME PERDAIT la table, et les gardes
+  //     `no such table` de players.ts échouaient alors OUVERTES (elles supposent
+  //     « pas de table = pas de semaine BR », ce qui devient faux) ;
+  //   • si le db.exec de la v1 jetait, la v2 ne trouvait pas de table et posait
+  //     QUAND MÊME son marqueur : au boot suivant la v1 recréait la table en
+  //     cascade et la v2 était sautée à jamais.
+  // Le DROP IF EXISTS en tête, la transaction, et le marqueur conditionnel
+  // ci-dessous ferment les trois.
+  try {
+    const already = db.prepare(`SELECT 1 FROM _applied_fixes WHERE name = ?`)
+      .get("add_nexa_bankroll_weeks_fk_v2");
+    if (!already) {
+      const t = db.prepare(
+        `SELECT sql FROM sqlite_master WHERE type='table' AND name='nexa_player_bankroll_weeks'`
+      ).get() as { sql: string } | undefined;
+      // TABLE ABSENTE = la v1 n'a pas (encore) tourné. On ne pose PAS le marqueur :
+      // sinon, si la v1 échoue ce boot-ci et réussit le suivant, elle recrée la
+      // table en cascade et cette migration-ci ne repassera jamais. On repassera au
+      // prochain boot, quand la table existera.
+      const cascade = !!t && /ON DELETE CASCADE/i.test(t.sql.split("settlement_id")[1]?.split(",")[0] ?? "");
+
+      // ON NE RECONSTRUIT PAS DANS LA TRANSACTION DE QUELQU'UN D'AUTRE.
+      //
+      // `add_a5poker_game_v1` (ligne ~1066) fait BEGIN … COMMIT et, sur une base
+      // où il échoue en cours, son `finally` ne restaure que le PRAGMA : il ne
+      // ROLLBACK pas. La transaction reste alors OUVERTE pour tout le reste
+      // d'initSchema. Deux conséquences ici, et les deux sont graves :
+      //   • `PRAGMA foreign_keys = OFF` est un NO-OP dans une transaction (doc
+      //     SQLite) : le DROP/RENAME se ferait sous contrainte, et pourrait
+      //     échouer ou casser des références ;
+      //   • notre ROLLBACK de secours annulerait TOUT ce qui a été fait depuis ce
+      //     BEGIN étranger — soit des milliers de lignes de schéma. Constaté pour
+      //     de vrai : la suite group-provisioning perdait `group_creations`, créée
+      //     1 100 lignes plus haut.
+      // On reporte donc au prochain boot, sans poser le marqueur. Sur une base
+      // saine (a5poker déjà appliqué), ce cas ne se présente pas.
+      let reporte = false;
+      if (db.inTransaction) {
+        reporte = true;
+        console.error(
+          "[MIGRATION:add_nexa_bankroll_weeks_fk_v2] transaction déjà ouverte par une migration " +
+          "antérieure — rebuild reporté au prochain boot (aucun marqueur posé).",
+        );
+      } else if (t && cascade) {
+        db.pragma("foreign_keys = OFF");
+        try {
+          db.exec(`
+            BEGIN;
+            -- Reliquat d'un rebuild interrompu : sinon le CREATE ci-dessous jette
+            -- « table already exists » à chaque boot, définitivement.
+            DROP TABLE IF EXISTS nexa_player_bankroll_weeks_new;
+            CREATE TABLE nexa_player_bankroll_weeks_new (
+              id                   INTEGER PRIMARY KEY AUTOINCREMENT,
+              player_id            INTEGER NOT NULL REFERENCES players(id) ON DELETE CASCADE,
+              week_start           TEXT NOT NULL,
+              br_open              REAL NOT NULL,
+              br_open_source       TEXT NOT NULL CHECK(br_open_source IN ('carry','manual')),
+              br_close             REAL NOT NULL,
+              deposits             REAL NOT NULL,
+              cashouts             REAL NOT NULL,
+              result               REAL NOT NULL,
+              action_pct           REAL NOT NULL CHECK(action_pct > 0 AND action_pct <= 100),
+              action_amount        REAL NOT NULL,
+              transfer_movement_id INTEGER REFERENCES wallet_transactions(id),
+              -- LA correction : plus de cascade. Voir l'encadré ci-dessus.
+              settlement_id        INTEGER REFERENCES manual_settlements(id),
+              note                 TEXT,
+              locked_at            TEXT NOT NULL DEFAULT (datetime('now')),
+              UNIQUE(player_id, week_start)
+            );
+            INSERT INTO nexa_player_bankroll_weeks_new
+              SELECT id, player_id, week_start, br_open, br_open_source, br_close,
+                     deposits, cashouts, result, action_pct, action_amount,
+                     transfer_movement_id, settlement_id, note, locked_at
+                FROM nexa_player_bankroll_weeks;
+            DROP TABLE nexa_player_bankroll_weeks;
+            ALTER TABLE nexa_player_bankroll_weeks_new RENAME TO nexa_player_bankroll_weeks;
+            -- DROP TABLE a emporté les index : on les repose à l'identique.
+            CREATE INDEX IF NOT EXISTS idx_nexa_br_player
+              ON nexa_player_bankroll_weeks(player_id, week_start);
+            CREATE INDEX IF NOT EXISTS idx_nexa_br_transfer
+              ON nexa_player_bankroll_weeks(transfer_movement_id)
+              WHERE transfer_movement_id IS NOT NULL;
+          `);
+          // Contrôle AVANT le COMMIT — c'est ce qui rend « migration annulée » vrai.
+          // Un rebuild sous foreign_keys=OFF peut laisser des références pendantes
+          // sans rien dire ; le ROLLBACK du catch les emporte.
+          const violations = db.pragma("foreign_key_check(nexa_player_bankroll_weeks)") as unknown[];
+          if (violations.length > 0) {
+            throw new Error(`${violations.length} référence(s) pendante(s) après rebuild — migration annulée.`);
+          }
+          db.exec(`COMMIT;`);
+          console.log("[MIGRATION] add_nexa_bankroll_weeks_fk_v2 — table reconstruite (FK sans cascade)");
+        } catch (e) {
+          // Le ROLLBACK est ce qui interdit l'état « table perdue » : soit l'échange
+          // complet a eu lieu, soit rien. Il n'annule QUE notre transaction — on ne
+          // rentre dans ce bloc que si db.inTransaction était faux au départ, donc
+          // le BEGIN ci-dessus est le nôtre. Le test le redit ici : si le BEGIN
+          // lui-même a échoué, il n'y a rien à annuler et un ROLLBACK aveugle
+          // emporterait la transaction d'un autre. Son propre échec ne doit pas
+          // masquer l'erreur d'origine, qui est la seule informative.
+          if (db.inTransaction) { try { db.exec(`ROLLBACK;`); } catch { /* déjà annulée */ } }
+          throw e;
+        } finally {
+          // finally : la garde doit être remise même si le rebuild jette, sinon
+          // tout le reste du boot tournerait sans intégrité référentielle.
+          db.pragma("foreign_keys = ON");
+        }
+      }
+      // Marqueur posé UNIQUEMENT si la table existe ET qu'on n'a rien reporté —
+      // reconstruite à l'instant, ou déjà dans la bonne forme. Table absente = la
+      // v1 n'a pas encore tourné ; rebuild reporté = transaction étrangère ouverte.
+      // Dans les deux cas on repasse au prochain boot plutôt que de se déclarer
+      // fait sur du vide, ce qui laisserait la cascade en place pour toujours.
+      if (t && !reporte) {
+        db.prepare(`INSERT OR IGNORE INTO _applied_fixes (name) VALUES (?)`).run("add_nexa_bankroll_weeks_fk_v2");
+        console.log("[MIGRATION] add_nexa_bankroll_weeks_fk_v2 applied");
+      } else if (!reporte) {
+        console.log("[MIGRATION] add_nexa_bankroll_weeks_fk_v2 — table absente, reporté au prochain boot");
+      }
+    }
+  } catch (err: any) {
+    console.error(`[MIGRATION:add_nexa_bankroll_weeks_fk_v2] FAILED (sera rejouée au prochain boot):`, err.message);
+  }
+
   // RichAds — tracking des clics d'acquisition payante (GO Baki 2026-08-08).
   //
   // Table AUTONOME, sans lien avec players, nexa_leads ni le money engine. Le

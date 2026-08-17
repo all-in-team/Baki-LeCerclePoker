@@ -292,7 +292,17 @@ export const ACTIONS: Record<string, ActionDef> = {
         `Sens     : ${sensLabel(s.amount_due_usdt)}`,
         `Détail   : ${esc(settlementDetail(s, signed))}  ·  ${s.tx_count} tx`,
         `État     : ${esc(s.status)} depuis ${s.age_days} j`,
-        `Hash     : ${txHash ? esc(txHash) : "(non fourni)"}   Date paiement : ${paidDate ? esc(paidDate) : "(aujourd'hui, par défaut)"}`,
+        // Sur un règlement d'action NEXAPOKER, « aujourd'hui par défaut » est
+        // trompeur : si le règlement est adossé à une semaine de bankroll, le
+        // moteur EXIGE la date réelle du virement et refusera sans elle (elle
+        // décide dans quelle semaine le versement est compté). On annonce donc
+        // le refus au lieu de rassurer. Le test est large — room + kind — comme
+        // celui de /payments : sur-ensemble strict, faux positifs sans coût.
+        `Hash     : ${txHash ? esc(txHash) : "(non fourni)"}   Date paiement : ${
+          paidDate ? esc(paidDate)
+                   : (s.game_name === "NEXAPOKER" && s.kind === "action")
+                     ? "⚠️ MANQUANTE — obligatoire ici, l'action sera refusée"
+                     : "(aujourd'hui, par défaut)"}`,
         ``,
         `⚠️ Irréversible : il n'existe pas de « démarquer payé » dans l'app.`,
       ].join("\n");

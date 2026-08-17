@@ -258,6 +258,34 @@ export function getNexaPlayerWeeks(playerId: number): NexaPlayerWeek[] {
 
 export type WinlossResult = { ok: true; week_start: string } | { ok: false; error: string };
 
+/**
+ * Cette semaine est-elle pilotée par la bankroll ?
+ *
+ * Lecture SQL directe plutôt qu'un import de ./bankroll : ce module-ci est
+ * importé PAR celui-là (lockBankrollWeekOn appelle addMovementOn), un import
+ * retour créerait un cycle. Même parti pris que pour ./action-settlement.
+ *
+ * Le repli ne couvre QUE l'absence de table : la migration
+ * add_nexa_bankroll_weeks_v1 est plus récente que ce fichier, et sur une base
+ * d'avant elle il n'y a aucune semaine BR à protéger — la grille doit continuer
+ * de marcher exactement comme avant.
+ *
+ * Tout le reste est RELANCÉ. Un `catch` muet ferait échouer cette garde EN
+ * LAISSANT PASSER : un SQLITE_BUSY sur cette seule requête suffirait à autoriser
+ * l'écrasement du résultat d'une semaine figée. Une garde d'argent doit échouer
+ * fermée. (Constat money-auditor 2026-08-17.)
+ */
+function isBankrollDriven(db: DB, playerId: number, weekStart: string): boolean {
+  try {
+    return !!db.prepare(
+      `SELECT 1 FROM nexa_player_bankroll_weeks WHERE player_id = ? AND week_start = ?`
+    ).get(playerId, weekStart);
+  } catch (e: any) {
+    if (!/no such table/i.test(e?.message ?? "")) throw e;
+    return false;
+  }
+}
+
 /** Saisit (ou corrige) le win/loss d'une semaine. Montant signé. */
 export function setWeeklyWinlossOn(
   db: DB, args: { player_id: number; week_start: string; amount: number; note?: string | null },
@@ -271,6 +299,18 @@ export function setWeeklyWinlossOn(
   }
   if (!db.prepare(`SELECT 1 FROM players WHERE id = ?`).get(player_id)) {
     return { ok: false, error: `Joueur ${player_id} introuvable.` };
+  }
+  // UNE SEULE VÉRITÉ PAR SEMAINE. Si la semaine a été calculée depuis la
+  // bankroll, la grille ne peut pas écrire par-dessus : on aurait deux chiffres
+  // pour la même semaine du même joueur, l'un tapé à la main, l'autre déduit de
+  // la BR, et rien pour dire lequel fait foi. Le refus vit ICI, dans l'écrivain,
+  // et pas dans l'UI : la grille, la route et tout futur appelant en héritent.
+  if (isBankrollDriven(db, player_id, week_start)) {
+    return {
+      ok: false,
+      error: `Semaine ${week_start} calculée depuis la bankroll — elle ne se saisit pas à la main. `
+           + `Déverrouille le règlement BR de cette semaine si le chiffre est faux.`,
+    };
   }
   try {
     // UPSERT et non append-only : contrairement à une part d'action, un win/loss
@@ -296,6 +336,16 @@ export function setWeeklyWinlossOn(
 export function clearWeeklyWinlossOn(db: DB, playerId: number, weekStart: string): WinlossResult {
   if (!isMondayISO(weekStart)) {
     return { ok: false, error: `Semaine « ${weekStart} » invalide — attendu la date d'un LUNDI.` };
+  }
+  // Dé-saisir une semaine BR reviendrait à effacer le résultat d'un règlement
+  // figé en laissant le règlement debout : la semaine resterait réglée, payée
+  // peut-être, mais sans résultat. Même refus que pour l'écriture.
+  if (isBankrollDriven(db, playerId, weekStart)) {
+    return {
+      ok: false,
+      error: `Semaine ${weekStart} calculée depuis la bankroll — elle ne se dé-saisit pas ici. `
+           + `Passe par le déverrouillage du règlement BR.`,
+    };
   }
   db.prepare(`DELETE FROM nexa_player_weekly_winloss WHERE player_id = ? AND week_start = ?`)
     .run(playerId, weekStart);
@@ -998,6 +1048,29 @@ export type MovementResult = { ok: true; id: number } | { ok: false; error: stri
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
 
 /**
+ * Semaine BR FIGÉE qui contient cette date, ou null.
+ *
+ * Lecture directe, même raison que isBankrollDriven : ./bankroll importe ce
+ * module, l'import retour ferait un cycle. Et même règle sur le repli — seule
+ * l'absence de table est tolérée, tout le reste est relancé : un `catch` muet
+ * laisserait un mouvement tardif entrer dans une semaine figée sur un simple
+ * hoquet de la base.
+ */
+function bankrollWeekCovering(db: DB, playerId: number, txDate: string): string | null {
+  try {
+    const r = db.prepare(`
+      SELECT week_start FROM nexa_player_bankroll_weeks
+       WHERE player_id = ? AND week_start <= ? AND date(week_start, '+6 days') >= ?
+       LIMIT 1
+    `).get(playerId, txDate, txDate) as { week_start: string } | undefined;
+    return r?.week_start ?? null;
+  } catch (e: any) {
+    if (!/no such table/i.test(e?.message ?? "")) throw e;
+    return null;
+  }
+}
+
+/**
  * Enregistre un buy-in ou un cash-out.
  *
  * Le montant est TOUJOURS positif : c'est le `type` qui porte le sens. Accepter
@@ -1018,6 +1091,23 @@ export function addMovementOn(
   }
   if (!db.prepare(`SELECT 1 FROM players WHERE id = ?`).get(player_id)) {
     return { ok: false, error: `Joueur ${player_id} introuvable.` };
+  }
+  // MOUVEMENT TARDIF SUR UNE SEMAINE FIGÉE : refus dur (arbitrage Hugo, 2026-08-17).
+  //
+  // La règle des règlements hebdomadaires — « une transaction tardive appartient
+  // à la semaine ouverte suivante » (invariant #11) — NE MARCHE PAS ici. Une
+  // semaine BR est bornée par les dates : un mouvement daté dans une semaine
+  // close ne serait compté ni dans celle-ci (ses dépôts et cash-outs sont figés)
+  // ni dans la suivante (hors fenêtre). Il disparaîtrait du calcul en silence, et
+  // le résultat de la semaine serait faux du montant du mouvement.
+  const frozen = bankrollWeekCovering(db, player_id, tx_date);
+  if (frozen) {
+    return {
+      ok: false,
+      error: `Le ${tx_date} tombe dans la semaine BR ${frozen} déjà figée pour ce joueur. `
+           + `Un mouvement ajouté après coup n'entrerait dans AUCUN calcul. `
+           + `Déverrouille la semaine, ajoute le mouvement, re-clôture.`,
+    };
   }
   const gid = gameId(db);
 
@@ -1067,12 +1157,25 @@ export function deleteMovementOn(db: DB, id: number): { ok: true } | { ok: false
   // source='manual' : on ne supprime QUE de la saisie manuelle. Une ligne issue
   // d'une synchro on-chain n'est pas un « mouvement » au sens de cet écran.
   const row = db.prepare(
-    `SELECT settled, settlement_id FROM wallet_transactions
+    `SELECT player_id, tx_date, settled, settlement_id FROM wallet_transactions
       WHERE id = ? AND game_id = ? AND source = 'manual'`
-  ).get(id, gid) as { settled: number; settlement_id: number | null } | undefined;
+  ).get(id, gid) as { player_id: number; tx_date: string; settled: number; settlement_id: number | null } | undefined;
   if (!row) return { ok: false, error: `Mouvement ${id} introuvable sur NEXAPOKER, ou non saisi manuellement.` };
   if (row.settled === 1 || row.settlement_id !== null) {
     return { ok: false, error: `Mouvement ${id} déjà consommé par un règlement — il ne peut plus être supprimé.` };
+  }
+  // Symétrique du refus posé sur l'ajout : retirer un mouvement d'une semaine
+  // figée change son assiette après coup. Les dépôts et cash-outs de la semaine
+  // sont recopiés dans nexa_player_bankroll_weeks au verrouillage, donc le
+  // montant réglé ne bougerait pas — mais l'historique cesserait de justifier
+  // le chiffre, et plus rien ne permettrait de rejouer le calcul.
+  const frozen = bankrollWeekCovering(db, row.player_id, row.tx_date);
+  if (frozen) {
+    return {
+      ok: false,
+      error: `Mouvement ${id} daté dans la semaine BR ${frozen}, déjà figée — suppression refusée. `
+           + `Déverrouille la semaine d'abord.`,
+    };
   }
   db.prepare(`DELETE FROM wallet_transactions WHERE id = ? AND game_id = ? AND source = 'manual'`).run(id, gid);
   return { ok: true };

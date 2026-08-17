@@ -336,9 +336,36 @@ export default function PaymentsClient({
     setOpenOverdue(prev => { const n = new Set(prev); if (n.has(key)) n.delete(key); else n.add(key); return n; });
   }
 
+  /**
+   * Un règlement de part d'action NEXAPOKER peut être adossé à une semaine de
+   * BANKROLL — et la date de paiement entre alors DANS LE CALCUL : le versement
+   * compte comme un dépôt de bankroll dans la semaine où il tombe.
+   *
+   * Accepter « aujourd'hui » pré-rempli sur un virement parti la semaine dernière
+   * date le mouvement hors de la semaine concernée : celle-ci est alors close sur
+   * un résultat surévalué du montant du versement, et une part d'action fantôme
+   * naît au débit du joueur. (Constat money-auditor 2026-08-17.)
+   *
+   * Le test est VOLONTAIREMENT LARGE — room + kind, pas un lien vers la table des
+   * semaines BR — parce que c'est un SUR-ENSEMBLE STRICT : lockBankrollWeekOn
+   * écrit toujours game_id = NEXAPOKER et kind = 'action', donc aucun règlement
+   * de bankroll ne lui échappe, et ses faux positifs (règlements d'action NEXA
+   * ordinaires) ne coûtent qu'une date à saisir. Jamais un chiffre faux.
+   * (Une version antérieure justifiait ce choix par un risque de 500 sur
+   * /payments si la table manquait : c'était faux, HUB_SELECT interroge déjà
+   * deux tables NEXA dans ses COALESCE. Constat money-auditor.)
+   *
+   * CE N'EST PAS LA GARANTIE, seulement une affordance. Le refus d'une date
+   * absente vit dans le moteur (writeBankrollTransferOnPaid), où il couvre aussi
+   * le lot et l'action du bot Telegram — et où il est testable.
+   */
+  const dateCritique = (s: HubSettlement) => s.game_name === "NEXAPOKER" && s.kind === "action";
+
   function openPay(s: HubSettlement) {
     setPayTarget(s);
-    setPayDate(today());
+    // Vide, et non « aujourd'hui » : sur ces règlements la date est une donnée de
+    // calcul, pas un horodatage. Elle doit être choisie, pas acceptée.
+    setPayDate(dateCritique(s) ? "" : today());
     setPayHash("");
   }
 
@@ -862,7 +889,18 @@ export default function PaymentsClient({
             fontSize: 12, fontWeight: 600, background: "none", border: "1px solid var(--border)",
             color: "var(--text-muted)", cursor: "pointer",
           }}><X size={13} /> Vider</button>
-          <button onClick={() => { setBulkDate(today()); setBulkHash(""); setBulkOpen(true); }} style={{
+          {/* Même règle qu'openPay, et il FAUT la répéter ici : le lot applique UNE
+              SEULE date à des règlements de natures différentes — sur un rakeback
+              c'est un horodatage, sur une semaine de bankroll c'est une donnée de
+              calcul. Sans ça, le bouton de lot contourne la parade du paiement
+              unitaire et rejoue le même chiffre faux. Le cas n'a rien de tordu :
+              un joueur staké porte couramment deux règlements en attente (action
+              BR + rakeback), donc un groupe, donc un « tout sélectionner ».
+              (Constat money-auditor, mesuré au moteur.) */}
+          <button onClick={() => {
+            setBulkDate(selection.rows.some(dateCritique) ? "" : today());
+            setBulkHash(""); setBulkOpen(true);
+          }} style={{
             display: "inline-flex", alignItems: "center", gap: 6, padding: "8px 16px", borderRadius: 8,
             fontSize: 13, fontWeight: 700, background: "rgba(34,197,94,0.16)", color: "var(--green)",
             border: "1px solid rgba(34,197,94,0.4)", cursor: "pointer",
@@ -893,8 +931,21 @@ export default function PaymentsClient({
               </div>
 
               <label style={{ display: "flex", flexDirection: "column", gap: 5 }}>
-                <span style={{ fontSize: 11, fontWeight: 600, color: "var(--text-muted)" }}>Date du paiement</span>
-                <input type="date" value={payDate} onChange={e => setPayDate(e.target.value)} style={{ ...inputStyle, fontSize: 13, padding: "9px 12px" }} />
+                <span style={{ fontSize: 11, fontWeight: 600, color: "var(--text-muted)" }}>
+                  Date du paiement
+                  {dateCritique(payTarget) && <span style={{ color: "var(--yellow, #F0B90B)" }}> — entre dans le calcul</span>}
+                </span>
+                <input type="date" value={payDate} onChange={e => setPayDate(e.target.value)}
+                  style={{ ...inputStyle, fontSize: 13, padding: "9px 12px",
+                           borderColor: dateCritique(payTarget) && !payDate ? "rgba(240,185,11,0.5)" : undefined }} />
+                {dateCritique(payTarget) && (
+                  <span style={{ fontSize: 10.5, color: "var(--text-dim)" }}>
+                    Mets le jour où l&apos;argent a <b>réellement</b> bougé. Sur un règlement de
+                    bankroll, le versement compte comme un dépôt dans la semaine où il tombe :
+                    une date trop tardive fausse cette semaine-là du montant versé, et la
+                    rend incorrigible une fois clôturée.
+                  </span>
+                )}
               </label>
 
               <label style={{ display: "flex", flexDirection: "column", gap: 5 }}>
@@ -949,8 +1000,21 @@ export default function PaymentsClient({
           </div>
 
           <label style={{ display: "flex", flexDirection: "column", gap: 5 }}>
-            <span style={{ fontSize: 11, fontWeight: 600, color: "var(--text-muted)" }}>Date du paiement (appliquée à toute la sélection)</span>
-            <input type="date" value={bulkDate} onChange={e => setBulkDate(e.target.value)} style={{ ...inputStyle, fontSize: 13, padding: "9px 12px" }} />
+            <span style={{ fontSize: 11, fontWeight: 600, color: "var(--text-muted)" }}>
+              Date du paiement (appliquée à toute la sélection)
+              {selection.rows.some(dateCritique) && <span style={{ color: "var(--yellow, #F0B90B)" }}> — entre dans le calcul</span>}
+            </span>
+            <input type="date" value={bulkDate} onChange={e => setBulkDate(e.target.value)}
+              style={{ ...inputStyle, fontSize: 13, padding: "9px 12px",
+                       borderColor: selection.rows.some(dateCritique) && !bulkDate ? "rgba(240,185,11,0.5)" : undefined }} />
+            {selection.rows.some(dateCritique) && (
+              <span style={{ fontSize: 10.5, color: "var(--text-dim)" }}>
+                La sélection contient un règlement de part d&apos;action NEXAPOKER : sur celui-ci
+                la date n&apos;est pas un horodatage mais une <b>donnée de calcul</b> — le versement
+                compte comme un dépôt dans la semaine où il tombe. Mets le jour où l&apos;argent a
+                réellement bougé. Si les virements n&apos;ont pas tous la même date, règle-les un par un.
+              </span>
+            )}
           </label>
 
           <label style={{ display: "flex", flexDirection: "column", gap: 5 }}>

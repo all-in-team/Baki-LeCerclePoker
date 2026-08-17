@@ -143,6 +143,11 @@ Internal ops + accounting tool for a single-operator poker affiliation business 
 - Incoming USDT to a player's **game wallet** = **deposit** (player funds their action).
 - Incoming USDT to a player's **cashout wallet from `wallet_mère`** = **withdrawal** (operator pays the player).
 - **Anything else is NOT a transaction.** Do not import. See invariant #1 below.
+- ⚠️ **Exception NEXAPOKER — le sens du grand livre n'est pas celui de la bankroll.** Le
+  versement d'une part d'action est un `withdrawal` qui **entre** dans la bankroll du joueur ;
+  son règlement d'une semaine gagnante est un `deposit` qui ne la **touche pas**. Le calcul
+  BR somme sur `br_effect`, jamais sur `type`. Détail et règle d'exploitation :
+  `docs/DOMAIN.md` § « NEXAPOKER — le sens du grand livre n'est PAS le sens de la bankroll ».
 
 ### Net balance formula (`getPlayerBalance` in `lib/queries.ts`)
 ```

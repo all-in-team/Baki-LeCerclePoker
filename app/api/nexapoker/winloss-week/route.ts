@@ -12,6 +12,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getDb } from "@/lib/db";
 import { getNexaPlayersOn, getWinlossForWeekOn } from "@/lib/funnels/nexa/players";
+import { getBankrollLockedForWeekOn } from "@/lib/funnels/nexa/bankroll";
 
 export async function GET(req: NextRequest) {
   try {
@@ -28,6 +29,12 @@ export async function GET(req: NextRequest) {
     }
     const db = getDb();
     const saved = getWinlossForWeekOn(db, week);
+    // Semaines dont le résultat vient de la BANKROLL. La cellule doit être en
+    // lecture seule : la saisie manuelle et le calcul BR donneraient deux chiffres
+    // pour la même semaine du même joueur, sans rien pour dire lequel fait foi.
+    // Le refus réel est posé côté écrivain (setWeeklyWinlossOn) ; ce drapeau ne
+    // fait que l'annoncer à l'écran au lieu de laisser taper pour rien.
+    const brLocked = getBankrollLockedForWeekOn(db, week);
     // getNexaPlayersOn dédoublonne déjà par player_id (cf. son commentaire) : la
     // grille ne peut pas afficher deux fois le même joueur.
     const rows = getNexaPlayersOn(db).map(p => ({
@@ -35,6 +42,7 @@ export async function GET(req: NextRequest) {
       name: p.name,
       action_pct: p.action_pct,
       amount: saved.has(p.player_id) ? saved.get(p.player_id)! : null,
+      bankroll_locked: brLocked.has(p.player_id),
     }));
     return NextResponse.json({ ok: true, week_start: week, players: rows });
   } catch (e: any) {

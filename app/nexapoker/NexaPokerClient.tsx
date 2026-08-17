@@ -16,6 +16,7 @@ import { movementColor, netColor, isZeroAmount } from "@/components/ledger/Movem
 import NexaRevenueChart, { type NexaChartWeek } from "./NexaRevenueChart";
 import WinlossGrid from "./WinlossGrid";
 import RakebackSettlePanel from "./RakebackSettlePanel";
+import BankrollSettlePanel from "./BankrollSettlePanel";
 
 const CARD: React.CSSProperties = {
   background: "#12141C", border: "1px solid rgba(255,255,255,0.06)", borderRadius: 14, padding: 18,
@@ -858,6 +859,25 @@ export default function NexaPokerClient({ currentWeek, today, chartWeeks, period
               </b>
             </span>
           </div>
+          {/* Règlement sur BANKROLL — le geste hebdomadaire des joueurs stakés.
+              Ce n'est PAS un troisième flux d'argent : il produit le win/loss de la
+              semaine, que la chaîne existante transforme ensuite en part d'action.
+              D'où sa place ici, en amont du panneau rakeback : c'est lui qui
+              alimente la colonne « action » du tableau ci-dessus.
+              Réservé aux joueurs stakés — sans part d'action, il n'y a rien à régler. */}
+          {(players.find(x => x.player_id === detail.player_id)?.action_pct ?? 0) > 0 && (
+            <div style={{ marginTop: 14 }}>
+              <BankrollSettlePanel
+                playerId={detail.player_id} playerName={detail.name}
+                onSettled={() => {
+                  const p = players.find(x => x.player_id === detail.player_id);
+                  if (p) void openDetail(p);
+                  void load();
+                  router.refresh();
+                }} />
+            </div>
+          )}
+
           {/* Règlement du RAKEBACK — flux distinct de la part d'action, et qui va
               dans l'autre sens : le rakeback SORT. Les deux panneaux cohabitent
               dans la vue détail sans jamais additionner leurs montants. */}

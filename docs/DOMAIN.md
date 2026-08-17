@@ -37,6 +37,66 @@ On-chain USDT movement. Auto-synced from TRON. Two types:
 - `deposit` — money INTO the player's game wallet (player funded their action)
 - `withdrawal` — money OUT to the player's cashout wallet, sent FROM `wallet_mère`
 
+#### ⚠️ NEXAPOKER — le sens du grand livre n'est PAS le sens de la bankroll
+
+Le règlement hebdomadaire NEXAPOKER se calcule sur la **bankroll** du joueur
+(`nexa_player_bankroll_weeks`), pas sur ses transactions. Deux mouvements y portent un
+sens ledger opposé à leur effet réel sur la bankroll, et **seul `getWeekMovementsOn`
+(`lib/funnels/nexa/bankroll.ts`) le sait** :
+
+| Mouvement | Type au grand livre | Effet bankroll | Pourquoi |
+|---|---|---|---|
+| buy-in du joueur | `deposit` | **entre** | il finance son action |
+| cash-out du joueur | `withdrawal` | **sort** | il retire ses gains |
+| **mon versement de part d'action** | `withdrawal` | **entre** | l'opérateur paie le joueur (sens ledger), mais l'argent atterrit sur sa **wallet game** : sa bankroll grossit |
+| **son règlement d'une semaine gagnante** | `deposit` | **aucun** | il me paie de sa poche ; sa bankroll ne bouge pas |
+
+Les deux derniers se reconnaissent par `nexa_player_bankroll_weeks.transfer_movement_id`,
+et leur sens se lit sur le signe de l'`action_amount` **figé** de la semaine qui les porte.
+Le calcul BR somme sur `br_effect` (`'in' | 'out' | 'none'`), **jamais** sur `type`.
+
+Conséquences pour qui touche à ces lignes :
+- Tout autre lecteur de `wallet_transactions` (`getMovementsOn`, `getNexaPlayerDetailOn`,
+  `getPlayerWalletStats`, `getPlayerBalance`, `computeWeek`) ne voit que `type` et les
+  traite comme des mouvements ordinaires. C'est voulu côté trésorerie — c'est bien de
+  l'argent qui bouge — mais **ne jamais recopier cette lecture dans un calcul de bankroll**.
+- Le versement n'est **pas** reporté sur la BR de départ de la semaine suivante : il compte
+  comme un dépôt dans la semaine de sa **date de paiement réelle**. Le reporter reviendrait
+  à supposer qu'il a eu lieu, et fabriquerait une seconde dette pour la même perte s'il
+  traîne. (Constat money-auditor, 2026-08-17.)
+- `nexa_player_weekly_winloss` reste **la seule table de résultat** : la bankroll est un
+  calculateur qui l'alimente, jamais un second résultat.
+
+**LA RÈGLE D'EXPLOITATION dont tout le modèle dépend** — elle n'est enforcée qu'au runtime
+par un blocker, écrivez-la ici pour qu'elle survive :
+
+> Un règlement de semaine BR se marque payé **à sa date réelle** dans `/payments` **avant**
+> que la semaine suivante puisse être clôturée.
+
+Pourquoi les deux moitiés comptent :
+- **avant** — tant que le règlement est `locked`, le système ne sait pas si l'argent a bougé.
+  S'il a bougé sans être enregistré, la photo de fin de semaine le contient (sa bankroll a
+  grossi) mais le calcul l'ignore : le résultat est surévalué du montant versé et une part
+  d'action fantôme naît au débit du joueur. D'où le refus de clôture.
+- **à sa date réelle** — le versement compte dans la semaine où il tombe. Une date trop
+  tardive (accepter « aujourd'hui » pré-rempli sur un virement de la semaine dernière) fausse
+  la semaine concernée du montant versé.
+
+  Distinguer deux cas, parce qu'ils n'ont pas la même parade :
+  - **date ABSENTE** → `markPaid` **refuse** sur un règlement de bankroll. Le garde vit dans
+    le moteur (`writeBankrollTransferOnPaid`), donc il couvre les trois appelants — `/payments`
+    à l'unité, `/payments` en lot, et l'action `mark_settlement_paid` du bot Telegram — et tous
+    les suivants. C'est la garantie, et elle est testable.
+  - **date FAUSSE mais plausible** → aucun garde serveur ne peut la détecter : une date est une
+    déclaration. Seules parades : les bornes (`paidDate ≥ lundi de la semaine réglée`, et refus
+    d'une date en semaine déjà figée), plus l'écran qui ne pré-remplit pas la date sur ces
+    règlements et dit pourquoi. Ces parades-là réduisent la friction et le risque ; elles ne
+    remplacent pas la vigilance.
+
+Corollaire à connaître avant de cliquer : marquer payé rend la semaine réglée **définitivement
+incorrigible** (un règlement payé ne se déverrouille pas). Une semaine BR se vérifie **avant**
+le paiement, jamais après.
+
 ### Telegram transaction (`telegram_transactions`)
 Manual cash ledger, EUR-default. Direction `in | out`. This is the off-chain reconciliation of Telegram-based handover (cash, alipay, etc).
 

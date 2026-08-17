@@ -378,12 +378,199 @@ export function markPaid(settlementId: number, txHash?: string, paidDate?: strin
 
   // WHERE status='locked' is the authoritative guard: if a concurrent caller already paid,
   // this flips 0 rows → report failure instead of a spurious ok (belt-and-suspenders).
-  const upd = db.prepare(`
-    UPDATE manual_settlements SET status = 'paid', paid_at = datetime('now'), tx_hash = ?, paid_date = ?
-    WHERE id = ? AND status = 'locked'
-  `).run(txHash ?? null, paidDate ?? null, settlementId);
-  if (upd.changes !== 1) return { ok: false, error: "Déjà payé — double-paiement refusé" };
-  return { ok: true };
+  //
+  // Transaction : le flip de statut et l'éventuel versement de bankroll (ci-dessous)
+  // sont un seul fait. Un versement écrit sans que le règlement passe payé le ferait
+  // ré-écrire au clic suivant — deux mouvements pour une seule dette.
+  try {
+    const run = db.transaction((): { ok: boolean; error?: string } => {
+      const upd = db.prepare(`
+        UPDATE manual_settlements SET status = 'paid', paid_at = datetime('now'), tx_hash = ?, paid_date = ?
+        WHERE id = ? AND status = 'locked'
+      `).run(txHash ?? null, paidDate ?? null, settlementId);
+      if (upd.changes !== 1) return { ok: false, error: "Déjà payé — double-paiement refusé" };
+
+      // `paidDate ?? null` et NON `?? todayUTC()` : sur un règlement de bankroll,
+      // l'absence de date déclarée n'est pas « aujourd'hui », c'est une information
+      // manquante — et le moteur doit la refuser plutôt que d'en inventer une.
+      // Voir writeBankrollTransferOnPaid.
+      writeBankrollTransferOnPaid(db, settlementId, paidDate ?? null);
+      return { ok: true };
+    });
+    const r = run();
+    if (!r.ok) return r;
+    return { ok: true };
+  } catch (e: any) {
+    return { ok: false, error: e?.message ?? "Paiement échoué" };
+  }
+}
+
+/**
+ * Versement d'une part d'action NEXAPOKER calculée sur BANKROLL.
+ *
+ * C'EST ICI QUE L'ARGENT S'INSCRIT AU GRAND LIVRE, et nulle part ailleurs.
+ * Le verrouillage de la semaine ne crée AUCUN mouvement : à ce moment-là le
+ * règlement est 'locked', l'argent n'est pas parti, et écrire un retrait
+ * affirmerait un transfert qui n'a pas eu lieu — net_position, my_pnl, /solde et
+ * le total agence seraient tous faux jusqu'au paiement, pendant que /payments
+ * afficherait la dette en sens inverse. (Arbitrage Hugo, sur constat
+ * money-auditor, 2026-08-17.)
+ *
+ * LES DEUX SENS SONT TRAITÉS, et symétriquement (arbitrage Hugo 2026-08-17) :
+ *   • semaine perdante (action_amount < 0) → 'withdrawal' : je verse ma part sur
+ *     sa wallet game. L'opérateur paie le joueur, convention docs/DOMAIN.md.
+ *   • semaine gagnante (action_amount > 0) → 'deposit' : il me règle ma part.
+ *
+ * Écrire le SECOND sens n'est pas une coquetterie de symétrie : sans lui, le seul
+ * moyen de faire apparaître cet encaissement dans les comptes était de le saisir
+ * à la main en buy-in — et le calcul BR l'aurait alors compté comme un dépôt de
+ * bankroll, minorant le résultat de la semaine et la part d'action d'autant, en
+ * silence. Lui donner sa place ici supprime le geste fautif au lieu de le
+ * signaler. (Constat money-auditor, contre-audit 2026-08-17.)
+ *
+ * LES DEUX N'ONT PAS LE MÊME EFFET SUR LA BANKROLL, et c'est `transfer_movement_id`
+ * qui permet à getWeekMovementsOn de les distinguer :
+ *   • le VERSEMENT atterrit sur sa wallet game : il ENTRE dans sa bankroll, et il
+ *     compte comme un dépôt dans la semaine de sa date de paiement. Il n'est ni
+ *     reporté sur la BR de départ suivante, ni exclu du calcul.
+ *   • l'ENCAISSEMENT, lui, ne touche pas sa bankroll : il me paie de sa poche.
+ *     Hors calcul, dans les deux sens.
+ *
+ * `transfer_movement_id` porte donc « le mouvement qui solde cette semaine »,
+ * dans un sens ou dans l'autre. Une semaine n'en a jamais deux : son règlement
+ * ne passe payé qu'une fois.
+ *
+ * PAS de passage par addMovementOn. Ce n'est PAS un cycle d'imports — il n'y en a
+ * aucun, `players.ts` n'importe pas ce module (vérifié, constat money-auditor
+ * passe 5, qui a repris une affirmation fausse écrite ici). La vraie raison est
+ * plus étroite : addMovementOn refuse toute date en semaine figée, alors que ce
+ * mouvement-ci a besoin de bornes à lui (voir ci-dessous). Le coût assumé est
+ * une seconde écriture de mouvement manuel à côté d'insertWalletTransaction,
+ * présenté dans queries.ts comme LE chemin — à unifier si un troisième apparaît.
+ *
+ * Idempotence : garantie par l'appelant. Ce code ne tourne que dans la
+ * transaction où le règlement passe de 'locked' à 'paid', et ce flip ne peut
+ * réussir qu'une fois.
+ *
+ * try/catch sur l'absence de table : la migration add_nexa_bankroll_weeks_v1 est
+ * plus récente que ce fichier. Toute autre erreur est relancée — elle annule la
+ * transaction, et le règlement ne passe pas payé sans son versement.
+ */
+export function writeBankrollTransferOnPaid(
+  db: ReturnType<typeof getDb>, settlementId: number, paidDate: string | null,
+): void {
+  let br: { id: number; player_id: number; week_start: string; action_amount: number;
+            transfer_movement_id: number | null } | undefined;
+  try {
+    br = db.prepare(`
+      SELECT id, player_id, week_start, action_amount, transfer_movement_id
+        FROM nexa_player_bankroll_weeks WHERE settlement_id = ?
+    `).get(settlementId) as typeof br;
+  } catch (e: any) {
+    if (!/no such table/i.test(e?.message ?? "")) throw e;
+    return;
+  }
+  if (!br) return;                          // règlement ordinaire, rien à faire
+  if (br.transfer_movement_id !== null) return;  // déjà soldé (ceinture)
+
+  // AUCUNE DATE DÉCLARÉE : REFUS. C'est le garde qui ferme TOUS les appelants.
+  //
+  // markPaid a trois appelants — /payments à l'unité, /payments en lot, et
+  // l'action `mark_settlement_paid` du bot Telegram (lib/agent-actions.ts). Les
+  // deux premiers ont été protégés à l'écran, un à la fois ; le troisième
+  // n'appelle jamais avec une date, et un quatrième répéterait l'oubli.
+  //
+  // Sur un règlement de bankroll, la date n'est pas un horodatage : le versement
+  // compte comme un dépôt dans la semaine où il tombe. Retomber sur « aujourd'hui »
+  // date le mouvement hors de la semaine concernée dès que le virement est
+  // antérieur — la semaine se clôture sur un résultat surévalué du montant versé,
+  // et une part d'action fantôme naît au débit du joueur.
+  //
+  // Le refus vit donc ICI, dans le moteur (invariant #2), et pas dans trois écrans :
+  // il couvre les trois chemins et tous les suivants, et il est TESTABLE, ce que
+  // les parades d'écran ne sont pas. Celles-ci restent utiles — elles évitent la
+  // friction en demandant la date au bon moment — mais elles ne sont plus la
+  // garantie. (Constat money-auditor, passe 7 : troisième appelant trouvé.)
+  if (paidDate === null) {
+    throw new Error(
+      `Règlement #${settlementId} adossé à la semaine de bankroll ${br.week_start} : la date de `
+      + `paiement est obligatoire. Le versement compte comme un dépôt dans la semaine où il tombe — `
+      + `« aujourd'hui » par défaut fausserait cette semaine-là. Déclare le jour du virement.`,
+    );
+  }
+
+  // PAIEMENT ANTIDATÉ DANS UNE SEMAINE FIGÉE : refus.
+  //
+  // Depuis que le versement compte comme un dépôt de bankroll À SA DATE (et n'est
+  // plus reporté sur la BR de départ suivante), une date tombant dans une semaine
+  // déjà close le ferait disparaître du calcul : cette semaine-là a ses dépôts
+  // figés, et la fenêtre des suivantes ne le contient pas. Même trou, et même
+  // refus dur, que pour un mouvement de jeu tardif (arbitrage Hugo).
+  //
+  // Ne mord QUE sur l'antidatage : une semaine ne peut être figée qu'une fois
+  // terminée, donc « aujourd'hui » n'est jamais dans une semaine figée, et le
+  // chemin nominal (paidDate absent → aujourd'hui) n'est jamais bloqué.
+  const gelee = db.prepare(`
+    SELECT week_start FROM nexa_player_bankroll_weeks
+     WHERE player_id = ? AND week_start <= ? AND date(week_start, '+6 days') >= ?
+     LIMIT 1
+  `).get(br.player_id, paidDate, paidDate) as { week_start: string } | undefined;
+  if (gelee) {
+    throw new Error(
+      `Date de paiement ${paidDate} dans la semaine BR ${gelee.week_start}, déjà figée : le versement `
+      + `n'entrerait dans aucun calcul. Choisis une date postérieure, ou déverrouille cette semaine.`,
+    );
+  }
+
+  // BORNE BASSE : on ne paie pas avant la semaine qu'on règle.
+  //
+  // Le garde ci-dessus ne regarde que les semaines FIGÉES ; une date antérieure à
+  // la toute première n'en touche aucune et passait. Le mouvement était alors
+  // écrit au grand livre et n'entrait dans AUCUN calcul BR — clôturer une semaine
+  // antérieure à la dernière figée est refusé. Perte silencieuse, même classe que
+  // le mouvement tardif. (Constat money-auditor, passe 5.)
+  //
+  // La borne est le lundi de la semaine réglée : le règlement naît à sa clôture,
+  // donc après sa fin — payer avant qu'elle ait commencé n'a aucun sens.
+  if (paidDate < br.week_start) {
+    throw new Error(
+      `Date de paiement ${paidDate} antérieure à la semaine réglée (${br.week_start}) : le versement `
+      + `n'entrerait dans aucun calcul de bankroll. Mets la date réelle du virement.`,
+    );
+  }
+
+  // Une part d'action nulle ne produit aucun règlement, donc ce code n'est pas
+  // atteint dans ce cas. La garde reste, pour ne jamais écrire un mouvement à 0 :
+  // ce serait du bruit dans l'Historique, et le montant doit être strictement
+  // positif (c'est le `type` qui porte le sens, jamais le signe).
+  const EPS = 0.0000001;
+  if (Math.abs(br.action_amount) <= EPS) return;
+
+  const gid = (db.prepare(`SELECT id FROM games WHERE name = 'NEXAPOKER'`).get() as { id: number } | undefined)?.id;
+  if (!gid) throw new Error("Game NEXAPOKER absent — mouvement de règlement bankroll impossible.");
+
+  // action_amount < 0 : je lui dois, l'argent sort → withdrawal.
+  // action_amount > 0 : il me doit, l'argent rentre → deposit.
+  const type = br.action_amount < 0 ? "withdrawal" : "deposit";
+  const amount = Math.abs(br.action_amount);
+  const ins = db.prepare(`
+    INSERT INTO wallet_transactions
+      (player_id, game_id, type, amount, currency, note, tx_date, tx_datetime, source)
+    VALUES (?, ?, ?, ?, 'USDT', ?, ?, ?, 'manual')
+  `).run(br.player_id, gid, type, amount,
+         `Part d'action BR semaine ${br.week_start}`,
+         paidDate, `${paidDate}T00:00:00Z`);
+
+  // `changes` contrôlé, comme au déverrouillage : si ce lien n'était pas posé, le
+  // mouvement existerait SANS être exclu du calcul de bankroll, et la semaine
+  // suivante serait fausse du montant du versement. Inatteignable aujourd'hui — la
+  // ligne vient d'être lue dans cette transaction — mais c'est la classe de bug qui
+  // se paie en argent, pas en exception.
+  const link = db.prepare(`UPDATE nexa_player_bankroll_weeks SET transfer_movement_id = ? WHERE id = ?`)
+    .run(Number(ins.lastInsertRowid), br.id);
+  if (link.changes !== 1) {
+    throw new Error(`Semaine de bankroll ${br.id} introuvable au rattachement du versement — paiement annulé.`);
+  }
 }
 
 // ── 5) unlockSettlement (locked only) ────────────────────
@@ -394,6 +581,40 @@ export function unlockSettlement(settlementId: number): { ok: boolean; error?: s
   const row = db.prepare(`SELECT id, status FROM manual_settlements WHERE id = ?`).get(settlementId) as { id: number; status: string } | undefined;
   if (!row) return { ok: false, error: "Règlement introuvable" };
   if (row.status === "paid") return { ok: false, error: "Règlement payé — délock interdit" };
+
+  // Règlement issu d'une semaine de BANKROLL NEXAPOKER : il ne se délocke pas ici.
+  //
+  // Ce DELETE ne fait pas que retirer une ligne : la semaine BR figée le référence,
+  // et le win/loss + le versement qu'elle justifie vivent dans deux AUTRES tables
+  // que ce chemin ne connaît pas. Le délock générique laisserait donc un résultat
+  // orphelin et un versement qui redeviendrait un cash-out ordinaire — le calcul de
+  // la semaine suivante serait faux du montant du versement.
+  //
+  // Le schéma refuse déjà ce DELETE (la FK de nexa_player_bankroll_weeks est en
+  // NO ACTION, délibérément). Ce test-ci n'ajoute pas la sécurité : il ajoute le
+  // MESSAGE, pour que /payments dise où aller au lieu d'afficher un échec de
+  // contrainte. Le déverrouillage correct passe par unlockBankrollWeekOn, qui
+  // démonte les quatre écritures dans le bon ordre.
+  //
+  // try/catch : la table naît d'une migration plus récente que ce fichier. Sur une
+  // base d'avant, il n'y a aucune semaine BR, donc rien à protéger — mais on ne
+  // laisse passer QUE l'absence de table, jamais une autre erreur (une garde
+  // d'argent ne doit pas échouer en laissant passer).
+  try {
+    const br = db.prepare(
+      `SELECT week_start, player_id FROM nexa_player_bankroll_weeks WHERE settlement_id = ?`
+    ).get(settlementId) as { week_start: string; player_id: number } | undefined;
+    if (br) {
+      return {
+        ok: false,
+        error: `Règlement issu de la semaine de bankroll ${br.week_start} — délock interdit ici. `
+             + `Passe par « déverrouiller » dans le panneau Règlement BR du joueur : `
+             + `lui seul retire aussi le win/loss et le versement.`,
+      };
+    }
+  } catch (e: any) {
+    if (!/no such table/i.test(e?.message ?? "")) throw e;
+  }
 
   try {
     let unflagged = 0;

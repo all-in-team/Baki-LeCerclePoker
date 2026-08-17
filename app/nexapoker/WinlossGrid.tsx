@@ -18,7 +18,12 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 
-type Row = { player_id: number; name: string; action_pct: number; amount: number | null };
+type Row = {
+  player_id: number; name: string; action_pct: number; amount: number | null;
+  /** Semaine calculée depuis la bankroll : la cellule est en LECTURE SEULE.
+   *  Le refus réel vit dans setWeeklyWinlossOn ; ce drapeau évite de taper pour rien. */
+  bankroll_locked?: boolean;
+};
 
 const CARD: React.CSSProperties = {
   background: "#12141C", border: "1px solid rgba(255,255,255,0.06)", borderRadius: 14, padding: 18,
@@ -122,6 +127,11 @@ export default function WinlossGrid() {
     let ecrits = 0, desaisis = 0, inchanges = 0;
     const erreurs: string[] = [];
     for (const r of shown) {
+      // Semaine calculée depuis la bankroll : elle n'appartient pas à cette grille.
+      // On l'écarte AVANT tout envoi — la route la refuserait de toute façon, mais
+      // un échec par joueur dans le récapitulatif ferait passer un fonctionnement
+      // normal pour une panne.
+      if (r.bankroll_locked) { inchanges++; continue; }
       const brut = (draft[r.player_id] ?? "").trim();
       // Rien à faire : champ vide sur une semaine jamais saisie.
       if (brut === "" && r.amount === null) { inchanges++; continue; }
@@ -223,18 +233,31 @@ export default function WinlossGrid() {
                   {r.name}
                   <span style={{ color: "#555568", marginLeft: 6, fontSize: 10 }}>{r.action_pct} %</span>
                 </span>
-                {enBase && (
+                {enBase && !r.bankroll_locked && (
                   <span style={{ fontSize: 10, color: "#555568" }} title="Montant actuellement en base">
                     {fmt(r.amount!)}
                   </span>
                 )}
+                {r.bankroll_locked && (
+                  <span style={{ fontSize: 10, color: "#22D3EE" }} title="Calculé depuis la bankroll — se corrige en déverrouillant le règlement BR">
+                    BR
+                  </span>
+                )}
                 <input
                   ref={el => { inputs.current[i] = el; }}
-                  value={brut} inputMode="decimal" placeholder="non saisi"
+                  value={brut} inputMode="decimal"
+                  placeholder={r.bankroll_locked ? "—" : "non saisi"}
+                  readOnly={r.bankroll_locked}
+                  title={r.bankroll_locked
+                    ? "Semaine calculée depuis la bankroll. Pour la corriger, déverrouille le règlement BR dans la vue détail du joueur."
+                    : undefined}
                   onKeyDown={e => onKey(e, i)}
                   onChange={e => setDraft({ ...draft, [r.player_id]: e.target.value })}
                   style={{ ...INPUT, width: 92, textAlign: "right",
-                           color: illisible ? "#F87171" : v !== null && v < 0 ? "#F87171" : "#E8E8EE" }}
+                           opacity: r.bankroll_locked ? 0.55 : 1,
+                           cursor: r.bankroll_locked ? "not-allowed" : "text",
+                           color: r.bankroll_locked ? "#22D3EE"
+                                : illisible ? "#F87171" : v !== null && v < 0 ? "#F87171" : "#E8E8EE" }}
                 />
               </label>
             );
