@@ -1,3 +1,6 @@
+import { computePeriodFilter } from "@/lib/period-filter";
+import { toParisDate } from "@/lib/date-utils";
+
 // Types + badges partagés par la page Joueurs unifiée (table + kanban + modales).
 // Anciennement dupliqués dans app/crm/CRMListClient.tsx, CRMKanbanView.tsx et PlayerDetailDrawer.tsx.
 
@@ -164,4 +167,50 @@ export function isActiveStatus(status: string): boolean {
 
 export function fmtAmt(n: number): string {
   return `${n >= 0 ? "+" : ""}${n.toLocaleString("fr-FR", { maximumFractionDigits: 0 })}`;
+}
+
+// ── Résolution de la période ────────────────────────────────────────────────
+// Vit ici (et non dans page.tsx) depuis que la section « Historique » de la fiche
+// joueur réutilise la même barre : deux résolveurs pour un même contrat d'URL
+// auraient dérivé. Module pur — computePeriodFilter et date-utils n'importent
+// aucune DB, donc utilisable côté client comme côté serveur.
+export function daysAgo(n: number): string {
+  const d = new Date(); d.setDate(d.getDate() - n);
+  return d.toISOString().slice(0, 10);
+}
+
+/**
+ * Résout `?filter=` vers la période de la page. Toute valeur non reconnue —
+ * ou un `custom:` irrésoluble — retombe sur 30j, le défaut historique.
+ *
+ * `7d` est résolu ICI et pas dans computePeriodFilter : ce résolveur est partagé
+ * avec les pages P&L (lib/games/wallet-ledger.tsx, nutspk/ledger.tsx) qui
+ * n'ont pas de whitelist. Y ajouter une branche `7d` changeait leur réponse à
+ * `?filter=7d` — d'un repli sur « cette semaine » vers une fenêtre glissante,
+ * sans aucun bouton actif dans leur barre. La page Joueurs garde donc sa
+ * borne 7j pour elle.
+ */
+export function resolvePlayersPeriod(raw: string | undefined, today: string): PlayersPeriod {
+  if (raw === "lifetime") return { key: "lifetime", kind: "lifetime" };
+  if (raw === "7d") return { key: "7d", kind: "7d", from: daysAgo(7), to: today };
+
+  if (raw?.startsWith("custom:")) {
+    const resolved = computePeriodFilter(raw);
+    // computePeriodFilter signale un custom malformé en retombant sur « current »
+    // (semaine en cours) : la clé rendue ne correspond alors plus à la demande.
+    if (resolved.key === raw && resolved.startDate && resolved.endDate) {
+      const from = toParisDate(resolved.startDate);
+      const to = toParisDate(resolved.endDate);
+      // Garde anti-débordement : le contrat d'URL ne valide que la FORME
+      // (`\d{4}-\d{2}-\d{2}`), et Date.UTC normalise silencieusement une date
+      // impossible — `2026-02-30` devient le 2 mars. Sans ce contrôle, une URL
+      // en favori afficherait une fenêtre que personne n'a demandée.
+      const [askedFrom, askedTo] = raw.slice(7).split("~").map(p => p.slice(0, 10));
+      if (from === askedFrom && to === askedTo) {
+        return { key: raw, kind: "custom", from, to };
+      }
+    }
+  }
+
+  return { key: "30d", kind: "30d", from: daysAgo(30), to: today };
 }

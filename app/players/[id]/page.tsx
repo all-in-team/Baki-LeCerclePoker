@@ -2,7 +2,7 @@ export const dynamic = "force-dynamic";
 import { notFound } from "next/navigation";
 import {
   getPlayerById, getCrmNotes, getWalletTransactions, getPlayerPnLAllGames, getPlayerAgencyCutSeries,
-  getGrinderProfitability, getPlayerGameDeals, getGames, getPlayerWalletStats, getQuarantinedTransactions, type PlayerGamePnL,
+  getGrinderProfitability, getPlayerGameDeals, getGames, getPlayerWalletStats, getQuarantinedTransactions, getPlayerTransactionHistory, type PlayerGamePnL,
 } from "@/lib/queries";
 import { getPlayerAffiliation } from "@/lib/queries/affiliate";
 import { getCnyRate } from "@/lib/currency";
@@ -13,6 +13,7 @@ import NetPnlChart from "@/app/akpoker/pnl/NetPnlChart";
 import PlayerDetailClient from "./PlayerDetailClient";
 import PlayerDangerZone from "./PlayerDangerZone";
 import QuarantinePanel from "@/components/QuarantinePanel";
+import PlayerHistoryPanel from "@/components/PlayerHistoryPanel";
 
 function daysAgo(n: number): string {
   const d = new Date(); d.setDate(d.getDate() - n);
@@ -89,6 +90,11 @@ export default async function PlayerDetailPage({ params, searchParams }: { param
   // Mouvements mis de côté par le sync — hors de tout solde tant qu'ils ne sont
   // pas arbitrés. Affichés en tête de fiche : c'est là qu'on regarde un solde.
   const quarantined = getQuarantinedTransactions(playerId);
+
+  // Historique complet — toutes les lignes du joueur, réglées comprises, sans
+  // borne de deal. `stats.net` (borné aux deals, cf. getPlayerWalletStats) est
+  // passé pour que le panneau puisse expliquer l'écart au lieu de le subir.
+  const history = getPlayerTransactionHistory(playerId);
 
   const accent = (label: string) => GAME_COLOR[label] ?? "#9CA3AF";
 
@@ -290,6 +296,13 @@ export default async function PlayerDetailPage({ params, searchParams }: { param
         allGames={allGames as any}
         stats={stats}
         gameIds={gameIds}
+      />
+
+      <PlayerHistoryPanel
+        playerId={playerId}
+        playerName={player.name}
+        transactions={history}
+        dealBoundedNet={stats.net ?? null}
       />
 
       {/* Notes */}

@@ -36,7 +36,7 @@ export type PeriodControl = "current" | "last" | "weeks" | "7d" | "30d" | "lifet
  * historique, rendu inchangé pour les pages existantes.
  */
 export default function PeriodFilterBar({
-  activeFilter, rangeLabel, weeks, basePath, only, dayGranularCustom = false,
+  activeFilter, rangeLabel, weeks, basePath, only, dayGranularCustom = false, onSelect,
 }: {
   activeFilter: string;
   rangeLabel: string;
@@ -44,6 +44,14 @@ export default function PeriodFilterBar({
   basePath: string;
   only?: PeriodControl[];
   dayGranularCustom?: boolean;
+  /**
+   * Mode CONTRÔLÉ : appelé au lieu de naviguer. Sert à la section « Historique »
+   * de la fiche joueur, dont les filtres vivent en état local — y router
+   * l'URL écraserait les autres paramètres de la page (`?range=` du graphe
+   * agency) et rechargerait la fiche entière à chaque clic de période.
+   * Omis = comportement historique inchangé (push vers `basePath?filter=`).
+   */
+  onSelect?: (filter: string) => void;
 }) {
   const router = useRouter();
   const [weekOpen, setWeekOpen] = useState(false);
@@ -61,6 +69,7 @@ export default function PeriodFilterBar({
   function navigate(filter: string) {
     setWeekOpen(false);
     setPendingFilter(filter);
+    if (onSelect) { onSelect(filter); setPendingFilter(null); return; }
     startTransition(() => {
       // `?filter=current` est émis EXPLICITEMENT, y compris pour la semaine en
       // cours. Auparavant « Cette semaine » renvoyait sur basePath nu : sur une

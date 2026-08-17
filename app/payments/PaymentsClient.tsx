@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
   AlertTriangle, BadgeCheck, Banknote, Clock, ExternalLink, Unlock,
@@ -8,6 +8,7 @@ import {
 } from "lucide-react";
 import Btn from "@/components/Btn";
 import Modal from "@/components/Modal";
+import SettlementTxDetail from "@/components/SettlementTxDetail";
 import type {
   HubSettlement, OverdueBucket, PaymentsTotals, PlayerPendingGroup, PlayerOverdueGroup,
 } from "@/lib/manual-settlement-engine";
@@ -386,12 +387,37 @@ export default function PaymentsClient({
     } finally { setRowBusy(null); }
   }
 
+  // Détail des transactions d'un règlement — lecture seule, un seul ouvert à la
+  // fois. Le contenu est chargé à la demande par SettlementTxDetail : précharger
+  // les ~157 règlements de l'historique ferait payer à chaque rendu un travail
+  // que personne ne regarde.
+  const [openTxDetail, setOpenTxDetail] = useState<number | null>(null);
+
+  /** La puce « N tx » devient le bouton de dépliage. */
+  function TxCountToggle({ id, count, open, onToggle }: {
+    id: number; count: number; open: boolean; onToggle: (v: number | null) => void;
+  }) {
+    return (
+      <button onClick={() => onToggle(open ? null : id)}
+        title={open ? "Masquer le détail des transactions" : "Voir les transactions couvertes"}
+        style={{
+          display: "inline-flex", alignItems: "center", gap: 3, padding: "1px 6px", borderRadius: 6,
+          fontSize: 11, cursor: "pointer", border: "1px solid " + (open ? "var(--green)" : "transparent"),
+          background: open ? "rgba(34,197,94,0.10)" : "transparent",
+          color: open ? "var(--green)" : "var(--text-dim)",
+        }}>
+        {open ? <ChevronDown size={10} /> : <ChevronRight size={10} />}{count} tx
+      </button>
+    );
+  }
+
   /** Ligne d'un règlement réel — partagée par la vue plate et le dépli des groupes. */
   function PendingRow({ s, inset }: { s: HubSettlement; inset?: boolean }) {
     const dir = direction(s.amount_due_usdt);
     const Icon = dir.icon;
     const isSel = selected.has(s.id);
     return (
+      <>
       <div style={{
         ...rowBase,
         gridTemplateColumns: "20px 88px minmax(110px,1fr) 130px 128px 150px auto",
@@ -409,7 +435,7 @@ export default function PaymentsClient({
 
         <span style={{ display: "inline-flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
           <WeekChip label={s.week_label} />
-          <span style={{ fontSize: 11, color: "var(--text-dim)" }}>{s.tx_count} tx</span>
+          <TxCountToggle id={s.id} count={s.tx_count} open={openTxDetail === s.id} onToggle={setOpenTxDetail} />
         </span>
 
         <span style={{ fontSize: 11, color: "var(--text-dim)" }}>
@@ -435,6 +461,8 @@ export default function PaymentsClient({
           </button>
         </span>
       </div>
+      {openTxDetail === s.id && <SettlementTxDetail settlementId={s.id} />}
+      </>
     );
   }
 
@@ -767,14 +795,15 @@ export default function PaymentsClient({
               {filteredPaid.map(s => {
                 const dir = direction(s.amount_due_usdt);
                 return (
-                  <div key={s.id} style={{ ...rowBase, gridTemplateColumns: "88px minmax(120px,1fr) 118px 110px 150px auto" }}>
+                  <Fragment key={s.id}>
+                  <div style={{ ...rowBase, gridTemplateColumns: "88px minmax(120px,1fr) 118px 110px 150px auto" }}>
                     <RoomBadge label={s.room_label} color={s.room_color} /><KindBadge kind={s.kind} />
                     <a href={`${s.room_base_path}?player=${s.player_id}`} style={{ fontSize: 13, fontWeight: 600, color: "var(--text)", textDecoration: "none" }}>
                       {s.player_name}
                     </a>
                     <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
                       <WeekChip label={s.week_label} />
-                      <span style={{ fontSize: 11, color: "var(--text-dim)" }}>{s.tx_count} tx</span>
+                      <TxCountToggle id={s.id} count={s.tx_count} open={openTxDetail === s.id} onToggle={setOpenTxDetail} />
                     </span>
                     <span style={{ fontSize: 11, color: "var(--text-muted)" }} title="Date de paiement">
                       {fmtDate(s.paid_on)}
@@ -792,6 +821,8 @@ export default function PaymentsClient({
                       ) : <span style={{ fontSize: 11, color: "var(--text-dim)" }}>—</span>}
                     </span>
                   </div>
+                  {openTxDetail === s.id && <SettlementTxDetail settlementId={s.id} />}
+                  </Fragment>
                 );
               })}
             </div>

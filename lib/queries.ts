@@ -2,6 +2,7 @@ import { getDb } from "./db";
 import { toParisDate, toUTCISO, parisLocalToUTC, addMonthsParis } from "./date-utils";
 import { computeStakingBlock, projectStakingBlock, operatorPnlFromReglement } from "./qqpk-staking-engine";
 import { assertWalletAddress } from "./wallet-address";
+import type { HistoryTx } from "./wallet-history";
 
 // ── Players ──────────────────────────────────────────────
 // Les lignes archivées (soft-delete, audit 2026-07-25) sont exclues : cette fonction
@@ -1419,6 +1420,65 @@ export function arbitrateQuarantinedTransaction(id: number, decision: "approve" 
     console.log(`[QUARANTAINE] tx ${id} → ${next}`);
   }
   return res.changes;
+}
+
+/**
+ * Historique COMPLET des mouvements d'un joueur — lecture seule.
+ *
+ * Volontairement SANS filtre de statut, contrairement à getWalletTransactions :
+ * l'écran Historique doit montrer les lignes en quarantaine et les legacy
+ * `source='unknown'`, avec leur badge. Elles restent hors des totaux — la règle
+ * de comptage est appliquée à l'affichage par `isCountable` (lib/wallet-history.ts),
+ * qui est le miroir exact du prédicat SQL utilisé partout ailleurs.
+ *
+ * Aucune borne de deal non plus (pas de JOIN player_game_deals) : c'est ce qui
+ * distingue cette vue des cartes P&L, et c'est ce qu'on demande d'elle —
+ * « toutes les transactions depuis le début ».
+ */
+export function getPlayerTransactionHistory(playerId: number): HistoryTx[] {
+  return getDb().prepare(`
+    SELECT
+      wt.id,
+      COALESCE(wt.tx_datetime, wt.tx_date) AS tx_at,
+      g.name AS game_name,
+      wt.type, wt.amount, wt.currency, wt.source, wt.status,
+      wt.settled, wt.settlement_id,
+      ms.status  AS settlement_status,
+      ms.kind    AS settlement_kind,
+      ms.paid_at AS settlement_paid_at,
+      ms.amount_due_usdt AS settlement_amount_due,
+      wt.counterparty_address, wt.tron_tx_hash, wt.note, wt.created_at
+    FROM wallet_transactions wt
+    LEFT JOIN games g ON g.id = wt.game_id
+    LEFT JOIN manual_settlements ms ON ms.id = wt.settlement_id
+    WHERE wt.player_id = ?
+    ORDER BY COALESCE(wt.tx_datetime, wt.tx_date) DESC, wt.id DESC
+  `).all(playerId) as HistoryTx[];
+}
+
+/**
+ * Transactions couvertes par un règlement — lecture seule, pour le dépliage
+ * d'une ligne « Réglé N tx » sur /payments.
+ */
+export function getSettlementCoveredTransactions(settlementId: number): HistoryTx[] {
+  return getDb().prepare(`
+    SELECT
+      wt.id,
+      COALESCE(wt.tx_datetime, wt.tx_date) AS tx_at,
+      g.name AS game_name,
+      wt.type, wt.amount, wt.currency, wt.source, wt.status,
+      wt.settled, wt.settlement_id,
+      ms.status  AS settlement_status,
+      ms.kind    AS settlement_kind,
+      ms.paid_at AS settlement_paid_at,
+      ms.amount_due_usdt AS settlement_amount_due,
+      wt.counterparty_address, wt.tron_tx_hash, wt.note, wt.created_at
+    FROM wallet_transactions wt
+    LEFT JOIN games g ON g.id = wt.game_id
+    LEFT JOIN manual_settlements ms ON ms.id = wt.settlement_id
+    WHERE wt.settlement_id = ?
+    ORDER BY COALESCE(wt.tx_datetime, wt.tx_date) DESC, wt.id DESC
+  `).all(settlementId) as HistoryTx[];
 }
 
 // ── Report Schedule Tracking ────────────────────────────────
