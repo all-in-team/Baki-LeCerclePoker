@@ -3,6 +3,7 @@ import {
   getQuarantinedTransactions,
   countQuarantinedTransactions,
   arbitrateQuarantinedTransaction,
+  getQuarantineArbitrationBlocker,
 } from "@/lib/queries";
 
 // Arbitrage des mouvements wallet mis en quarantaine par le sync (montant au-delà
@@ -33,10 +34,13 @@ export async function POST(req: NextRequest) {
 
   const changes = arbitrateQuarantinedTransaction(id, decision);
   if (changes === 0) {
-    return NextResponse.json(
-      { error: "Transaction introuvable ou déjà arbitrée." },
-      { status: 409 },
-    );
+    // Le UPDATE porte `status='quarantined'` sur les deux décisions, et
+    // `settled=0` sur le seul rejet. Sans distinction, un refus pour cause de
+    // ligne déjà réglée s'afficherait « déjà arbitrée » — Baki chercherait un
+    // arbitrage qui n'a jamais eu lieu. On relit la ligne, avec la décision
+    // demandée, pour dire laquelle des conditions a bloqué.
+    const row = getQuarantineArbitrationBlocker(id, decision);
+    return NextResponse.json({ error: row }, { status: 409 });
   }
 
   return NextResponse.json({

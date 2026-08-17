@@ -83,6 +83,8 @@ interface TxRecord {
   currency: string;
   source: string | null;
   settled: number;
+  /** 'active' | 'quarantined' | 'rejected' — NULL sur les lignes d'avant la migration. */
+  status: string | null;
   tx_datetime: string | null;
   tx_date: string;
 }
@@ -124,7 +126,16 @@ export function resolveSelectionScope(
 
 // ── 1) getAvailableTransactions ──────────────────────────
 // Player's still-unsettled txs for a game scope (settled=0), real sources only, oldest→newest.
-
+//
+// ⚠️ MONEY-CRITICAL — le filtre `status` est ce qui empêche une ligne en
+// quarantaine d'être PROPOSÉE au règlement.
+//
+// Historique (audit money-auditor du 17/08/2026, faille F1) : la quarantaine
+// introduite par add_wallet_tx_quarantine_v1 filtrait 30 requêtes de LECTURE et
+// aucune du chemin d'écriture. Une ligne de 250 000 USDT mise de côté par le
+// scanner était exclue de la carte de solde, mais s'affichait ici comme une
+// ligne normale — cochée puis verrouillée, elle produisait une facture figée de
+// 125 000 USDT. Le seuil de vraisemblance était contourné de bout en bout.
 export function getAvailableTransactions(gameId: GameScope, playerId: number): AvailableTx[] {
   const db = getDb();
   const ids = scopeIds(gameId);
@@ -136,6 +147,7 @@ export function getAvailableTransactions(gameId: GameScope, playerId: number): A
       AND player_id = ?
       AND settled = 0
       AND source IN ('sync', 'manual')
+      AND (status IS NULL OR status = 'active')
     ORDER BY COALESCE(tx_datetime, tx_date) ASC, id ASC
   `).all(...ids, playerId) as AvailableTx[];
 }
@@ -155,7 +167,7 @@ function loadSelection(
   const ids = [...new Set(txIds)];
   const placeholders = ids.map(() => "?").join(",");
   const rows = db.prepare(`
-    SELECT id, player_id, game_id, type, amount, currency, source, settled, tx_datetime, tx_date
+    SELECT id, player_id, game_id, type, amount, currency, source, settled, status, tx_datetime, tx_date
     FROM wallet_transactions
     WHERE id IN (${placeholders})
   `).all(...ids) as TxRecord[];
@@ -171,6 +183,17 @@ function loadSelection(
     }
     if (r.source !== "sync" && r.source !== "manual") {
       return { error: `Transaction ${r.id} a une source invalide (${r.source ?? "null"}) — non réglable` };
+    }
+    // ⚠️ LA porte de la quarantaine (audit F1 du 17/08/2026). C'est le point de
+    // passage UNIQUE de previewSettlement ET lockSettlement : bloquer ici, et
+    // seulement ici, suffit à garantir qu'aucun montant non arbitré n'entre dans
+    // un règlement figé.
+    //
+    // On REFUSE, on ne filtre pas : écarter silencieusement une ligne cochée
+    // règlerait un montant différent de celui que Baki a sous les yeux. Fail-closed
+    // sur le statut — tout état autre qu'`active` bloque, y compris un état futur.
+    if (r.status != null && r.status !== "active") {
+      return { error: `Transaction ${r.id} est en ${r.status} — arbitre-la sur la fiche joueur avant de la régler` };
     }
     if (getExchangeRate(r.currency) === 0) {
       return { error: `Taux de change manquant pour ${r.currency} (tx ${r.id}) — règlement bloqué` };
@@ -305,11 +328,16 @@ export function lockSettlement(
       const settlementId = Number(ins.lastInsertRowid);
 
       // Flag ONLY rows still unsettled — settled=0 in the WHERE is a second-line race guard.
+      // Le prédicat `status` est la troisième : si une ligne non arbitrée atteignait
+      // malgré tout le lock, elle ne serait pas marquée, le contrôle d'égalité
+      // ci-dessous échouerait et TOUTE la transaction serait annulée. Pas de
+      // désynchronisation possible entre le montant écrit et les lignes marquées.
       const placeholders = ids.map(() => "?").join(",");
       const upd = db.prepare(`
         UPDATE wallet_transactions
         SET settled = 1, settlement_id = ?
         WHERE id IN (${placeholders}) AND settled = 0
+          AND (status IS NULL OR status = 'active')
       `).run(settlementId, ...ids);
 
       // If we didn't flag exactly the selection, something raced/changed → abort the whole tx.
@@ -696,6 +724,10 @@ export function getOverdueBuckets(): OverdueBucket[] {
     WHERE wt.game_id IN (${placeholders})
       AND wt.settled = 0
       AND wt.source IN ('sync', 'manual')
+      -- Sans ce filtre, une ligne en quarantaine qu'on décide de NE PAS régler ne
+      -- peut jamais passer à settled=1 : elle vieillirait en impayé permanent et
+      -- inextinguible, répété chaque jour dans le résumé Telegram et sur /payments.
+      AND (wt.status IS NULL OR wt.status = 'active')
     ORDER BY stamp ASC
   `).all(...ids) as { id: number; player_id: number; player_name: string; game_id: number; type: string; amount: number; currency: string; stamp: string }[];
 

@@ -1407,19 +1407,67 @@ export function countQuarantinedTransactions(): number {
 /**
  * Arbitrage manuel d'une ligne en quarantaine.
  *
- * Ne touche QUE des lignes 'quarantined' : impossible de repasser en quarantaine
- * une transaction déjà comptabilisée et potentiellement réglée, ni de « valider »
- * deux fois. Retourne le nombre de lignes affectées (0 = déjà arbitrée).
+ * Verrou commun : `status = 'quarantined'` — on ne peut ni remettre en
+ * quarantaine une ligne déjà comptabilisée, ni « valider » deux fois.
+ *
+ * Verrou supplémentaire sur le SEUL rejet : `settled = 0`. On ne peut pas
+ * répudier une ligne qui adosse un règlement. Le docstring précédent prétendait
+ * couvrir ce cas, il ne le faisait pas (audit money-auditor du 17/08/2026,
+ * faille F1). Le scénario : une ligne en quarantaine atteignait le panneau
+ * « Régler », était verrouillée dans un règlement — donc `settled=1` mais
+ * toujours `quarantined` — puis un clic sur « Rejeter » passait cette ligne en
+ * `rejected`. Le montant figé restait, la transaction qui le justifiait était
+ * répudiée (invariant #9). Les gardes de manual-settlement-engine.ts ferment
+ * l'entrée du scénario ; celle-ci ferme sa sortie, pour que la faille ne puisse
+ * pas se reformer par un autre chemin.
+ *
+ * Pourquoi l'approbation n'est PAS verrouillée par `settled` : approuver rend la
+ * base PLUS cohérente avec le montant figé, jamais moins — la ligne rejoint les
+ * agrégats qu'un règlement payé affirme déjà avoir soldés. Verrouiller les deux
+ * décisions supprimerait le seul chemin de réparation d'une ligne déjà
+ * corrompue : si son règlement est payé, `unlockSettlement` le refuse, `settled`
+ * ne peut plus revenir à 0, et la ligne resterait exclue à vie de tous les
+ * soldes. (2e passe money-auditor sur ce correctif, même date.)
+ *
+ * Retourne le nombre de lignes affectées (0 = déjà arbitrée, ou rejet d'une
+ * ligne déjà réglée).
  */
 export function arbitrateQuarantinedTransaction(id: number, decision: "approve" | "reject"): number {
   const next = decision === "approve" ? "active" : "rejected";
+  const settledGuard = decision === "reject" ? "AND settled = 0" : "";
   const res = getDb().prepare(
-    `UPDATE wallet_transactions SET status = ? WHERE id = ? AND status = 'quarantined'`
+    `UPDATE wallet_transactions SET status = ? WHERE id = ? AND status = 'quarantined' ${settledGuard}`
   ).run(next, id);
   if (res.changes > 0) {
     console.log(`[QUARANTAINE] tx ${id} → ${next}`);
   }
   return res.changes;
+}
+
+/**
+ * Pourquoi un arbitrage de quarantaine a été refusé — lecture seule, pour
+ * transformer un 409 muet en message actionnable.
+ *
+ * Prend la décision demandée : les deux verrous ne s'appliquent pas aux mêmes
+ * décisions, donc un message qui parle de rejet après un clic sur « Valider »
+ * envoie chercher un blocage qui n'existe pas.
+ */
+export function getQuarantineArbitrationBlocker(id: number, decision: "approve" | "reject"): string {
+  const row = getDb().prepare(
+    `SELECT status, settled, settlement_id FROM wallet_transactions WHERE id = ?`
+  ).get(id) as { status: string | null; settled: number; settlement_id: number | null } | undefined;
+
+  if (!row) return `Transaction ${id} introuvable.`;
+  if (row.status !== "quarantined") {
+    return `Transaction ${id} n'est pas en quarantaine (statut : ${row.status ?? "aucun"}) — déjà arbitrée.`;
+  }
+  if (decision === "reject" && row.settled === 1) {
+    return `Transaction ${id} est en quarantaine mais déjà rattachée au règlement #${row.settlement_id ?? "?"} : `
+      + `elle ne peut plus être rejetée sans réécrire un montant figé. Deux issues : la VALIDER `
+      + `(elle rejoint les soldes, cohérente avec le montant déjà facturé), ou délocker le règlement `
+      + `#${row.settlement_id ?? "?"} d'abord si le montant lui-même est à refaire.`;
+  }
+  return `Arbitrage de la transaction ${id} refusé (état inattendu : statut ${row.status}, settled ${row.settled}).`;
 }
 
 /**
