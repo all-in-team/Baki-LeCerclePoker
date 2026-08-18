@@ -86,7 +86,11 @@ const SERIES: SeriesDef[] = [
     hint: "Commission encaissée moins le rakeback dû aux joueurs.",
   },
   {
-    key: "action", label: "Part d'action", color: VIOLET, defaultOn: false,
+    // defaultOn: true — c'est une grosse part de ce que la room rapporte, elle ne
+    // doit pas se mériter un clic. Elle reste invisible tant qu'AUCUNE semaine n'a
+    // de win/loss saisi : `available` la retire alors du registre, plutôt que de
+    // tracer une ligne à zéro qui affirmerait « rien gagné ».
+    key: "action", label: "Part d'action", color: VIOLET, defaultOn: true,
     value: w => w.action_amount,
     hint: "Ma part sur les win/loss saisis. Positive quand le joueur gagne — même convention que les pages P&L.",
   },

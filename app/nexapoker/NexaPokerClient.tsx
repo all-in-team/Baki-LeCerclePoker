@@ -9,7 +9,7 @@
 // Rien ne se rattache par approximation : le hint affiché sur une ligne à
 // réconcilier vient de resolveRows et n'est jamais appliqué seul.
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { createPortal } from "react-dom";
 import { movementColor, netColor, isZeroAmount } from "@/components/ledger/MovementAmount";
@@ -236,418 +236,16 @@ export default function NexaPokerClient({ currentWeek, today, chartWeeks, period
     alerts: players.reduce((s, p) => s + p.check_ko, 0),
   }), [players]);
 
-  return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-      {/* Le bandeau « Saisir la semaine » a été retiré : il faisait doublon avec la
-          section de saisie en bas de page, que la page raccourcie met à portée de
-          molette. La table des joueurs est le haut de page. */}
-
-      {/* Conflits de lead : deux leads revendiquent le même joueur. Le funnel n'y
-          touche pas — il faut trancher à la main. */}
-      {anomalies.length > 0 && (
-        <div style={{ ...CARD, borderColor: "rgba(239,68,68,0.35)" }}>
-          <div style={{ fontSize: 13, fontWeight: 600, color: "#F87171", marginBottom: 4 }}>
-            ⚠️ {anomalies.length} conflit(s) de lead — deux leads pour un même joueur
-          </div>
-          <div style={{ fontSize: 12, color: "#8888A0", marginBottom: 10 }}>
-            Le funnel n'a rien modifié : il ne tranche pas à ta place. Décide quel lead
-            correspond réellement au joueur, et corrige le Member ID de l'autre.
-          </div>
-          <ul style={{ margin: "0 0 0 18px", fontSize: 12, color: "#E8E8EE" }}>
-            {anomalies.map(a => (
-              <li key={`${a.lead_id}-${a.other_lead_id}`} style={{ marginBottom: 4 }}>
-                Member ID <b>{a.member_id}</b> → joueur <b>{a.player_name}</b> (#{a.player_id}), déjà lié au
-                lead #{a.other_lead_id}{a.other_lead_handle ? ` (@${a.other_lead_handle})` : ""} ;
-                réclamé aussi par le lead #{a.lead_id}{a.lead_handle ? ` (@${a.lead_handle})` : ""}.
-              </li>
-            ))}
-          </ul>
-        </div>
-      )}
-
-      {/* ── À réconcilier ─────────────────────────────────────────────── */}
-      {unrec.length > 0 && (
-        <div style={{ ...CARD, borderColor: "rgba(240,185,11,0.35)" }}>
-          <div style={{ fontSize: 13, fontWeight: 600, color: "#F0B90B", marginBottom: 4 }}>
-            ⚠️ {unrec.length} ligne(s) du report à réconcilier
-          </div>
-          <div style={{ fontSize: 12, color: "#8888A0", marginBottom: 12 }}>
-            Ces lignes ne sont rattachées à aucun joueur. Une fois rattachées, tout l'historique déjà
-            saisi les rejoint — aucune re-saisie.
-          </div>
-          <table style={{ width: "100%", borderCollapse: "collapse" }}>
-            <thead><tr>
-              <th style={TH}>Pseudo report</th><th style={TH}>Member ID</th><th style={TH}>Semaines</th>
-              <th style={TH}>Rake</th><th style={TH}>Commission</th><th style={TH}>Période</th><th style={TH} />
-            </tr></thead>
-            <tbody>
-              {unrec.map(u => (
-                <tr key={u.row_key} style={{ borderTop: "1px solid rgba(255,255,255,0.05)" }}>
-                  <td style={{ ...TD, fontWeight: 600 }}>{u.nickname}</td>
-                  <td style={TD}>{u.member_id ?? <span style={{ color: "#555568" }}>—</span>}</td>
-                  <td style={TD}>{u.weeks}</td>
-                  <td style={TD}>{fmt(u.total_rake)}</td>
-                  <td style={TD}>{fmt(u.total_commission)}</td>
-                  <td style={{ ...TD, color: "#8888A0" }}>{u.first_week} → {u.last_week}</td>
-                  <td style={{ ...TD, textAlign: "right" }}>
-                    {/* Le hint vient de resolveRows. Il PROPOSE, il n'applique rien. */}
-                    {u.hint_player_id !== null && (
-                      <span style={{ fontSize: 11, color: "#F0B90B", marginRight: 10 }}
-                            title="Candidat proposé d'après le pseudo. Rien n'est rattaché tant que tu ne valides pas.">
-                        candidat : {u.hint_player_name}
-                      </span>
-                    )}
-                    <button disabled={busy} onClick={() => setLinking({ row: u, target: String(u.hint_player_id ?? "") })}
-                            style={{ ...INPUT, cursor: "pointer", marginRight: 6, borderColor: "rgba(96,165,250,0.4)", color: "#60A5FA" }}>
-                      Rattacher
-                    </button>
-                    <button disabled={busy}
-                            onClick={() => setAdding({ nickname: u.nickname, member_id: u.member_id ?? "", telegram: "", pct: "0", week: currentWeek })}
-                            style={{ ...INPUT, cursor: "pointer", borderColor: "rgba(16,185,129,0.4)", color: "#34D399" }}>
-                      Créer le joueur
-                    </button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
-
-      {/* ── Joueurs ───────────────────────────────────────────────────── */}
-      <div style={CARD}>
-        <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 12 }}>
-          <div style={{ fontSize: 13, fontWeight: 600, color: "#E8E8EE" }}>
-            Joueurs NEXAPOKER {loading ? "…" : `(${players.length})`}
-          </div>
-          <div style={{ flex: 1 }} />
-          <span style={{ fontSize: 12, color: "#8888A0" }}>
-            Σ rake {fmt(totals.rake)} · Σ commission {fmt(totals.commission)}
-            {totals.alerts > 0 && <span style={{ color: "#F87171" }}> · {totals.alerts} semaine(s) en alerte</span>}
-          </span>
-          <button onClick={() => setShowExtra(v => !v)}
-                  title="Affiche ou masque Semaines / Rake / Buy-ins / Cash-outs"
-                  style={{ ...INPUT, cursor: "pointer", padding: "6px 11px", borderRadius: 999,
-                           background: showExtra ? "rgba(255,255,255,0.06)" : "#0B0D12",
-                           borderColor: showExtra ? "rgba(255,255,255,0.22)" : "rgba(255,255,255,0.1)",
-                           color: showExtra ? "#E8E8EE" : "#8888A0", fontWeight: 600 }}>
-            Σ Colonnes chiffres
-          </button>
-          <button disabled={busy}
-                  onClick={() => setAdding({ nickname: "", member_id: "", telegram: "", pct: "0", week: currentWeek })}
-                  style={{ padding: "8px 16px", borderRadius: 8, border: "none", background: "#10B981",
-                           color: "#0B0D12", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>
-            + Ajouter un joueur
-          </button>
-        </div>
-
-        <div style={{ overflowX: "auto" }}>
-          <table style={{ width: "100%", borderCollapse: "separate", borderSpacing: 0, minWidth: 700 }}>
-            <thead><tr>
-              {/* Joueur figé à gauche : la ligne reste identifiable quand la table
-                  scrolle, sur écran étroit. Parts d'action en tête, comme demandé. */}
-              <th style={{ ...P_TH, ...STICKY_TH }}>Joueur</th>
-              <th style={P_TH}>Identité</th>
-              <th style={P_TH}>Parts</th>
-              {showExtra && <th style={{ ...P_TH, textAlign: "right" }}>Semaines</th>}
-              {showExtra && <th style={{ ...P_TH, textAlign: "right" }}>Rake</th>}
-              <th style={{ ...P_TH, textAlign: "right" }}>Commission</th>
-              {showExtra && <th style={{ ...P_TH, textAlign: "right" }}>Buy-ins</th>}
-              {showExtra && <th style={{ ...P_TH, textAlign: "right" }}>Cash-outs</th>}
-              <th style={{ ...P_TH, textAlign: "right" }}>Net</th>
-              <th style={{ ...P_TH, textAlign: "right" }} />
-            </tr></thead>
-            <tbody>
-              {players.length === 0 && !loading && (
-                <tr><td colSpan={showExtra ? 10 : 6} style={{ ...P_TD, color: "#8888A0", padding: 20, textAlign: "center" }}>
-                  Aucun joueur rattaché. Utilise « Ajouter un joueur », ou réconcilie une ligne du report.
-                </td></tr>
-              )}
-              {players.map(p => {
-                // Le pseudo du report ne s'affiche que s'il apporte une information :
-                // répété à l'identique sous le nom, il ne fait que manger de la largeur.
-                const nickDiffers = p.report_nickname !== null
-                  && p.report_nickname.trim().toLowerCase() !== p.name.trim().toLowerCase();
-                return (
-                <tr key={p.player_id}>
-                  <td style={{ ...P_TD, ...STICKY_TD, fontWeight: 600 }}>
-                    {p.name}
-                    {p.check_ko > 0 && (
-                      <span style={{ color: "#F87171", fontSize: 10, marginLeft: 5 }}
-                            title="Semaine(s) dont le recalcul ne retombe pas sur le report">
-                        ⚠️{p.check_ko}
-                      </span>
-                    )}
-                    {p.lead_id === null && (
-                      <div style={{ fontSize: 10, color: "#555568", fontWeight: 400 }} title="Arrivé hors funnel">hors funnel</div>
-                    )}
-                  </td>
-                  {/* Identité — Member ID et @Telegram tiennent sur deux lignes dans une
-                      seule colonne : trois colonnes pour trois identifiants du même
-                      joueur, c'était de la largeur dépensée sans information ajoutée. */}
-                  <td style={{ ...P_TD, whiteSpace: "normal" }}>
-                    <div style={{ fontFamily: "var(--font-jbmono), monospace", fontSize: 11.5,
-                                  color: p.member_id ? "#E8E8EE" : "#555568" }}>
-                      {p.member_id ?? "—"}
-                    </div>
-                    <div style={{ fontSize: 11, color: p.telegram_handle ? "#8888A0" : "#3A3A48" }}>
-                      {p.telegram_handle ?? "—"}
-                    </div>
-                    {nickDiffers && (
-                      <div style={{ fontSize: 10, color: "#555568" }} title="Pseudo sous lequel le report le désigne">
-                        report : {p.report_nickname}
-                      </div>
-                    )}
-                  </td>
-                  {/* Parts — action / rakeback côte à côte, chaque taux cliquable ouvre
-                      SON éditeur. L'assiette reste affichée : 40 % du rake brut et 40 %
-                      de la commission ne sont pas le même montant. */}
-                  <td style={{ ...P_TD, whiteSpace: "normal" }}>
-                    <div style={{ display: "flex", alignItems: "center", gap: 2 }}>
-                      <button disabled={busy}
-                              onClick={() => setEditing({ player: p, pct: String(p.action_pct), week: currentWeek })}
-                              title={p.action_since
-                                ? `Part d'action : ${p.action_pct} %, en vigueur depuis le ${p.action_since}`
-                                : "Part d'action — aucune période enregistrée"}
-                              style={{ background: "transparent", border: "1px solid rgba(255,255,255,0.12)",
-                                       borderRadius: 6, padding: "2px 7px", cursor: "pointer",
-                                       color: p.action_pct > 0 ? "#E8E8EE" : "#8888A0", fontSize: 12, fontWeight: 700 }}>
-                        {p.action_pct} %
-                      </button>
-                      <span style={{ color: "#3A3A48", fontSize: 11 }}>/</span>
-                      <button disabled={busy}
-                              onClick={() => setEditingRb({
-                                player: p, pct: String(p.rakeback_pct), basis: p.rakeback_basis,
-                                carry: p.rakeback_makeup_carry, week: currentWeek,
-                              })}
-                              title={p.rakeback_since
-                                ? `Rakeback : ${p.rakeback_pct} % sur ${BASIS_LABEL[p.rakeback_basis]}, en vigueur depuis le ${p.rakeback_since}`
-                                : `Rakeback — aucune période enregistrée, défaut global (settings) : ${p.rakeback_pct} % sur ${BASIS_LABEL[p.rakeback_basis]}`}
-                              style={{ background: "transparent",
-                                       border: `1px solid ${p.rakeback_is_default ? "rgba(255,255,255,0.06)" : "rgba(255,255,255,0.12)"}`,
-                                       borderRadius: 6, padding: "2px 7px", cursor: "pointer",
-                                       color: p.rakeback_is_default ? "#555568" : "#E8E8EE", fontSize: 12, fontWeight: 700 }}>
-                        {p.rakeback_pct} %
-                      </button>
-                    </div>
-                    <div style={{ fontSize: 10, color: "#555568", marginTop: 2 }}>
-                      action / rb {BASIS_LABEL[p.rakeback_basis]}{p.rakeback_is_default ? " (déf.)" : ""}
-                    </div>
-                  </td>
-                  {showExtra && <td style={{ ...P_TD, textAlign: "right" }}>{p.weeks_count || "—"}</td>}
-                  {showExtra && <td style={{ ...P_TD, textAlign: "right" }}>{fmt(p.total_rake)}</td>}
-                  <td style={{ ...P_TD, textAlign: "right", fontWeight: 600 }}>{fmt(p.total_commission)}</td>
-                  {showExtra && (
-                    <td style={{ ...P_TD, textAlign: "right", color: movementColor("deposit") }}>
-                      {isZeroAmount(p.deposited) ? "—" : fmt(p.deposited)}
-                    </td>
-                  )}
-                  {showExtra && (
-                    <td style={{ ...P_TD, textAlign: "right", color: movementColor("withdrawal") }}>
-                      {isZeroAmount(p.withdrawn) ? "—" : fmt(p.withdrawn)}
-                    </td>
-                  )}
-                  <td style={{ ...P_TD, textAlign: "right", fontWeight: 600,
-                               color: netColor(p.net_movements) }}
-                      title="Cash-outs − buy-ins. Convention du repo : dépôt rouge, retrait vert — un net négatif est dominé par les dépôts.">
-                    {Math.abs(p.net_movements) < 0.005 ? "—" : fmt(p.net_movements)}
-                  </td>
-                  {/* Un seul bouton pour les mouvements : quatre boutons par ligne
-                      pesaient plus large que les chiffres qu'ils accompagnaient. */}
-                  <td style={{ ...P_TD, textAlign: "right" }}>
-                    <button disabled={busy}
-                            onMouseDown={e => e.stopPropagation()}
-                            onClick={e => {
-                              const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
-                              setMenu(menu?.player.player_id === p.player_id
-                                ? null
-                                : { player: p, x: r.right, y: r.bottom + 4 });
-                            }}
-                            style={{ ...INPUT, cursor: "pointer", padding: "3px 8px", marginRight: 4,
-                                     borderColor: "rgba(96,165,250,0.4)", color: "#60A5FA" }}>
-                      + Mouvement ▾
-                    </button>
-                    <button disabled={busy || detailBusy} onClick={() => void openDetail(p)}
-                            style={{ ...INPUT, cursor: "pointer", padding: "3px 8px",
-                                     borderColor: "rgba(16,185,129,0.4)", color: "#10B981" }}>
-                      Détail
-                    </button>
-                  </td>
-                </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
-      </div>
-
-      {/* ── Édition de la part d'action ───────────────────────────────── */}
-      {editing && (
-        <div style={{ ...CARD, borderColor: "rgba(96,165,250,0.35)" }}>
-          <div style={{ fontSize: 13, fontWeight: 600, color: "#E8E8EE", marginBottom: 4 }}>
-            Part d'action — {editing.player.name}
-          </div>
-          <div style={{ fontSize: 12, color: "#8888A0", marginBottom: 12 }}>
-            La période en cours sera close la semaine précédente et une nouvelle démarrera à la semaine
-            choisie. L'historique n'est jamais modifié.
-            {editing.player.action_since && <> Période actuelle : {editing.player.action_pct} % depuis le {editing.player.action_since}.</>}
-          </div>
-          <div style={{ display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
-            <label style={{ fontSize: 12, color: "#8888A0", display: "flex", gap: 6, alignItems: "center" }}>
-              Part d'action %
-              <input value={editing.pct} inputMode="decimal" style={{ ...INPUT, width: 80, textAlign: "right" }}
-                     onChange={e => setEditing({ ...editing, pct: e.target.value })} />
-            </label>
-            <label style={{ fontSize: 12, color: "#8888A0", display: "flex", gap: 6, alignItems: "center" }}>
-              À effet du (lundi)
-              <input type="date" value={editing.week} style={INPUT}
-                     onChange={e => setEditing({ ...editing, week: e.target.value })} />
-            </label>
-            <button disabled={busy} onClick={async () => {
-              const ok = await post("/api/nexapoker/action-share",
-                { player_id: editing.player.player_id, pct: parseFloat(editing.pct.replace(",", ".")), start_week: editing.week },
-                j => `Part d'action enregistrée${j.closed_previous ? ` — période précédente close au ${j.closed_previous}` : ""}.`);
-              if (ok) setEditing(null);
-            }} style={{ padding: "8px 16px", borderRadius: 8, border: "none", background: "#10B981", color: "#0B0D12", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>
-              Enregistrer
-            </button>
-            <button onClick={() => setEditing(null)} style={{ ...INPUT, cursor: "pointer", color: "#8888A0" }}>Annuler</button>
-          </div>
-        </div>
-      )}
-
-      {/* ── Saisie hebdomadaire des win/loss ────────────────────────────
-          Juste sous la table des joueurs : c'est le geste du lundi, il se fait en
-          regardant les joueurs. Il alimente la part d'action, donc les cartes et
-          le graph — d'où le router.refresh() qu'il déclenche en fin de saisie. */}
-      <WinlossGrid />
-
-      {/* ── Graph des gains ──────────────────────────────────────────────
-          Entre la table des joueurs et la vue Agence. Alimenté par le MÊME agrégat
-          serveur que les cartes du haut (getNexaDashboard), donc il SUIT le filtre
-          de période : le graph et les cartes ne peuvent pas raconter deux périodes
-          différentes. La vue Agence ci-dessous reste, elle, en lifetime — c'est
-          délibéré et dit dans son intitulé. */}
-      {chartWeeks.length > 0 && (
-        <div>
-          <NexaRevenueChart weeks={chartWeeks} />
-          <div style={{ fontSize: 10, color: "#555568", margin: "6px 2px 0" }}>
-            Période affichée : {periodLabel}. La vue Agence ci-dessous couvre, elle, tout l&apos;historique.
-          </div>
-        </div>
-      )}
-
-      {/* ── Vue agence : la rentrée hebdo, et ma position par joueur ──── */}
-      {agency && agency.weeks.length > 0 && (
-        <div style={CARD}>
-          <div style={{ fontSize: 13, fontWeight: 600, color: "#E8E8EE", marginBottom: 4 }}>
-            Agence — ce que NEXAPOKER rapporte
-          </div>
-          <div style={{ fontSize: 12, color: "#8888A0", marginBottom: 12 }}>
-            La commission d'affiliation est de l'argent reçu : elle est comptée même sur une semaine dont
-            le contrôle a échoué. C'est la colonne « contrôle » qui signale l'écart, pas une disparition
-            silencieuse du chiffre.
-          </div>
-
-          <div style={{ display: "flex", gap: 20, flexWrap: "wrap", marginBottom: 14, fontSize: 12, color: "#8888A0" }}>
-            <span>Rake généré <b style={{ color: "#E8E8EE" }}>{fmt(agency.totals.gross_rake)}</b></span>
-            <span>Commission encaissée <b style={{ color: "#10B981", fontSize: 14 }}>{fmt(agency.totals.commission)}</b></span>
-            <span>Action déjà réglée <b style={{ color: "#8888A0" }}>{fmt(agency.totals.action_settled)}</b></span>
-            <span>Position nette totale{" "}
-              <b style={{ color: agency.totals.net_position === null ? "#555568" : netColor(agency.totals.net_position) }}>
-                {agency.totals.net_position === null ? "incalculable" : fmt(agency.totals.net_position)}
-              </b>
-            </span>
-            {agency.totals.weeks_with_check_ko > 0 && (
-              <span style={{ color: "#F87171" }}>⚠️ {agency.totals.weeks_with_check_ko} semaine(s) avec un contrôle en échec</span>
-            )}
-          </div>
-
-          {/* Côte à côte tant que les deux tables tiennent vraiment (base de flex >
-              largeur minimale de chacune) ; en dessous elles s'empilent en pleine
-              largeur plutôt que de se serrer en scrollant chacune de son côté. */}
-          <div style={{ display: "flex", gap: 24, flexWrap: "wrap", alignItems: "flex-start" }}>
-            <div style={{ flex: "1 1 380px", minWidth: 0, overflowX: "auto" }}>
-              <div style={{ fontSize: 11, color: "#8888A0", fontWeight: 600, marginBottom: 6 }}>PAR SEMAINE</div>
-              <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 340 }}>
-                <thead><tr>
-                  <th style={TH}>Semaine</th>
-                  <th style={{ ...TH, textAlign: "right" }}>Rake</th>
-                  <th style={{ ...TH, textAlign: "right" }}>Commission</th>
-                  <th style={{ ...TH, textAlign: "right" }}>Joueurs</th>
-                  <th style={{ ...TH, textAlign: "right" }}>Contrôle</th>
-                </tr></thead>
-                <tbody>
-                  {agency.weeks.map(w => (
-                    <tr key={w.week_start} style={{ borderTop: "1px solid rgba(255,255,255,0.05)" }}>
-                      <td style={{ ...TD, fontWeight: 600 }}>{w.week_start}</td>
-                      <td style={{ ...TD, textAlign: "right" }}>{fmt(w.gross_rake)}</td>
-                      <td style={{ ...TD, textAlign: "right", fontWeight: 600, color: "#10B981" }}>{fmt(w.commission)}</td>
-                      <td style={{ ...TD, textAlign: "right", color: "#8888A0" }}>{w.players_count}</td>
-                      <td style={{ ...TD, textAlign: "right" }}>
-                        {w.check_ko > 0
-                          ? <span style={{ color: "#F87171" }}>⚠️ {w.check_ko}</span>
-                          : <span style={{ color: "#555568" }}>ok</span>}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-
-            <div style={{ flex: "1 1 500px", minWidth: 0, overflowX: "auto" }}>
-              <div style={{ fontSize: 11, color: "#8888A0", fontWeight: 600, marginBottom: 6 }}>
-                MA POSITION PAR JOUEUR
-              </div>
-              <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 470 }}>
-                <thead><tr>
-                  <th style={TH}>Joueur</th>
-                  <th style={{ ...TH, textAlign: "right" }}>Commission</th>
-                  <th style={{ ...TH, textAlign: "right" }}>Action à régler</th>
-                  <th style={{ ...TH, textAlign: "right" }}>Déjà réglé</th>
-                  <th style={{ ...TH, textAlign: "right" }}>Mouvements</th>
-                  <th style={{ ...TH, textAlign: "right" }}>Position</th>
-                </tr></thead>
-                <tbody>
-                  {agency.players.map(p => (
-                    <tr key={p.player_id} style={{ borderTop: "1px solid rgba(255,255,255,0.05)" }}>
-                      <td style={{ ...TD, fontWeight: 600 }}>{p.name}</td>
-                      <td style={{ ...TD, textAlign: "right", color: "#10B981" }}>{fmt(p.commission)}</td>
-                      <td style={{ ...TD, textAlign: "right",
-                                   color: p.action_unsettled === null ? "#555568" : netColor(p.action_unsettled) }}>
-                        {p.action_unsettled === null ? "—" : fmt(p.action_unsettled)}
-                      </td>
-                      <td style={{ ...TD, textAlign: "right", color: "#8888A0" }}>
-                        {Math.abs(p.action_settled) < 0.005 ? "—" : fmt(p.action_settled)}
-                      </td>
-                      <td style={{ ...TD, textAlign: "right", color: netColor(p.net_movements) }}>
-                        {fmt(p.net_movements)}
-                      </td>
-                      <td style={{ ...TD, textAlign: "right", fontWeight: 600,
-                                   color: p.net_position === null ? "#555568" : netColor(p.net_position) }}
-                          title={p.weeks_missing_winloss > 0
-                            ? `${p.weeks_missing_winloss} semaine(s) sans win/loss saisi`
-                            : "Positif = le joueur te doit"}>
-                        {p.net_position === null ? `— (${p.weeks_missing_winloss} sem.)` : fmt(p.net_position)}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </div>
-
-          {agency.totals.players_incomplete > 0 && (
-            <div style={{ fontSize: 11, color: "#F0B90B", marginTop: 10 }}>
-              {agency.totals.players_incomplete} joueur(s) sans win/loss complet — la position totale reste
-              incalculable tant qu'ils ne sont pas saisis. Un total partiel passerait pour un total.
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* ── Détail hebdo d'un joueur + saisie du win/loss ─────────────── */}
-      {detail && (
+  // ── Panneau de détail d'un joueur ──────────────────────────────────
+  //
+  // Extrait du JSX de retour pour être rendu DANS LE TABLEAU, sous la ligne
+  // du joueur (cf. le <tr> de dépliage). Il vivait auparavant tout en bas de
+  // la page : cliquer « Détail » ouvrait un panneau à des écrans de distance
+  // de la ligne cliquée. Même pattern que LedgerTable (KKPOKER / A5NUTS) :
+  // Fragment + <tr> conditionnel en colSpan.
+  //
+  // AUCUN changement de contenu : le bloc est déplacé tel quel.
+  const detailPanel = detail && (
         <div style={{ ...CARD, borderColor: "rgba(16,185,129,0.35)" }}>
           <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 4 }}>
             <div style={{ fontSize: 13, fontWeight: 600, color: "#E8E8EE" }}>
@@ -901,6 +499,444 @@ export default function NexaPokerClient({ currentWeek, today, chartWeeks, period
                  rake exclu {fmt(detail.blocked_weeks.gross_rake)}.</>
             )}
           </div>
+        </div>
+  );
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+      {/* Le bandeau « Saisir la semaine » a été retiré : il faisait doublon avec la
+          section de saisie en bas de page, que la page raccourcie met à portée de
+          molette. La table des joueurs est le haut de page. */}
+
+      {/* Conflits de lead : deux leads revendiquent le même joueur. Le funnel n'y
+          touche pas — il faut trancher à la main. */}
+      {anomalies.length > 0 && (
+        <div style={{ ...CARD, borderColor: "rgba(239,68,68,0.35)" }}>
+          <div style={{ fontSize: 13, fontWeight: 600, color: "#F87171", marginBottom: 4 }}>
+            ⚠️ {anomalies.length} conflit(s) de lead — deux leads pour un même joueur
+          </div>
+          <div style={{ fontSize: 12, color: "#8888A0", marginBottom: 10 }}>
+            Le funnel n'a rien modifié : il ne tranche pas à ta place. Décide quel lead
+            correspond réellement au joueur, et corrige le Member ID de l'autre.
+          </div>
+          <ul style={{ margin: "0 0 0 18px", fontSize: 12, color: "#E8E8EE" }}>
+            {anomalies.map(a => (
+              <li key={`${a.lead_id}-${a.other_lead_id}`} style={{ marginBottom: 4 }}>
+                Member ID <b>{a.member_id}</b> → joueur <b>{a.player_name}</b> (#{a.player_id}), déjà lié au
+                lead #{a.other_lead_id}{a.other_lead_handle ? ` (@${a.other_lead_handle})` : ""} ;
+                réclamé aussi par le lead #{a.lead_id}{a.lead_handle ? ` (@${a.lead_handle})` : ""}.
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {/* ── À réconcilier ─────────────────────────────────────────────── */}
+      {unrec.length > 0 && (
+        <div style={{ ...CARD, borderColor: "rgba(240,185,11,0.35)" }}>
+          <div style={{ fontSize: 13, fontWeight: 600, color: "#F0B90B", marginBottom: 4 }}>
+            ⚠️ {unrec.length} ligne(s) du report à réconcilier
+          </div>
+          <div style={{ fontSize: 12, color: "#8888A0", marginBottom: 12 }}>
+            Ces lignes ne sont rattachées à aucun joueur. Une fois rattachées, tout l'historique déjà
+            saisi les rejoint — aucune re-saisie.
+          </div>
+          <table style={{ width: "100%", borderCollapse: "collapse" }}>
+            <thead><tr>
+              <th style={TH}>Pseudo report</th><th style={TH}>Member ID</th><th style={TH}>Semaines</th>
+              <th style={TH}>Rake</th><th style={TH}>Commission</th><th style={TH}>Période</th><th style={TH} />
+            </tr></thead>
+            <tbody>
+              {unrec.map(u => (
+                <tr key={u.row_key} style={{ borderTop: "1px solid rgba(255,255,255,0.05)" }}>
+                  <td style={{ ...TD, fontWeight: 600 }}>{u.nickname}</td>
+                  <td style={TD}>{u.member_id ?? <span style={{ color: "#555568" }}>—</span>}</td>
+                  <td style={TD}>{u.weeks}</td>
+                  <td style={TD}>{fmt(u.total_rake)}</td>
+                  <td style={TD}>{fmt(u.total_commission)}</td>
+                  <td style={{ ...TD, color: "#8888A0" }}>{u.first_week} → {u.last_week}</td>
+                  <td style={{ ...TD, textAlign: "right" }}>
+                    {/* Le hint vient de resolveRows. Il PROPOSE, il n'applique rien. */}
+                    {u.hint_player_id !== null && (
+                      <span style={{ fontSize: 11, color: "#F0B90B", marginRight: 10 }}
+                            title="Candidat proposé d'après le pseudo. Rien n'est rattaché tant que tu ne valides pas.">
+                        candidat : {u.hint_player_name}
+                      </span>
+                    )}
+                    <button disabled={busy} onClick={() => setLinking({ row: u, target: String(u.hint_player_id ?? "") })}
+                            style={{ ...INPUT, cursor: "pointer", marginRight: 6, borderColor: "rgba(96,165,250,0.4)", color: "#60A5FA" }}>
+                      Rattacher
+                    </button>
+                    <button disabled={busy}
+                            onClick={() => setAdding({ nickname: u.nickname, member_id: u.member_id ?? "", telegram: "", pct: "0", week: currentWeek })}
+                            style={{ ...INPUT, cursor: "pointer", borderColor: "rgba(16,185,129,0.4)", color: "#34D399" }}>
+                      Créer le joueur
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {/* ── Graph des gains ──────────────────────────────────────────────
+          EN HAUT, juste sous les cartes KPI et les filtres de période : c'est la
+          vue d'ensemble, elle se lit AVANT le détail joueur par joueur. Alimenté
+          par le MÊME agrégat serveur que les cartes (getNexaDashboard), donc il
+          SUIT le filtre de période — le graph et les cartes ne peuvent pas
+          raconter deux périodes différentes. La vue Agence, elle, reste en
+          lifetime : c'est délibéré et dit dans son intitulé. */}
+      {chartWeeks.length > 0 && (
+        <div>
+          <NexaRevenueChart weeks={chartWeeks} />
+          <div style={{ fontSize: 10, color: "#555568", margin: "6px 2px 0" }}>
+            Période affichée : {periodLabel}. La vue Agence ci-dessous couvre, elle, tout l&apos;historique.
+          </div>
+        </div>
+      )}
+
+      {/* ── Joueurs ───────────────────────────────────────────────────── */}
+      <div style={CARD}>
+        <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 12 }}>
+          <div style={{ fontSize: 13, fontWeight: 600, color: "#E8E8EE" }}>
+            Joueurs NEXAPOKER {loading ? "…" : `(${players.length})`}
+          </div>
+          <div style={{ flex: 1 }} />
+          <span style={{ fontSize: 12, color: "#8888A0" }}>
+            Σ rake {fmt(totals.rake)} · Σ commission {fmt(totals.commission)}
+            {totals.alerts > 0 && <span style={{ color: "#F87171" }}> · {totals.alerts} semaine(s) en alerte</span>}
+          </span>
+          <button onClick={() => setShowExtra(v => !v)}
+                  title="Affiche ou masque Semaines / Rake / Buy-ins / Cash-outs"
+                  style={{ ...INPUT, cursor: "pointer", padding: "6px 11px", borderRadius: 999,
+                           background: showExtra ? "rgba(255,255,255,0.06)" : "#0B0D12",
+                           borderColor: showExtra ? "rgba(255,255,255,0.22)" : "rgba(255,255,255,0.1)",
+                           color: showExtra ? "#E8E8EE" : "#8888A0", fontWeight: 600 }}>
+            Σ Colonnes chiffres
+          </button>
+          <button disabled={busy}
+                  onClick={() => setAdding({ nickname: "", member_id: "", telegram: "", pct: "0", week: currentWeek })}
+                  style={{ padding: "8px 16px", borderRadius: 8, border: "none", background: "#10B981",
+                           color: "#0B0D12", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>
+            + Ajouter un joueur
+          </button>
+        </div>
+
+        <div style={{ overflowX: "auto" }}>
+          <table style={{ width: "100%", borderCollapse: "separate", borderSpacing: 0, minWidth: 700 }}>
+            <thead><tr>
+              {/* Joueur figé à gauche : la ligne reste identifiable quand la table
+                  scrolle, sur écran étroit. Parts d'action en tête, comme demandé. */}
+              <th style={{ ...P_TH, ...STICKY_TH }}>Joueur</th>
+              <th style={P_TH}>Identité</th>
+              <th style={P_TH}>Parts</th>
+              {showExtra && <th style={{ ...P_TH, textAlign: "right" }}>Semaines</th>}
+              {showExtra && <th style={{ ...P_TH, textAlign: "right" }}>Rake</th>}
+              <th style={{ ...P_TH, textAlign: "right" }}>Commission</th>
+              {showExtra && <th style={{ ...P_TH, textAlign: "right" }}>Buy-ins</th>}
+              {showExtra && <th style={{ ...P_TH, textAlign: "right" }}>Cash-outs</th>}
+              <th style={{ ...P_TH, textAlign: "right" }}>Net</th>
+              <th style={{ ...P_TH, textAlign: "right" }} />
+            </tr></thead>
+            <tbody>
+              {players.length === 0 && !loading && (
+                <tr><td colSpan={showExtra ? 10 : 6} style={{ ...P_TD, color: "#8888A0", padding: 20, textAlign: "center" }}>
+                  Aucun joueur rattaché. Utilise « Ajouter un joueur », ou réconcilie une ligne du report.
+                </td></tr>
+              )}
+              {players.map(p => {
+                // Le pseudo du report ne s'affiche que s'il apporte une information :
+                // répété à l'identique sous le nom, il ne fait que manger de la largeur.
+                const nickDiffers = p.report_nickname !== null
+                  && p.report_nickname.trim().toLowerCase() !== p.name.trim().toLowerCase();
+                // Le joueur déplié : sa ligne perd son fond neutre et garde son
+                // trait de séparation SEULEMENT si le panneau n'est pas dessous —
+                // sinon la ligne et son panneau se soudent visuellement, comme
+                // dans LedgerTable.
+                const isOpen = detail?.player_id === p.player_id;
+                return (
+                <Fragment key={p.player_id}>
+                <tr style={{ background: isOpen ? "rgba(16,185,129,0.06)" : undefined }}>
+                  <td style={{ ...P_TD, ...STICKY_TD, fontWeight: 600,
+                               borderBottom: isOpen ? "none" : undefined,
+                               background: isOpen ? "rgba(16,185,129,0.06)" : undefined }}>
+                    {p.name}
+                    {p.check_ko > 0 && (
+                      <span style={{ color: "#F87171", fontSize: 10, marginLeft: 5 }}
+                            title="Semaine(s) dont le recalcul ne retombe pas sur le report">
+                        ⚠️{p.check_ko}
+                      </span>
+                    )}
+                    {p.lead_id === null && (
+                      <div style={{ fontSize: 10, color: "#555568", fontWeight: 400 }} title="Arrivé hors funnel">hors funnel</div>
+                    )}
+                  </td>
+                  {/* Identité — Member ID et @Telegram tiennent sur deux lignes dans une
+                      seule colonne : trois colonnes pour trois identifiants du même
+                      joueur, c'était de la largeur dépensée sans information ajoutée. */}
+                  <td style={{ ...P_TD, whiteSpace: "normal" }}>
+                    <div style={{ fontFamily: "var(--font-jbmono), monospace", fontSize: 11.5,
+                                  color: p.member_id ? "#E8E8EE" : "#555568" }}>
+                      {p.member_id ?? "—"}
+                    </div>
+                    <div style={{ fontSize: 11, color: p.telegram_handle ? "#8888A0" : "#3A3A48" }}>
+                      {p.telegram_handle ?? "—"}
+                    </div>
+                    {nickDiffers && (
+                      <div style={{ fontSize: 10, color: "#555568" }} title="Pseudo sous lequel le report le désigne">
+                        report : {p.report_nickname}
+                      </div>
+                    )}
+                  </td>
+                  {/* Parts — action / rakeback côte à côte, chaque taux cliquable ouvre
+                      SON éditeur. L'assiette reste affichée : 40 % du rake brut et 40 %
+                      de la commission ne sont pas le même montant. */}
+                  <td style={{ ...P_TD, whiteSpace: "normal" }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 2 }}>
+                      <button disabled={busy}
+                              onClick={() => setEditing({ player: p, pct: String(p.action_pct), week: currentWeek })}
+                              title={p.action_since
+                                ? `Part d'action : ${p.action_pct} %, en vigueur depuis le ${p.action_since}`
+                                : "Part d'action — aucune période enregistrée"}
+                              style={{ background: "transparent", border: "1px solid rgba(255,255,255,0.12)",
+                                       borderRadius: 6, padding: "2px 7px", cursor: "pointer",
+                                       color: p.action_pct > 0 ? "#E8E8EE" : "#8888A0", fontSize: 12, fontWeight: 700 }}>
+                        {p.action_pct} %
+                      </button>
+                      <span style={{ color: "#3A3A48", fontSize: 11 }}>/</span>
+                      <button disabled={busy}
+                              onClick={() => setEditingRb({
+                                player: p, pct: String(p.rakeback_pct), basis: p.rakeback_basis,
+                                carry: p.rakeback_makeup_carry, week: currentWeek,
+                              })}
+                              title={p.rakeback_since
+                                ? `Rakeback : ${p.rakeback_pct} % sur ${BASIS_LABEL[p.rakeback_basis]}, en vigueur depuis le ${p.rakeback_since}`
+                                : `Rakeback — aucune période enregistrée, défaut global (settings) : ${p.rakeback_pct} % sur ${BASIS_LABEL[p.rakeback_basis]}`}
+                              style={{ background: "transparent",
+                                       border: `1px solid ${p.rakeback_is_default ? "rgba(255,255,255,0.06)" : "rgba(255,255,255,0.12)"}`,
+                                       borderRadius: 6, padding: "2px 7px", cursor: "pointer",
+                                       color: p.rakeback_is_default ? "#555568" : "#E8E8EE", fontSize: 12, fontWeight: 700 }}>
+                        {p.rakeback_pct} %
+                      </button>
+                    </div>
+                    <div style={{ fontSize: 10, color: "#555568", marginTop: 2 }}>
+                      action / rb {BASIS_LABEL[p.rakeback_basis]}{p.rakeback_is_default ? " (déf.)" : ""}
+                    </div>
+                  </td>
+                  {showExtra && <td style={{ ...P_TD, textAlign: "right" }}>{p.weeks_count || "—"}</td>}
+                  {showExtra && <td style={{ ...P_TD, textAlign: "right" }}>{fmt(p.total_rake)}</td>}
+                  <td style={{ ...P_TD, textAlign: "right", fontWeight: 600 }}>{fmt(p.total_commission)}</td>
+                  {showExtra && (
+                    <td style={{ ...P_TD, textAlign: "right", color: movementColor("deposit") }}>
+                      {isZeroAmount(p.deposited) ? "—" : fmt(p.deposited)}
+                    </td>
+                  )}
+                  {showExtra && (
+                    <td style={{ ...P_TD, textAlign: "right", color: movementColor("withdrawal") }}>
+                      {isZeroAmount(p.withdrawn) ? "—" : fmt(p.withdrawn)}
+                    </td>
+                  )}
+                  <td style={{ ...P_TD, textAlign: "right", fontWeight: 600,
+                               color: netColor(p.net_movements) }}
+                      title="Cash-outs − buy-ins. Convention du repo : dépôt rouge, retrait vert — un net négatif est dominé par les dépôts.">
+                    {Math.abs(p.net_movements) < 0.005 ? "—" : fmt(p.net_movements)}
+                  </td>
+                  {/* Un seul bouton pour les mouvements : quatre boutons par ligne
+                      pesaient plus large que les chiffres qu'ils accompagnaient. */}
+                  <td style={{ ...P_TD, textAlign: "right" }}>
+                    <button disabled={busy}
+                            onMouseDown={e => e.stopPropagation()}
+                            onClick={e => {
+                              const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+                              setMenu(menu?.player.player_id === p.player_id
+                                ? null
+                                : { player: p, x: r.right, y: r.bottom + 4 });
+                            }}
+                            style={{ ...INPUT, cursor: "pointer", padding: "3px 8px", marginRight: 4,
+                                     borderColor: "rgba(96,165,250,0.4)", color: "#60A5FA" }}>
+                      + Mouvement ▾
+                    </button>
+                    {/* Bascule : re-cliquer replie. Un seul joueur ouvert à la
+                        fois — openDetail écrase `detail`, donc l'ouverture d'un
+                        autre referme celui-ci sans geste supplémentaire. */}
+                    <button disabled={busy || detailBusy}
+                            onClick={() => { if (isOpen) setDetail(null); else void openDetail(p); }}
+                            style={{ ...INPUT, cursor: "pointer", padding: "3px 8px",
+                                     borderColor: "rgba(16,185,129,0.4)", color: "#10B981",
+                                     background: isOpen ? "rgba(16,185,129,0.14)" : undefined,
+                                     fontWeight: isOpen ? 700 : undefined }}>
+                      {isOpen ? "Replier ▲" : "Détail ▼"}
+                    </button>
+                  </td>
+                </tr>
+                {/* Le panneau, DANS le tableau, juste sous la ligne cliquée. */}
+                {isOpen && (
+                  <tr>
+                    <td colSpan={showExtra ? 10 : 6}
+                        style={{ padding: "0 10px 12px", background: "rgba(16,185,129,0.06)",
+                                 borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
+                      {detailPanel}
+                    </td>
+                  </tr>
+                )}
+                </Fragment>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {/* ── Saisie hebdomadaire des win/loss ────────────────────────────
+          Sous la table des joueurs : c'est le geste du lundi, il se fait en
+          regardant les joueurs. Il alimente la part d'action, donc les cartes et
+          le graph — d'où le router.refresh() qu'il déclenche en fin de saisie. */}
+      <WinlossGrid />
+
+      {/* ── Édition de la part d'action ───────────────────────────────── */}
+      {editing && (
+        <div style={{ ...CARD, borderColor: "rgba(96,165,250,0.35)" }}>
+          <div style={{ fontSize: 13, fontWeight: 600, color: "#E8E8EE", marginBottom: 4 }}>
+            Part d'action — {editing.player.name}
+          </div>
+          <div style={{ fontSize: 12, color: "#8888A0", marginBottom: 12 }}>
+            La période en cours sera close la semaine précédente et une nouvelle démarrera à la semaine
+            choisie. L'historique n'est jamais modifié.
+            {editing.player.action_since && <> Période actuelle : {editing.player.action_pct} % depuis le {editing.player.action_since}.</>}
+          </div>
+          <div style={{ display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
+            <label style={{ fontSize: 12, color: "#8888A0", display: "flex", gap: 6, alignItems: "center" }}>
+              Part d'action %
+              <input value={editing.pct} inputMode="decimal" style={{ ...INPUT, width: 80, textAlign: "right" }}
+                     onChange={e => setEditing({ ...editing, pct: e.target.value })} />
+            </label>
+            <label style={{ fontSize: 12, color: "#8888A0", display: "flex", gap: 6, alignItems: "center" }}>
+              À effet du (lundi)
+              <input type="date" value={editing.week} style={INPUT}
+                     onChange={e => setEditing({ ...editing, week: e.target.value })} />
+            </label>
+            <button disabled={busy} onClick={async () => {
+              const ok = await post("/api/nexapoker/action-share",
+                { player_id: editing.player.player_id, pct: parseFloat(editing.pct.replace(",", ".")), start_week: editing.week },
+                j => `Part d'action enregistrée${j.closed_previous ? ` — période précédente close au ${j.closed_previous}` : ""}.`);
+              if (ok) setEditing(null);
+            }} style={{ padding: "8px 16px", borderRadius: 8, border: "none", background: "#10B981", color: "#0B0D12", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>
+              Enregistrer
+            </button>
+            <button onClick={() => setEditing(null)} style={{ ...INPUT, cursor: "pointer", color: "#8888A0" }}>Annuler</button>
+          </div>
+        </div>
+      )}
+
+
+
+      {/* ── Vue agence : la rentrée hebdo, et ma position par joueur ──── */}
+      {agency && agency.weeks.length > 0 && (
+        <div style={CARD}>
+          <div style={{ fontSize: 13, fontWeight: 600, color: "#E8E8EE", marginBottom: 4 }}>
+            Agence — ce que NEXAPOKER rapporte
+          </div>
+          <div style={{ fontSize: 12, color: "#8888A0", marginBottom: 12 }}>
+            La commission d'affiliation est de l'argent reçu : elle est comptée même sur une semaine dont
+            le contrôle a échoué. C'est la colonne « contrôle » qui signale l'écart, pas une disparition
+            silencieuse du chiffre.
+          </div>
+
+          <div style={{ display: "flex", gap: 20, flexWrap: "wrap", marginBottom: 14, fontSize: 12, color: "#8888A0" }}>
+            <span>Rake généré <b style={{ color: "#E8E8EE" }}>{fmt(agency.totals.gross_rake)}</b></span>
+            <span>Commission encaissée <b style={{ color: "#10B981", fontSize: 14 }}>{fmt(agency.totals.commission)}</b></span>
+            <span>Action déjà réglée <b style={{ color: "#8888A0" }}>{fmt(agency.totals.action_settled)}</b></span>
+            <span>Position nette totale{" "}
+              <b style={{ color: agency.totals.net_position === null ? "#555568" : netColor(agency.totals.net_position) }}>
+                {agency.totals.net_position === null ? "incalculable" : fmt(agency.totals.net_position)}
+              </b>
+            </span>
+            {agency.totals.weeks_with_check_ko > 0 && (
+              <span style={{ color: "#F87171" }}>⚠️ {agency.totals.weeks_with_check_ko} semaine(s) avec un contrôle en échec</span>
+            )}
+          </div>
+
+          {/* Côte à côte tant que les deux tables tiennent vraiment (base de flex >
+              largeur minimale de chacune) ; en dessous elles s'empilent en pleine
+              largeur plutôt que de se serrer en scrollant chacune de son côté. */}
+          <div style={{ display: "flex", gap: 24, flexWrap: "wrap", alignItems: "flex-start" }}>
+            <div style={{ flex: "1 1 380px", minWidth: 0, overflowX: "auto" }}>
+              <div style={{ fontSize: 11, color: "#8888A0", fontWeight: 600, marginBottom: 6 }}>PAR SEMAINE</div>
+              <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 340 }}>
+                <thead><tr>
+                  <th style={TH}>Semaine</th>
+                  <th style={{ ...TH, textAlign: "right" }}>Rake</th>
+                  <th style={{ ...TH, textAlign: "right" }}>Commission</th>
+                  <th style={{ ...TH, textAlign: "right" }}>Joueurs</th>
+                  <th style={{ ...TH, textAlign: "right" }}>Contrôle</th>
+                </tr></thead>
+                <tbody>
+                  {agency.weeks.map(w => (
+                    <tr key={w.week_start} style={{ borderTop: "1px solid rgba(255,255,255,0.05)" }}>
+                      <td style={{ ...TD, fontWeight: 600 }}>{w.week_start}</td>
+                      <td style={{ ...TD, textAlign: "right" }}>{fmt(w.gross_rake)}</td>
+                      <td style={{ ...TD, textAlign: "right", fontWeight: 600, color: "#10B981" }}>{fmt(w.commission)}</td>
+                      <td style={{ ...TD, textAlign: "right", color: "#8888A0" }}>{w.players_count}</td>
+                      <td style={{ ...TD, textAlign: "right" }}>
+                        {w.check_ko > 0
+                          ? <span style={{ color: "#F87171" }}>⚠️ {w.check_ko}</span>
+                          : <span style={{ color: "#555568" }}>ok</span>}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            <div style={{ flex: "1 1 500px", minWidth: 0, overflowX: "auto" }}>
+              <div style={{ fontSize: 11, color: "#8888A0", fontWeight: 600, marginBottom: 6 }}>
+                MA POSITION PAR JOUEUR
+              </div>
+              <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 470 }}>
+                <thead><tr>
+                  <th style={TH}>Joueur</th>
+                  <th style={{ ...TH, textAlign: "right" }}>Commission</th>
+                  <th style={{ ...TH, textAlign: "right" }}>Action à régler</th>
+                  <th style={{ ...TH, textAlign: "right" }}>Déjà réglé</th>
+                  <th style={{ ...TH, textAlign: "right" }}>Mouvements</th>
+                  <th style={{ ...TH, textAlign: "right" }}>Position</th>
+                </tr></thead>
+                <tbody>
+                  {agency.players.map(p => (
+                    <tr key={p.player_id} style={{ borderTop: "1px solid rgba(255,255,255,0.05)" }}>
+                      <td style={{ ...TD, fontWeight: 600 }}>{p.name}</td>
+                      <td style={{ ...TD, textAlign: "right", color: "#10B981" }}>{fmt(p.commission)}</td>
+                      <td style={{ ...TD, textAlign: "right",
+                                   color: p.action_unsettled === null ? "#555568" : netColor(p.action_unsettled) }}>
+                        {p.action_unsettled === null ? "—" : fmt(p.action_unsettled)}
+                      </td>
+                      <td style={{ ...TD, textAlign: "right", color: "#8888A0" }}>
+                        {Math.abs(p.action_settled) < 0.005 ? "—" : fmt(p.action_settled)}
+                      </td>
+                      <td style={{ ...TD, textAlign: "right", color: netColor(p.net_movements) }}>
+                        {fmt(p.net_movements)}
+                      </td>
+                      <td style={{ ...TD, textAlign: "right", fontWeight: 600,
+                                   color: p.net_position === null ? "#555568" : netColor(p.net_position) }}
+                          title={p.weeks_missing_winloss > 0
+                            ? `${p.weeks_missing_winloss} semaine(s) sans win/loss saisi`
+                            : "Positif = le joueur te doit"}>
+                        {p.net_position === null ? `— (${p.weeks_missing_winloss} sem.)` : fmt(p.net_position)}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          {agency.totals.players_incomplete > 0 && (
+            <div style={{ fontSize: 11, color: "#F0B90B", marginTop: 10 }}>
+              {agency.totals.players_incomplete} joueur(s) sans win/loss complet — la position totale reste
+              incalculable tant qu'ils ne sont pas saisis. Un total partiel passerait pour un total.
+            </div>
+          )}
         </div>
       )}
 
