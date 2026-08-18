@@ -33,8 +33,9 @@ These rules override default behavior. Violation = stop and report.
 
 ## BEFORE CLAIMING "WORKING" / "LIVE" / "DEPLOYED"
 Mandatory sequence — no shortcuts:
-1. Code change committed + `railway up --ci --detach`
-2. ONE check that deploy landed (single curl to `/api/version`, max 60s wait, no loop)
+1. Code change committed + `railway up --ci` **en bloquant**, attendu jusqu'à `Deploy complete`
+2. ONE check that deploy landed — `/api/version` rend `commit: "local-dev"` avec `railway up`,
+   donc c'est `built_at` qui fait foi, pas le SHA. Single curl, no loop.
 3. Runtime verify the CHANGED BEHAVIOR end-to-end (curl real endpoint, hit webhook with test payload, etc.)
 4. `railway logs 2>&1 | tail -50` — scan for errors related to the change
 5. THEN report "verified working" with the actual command output pasted as evidence
@@ -52,7 +53,9 @@ No exceptions. No "this is just a small change". Run money-auditor and paste its
 
 ## ESCALATION — STOP IMMEDIATELY when:
 - Same endpoint returns the same result on 2 consecutive calls
-- Deploy hasn't propagated 60s after `railway up --ci --detach`
+- `railway up --ci` rend une erreur réseau, OU `railway status` montre `BUILDING` +
+  `deploymentStopped=true` sans erreur dans les logs → connexion CLI perdue, cf. § RAILWAY
+  DEPLOY RULES. Ne pas déboguer le code : demander à Baki et relancer tel quel.
 - Any test fails (DO NOT auto-retry — report and ask)
 - FK / CHECK / UNIQUE constraint error during DB op
 - Unexpected schema state (column missing, table missing, type mismatch)
@@ -81,11 +84,43 @@ La règle couvre les deux, sans exception.
 Ce qui NE déploie PAS, et ne demande donc pas de feu vert : `git commit`, et `git push` sur une
 branche autre que `main`. Un push sur `main` déclenche le trigger github → demander avant.
 
+### 🔌 `railway up` SE FAIT EN MODE BLOQUANT — jamais `--detach`
+
+**Commande : `railway up --ci`**, sans `--detach`, et on la laisse tourner jusqu'à
+`Deploy complete`. En `--ci`, le build est lié à la SESSION CLI : si la connexion tombe,
+Railway **annule le build**. En mode détaché la session se ferme immédiatement — d'où des
+annulations à répétition. (Constat Baki : 3 déploiements annulés sur 5, dont 2 mesurés les
+2026-08-17 et 18. `npm run deploy` est concerné : `scripts/deploy.sh` appelle
+`railway up --ci --detach` puis sonde `/api/version` 30 fois pour rien.)
+
+**Le symptôme, à reconnaître du premier coup d'œil :**
+
+```
+railway status --json  →  status=BUILDING, deploymentStopped=true
+railway logs --build <id>  →  s'arrête net, AUCUNE erreur
+curl /api/version  →  toujours la version précédente
+```
+
+`BUILDING` + `stopped=true` + **aucune erreur dans les logs** = **connexion CLI perdue**.
+Ce n'est PAS un problème de code, ce n'est PAS un build cassé : c'est la même commande à
+relancer telle quelle, en bloquant. Ne pas chercher la cause dans le diff, ne pas
+« corriger » quoi que ce soit avant d'avoir retenté une fois.
+
+Une vraie erreur de build, elle, laisse une trace explicite dans `railway logs --build`
+(erreur TypeScript, module introuvable, OOM). Distinguer les deux avant de conclure.
+
+Le reste des règles ne change pas : le feu vert explicite de Baki reste obligatoire, et le
+plafond d'un déploiement par tâche aussi — une annulation par perte de connexion se
+relance sur son accord, pas de sa propre initiative.
+
 ### Le reste
 - Git auto-deploy is UNRELIABLE on this project (silently skips commits). Quand Baki a donné son
-  feu vert, utiliser `railway up --ci --detach` pour forcer.
+  feu vert, utiliser `railway up --ci` (bloquant, cf. ci-dessus) pour forcer.
 - NEVER ask the user to check the Railway dashboard. Use Railway CLI from terminal.
-- After `railway up --ci --detach`: ONE curl check on `/api/version`, accept the result. Do not loop.
+- Après `Deploy complete` : `railway up` envoie l'arbre LOCAL sans métadonnée git, donc
+  `/api/version` rend `commit: "local-dev"` — le SHA n'y est PAS vérifiable. Se fier à
+  `built_at`, puis vérifier le COMPORTEMENT changé (logs de migration, endpoint, écran).
+  ONE curl check, accept the result. Do not loop.
 
 ## ONE PHASE AT A TIME
 User gives ONE phase prompt. You execute. You report. You STOP. You wait for the next prompt.
