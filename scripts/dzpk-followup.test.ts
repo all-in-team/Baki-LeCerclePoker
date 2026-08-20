@@ -103,8 +103,11 @@ const SEND_HOUR = FOLLOWUP_UTC_HOUR_MIN; // dans la fenêtre d'envoi
 
 async function run() {
   console.log("\nvariante d'accueil — déterministe, et le texte suit");
+  // Test A/B gelé le 20/08/2026 : 100 % des nouveaux leads reçoivent A
+  // (A joignait à 19 % contre 11 % pour B sur 73 leads). Les assertions
+  // reflètent l'état gelé ; reprendre la parité si le test est relancé.
   eq("id impair → A", pickWelcomeVariant(1), "A");
-  eq("id pair → B", pickWelcomeVariant(2), "B");
+  eq("id pair → A (test gelé)", pickWelcomeVariant(2), "A");
   {
     process.env.DZPK_CLUB_INVITE_URL = "https://t.me/+club";
     const a = buildWelcome("A");

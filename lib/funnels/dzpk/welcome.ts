@@ -15,15 +15,18 @@ import {
 /**
  * Variante d'accueil du test A/B (étape 5 de l'optimisation).
  *
- * "A" = copie historique, "B" = angle observation (cf. copy.ts). La variante
- * est DÉRIVÉE de la parité de l'id du lead — déterministe, équilibrée à ~50/50,
- * et rejouable : un re-/start retombe sur la même variante, donc un lead ne
- * voit jamais les deux textes.
+ * "A" = copie historique, "B" = angle observation (cf. copy.ts).
+ *
+ * TEST GELÉ le 20/08/2026 — bascule 100 % A (décision Hugo) : sur 73 leads
+ * exposés, A convertissait au join à 19 % (7/36) contre 11 % (4/37) pour B.
+ * Les leads B existants GARDENT leur variante (relances cohérentes) : seule
+ * l'affectation des NOUVEAUX leads est figée. Pour reprendre le test, rétablir
+ * `return leadId % 2 === 0 ? "B" : "A";`.
  */
 export type WelcomeVariant = "A" | "B";
 
-export function pickWelcomeVariant(leadId: number): WelcomeVariant {
-  return leadId % 2 === 0 ? "B" : "A";
+export function pickWelcomeVariant(_leadId: number): WelcomeVariant {
+  return "A";
 }
 
 export interface SendResult {
