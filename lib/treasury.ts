@@ -15,6 +15,7 @@ export const TREASURY_WALLETS: { label: string; address: string }[] = [
   { label: "Hugo short gasfee", address: "TJwq47V9oRMnngv49V66A1QhhT9LfADc4o" },
   { label: "Général", address: "TBtcUxCFDUEXKS1ypPQ18U6CQmfFcK2itf" },
   { label: "Général gas fee", address: "TNBf7UHvahKbodkH8PEtwFoQk6xMLSAvNd" },
+  { label: "Baki général", address: "TL3WPSWwxmzF3ziRko2BNU4WKFBQZh53yo" },
   { label: "Baki gas fee", address: "TTDEX1XimZsBTP6fYbaJVipCXWp3xvNZjN" },
 ];
 
