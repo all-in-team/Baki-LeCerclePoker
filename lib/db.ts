@@ -19,6 +19,9 @@ import {
 } from "./funnels/dzpk/schema";
 // Module pur (aucun import) : utilisable depuis une migration sans cycle.
 import { nameKey as dzpkNameKey } from "./funnels/dzpk/name-key";
+// Module pur (aucun import) : le DDL du suivi multi-comptes « AK multi-Account »,
+// partagé avec scripts/pool-engine.test.ts pour que les tests exercent la même SQL.
+import { POOL_SCHEMA_SQL, POOL_GAME_INSERT_SQL, POOL_MIGRATION_V1 } from "./pool/schema";
 
 // Quarantaine des mouvements wallet — cf. la migration en bas de ce fichier.
 export const WALLET_TX_QUARANTINE_V1 = "add_wallet_tx_quarantine_v1";
@@ -3897,5 +3900,27 @@ function initSchema(db: Database.Database) {
     }
   } catch (err: any) {
     console.error(`[MIGRATION:${WALLET_TX_QUARANTINE_V1}] FAILED (sera rejouée au prochain boot):`, err.message);
+  }
+
+  // ── Suivi multi-comptes « AK multi-Account » (GO Baki 2026-09-13) ───────────
+  //
+  // Nouvelle game, réglée sur le POOL des soldes du joueur (main + N comptes ×
+  // {AK, OkPay}), pas sur des transactions : tout passe par OkPay, aucune ligne
+  // TRON, donc aucun recoupement avec le P&L wallet des rooms existantes. Le
+  // modèle complet et ses invariants sont en tête de lib/pool/schema.ts.
+  //
+  // Marqueur posé APRÈS le db.exec : le poser avant le rendrait persistant malgré
+  // un échec de création, et la migration serait sautée pour toujours en
+  // annonçant l'inverse (leçon add_nexa_bankroll_weeks_v1).
+  try {
+    const already = db.prepare(`SELECT 1 FROM _applied_fixes WHERE name = ?`).get(POOL_MIGRATION_V1);
+    if (!already) {
+      db.exec(POOL_SCHEMA_SQL);
+      db.exec(POOL_GAME_INSERT_SQL);
+      db.prepare(`INSERT OR IGNORE INTO _applied_fixes (name) VALUES (?)`).run(POOL_MIGRATION_V1);
+      console.log(`[MIGRATION] ${POOL_MIGRATION_V1} applied`);
+    }
+  } catch (err: any) {
+    console.error(`[MIGRATION:${POOL_MIGRATION_V1}] FAILED (sera rejouée au prochain boot):`, err.message);
   }
 }
