@@ -179,6 +179,38 @@ export function relinkLogOn(db: DB, memberId?: string): RelinkLogRow[] {
   return rows.map(r => ({ ...r, weeks: JSON.parse(r.weeks) as string[] }));
 }
 
+/**
+ * Ajout MANUEL d'un joueur depuis la page XPoker : ligne players + (optionnel)
+ * premier Player ID via linkMemberIdOn + (optionnel) premier deal. Une seule
+ * transaction : rien à moitié. Le nom n'est jamais un critère d'identité — deux
+ * joueurs peuvent porter le même nom, c'est le Player ID qui identifie.
+ */
+export function createXpokerPlayerOn(
+  db: DB, args: { name: string; telegram_handle?: string | null; member_id?: string | null; nickname?: string | null; action_pct?: number | null; rb_pct?: number | null; start_week?: string | null },
+): { ok: true; player_id: number } | { ok: false; error: string } {
+  const name = String(args.name ?? "").trim();
+  if (!name) return { ok: false, error: "Nom requis" };
+  try {
+    const run = db.transaction(() => {
+      const pid = Number(db.prepare(`INSERT INTO players (name, telegram_handle) VALUES (?, ?)`).run(name, args.telegram_handle?.trim() || null).lastInsertRowid);
+      if (args.member_id && String(args.member_id).trim()) {
+        const l = linkMemberIdOn(db, { player_id: pid, member_id: String(args.member_id), nickname: args.nickname ?? null });
+        if (!l.ok) throw new Error(l.error);
+      }
+      if (args.action_pct !== null && args.action_pct !== undefined) {
+        const d = setDealOn(db, { player_id: pid, action_pct: args.action_pct, rb_pct: args.rb_pct ?? 0, start_week: args.start_week ?? mondayOf(new Date().toISOString().slice(0, 10)) });
+        if (!d.ok) throw new Error(d.error ?? "deal refusé");
+      }
+      return pid;
+    });
+    return { ok: true, player_id: run() };
+  } catch (e: any) { return { ok: false, error: e?.message ?? String(e) }; }
+}
+
+function mondayOf(iso: string): string {
+  const d = new Date(iso + "T00:00:00Z"); d.setUTCDate(d.getUTCDate() - ((d.getUTCDay() + 6) % 7)); return d.toISOString().slice(0, 10);
+}
+
 /** Archive (soft) un Player ID : l'historique reste, un import futur sous cet ID repart en réconciliation. */
 export function archiveAccountOn(db: DB, accountId: number, playerId: number): { ok: boolean; error?: string } {
   const gid = xpokerGameIdOn(db);

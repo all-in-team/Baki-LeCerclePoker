@@ -44,6 +44,9 @@ const ROOMS: NavItem[] = [
   { href: "/a5nuts/pnl", label: "A5NUTS", icon: Wallet },
   { href: "/aks/pnl", label: "AKS/OK POKER", icon: Wallet },
   { href: "/nexapoker", label: "NEXAPOKER", icon: Wallet },
+  // XPoker Twd : room réglée EN CHIPS par le club (sheet hebdo), agence
+  // dépositaire des jetons — page unique /xpoker (lib/games/xpoker/schema.ts).
+  { href: "/xpoker", label: "XPoker Twd", icon: Wallet },
 ];
 
 const GROUPS: NavGroup[] = [
