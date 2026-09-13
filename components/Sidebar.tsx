@@ -44,6 +44,9 @@ const ROOMS: NavItem[] = [
   { href: "/a5nuts/pnl", label: "A5NUTS", icon: Wallet },
   { href: "/aks/pnl", label: "AKS/OK POKER", icon: Wallet },
   { href: "/nexapoker", label: "NEXAPOKER", icon: Wallet },
+  // AK multi-Account : règlement sur le POOL des soldes (main OkPay + N comptes), pas
+  // sur des transactions. Cible du pivot AKS (archivage à venir, après solde).
+  { href: "/ak-multi", label: "AK MULTI", icon: Wallet },
 ];
 
 const GROUPS: NavGroup[] = [

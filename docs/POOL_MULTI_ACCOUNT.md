@@ -99,8 +99,16 @@ en interne (jamais l'heure locale du serveur — Railway ≠ Mac). Le fuseau ré
   GO SOUS RÉSERVE (R1 une ligne agence ne date qu'un règlement — appliqué + index unique ;
   R4 veille tolérée — appliqué). Ces deux derniers correctifs sont postérieurs au dernier
   passage de l'auditeur : couverts par tests (section 8), pas ré-audités.
-- **3 — handler bot** (message OkPay transféré, v1) + écran `app/ak-multi/pool/…` +
-  textarea de secours. Captures réelles avant commit.
+- **3 — FAIT** : handler bot `lib/pool/okpay-forward.ts` (branché dans le webhook AVANT
+  funnels et sessions ; propriétaires et joueurs connus seulement ; réponse : wallet,
+  propriétaire, lignes nouvelles/connues, dernier solde, état de la chaîne, règlements
+  résolus), écran `/ak-multi` (`app/ak-multi/`, routes `app/api/ak-multi/*` fines,
+  `now` serveur en heure murale via `lib/pool/clock.ts`), textarea de secours, entrée
+  sidebar, hub `/payments` : date obligatoire (« entre dans le calcul ») pour AK multi.
+  Vérifié en local sur base de test : preview 850,12 / −149,88 / −44,96, lock, markPaid
+  depuis le hub → mouvement `in 44.96` à clôture + 1 s en précision jour, blocker ±1 jour
+  à la clôture suivante, message réel ingéré via le webhook (5 lignes, wallet agence).
+  Non vérifié : la réponse Telegram du bot (pas de token en local).
 - **Archivage AKS** : phase séparée, APRÈS inventaire de ce qui reste ouvert (tx non
   réglées, règlements `locked`, soldes ≠ 0) — masquer, jamais supprimer ; désarchivage =
   `UPDATE games SET status='active'`, sans migration. Aucun report de solde AKS → pool.
@@ -120,6 +128,18 @@ Issu des trois passes d'audit de la phase 2 (2026-09-13) :
   `paid_before_close` en rouge : la période réglée est surévaluée, à traiter à la main.
 - Refus B1 (« wallet maintenant … ») et B4 (« main portait X ») : afficher le chemin
   (détacher / vider vers la nouvelle / clôturer à 0).
+- **R1-b** (4ᵉ passe) : un mouvement `declared` créé depuis une ligne agence (prêt, avance)
+  devrait porter `okpay_line_id` pour que `NOT IN` l'exclue ; et `double_declared` doit se
+  taire si le `declared` porte une ligne. Aujourd'hui : montants égaux + page partielle →
+  le règlement peut se résoudre sur la ligne du prêt (±13,50 entre deux périodes, signalé
+  par `resolution_ambiguous` + `double_declared` — ne PAS supprimer la déclaration).
+- **R1-d** : à montants égaux, l'attribution des lignes entre deux règlements peut être
+  échangée — neutre en argent, à savoir en lecture d'audit.
+- Assertion nommée « `NOT IN` retiré → le hook jette UNIQUE » (le harnais meurt au lieu
+  d'asserter).
+- **Fuseau OkPay** : `lib/pool/clock.ts` suppose Europe/Paris (heure du téléphone) pour
+  `now`. Le mismatch d'hydratation vu en local sur `/ak-multi` vient d'une extension
+  navigateur (`bis_skin_checked`), pas de la page.
 
 - `now` passé à `previewPoolPeriodOn` doit être en **heure murale OkPay** (même convention que
   `closed_at`) — pas `new Date()` serveur UTC. Fuseau OkPay à confirmer sur un message
