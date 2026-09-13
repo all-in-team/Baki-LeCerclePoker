@@ -669,12 +669,20 @@ export default function PaymentsClient({
                     {/* Net compensé toutes rooms — Σ signée de montants déjà figés */}
                     <span style={{ display: "inline-flex", flexDirection: "column", alignItems: "flex-end", gap: 1 }}
                       title="Solde net toutes rooms compensées, sur les règlements lockés non payés">
-                      <span style={{ fontSize: 15, fontWeight: 700, color: nd.color, fontVariantNumeric: "tabular-nums" }}>
-                        {Math.abs(g.net_usdt) < ZERO ? "0,00" : agencySigned(g.net_usdt)} USDT
-                      </span>
-                      <span style={{ fontSize: 10, color: nd.color, opacity: 0.85 }}>
-                        net compensé · {nd.label}
-                      </span>
+                      {/* Un joueur qui n'a QUE des règlements en chips n'a pas un net USDT « équilibré » :
+                          il n'a pas de net USDT du tout. Dire 0,00 « équilibré » serait un faux message. */}
+                      {g.native_count === g.count ? (
+                        <span style={{ fontSize: 13, fontWeight: 700, color: "#EC4899" }}>rien en USDT</span>
+                      ) : (
+                        <>
+                          <span style={{ fontSize: 15, fontWeight: 700, color: nd.color, fontVariantNumeric: "tabular-nums" }}>
+                            {Math.abs(g.net_usdt) < ZERO ? "0,00" : agencySigned(g.net_usdt)} USDT
+                          </span>
+                          <span style={{ fontSize: 10, color: nd.color, opacity: 0.85 }}>
+                            net compensé · {nd.label}
+                          </span>
+                        </>
+                      )}
                       {g.native_count > 0 && (
                         <span style={{ fontSize: 10, color: "#EC4899" }} title="Les règlements en chips ne se compensent jamais avec les USDT : ce sont des lignes à part.">
                           + {g.native_count} en chips (XPoker), à part

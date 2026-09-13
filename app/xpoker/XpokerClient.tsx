@@ -304,9 +304,12 @@ function SettlePanel({ p, rate, onChanged }: { p: XpokerDashboardPlayer; rate: n
       {settleable.length > 0 && (
         <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
           <span style={{ fontSize: 13 }}>
-            {chosen.length} semaine(s) → <b><Chips n={chosen.length ? due : null} rate={rate} sign /></b>
+            {chosen.length === 0
+              ? <span style={{ color: MUTED }}>coche une ou plusieurs semaines</span>
+              : <>{chosen.length} semaine(s) → <b style={{ fontSize: 15, color: Math.abs(due) < EPS ? MUTED : due > 0 ? GREEN : RED, fontVariantNumeric: "tabular-nums" }}>{signed(due)} chips</b></>}
             {chosen.length > 0 && <span style={{ fontSize: 11, fontWeight: 700, marginLeft: 6, color: Math.abs(due) < EPS ? MUTED : due > 0 ? GREEN : RED }}>{dueLabel(due)}</span>}
-            {chosen.length > 0 && <span style={{ fontSize: 10, color: MUTED }}> (≈ {signed(dueUsd)} USD aux taux figés)</span>}
+            {/* Équivalent aux taux FIGÉS de chaque semaine — le même que portera le règlement. */}
+            {chosen.length > 0 && <span style={{ fontSize: 10, color: MUTED }}> (≈ {signed(dueUsd)} USD aux taux figés — affichage)</span>}
           </span>
           <input style={{ ...input, width: 200 }} placeholder="note (optionnel)" value={notes} onChange={e => setNotes(e.target.value)} />
           <Btn size="sm" onClick={lock} disabled={busy || chosen.length === 0}>Verrouiller le règlement</Btn>
