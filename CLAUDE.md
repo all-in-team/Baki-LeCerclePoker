@@ -166,6 +166,7 @@ Internal ops + accounting tool for a single-operator poker affiliation business 
 - **Domain glossary (READ FIRST when touching balance / wallet / report code)** → `docs/DOMAIN.md`
 - Réserves du sélecteur de période /players (lifetime indicatif, custom en UTC) → `docs/PLAYERS_PERIOD_RESERVES.md`
 - AK multi-Account (règlement sur le pool des soldes, OkPay, §4 « les règlements traversent le pool ») → `lib/pool/*` · doc `docs/POOL_MULTI_ACCOUNT.md`
+- XPoker Twd (room réglée EN CHIPS par le club, agence dépositaire des jetons, deal hors `player_game_deals`, hors compensation du hub) → `lib/games/xpoker/*` · doc `docs/XPOKER.md`
 
 ## Domain — minimum mental model
 
