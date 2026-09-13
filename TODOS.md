@@ -44,6 +44,16 @@ Deferred work from /plan-ceo-review (2026-04-28).
   `getPlayerWalletStats` (`lib/queries.ts:806-808`) applique `action_pct` à tout mouvement,
   donc fabrique un `my_pnl` à partir d'un versement de règlement. Même geste à faire.
 
+### `add_pool_settlement_v1` en attente de déploiement depuis `main` — tout `railway up` la joue
+- **Constat (rejeu XPoker sur copie prod, 2026-09-13) :** `_applied_fixes` prod = 111 ; un boot
+  sur `main` passe à 113 — `add_pool_settlement_v1` (AK multi-Account, `lib/pool/schema.ts`)
+  n'est pas en prod. Le prochain déploiement de `main`, quel que soit le chantier, l'applique.
+- **Inerte ?** Oui : 6 `CREATE TABLE IF NOT EXISTS` + `INSERT OR IGNORE` d'une ligne `games`
+  (`AK multi-Account`, active), FK vers des tables existantes, aucun ALTER/DROP/UPDATE, marqueur
+  posé après le corps, rejouable. Aucune route ni page ne lit ces tables sur `main`
+  (seul `lib/pool/okpay-parse.ts`, non branché). Seul effet visible : la nouvelle ligne `games`
+  apparaît dans les sélecteurs génériques (fiche joueur, /crm/games, broadcast bot).
+
 ### SQL libre sur les tables d'argent — `db-diagnostic` (P0) et `query_db` (à cadrer)
 - **`app/api/admin/db-diagnostic/route.ts`** : hors auth, clé en dur dans le repo
   (`db-diag-20260518`), action `run-sql` qui exécute du SQL arbitraire — un `run()` en
