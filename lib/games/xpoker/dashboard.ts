@@ -16,6 +16,7 @@ import {
   type PlayerWeek, type XpokerAccount, type DealHistory, type UnlinkedMember, type AgencyStock, type RelinkLogRow,
 } from "./engine";
 import { chipsToUsd } from "./club-math";
+import { getSettleableWeeksOn, getXpokerSettlementsOn, type SettleableWeek, type BlockedWeek, type XpokerSettlementRow } from "./settlement";
 
 type DB = Database.Database;
 
@@ -72,6 +73,8 @@ export type XpokerDashboardPlayer = {
   winloss_usd: number;
   due_usd: number | null;
   movements: { buyin_chips: number; cashout_chips: number; count: number };
+  /** Règlement (étape 4) : semaines réglables aujourd'hui, bloquées (avec raison), règlements existants. Toutes périodes, pas seulement la fenêtre. */
+  settle: { settleable: SettleableWeek[]; blocked: BlockedWeek[]; settlements: XpokerSettlementRow[] };
 };
 
 export type XpokerChartWeek = {
@@ -148,6 +151,7 @@ export function getXpokerDashboardOn(db: DB, window: WeekWindow): XpokerDashboar
       winloss_usd: weeks.reduce((s, w) => s + w.winloss_usd, 0),
       due_usd: sumOrNull(weeks.map(w => w.due_usd)),
       movements: { buyin_chips: mv.buyin_chips, cashout_chips: mv.cashout_chips, count: mv.lines.length },
+      settle: { ...getSettleableWeeksOn(db, p.id), settlements: getXpokerSettlementsOn(db, p.id) },
     };
   });
 

@@ -273,6 +273,9 @@ export function parseXpokerTab(ws: XLSX.WorkSheet, tabLabel: string, opts: Xpoke
     if (winloss === null || rake === null) {
       throw new XpokerParseError(`Player ID ${member_id} (ligne ${r + 1}) : Win/Lose ou Rake vide — non saisi ≠ 0`, tabLabel);
     }
+    // Un rake négatif n'existe pas : un RB en serait soustrait signé alors que le
+    // mouvement rb_paid est toujours un versement (money-auditor étape 4, F2).
+    if (rake < 0) throw new XpokerParseError(`Player ID ${member_id} (ligne ${r + 1}) : rake négatif (${rake}) — un rake est toujours ≥ 0, fichier à vérifier`, tabLabel);
     if (seen.has(member_id)) throw new XpokerParseError(`Player ID ${member_id} présent deux fois dans le bloc`, tabLabel);
     seen.add(member_id);
     const agent_id = text(row[col.agentId]) ?? "", super_agent_id = text(row[col.superAgentId]) ?? "";

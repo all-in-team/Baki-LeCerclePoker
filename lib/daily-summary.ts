@@ -88,7 +88,8 @@ export async function sendDailySummary(): Promise<void> {
         paymentLines.push(
           // Les deux montants étaient intervertis : les anciens champs affirmaient le sens
           // inverse du calcul (cf. computeTotals / PaymentsTotals, corrigé 2026-07-25).
-          `⏳ ${payTotals.pending_count} à payer (${payTotals.outgoing_usdt.toFixed(0)} à sortir · ${payTotals.incoming_usdt.toFixed(0)} à rentrer)${oldest}`
+          `⏳ ${payTotals.pending_count} à payer (${payTotals.outgoing_usdt.toFixed(0)} à sortir · ${payTotals.incoming_usdt.toFixed(0)} à rentrer`
+          + (payTotals.native_pending_count > 0 ? ` · +${payTotals.native_pending_count} XPoker en chips, hors totaux` : "") + `)${oldest}`
         );
       }
       // Les 5 plus urgents seulement — le reste est sur la page (pas de troncature silencieuse).

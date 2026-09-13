@@ -93,6 +93,28 @@ export function linkMemberIdOn(
     const other = db.prepare(`SELECT name FROM players WHERE id = ?`).get(existing.player_id) as { name: string } | undefined;
     return { ok: false, error: `${member_id} appartient déjà à ${other?.name ?? `#${existing.player_id}`}` };
   }
+  // F1 (money-auditor étape 4) : relier des semaines ORPHELINES à un joueur dont ces
+  // semaines sont DÉJÀ RÉGLÉES rendrait la part de ce compte irrécouvrable sans signal
+  // (le dû figé ne bouge pas, la semaine reste « settled », l'écart n'est jamais
+  // réglable). Miroir de la garde R1 : refus nommé, Baki tranche (déverrouiller
+  // le règlement d'abord, ou rattacher ailleurs).
+  const orphanWeeks = (db.prepare(
+    `SELECT DISTINCT week_start FROM xpoker_week_rows WHERE member_id = ? AND player_id IS NULL AND is_agency = 0`
+  ).all(member_id) as { week_start: string }[]).map(r => r.week_start);
+  if (orphanWeeks.length > 0) {
+    const ph = orphanWeeks.map(() => "?").join(", ");
+    const settled = db.prepare(
+      `SELECT week_start, settlement_id FROM xpoker_settlement_weeks WHERE player_id = ? AND week_start IN (${ph}) ORDER BY week_start`
+    ).all(args.player_id, ...orphanWeeks) as { week_start: string; settlement_id: number }[];
+    if (settled.length > 0) {
+      return {
+        ok: false,
+        error: `${member_id} porte des semaines déjà réglées chez ce joueur : `
+             + settled.map(w => `${w.week_start} (règlement #${w.settlement_id})`).join(", ")
+             + ` — déverrouille ce règlement avant de rattacher, sinon la part de ce compte ne serait jamais réglée.`,
+      };
+    }
+  }
   const run = db.transaction(() => {
     let account_id: number;
     if (existing) {
@@ -342,6 +364,15 @@ export function commitImportOn(db: DB, a: CommitImportArgs): CommitImportResult 
 export function deleteImportOn(db: DB, importId: number): { ok: boolean; error?: string } {
   const led = db.prepare(`SELECT COUNT(*) AS n FROM xpoker_chip_ledger WHERE import_id = ?`).get(importId) as { n: number };
   if (led.n > 0) return { ok: false, error: `Import #${importId} : ${led.n} mouvement(s) du grand livre le référencent — supprime-les d'abord.` };
+  // Une semaine réglée repose sur les lignes de cet import : les supprimer laisserait un
+  // règlement figé sans donnée derrière, et un ré-import différent créerait un écart
+  // jamais réglable (réserve money-auditor étape 4).
+  const settled = db.prepare(`
+    SELECT COUNT(*) AS n FROM xpoker_settlement_weeks sw
+    JOIN xpoker_week_rows r ON r.player_id = sw.player_id AND r.week_start = sw.week_start
+    WHERE r.import_id = ?
+  `).get(importId) as { n: number };
+  if (settled.n > 0) return { ok: false, error: `Import #${importId} : ${settled.n} ligne(s) déjà réglée(s) s'appuient dessus — déverrouille les règlements avant.` };
   const r = db.prepare(`DELETE FROM xpoker_imports WHERE id = ?`).run(importId);
   return r.changes === 1 ? { ok: true } : { ok: false, error: "import introuvable" };
 }

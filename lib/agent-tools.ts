@@ -790,7 +790,7 @@ export async function executeTool(name: string, input: any, ctx?: ToolContext): 
     // weekly_settlements : c'est la même source que la page Paiements, donc une
     // seule vérité. Aucun calcul ici — le moteur porte la math (Baki 2026-07-27).
     if (name === "get_unpaid_settlements") {
-      const { getPendingSettlements, getOverdueBuckets, settlementDetail } = await import("./manual-settlement-engine");
+      const { getPendingSettlements, getOverdueBuckets, settlementDetail, isNativeSettlement } = await import("./manual-settlement-engine");
       const pending = getPendingSettlements();
       const overdue = getOverdueBuckets();
 
@@ -799,14 +799,20 @@ export async function executeTool(name: string, input: any, ctx?: ToolContext): 
       if (pending.length === 0) {
         out.push("Règlements lockés en attente de paiement : aucun.");
       } else {
-        const totalDue = pending.reduce((s, p) => s + p.amount_due_usdt, 0);
+        // Règlements XPoker (chips) : montant NATIF, jamais dans le net USDT (Baki Q1).
+        const nativeRows = pending.filter(isNativeSettlement);
+        const totalDue = pending.reduce((s, p) => s + (isNativeSettlement(p) ? 0 : p.amount_due_usdt), 0);
         out.push(`Règlements lockés en attente de paiement (${pending.length}) — le plus ancien d'abord :`);
         out.push(...pending.map(p =>
-          `• #${p.id} · ${p.player_name} · ${p.room_label} · ${fmtAmount(p.amount_due_usdt)} USDT ` +
+          `• #${p.id} · ${p.player_name} · ${p.room_label} · ` +
+          (isNativeSettlement(p)
+            ? `${fmtAmount(p.amount_due_native ?? 0)} CHIPS (≈ ${fmtAmount(p.amount_due_usdt)} USD, équivalent d'affichage, jamais un montant à payer) `
+            : `${fmtAmount(p.amount_due_usdt)} USDT `) +
           `${settlementDetail(p, fmtAmount)} · ` +
           `locké depuis ${p.age_days}j · ${p.week_label ?? "semaine ?"} · ${p.tx_count} tx`
         ));
-        out.push(`Net des montants dus : ${fmtAmount(totalDue)} USDT (positif = ça rentre, le joueur doit au Cercle ; négatif = ça sort, le Cercle doit au joueur).`);
+        out.push(`Net des montants dus : ${fmtAmount(totalDue)} USDT (positif = ça rentre, le joueur doit au Cercle ; négatif = ça sort, le Cercle doit au joueur)`
+          + (nativeRows.length ? ` — HORS ${nativeRows.length} règlement(s) XPoker en chips, qui ne se compensent jamais avec des USDT.` : "."));
         out.push(`Le « #N » en tête de ligne est le settlement_id — c'est lui qu'attend mark_settlement_paid.`);
       }
 

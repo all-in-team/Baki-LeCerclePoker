@@ -188,6 +188,7 @@ console.log("\n── 10. Refus explicites ──");
   throwsParse("libellé absent ⇒ erreur nommée", () => parseXpokerTab(sheet({ rows: CAS1, dropLabel: "Rake(without MTT)" }), "x", OPTS), /Rake\(without MTT\).*0 occurrence/);
   throwsParse("pied absent ⇒ erreur nommée", () => parseXpokerTab(sheet({ rows: CAS1, dropLabel: "Total Win/Lose" }), "x", OPTS), /Total Win\/Lose/);
   throwsParse("Player ID en double", () => parseXpokerTab(sheet({ rows: [...CAS1, { pid: "3062825", wl: 1, rake: 1 }] }), "x", OPTS), /deux fois/);
+  throwsParse("rake négatif ⇒ refus nommé (F2 : un RB ne se soustrait pas)", () => parseXpokerTab(sheet({ rows: [{ pid: "3062825", wl: 1000, rake: -500 }] }), "x", OPTS), /3062825.*rake négatif/);
   throwsParse("onglet vide", () => parseXpokerTab(XLSX.utils.aoa_to_sheet([[]]), "vide", OPTS), /幣值/);
   const e = (() => { try { parseXpokerTab(sheet({ rows: CAS1, club: "其他" }), "8/3", OPTS); } catch (x) { return x as XpokerParseError; } })();
   eq("l'erreur porte l'onglet", e?.tab, "8/3");

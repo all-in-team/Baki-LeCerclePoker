@@ -211,6 +211,7 @@ function PlayerRow({ p, rate, today, allPlayers, open, onToggle, onChanged }: {
         <tr><td colSpan={10} style={{ padding: "12px 14px 18px", borderTop: "1px solid var(--border)", background: "rgba(255,255,255,0.02)" }}>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(340px, 1fr))", gap: 16 }}>
             <WeeksTable weeks={p.weeks} />
+            <SettlePanel p={p} rate={rate} onChanged={onChanged} />
             <DealForm p={p} today={today} onChanged={onChanged} />
             <AccountsPanel p={p} allPlayers={allPlayers} onChanged={onChanged} />
             <MovementForm p={p} rate={rate} today={today} onChanged={onChanged} />
@@ -243,6 +244,91 @@ function WeeksTable({ weeks }: { weeks: PlayerWeek[] }) {
               </tr>
             ))}</tbody>
           </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Règlement (étape 4) : semaines réglables → lock ; payé / délock dans /payments ──
+
+const BLOCK_LABEL: Record<string, string> = {
+  no_deal: "incalculable — aucun deal cette semaine",
+  flagged: "import en écart — jamais réglable en un clic",
+  settled: "déjà réglée",
+};
+
+function SettlePanel({ p, rate, onChanged }: { p: XpokerDashboardPlayer; rate: number | null; onChanged: () => void }) {
+  const { settleable, blocked, settlements } = p.settle;
+  const [sel, setSel] = useState<Set<string>>(new Set());
+  const [notes, setNotes] = useState(""); const [msg, setMsg] = useState<string | null>(null); const [busy, setBusy] = useState(false);
+  const chosen = settleable.filter(w => sel.has(w.week_start));
+  const due = chosen.reduce((s, w) => s + w.due_chips, 0);
+  const dueUsd = chosen.reduce((s, w) => s + w.due_usd, 0);
+  async function lock() {
+    setBusy(true); setMsg(null);
+    const r = await post("/api/xpoker/settle", { player_id: p.player_id, week_starts: [...sel], notes: notes || null });
+    setBusy(false);
+    if (!r.ok) { setMsg(r.error ?? "refus"); return; }
+    setSel(new Set()); setNotes(""); onChanged();
+  }
+  return (
+    <div style={{ gridColumn: "1 / -1", padding: 12, borderRadius: 8, border: "1px solid rgba(236,72,153,0.35)", background: "rgba(236,72,153,0.05)" }}>
+      <div style={{ fontSize: 12, fontWeight: 700, color: "#E8E8EE", marginBottom: 4 }}>Règlement — en CHIPS, dû net = part d&apos;action − RB, tous comptes confondus</div>
+      <div style={{ fontSize: 11, color: MUTED, marginBottom: 8 }}>
+        Coche des semaines, verrouille : le montant est recalculé et figé par le moteur. Marquer payé (date réelle du transfert obligatoire) et déverrouiller se font dans <a href="/payments" style={{ color: "#EC4899" }}>Paiements</a>.
+        Jamais compensé avec les USDT des autres rooms. L&apos;équivalent USD n&apos;est qu&apos;un affichage.
+      </div>
+      {settleable.length === 0 && blocked.length === 0 && <div style={{ fontSize: 12, color: DIM }}>Aucune semaine importée.</div>}
+      {settleable.length > 0 && (
+        <table style={{ borderCollapse: "collapse", marginBottom: 8 }}>
+          <thead><tr><th style={thL}></th><th style={thL}>Semaine</th><th style={th}>Win/Lose</th><th style={th}>Deal</th><th style={th}>Part d&apos;action</th><th style={th}>RB</th><th style={th}>Dû</th></tr></thead>
+          <tbody>{settleable.map(w => (
+            <tr key={w.week_start} style={{ cursor: "pointer" }} onClick={() => setSel(prev => { const n = new Set(prev); n.has(w.week_start) ? n.delete(w.week_start) : n.add(w.week_start); return n; })}>
+              <td style={tdL}><input type="checkbox" readOnly checked={sel.has(w.week_start)} /></td>
+              <td style={tdL}>{w.week_start}</td>
+              <td style={td}><Chips n={w.winloss_chips} rate={w.rate_chips_per_usd} sign /></td>
+              <td style={{ ...td, color: MUTED }}>{pct(w.action_pct)} / RB {pct(w.rb_pct)}</td>
+              <td style={td}><Chips n={w.action_chips} rate={w.rate_chips_per_usd} sign /></td>
+              <td style={td}><Chips n={w.rb_chips} rate={w.rate_chips_per_usd} /></td>
+              <td style={td}><Chips n={w.due_chips} rate={w.rate_chips_per_usd} sign /></td>
+            </tr>
+          ))}</tbody>
+        </table>
+      )}
+      {blocked.length > 0 && (
+        <div style={{ fontSize: 11, color: MUTED, marginBottom: 8 }}>
+          Non réglables : {blocked.map(b => <span key={b.week_start} style={{ marginRight: 10, color: b.reason === "settled" ? MUTED : GOLD }}>{b.week_start} — {BLOCK_LABEL[b.reason]}{b.settlement_id ? ` (#${b.settlement_id})` : ""}</span>)}
+        </div>
+      )}
+      {settleable.length > 0 && (
+        <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+          <span style={{ fontSize: 13 }}>
+            {chosen.length} semaine(s) → <b><Chips n={chosen.length ? due : null} rate={rate} sign /></b>
+            {chosen.length > 0 && <span style={{ fontSize: 11, fontWeight: 700, marginLeft: 6, color: Math.abs(due) < EPS ? MUTED : due > 0 ? GREEN : RED }}>{dueLabel(due)}</span>}
+            {chosen.length > 0 && <span style={{ fontSize: 10, color: MUTED }}> (≈ {signed(dueUsd)} USD aux taux figés)</span>}
+          </span>
+          <input style={{ ...input, width: 200 }} placeholder="note (optionnel)" value={notes} onChange={e => setNotes(e.target.value)} />
+          <Btn size="sm" onClick={lock} disabled={busy || chosen.length === 0}>Verrouiller le règlement</Btn>
+        </div>
+      )}
+      {msg && <div style={{ color: "#FCA5A5", fontSize: 12, marginTop: 6 }}>{msg}</div>}
+      {settlements.length > 0 && (
+        <div style={{ marginTop: 10, fontSize: 12 }}>
+          <div style={{ fontWeight: 700, color: "#E8E8EE", marginBottom: 4 }}>Règlements</div>
+          {settlements.map(s => (
+            <div key={s.id} style={{ display: "flex", gap: 10, alignItems: "center", padding: "3px 0", borderTop: "1px solid var(--border)" }}>
+              <span style={{ color: MUTED }}>#{s.id}</span>
+              <span style={{ fontWeight: 700, color: s.status === "paid" ? GREEN : GOLD }}>{s.status === "paid" ? `payé le ${s.paid_date ?? s.paid_at?.slice(0, 10) ?? "?"}` : "verrouillé"}</span>
+              <span>{s.weeks.map(w => w.week_start).join(", ")}</span>
+              {/* Équivalent FIGÉ au lock (amount_due_usdt), pas le taux courant : la même valeur que /payments. */}
+              <span style={{ marginLeft: "auto", display: "inline-block", fontVariantNumeric: "tabular-nums", lineHeight: 1.2, color: Math.abs(s.due_chips) < EPS ? MUTED : s.due_chips > 0 ? GREEN : RED }}>
+                {signed(s.due_chips)}<span style={{ display: "block", fontSize: 10, color: MUTED, fontWeight: 400 }}>≈ {signed(s.due_usd)} USD figé</span>
+              </span>
+              <span style={{ fontSize: 11, fontWeight: 700, color: Math.abs(s.due_chips) < EPS ? MUTED : s.due_chips > 0 ? GREEN : RED }}>{dueLabel(s.due_chips)}</span>
+              {s.notes && <span style={{ color: MUTED, fontSize: 11 }}>— {s.notes}</span>}
+            </div>
+          ))}
         </div>
       )}
     </div>

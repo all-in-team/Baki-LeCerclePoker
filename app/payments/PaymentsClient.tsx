@@ -68,6 +68,34 @@ function agencySigned(due: number): string {
   return (due >= 0 ? "+" : "−") + fmt(due);
 }
 
+/**
+ * Règlement en devise NATIVE (XPoker Twd, chips) : `amount_due_native` est LE montant
+ * réglé ; `amount_due_usdt` n'est qu'un équivalent d'affichage au taux figé — jamais un
+ * montant à payer — et la ligne est HORS compensation (Baki Q1, 2026-09-13). Le sens
+ * (il nous doit / on lui doit) se lit sur le natif, qui a le même signe.
+ */
+function isNative(s: { amount_due_native?: number | null; native_currency?: string | null }): boolean {
+  return s.native_currency != null && s.amount_due_native != null;
+}
+function NativeAmount({ s, size = 14, color }: { s: HubSettlement; size?: number; color: string }) {
+  const n = s.amount_due_native ?? 0;
+  return (
+    <span style={{ display: "inline-flex", flexDirection: "column", alignItems: "flex-end", lineHeight: 1.15 }}>
+      <span style={{ fontSize: size, fontWeight: 700, color, fontVariantNumeric: "tabular-nums", whiteSpace: "nowrap" }}>{agencySigned(n)} chips</span>
+      {/* Texte complet demandé par Baki, sur deux lignes max : la cellule fait 150 px, un
+          nowrap poussait la colonne des boutons (« Marquer payé ») hors de la grille. */}
+      <span style={{ fontSize: 9, color: "var(--text-dim)", maxWidth: 150, textAlign: "right", lineHeight: 1.2 }}
+        title="Équivalent au taux chips/USD figé au verrouillage. Ce n'est PAS le montant à payer : le règlement se fait en chips.">
+        ≈ {agencySigned(s.amount_due_usdt)} USD — équivalent d&apos;affichage, jamais un montant à payer
+      </span>
+    </span>
+  );
+}
+/** Sens d'une ligne : sur le natif quand il existe, sinon sur l'USDT. Même signe, même lecture. */
+function dueOf(s: HubSettlement): number {
+  return isNative(s) ? (s.amount_due_native ?? 0) : s.amount_due_usdt;
+}
+
 /** Sens du règlement — la formulation demandée par Baki, explicite dans la colonne. */
 function direction(due: number): { label: string; color: string; icon: typeof ArrowUpRight | null } {
   if (Math.abs(due) < ZERO) return { label: "Rien à payer", color: "var(--text-dim)", icon: null };
@@ -191,6 +219,11 @@ function KindBadge({ kind }: { kind: string }) {
     ? { label: "RAKEBACK",
         title: "Rakeback dû au joueur — de l'argent qui sort, à ne pas confondre avec une part d'action",
         tint: "rgba(167,139,250,0.14)", ink: "#A78BFA" }
+    : kind === "xpoker"
+    ? { label: "CHIPS",
+        title: "Règlement XPoker Twd, en CHIPS (dû net = part d'action − rakeback). L'équivalent USD affiché "
+             + "n'est pas un montant à payer, et la ligne n'entre pas dans la compensation entre rooms.",
+        tint: "rgba(236,72,153,0.14)", ink: "#EC4899" }
     : kind === "rakeback_ack"
     ? { label: "ÉCART ACTÉ",
         title: "Écart de contrôle acté à 0 sur une semaine NEXAPOKER — aucun mouvement d'argent. "
@@ -251,7 +284,7 @@ export default function PaymentsClient({
 
   const sortedPending = useMemo(() => {
     const rows = [...pending];
-    if (sort === "amount") rows.sort((a, b) => Math.abs(b.amount_due_usdt) - Math.abs(a.amount_due_usdt));
+    if (sort === "amount") rows.sort((a, b) => Math.abs(b.amount_due_usdt) - Math.abs(a.amount_due_usdt));   // tri d'affichage : l'équivalent USD suffit à ordonner
     else if (sort === "room") rows.sort((a, b) => a.room_label.localeCompare(b.room_label) || b.age_days - a.age_days);
     else rows.sort((a, b) => b.age_days - a.age_days);
     return rows;
@@ -286,7 +319,9 @@ export default function PaymentsClient({
     (!fTo || (s.paid_on ?? "") <= fTo)
   ), [paid, fRoom, fPlayer, fFrom, fTo]);
 
-  const paidTotal = useMemo(() => filteredPaid.reduce((acc, s) => acc + s.amount_due_usdt, 0), [filteredPaid]);
+  // Natif (chips) exclu : un net USDT ne doit jamais contenir un équivalent d'affichage.
+  const paidTotal = useMemo(() => filteredPaid.reduce((acc, s) => acc + (isNative(s) ? 0 : s.amount_due_usdt), 0), [filteredPaid]);
+  const paidNativeCount = useMemo(() => filteredPaid.filter(isNative).length, [filteredPaid]);
 
   /**
    * Récap de la sélection. Le net seul ne suffit pas : sélectionner +500 et −500 afficherait
@@ -294,14 +329,16 @@ export default function PaymentsClient({
    */
   const selection = useMemo(() => {
     const rows = pending.filter(s => selected.has(s.id));
-    let net = 0, out = 0, inc = 0;
+    let net = 0, out = 0, inc = 0, native = 0;
     for (const s of rows) {
+      // Natif (chips XPoker) : compté à part, jamais dans le net ni les sous-totaux USDT.
+      if (isNative(s)) { native++; continue; }
       net += s.amount_due_usdt;
       // due > 0 = le joueur nous doit → ça rentre. Inverse de ce que ce bloc supposait avant.
       if (s.amount_due_usdt > 0) inc += s.amount_due_usdt;
       else if (s.amount_due_usdt < 0) out += -s.amount_due_usdt;
     }
-    return { rows, net, out, inc, count: rows.length };
+    return { rows, net, out, inc, native, count: rows.length };
   }, [pending, selected]);
 
   // Une ligne réglée ailleurs (ou délockée) disparaît de `pending` au refresh : on purge la
@@ -359,7 +396,10 @@ export default function PaymentsClient({
    * absente vit dans le moteur (writeBankrollTransferOnPaid), où il couvre aussi
    * le lot et l'action du bot Telegram — et où il est testable.
    */
-  const dateCritique = (s: HubSettlement) => s.game_name === "NEXAPOKER" && s.kind === "action";
+  // XPoker Twd aussi : la date réelle du transfert de chips date les mouvements du grand
+  // livre, et writeXpokerLedgerOnPaidOn refuse sans elle — donc pas de « aujourd'hui »
+  // pré-rempli, même garde-fou d'écran que la bankroll NEXA.
+  const dateCritique = (s: HubSettlement) => (s.game_name === "NEXAPOKER" && s.kind === "action") || isNative(s);
 
   function openPay(s: HubSettlement) {
     setPayTarget(s);
@@ -440,7 +480,7 @@ export default function PaymentsClient({
 
   /** Ligne d'un règlement réel — partagée par la vue plate et le dépli des groupes. */
   function PendingRow({ s, inset }: { s: HubSettlement; inset?: boolean }) {
-    const dir = direction(s.amount_due_usdt);
+    const dir = direction(dueOf(s));
     const Icon = dir.icon;
     const isSel = selected.has(s.id);
     return (
@@ -453,7 +493,12 @@ export default function PaymentsClient({
       }}>
         <TriCheckbox checked={isSel} onChange={() => toggleOne(s.id)} title="Sélectionner pour un règlement groupé" />
 
-        <RoomBadge label={s.room_label} color={s.room_color} /><KindBadge kind={s.kind} />
+        {/* UNE cellule de grille pour les deux badges : sans ce span, un KindBadge non nul
+            (rakeback NEXA, chips XPoker) ajoutait une 8ᵉ cellule à une grille de 7 colonnes et
+            rejetait les boutons (« Marquer payé ») sur une ligne invisible. */}
+        <span style={{ display: "inline-flex", alignItems: "center", gap: 4, flexWrap: "wrap" }}>
+          <RoomBadge label={s.room_label} color={s.room_color} /><KindBadge kind={s.kind} />
+        </span>
 
         <a href={`${s.room_base_path}?player=${s.player_id}`} title="Ouvrir le joueur dans sa room"
           style={{ fontSize: 13, fontWeight: 600, color: "var(--text)", textDecoration: "none" }}>
@@ -471,7 +516,9 @@ export default function PaymentsClient({
 
         <span style={{ display: "inline-flex", alignItems: "center", gap: 7 }}>
           {Icon && <Icon size={14} color={dir.color} />}
-          <span style={{ fontSize: 14, fontWeight: 700, color: dir.color, fontVariantNumeric: "tabular-nums" }}>{agencySigned(s.amount_due_usdt)}</span>
+          {isNative(s)
+            ? <NativeAmount s={s} color={dir.color} />
+            : <span style={{ fontSize: 14, fontWeight: 700, color: dir.color, fontVariantNumeric: "tabular-nums" }}>{agencySigned(s.amount_due_usdt)}</span>}
           <span style={{ fontSize: 10, color: dir.color, opacity: 0.85 }}>{dir.label}</span>
         </span>
 
@@ -509,7 +556,7 @@ export default function PaymentsClient({
         <Tile
           label="On nous doit"
           value={`${totals.incoming_usdt < ZERO ? "" : "+"}${fmt(totals.incoming_usdt)} USDT`}
-          sub="entrées attendues"
+          sub={totals.native_pending_count > 0 ? `entrées attendues · + ${totals.native_pending_count} règlement(s) XPoker en chips, hors totaux` : "entrées attendues"}
           color="#10B981"
         />
         <Tile
@@ -628,6 +675,11 @@ export default function PaymentsClient({
                       <span style={{ fontSize: 10, color: nd.color, opacity: 0.85 }}>
                         net compensé · {nd.label}
                       </span>
+                      {g.native_count > 0 && (
+                        <span style={{ fontSize: 10, color: "#EC4899" }} title="Les règlements en chips ne se compensent jamais avec les USDT : ce sont des lignes à part.">
+                          + {g.native_count} en chips (XPoker), à part
+                        </span>
+                      )}
                     </span>
 
                     <span style={{ display: "inline-flex", alignItems: "center", gap: 8, justifyContent: "flex-end" }}>
@@ -653,6 +705,14 @@ export default function PaymentsClient({
                       }}>
                         <span style={{ color: "var(--text-muted)", fontWeight: 600 }}>Par room :</span>
                         {g.rooms.map(r => {
+                          if (r.native) {
+                            return (
+                              <span key={r.label} style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
+                                <RoomBadge label={r.label} color={r.color} />
+                                <span style={{ color: "#EC4899" }}>{r.count} règlement{r.count > 1 ? "s" : ""} en chips — hors compensation, voir les lignes</span>
+                              </span>
+                            );
+                          }
                           const rd = direction(r.net_usdt);
                           return (
                             <span key={r.label} style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
@@ -820,11 +880,13 @@ export default function PaymentsClient({
           <>
             <div style={card}>
               {filteredPaid.map(s => {
-                const dir = direction(s.amount_due_usdt);
+                const dir = direction(dueOf(s));
                 return (
                   <Fragment key={s.id}>
                   <div style={{ ...rowBase, gridTemplateColumns: "88px minmax(120px,1fr) 118px 110px 150px auto" }}>
-                    <RoomBadge label={s.room_label} color={s.room_color} /><KindBadge kind={s.kind} />
+                    <span style={{ display: "inline-flex", alignItems: "center", gap: 4, flexWrap: "wrap" }}>
+                      <RoomBadge label={s.room_label} color={s.room_color} /><KindBadge kind={s.kind} />
+                    </span>
                     <a href={`${s.room_base_path}?player=${s.player_id}`} style={{ fontSize: 13, fontWeight: 600, color: "var(--text)", textDecoration: "none" }}>
                       {s.player_name}
                     </a>
@@ -836,7 +898,9 @@ export default function PaymentsClient({
                       {fmtDate(s.paid_on)}
                     </span>
                     <span style={{ display: "inline-flex", alignItems: "center", gap: 7 }}>
-                      <span style={{ fontSize: 13, fontWeight: 700, color: dir.color, fontVariantNumeric: "tabular-nums" }}>{agencySigned(s.amount_due_usdt)}</span>
+                      {isNative(s)
+                        ? <NativeAmount s={s} size={13} color={dir.color} />
+                        : <span style={{ fontSize: 13, fontWeight: 700, color: dir.color, fontVariantNumeric: "tabular-nums" }}>{agencySigned(s.amount_due_usdt)}</span>}
                       <span style={{ fontSize: 10, color: dir.color, opacity: 0.8 }}>{dir.label}</span>
                     </span>
                     <span style={{ display: "inline-flex", alignItems: "center", gap: 8, justifyContent: "flex-end" }}>
@@ -856,7 +920,7 @@ export default function PaymentsClient({
             <div style={{ display: "flex", gap: 14, padding: "10px 14px", fontSize: 11, color: "var(--text-muted)" }}>
               <span>{filteredPaid.length} règlement{filteredPaid.length > 1 ? "s" : ""}</span>
               <span>·</span>
-              <span>Net cumulé : <b style={{ color: Math.abs(paidTotal) < ZERO ? "var(--text-muted)" : paidTotal > 0 ? "#EF4444" : "#10B981" }}>{Math.abs(paidTotal) < ZERO ? "0,00" : agencySigned(paidTotal)} USDT</b> {Math.abs(paidTotal) < ZERO ? "" : paidTotal > 0 ? "sortis" : "rentrés"}</span>
+              <span>Net cumulé : <b style={{ color: Math.abs(paidTotal) < ZERO ? "var(--text-muted)" : paidTotal > 0 ? "#EF4444" : "#10B981" }}>{Math.abs(paidTotal) < ZERO ? "0,00" : agencySigned(paidTotal)} USDT</b> {Math.abs(paidTotal) < ZERO ? "" : paidTotal > 0 ? "sortis" : "rentrés"}{paidNativeCount > 0 && <span style={{ color: "#EC4899" }}> · hors {paidNativeCount} règlement(s) en chips</span>}</span>
             </div>
           </>
         )}
@@ -882,6 +946,7 @@ export default function PaymentsClient({
             <b style={{ color: "#EF4444" }}>−{fmt(selection.out)} sortants</b>
             {" / "}
             <b style={{ color: "#10B981" }}>+{fmt(selection.inc)} entrants</b>
+            {selection.native > 0 && <span style={{ color: "#EC4899" }}> · + {selection.native} en chips (XPoker), hors net</span>}
           </span>
           <div style={{ flex: 1 }} />
           <button onClick={() => setSelected(new Set())} style={{
@@ -911,7 +976,7 @@ export default function PaymentsClient({
       {/* ── Modale « marquer payé » (unitaire) ───────────── */}
       <Modal open={!!payTarget} onClose={() => setPayTarget(null)} title="Marquer ce règlement payé">
         {payTarget && (() => {
-          const dir = direction(payTarget.amount_due_usdt);
+          const dir = direction(dueOf(payTarget));
           return (
             <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
               <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", fontSize: 13, color: "var(--text)" }}>
@@ -925,9 +990,15 @@ export default function PaymentsClient({
                 <div style={{ fontSize: 11, color: "var(--text-muted)", marginBottom: 4 }}>Montant du règlement</div>
                 <div style={{ fontSize: 20, fontWeight: 700, color: dir.color, display: "inline-flex", alignItems: "center", gap: 7 }}>
                   {dir.icon && <dir.icon size={17} />}
-                  {agencySigned(payTarget.amount_due_usdt)} USDT
+                  {isNative(payTarget) ? `${agencySigned(payTarget.amount_due_native ?? 0)} chips` : `${agencySigned(payTarget.amount_due_usdt)} USDT`}
                   <span style={{ fontSize: 12, fontWeight: 600, opacity: 0.85 }}>· {dir.label}</span>
                 </div>
+                {isNative(payTarget) && (
+                  <div style={{ fontSize: 11, color: "var(--text-dim)", marginTop: 4 }}>
+                    ≈ {agencySigned(payTarget.amount_due_usdt)} USD — équivalent d&apos;affichage, jamais un montant à payer. Le transfert se fait en chips ;
+                    sa date réelle est obligatoire : elle date les mouvements au grand livre XPoker.
+                  </div>
+                )}
               </div>
 
               <label style={{ display: "flex", flexDirection: "column", gap: 5 }}>
@@ -986,13 +1057,13 @@ export default function PaymentsClient({
 
           <div style={{ maxHeight: 190, overflowY: "auto", border: "1px solid var(--border)", borderRadius: 8 }}>
             {selection.rows.map(s => {
-              const dir = direction(s.amount_due_usdt);
+              const dir = direction(dueOf(s));
               return (
                 <div key={s.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "7px 11px", borderBottom: "1px solid var(--border)", fontSize: 12 }}>
                   <RoomBadge label={s.room_label} color={s.room_color} /><KindBadge kind={s.kind} />
                   <span style={{ color: "var(--text)", fontWeight: 600 }}>{s.player_name}</span>
                   <WeekChip label={s.week_label} />
-                  <span style={{ marginLeft: "auto", fontWeight: 700, color: dir.color, fontVariantNumeric: "tabular-nums" }}>{agencySigned(s.amount_due_usdt)}</span>
+                  <span style={{ marginLeft: "auto", fontWeight: 700, color: dir.color, fontVariantNumeric: "tabular-nums" }}>{isNative(s) ? `${agencySigned(s.amount_due_native ?? 0)} chips` : agencySigned(s.amount_due_usdt)}</span>
                   <span style={{ fontSize: 10, color: dir.color, opacity: 0.8 }}>{dir.label}</span>
                 </div>
               );

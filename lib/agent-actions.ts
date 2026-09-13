@@ -156,7 +156,7 @@ async function resolveLockedSettlement(p: any) {
     throw new Error(`aucun règlement en attente pour "${playerRef}"${roomRef ? ` sur ${p.room}` : ""}`);
   }
   if (cands.length > 1) {
-    const list = cands.map(s => `#${s.id} ${s.player_name} · ${s.room_label} · ${s.week_label ?? "?"} · ${s.amount_due_usdt.toFixed(2)} USDT`).join(" | ");
+    const list = cands.map(s => `#${s.id} ${s.player_name} · ${s.room_label} · ${s.week_label ?? "?"} · ${s.native_currency ? `${(s.amount_due_native ?? 0).toFixed(2)} chips` : `${s.amount_due_usdt.toFixed(2)} USDT`}`).join(" | ");
     throw new Error(`ambigu — ${cands.length} règlements correspondent, donne le settlement_id : ${list}`);
   }
   return cands[0];
@@ -288,8 +288,11 @@ export const ACTIONS: Record<string, ActionDef> = {
         `Joueur   : <b>${esc(s.player_name)}</b>`,
         `Room     : ${esc(s.room_label)}`,
         `Semaine  : ${esc(s.week_label ?? "?")} (${esc(periode)})`,
-        `Montant  : <b>${signed(s.amount_due_usdt)} USDT</b>`,
-        `Sens     : ${sensLabel(s.amount_due_usdt)}`,
+        // XPoker : le montant réglé est en CHIPS ; l'USD n'est qu'un équivalent d'affichage.
+        s.native_currency
+          ? `Montant  : <b>${signed(s.amount_due_native ?? 0)} chips</b> (≈ ${signed(s.amount_due_usdt)} USD, équivalent d'affichage — jamais un montant à payer)`
+          : `Montant  : <b>${signed(s.amount_due_usdt)} USDT</b>`,
+        `Sens     : ${sensLabel(s.native_currency ? (s.amount_due_native ?? 0) : s.amount_due_usdt)}`,
         `Détail   : ${esc(settlementDetail(s, signed))}  ·  ${s.tx_count} tx`,
         `État     : ${esc(s.status)} depuis ${s.age_days} j`,
         // Sur un règlement d'action NEXAPOKER, « aujourd'hui par défaut » est
@@ -300,8 +303,8 @@ export const ACTIONS: Record<string, ActionDef> = {
         // celui de /payments : sur-ensemble strict, faux positifs sans coût.
         `Hash     : ${txHash ? esc(txHash) : "(non fourni)"}   Date paiement : ${
           paidDate ? esc(paidDate)
-                   : (s.game_name === "NEXAPOKER" && s.kind === "action")
-                     ? "⚠️ MANQUANTE — obligatoire ici, l'action sera refusée"
+                   : ((s.game_name === "NEXAPOKER" && s.kind === "action") || s.native_currency)
+                     ? "⚠️ MANQUANTE — obligatoire ici (NEXA bankroll / XPoker chips), l'action sera refusée"
                      : "(aujourd'hui, par défaut)"}`,
         ``,
         `⚠️ Irréversible : il n'existe pas de « démarquer payé » dans l'app.`,
@@ -335,7 +338,7 @@ export const ACTIONS: Record<string, ActionDef> = {
       const after = { settlement: db.prepare(`SELECT * FROM manual_settlements WHERE id = ?`).get(s.id) };
       return {
         before, after,
-        summary: `Règlement #${s.id} (${s.player_name} · ${s.room_label} · ${signed(s.amount_due_usdt)} USDT) marqué payé.`,
+        summary: `Règlement #${s.id} (${s.player_name} · ${s.room_label} · ${s.native_currency ? `${signed(s.amount_due_native ?? 0)} chips` : `${signed(s.amount_due_usdt)} USDT`}) marqué payé.`,
       };
     },
   },

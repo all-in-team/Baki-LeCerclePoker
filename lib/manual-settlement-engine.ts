@@ -24,6 +24,9 @@
 
 import { getDb } from "./db";
 import { toUsdt, getExchangeRate } from "./queries";
+// Règlement XPoker Twd (chips) : mouvements du grand livre écrits au markPaid, dans
+// la même transaction que le flip de statut — même doctrine que la bankroll NEXA.
+import { writeXpokerLedgerOnPaidOn, XPOKER_SETTLEMENT_KIND, XPOKER_NATIVE_CURRENCY } from "./games/xpoker/settlement";
 
 // ── Types ────────────────────────────────────────────────
 
@@ -395,6 +398,9 @@ export function markPaid(settlementId: number, txHash?: string, paidDate?: strin
       // manquante — et le moteur doit la refuser plutôt que d'en inventer une.
       // Voir writeBankrollTransferOnPaid.
       writeBankrollTransferOnPaid(db, settlementId, paidDate ?? null);
+      // XPoker Twd : action_paid / rb_paid au grand livre chips, datés paid_date
+      // (obligatoire — jette sinon, et le règlement ne passe pas payé). No-op ailleurs.
+      writeXpokerLedgerOnPaidOn(db, settlementId, paidDate ?? null);
       return { ok: true };
     });
     const r = run();
@@ -675,7 +681,18 @@ export const SETTLE_ROOMS: SettleRoom[] = [
   // le miroir player_game_deals, deux choses fausses ici. Le hub, lui, les affiche comme les
   // autres : elles portent bien un game_id et un amount_due_usdt dans la même convention.
   { label: "NEXAPOKER", games: ["NEXAPOKER"],        basePath: "/nexapoker",   color: "#22D3EE" },
+  // XPOKER TWD : réglé EN CHIPS. amount_due_native ('TWD') est le montant réglé ;
+  // amount_due_usdt n'est qu'un équivalent d'affichage au taux figé. Ces lignes
+  // sont EXCLUES de la compensation inter-rooms (net par joueur, totaux) — deux
+  // lignes vraies plutôt qu'un net faux (Baki Q1, 2026-09-13). Écrites par
+  // lockXpokerSettlementOn (lib/games/xpoker/settlement.ts), jamais par lockSettlement.
+  { label: "XPOKER",    games: ["XPOKER_TWD"],        basePath: "/xpoker",      color: "#EC4899" },
 ];
+
+/** Règlement en devise native (chips XPoker) : jamais compensé avec les USDT des autres rooms. */
+export function isNativeSettlement(s: { kind?: string | null; native_currency?: string | null }): boolean {
+  return s.kind === XPOKER_SETTLEMENT_KIND || s.native_currency === XPOKER_NATIVE_CURRENCY;
+}
 
 // games.name → room, resolved once per call. A game absent from SETTLE_ROOMS returns null
 // and is skipped: adding a new room = one line in SETTLE_ROOMS, nothing else.
@@ -767,6 +784,15 @@ export interface HubSettlement {
    * dire l'une « il me doit », l'autre « je lui dois ».
    */
   kind: string;
+  /**
+   * Règlement en devise NATIVE (XPoker : chips TWD). amount_due_native est LE montant
+   * réglé ; amount_due_usdt n'est alors qu'un équivalent d'affichage au taux figé
+   * (fx_rate_applied, NULL si plusieurs taux), jamais un montant à payer, et la ligne
+   * est exclue de la compensation inter-rooms. NULL sur toutes les autres rooms.
+   */
+  amount_due_native: number | null;
+  native_currency: string | null;
+  fx_rate_applied: number | null;
   status: "locked" | "paid";
   tx_hash: string | null;
   notes: string | null;
@@ -788,6 +814,7 @@ const HUB_SELECT = `
   SELECT ms.id, ms.game_id, g.name AS game_name, ms.player_id, p.name AS player_name,
          ms.net_selected_usdt, ms.action_pct_applied, ms.amount_due_usdt,
          ms.status, ms.tx_hash, ms.notes, ms.locked_at, ms.paid_at, ms.paid_date, ms.kind,
+         ms.amount_due_native, ms.native_currency, ms.fx_rate_applied,
          (SELECT COUNT(*) FROM wallet_transactions wt WHERE wt.settlement_id = ms.id) AS tx_count,
          -- COALESCE sur nexa_action_settlement_weeks : un règlement de part d'action NEXA
          -- n'a AUCUNE transaction back-linkée (son assiette est le win/loss saisi), sa
@@ -796,15 +823,18 @@ const HUB_SELECT = `
          -- Troisième repli : nexa_rakeback_settlement_weeks. Un règlement de
          -- rakeback n'a pas plus de transaction back-linkée qu'un règlement
          -- d'action, et sans ce repli il s'afficherait sans période ni semaine.
+         -- Quatrième repli : xpoker_settlement_weeks (règlement XPoker, semaines figées en chips).
          COALESCE(
            (SELECT MIN(COALESCE(wt.tx_datetime, wt.tx_date)) FROM wallet_transactions wt WHERE wt.settlement_id = ms.id),
            (SELECT MIN(nw.week_start) FROM nexa_action_settlement_weeks nw WHERE nw.settlement_id = ms.id),
-           (SELECT MIN(rw.week_start) FROM nexa_rakeback_settlement_weeks rw WHERE rw.settlement_id = ms.id)
+           (SELECT MIN(rw.week_start) FROM nexa_rakeback_settlement_weeks rw WHERE rw.settlement_id = ms.id),
+           (SELECT MIN(xw.week_start) FROM xpoker_settlement_weeks xw WHERE xw.settlement_id = ms.id)
          ) AS period_start,
          COALESCE(
            (SELECT MAX(COALESCE(wt.tx_datetime, wt.tx_date)) FROM wallet_transactions wt WHERE wt.settlement_id = ms.id),
            (SELECT MAX(nw.week_start) FROM nexa_action_settlement_weeks nw WHERE nw.settlement_id = ms.id),
-           (SELECT MAX(rw.week_start) FROM nexa_rakeback_settlement_weeks rw WHERE rw.settlement_id = ms.id)
+           (SELECT MAX(rw.week_start) FROM nexa_rakeback_settlement_weeks rw WHERE rw.settlement_id = ms.id),
+           (SELECT MAX(xw.week_start) FROM xpoker_settlement_weeks xw WHERE xw.settlement_id = ms.id)
          ) AS period_end
   FROM manual_settlements ms
   JOIN games g ON g.id = ms.game_id
@@ -1030,6 +1060,11 @@ export function settlementDetail(
   fmt: (n: number) => string,
 ): string {
   switch (s.kind) {
+    case XPOKER_SETTLEMENT_KIND:
+      // Le montant réglé est en CHIPS (amount_due_native, rendu par l'écran) ; ici on
+      // ne nomme que la nature — surtout pas un « × % » sur l'équivalent USD.
+      return `(dû net en chips : part d'action − rakeback, détail par semaine · `
+           + `${s.action_pct_applied === 0 ? "taux d'action multiples" : `action ${s.action_pct_applied}%`})`;
     case "rakeback":
       // Pas de « × » : le produit ne retombe pas sur le montant dès qu'il y a du makeup.
       return `(assiette ${fmt(s.net_selected_usdt)} · taux rakeback `
@@ -1070,8 +1105,14 @@ export interface PlayerPendingGroup {
   net_usdt: number;
   incoming_usdt: number;   // Σ des règlements > 0 — ce qui rentre, avant compensation
   outgoing_usdt: number;   // Σ |règlements < 0| — ce qui sort
-  /** Détail par room : ce qui justifie le net global. */
-  rooms: { label: string; color: string; base_path: string; net_usdt: number; count: number }[];
+  /**
+   * Règlements en devise NATIVE (XPoker, chips) : listés dans `settlements` et `rooms`
+   * mais JAMAIS dans net/incoming/outgoing — un dû en chips ne se compense pas contre
+   * des USDT. Compté ici pour que l'écran dise « + N règlement(s) en chips, à part ».
+   */
+  native_count: number;
+  /** Détail par room : ce qui justifie le net global. `native` = room en chips, net_usdt non compensé (0). */
+  rooms: { label: string; color: string; base_path: string; net_usdt: number; count: number; native: boolean }[];
   oldest_age_days: number;
 }
 
@@ -1088,21 +1129,26 @@ export function groupPendingByPlayer(pending: HubSettlement[]): PlayerPendingGro
       g = {
         player_id: s.player_id, player_name: s.player_name,
         settlements: [], count: 0,
-        net_usdt: 0, incoming_usdt: 0, outgoing_usdt: 0,
+        net_usdt: 0, incoming_usdt: 0, outgoing_usdt: 0, native_count: 0,
         rooms: [], oldest_age_days: 0,
       };
       byPlayer.set(s.player_id, g);
     }
     g.settlements.push(s);
     g.count++;
-    g.net_usdt += s.amount_due_usdt;
-    if (s.amount_due_usdt > 0) g.incoming_usdt += s.amount_due_usdt;
-    else if (s.amount_due_usdt < 0) g.outgoing_usdt += -s.amount_due_usdt;
+    const native = isNativeSettlement(s);
+    if (native) {
+      g.native_count++;
+    } else {
+      g.net_usdt += s.amount_due_usdt;
+      if (s.amount_due_usdt > 0) g.incoming_usdt += s.amount_due_usdt;
+      else if (s.amount_due_usdt < 0) g.outgoing_usdt += -s.amount_due_usdt;
+    }
     if (s.age_days > g.oldest_age_days) g.oldest_age_days = s.age_days;
 
     const room = g.rooms.find(r => r.label === s.room_label);
-    if (room) { room.net_usdt += s.amount_due_usdt; room.count++; }
-    else g.rooms.push({ label: s.room_label, color: s.room_color, base_path: s.room_base_path, net_usdt: s.amount_due_usdt, count: 1 });
+    if (room) { if (!native) room.net_usdt += s.amount_due_usdt; room.count++; }
+    else g.rooms.push({ label: s.room_label, color: s.room_color, base_path: s.room_base_path, net_usdt: native ? 0 : s.amount_due_usdt, count: 1, native });
   }
 
   const out = [...byPlayer.values()];
@@ -1189,6 +1235,8 @@ export interface PaymentsTotals {
   // le résumé Telegram quotidien. due > 0 = le joueur doit au Cercle, cf. computeTotals().
   incoming_usdt: number;   // Σ due des règlements en attente où due > 0 — entrées attendues
   outgoing_usdt: number;   // Σ |due| des règlements en attente où due < 0 — sorties à faire
+  /** Règlements en attente en devise NATIVE (chips XPoker) — hors des deux totaux ci-dessus. */
+  native_pending_count: number;
   pending_count: number;
   overdue_count: number;
   oldest_pending_days: number;
@@ -1213,15 +1261,18 @@ export function getUnassignedTxCount(): number {
 export function getPaymentsTotals(pending?: HubSettlement[], overdue?: OverdueBucket[]): PaymentsTotals {
   const p = pending ?? getPendingSettlements();
   const o = overdue ?? getOverdueBuckets();
-  let incoming = 0, outgoing = 0, oldest = 0;
+  let incoming = 0, outgoing = 0, oldest = 0, nativePending = 0;
   for (const s of p) {
+    if (s.age_days > oldest) oldest = s.age_days;
+    // Devise native (chips XPoker) : hors des totaux USDT, comptée à part.
+    if (isNativeSettlement(s)) { nativePending++; continue; }
     if (s.amount_due_usdt > 0) incoming += s.amount_due_usdt;
     else if (s.amount_due_usdt < 0) outgoing += -s.amount_due_usdt;
-    if (s.age_days > oldest) oldest = s.age_days;
   }
   return {
     incoming_usdt: incoming,
     outgoing_usdt: outgoing,
+    native_pending_count: nativePending,
     pending_count: p.length,
     overdue_count: o.length,
     oldest_pending_days: oldest,

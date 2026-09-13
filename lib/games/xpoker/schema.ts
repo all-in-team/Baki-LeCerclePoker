@@ -164,7 +164,7 @@ export const XPOKER_SCHEMA_SQL = `
     agent_id       TEXT,
     super_agent_id TEXT,
     winloss_chips  REAL NOT NULL,
-    rake_chips     REAL NOT NULL,
+    rake_chips     REAL NOT NULL CHECK(rake_chips >= 0),   -- un rake est toujours ≥ 0 (F2)
     -- 1 = compte agence (xpoker_agency_accounts au moment de l'import) : jamais
     -- de position joueur. 1 = sous-agent présent sur cette ligne.
     is_agency      INTEGER NOT NULL DEFAULT 0,
@@ -187,9 +187,11 @@ export const XPOKER_SCHEMA_SQL = `
   --   club_settlement : le club me règle (in) ou je lui dois (out)
   --   buyin           : je crédite le compte XPoker d'un joueur (out)
   --   cashout         : un joueur me rend des chips (in)
-  --   action_paid     : règlement de part d'action — je verse (out) ou il me
-  --                     règle (in) ; écrit au markPaid, daté paid_date
-  --   rb_paid         : rakeback versé au joueur (out), jamais notifié
+  --   action_paid     : règlement de part d'action — il me règle (in, il a gagné)
+  --                     ou je lui verse (out, il a perdu) ; écrit au markPaid du
+  --                     règlement, daté paid_date (la date RÉELLE du transfert)
+  --   rb_paid         : rakeback versé au joueur (out), jamais notifié ; même
+  --                     markPaid, même date
   --   adjustment      : correction manuelle motivée (in/out)
   -- Stock agence = Σ in − Σ out, toutes lignes. Position joueur = ses lignes
   -- (player_id) + ses résultats × son deal. Deux lectures, une table de faits.
@@ -221,9 +223,11 @@ export const XPOKER_SCHEMA_SQL = `
     ON xpoker_chip_ledger(player_id, occurred_at) WHERE player_id IS NOT NULL;
   CREATE INDEX IF NOT EXISTS idx_xpoker_ledger_date
     ON xpoker_chip_ledger(occurred_at);
-  -- Un règlement ne produit qu'UN mouvement — garanti au niveau du schéma.
+  -- Un règlement produit AU PLUS un mouvement par nature (action_paid, rb_paid) —
+  -- garanti au niveau du schéma : le markPaid ne réussit qu'une fois, et si ce
+  -- code repassait, la base refuserait le doublon.
   CREATE UNIQUE INDEX IF NOT EXISTS idx_xpoker_ledger_settlement
-    ON xpoker_chip_ledger(settlement_id) WHERE settlement_id IS NOT NULL;
+    ON xpoker_chip_ledger(settlement_id, kind) WHERE settlement_id IS NOT NULL;
   -- Un règlement club par import.
   CREATE UNIQUE INDEX IF NOT EXISTS idx_xpoker_ledger_import
     ON xpoker_chip_ledger(import_id) WHERE kind = 'club_settlement';
@@ -267,7 +271,7 @@ export const XPOKER_SCHEMA_SQL = `
     action_pct         REAL NOT NULL CHECK(action_pct = 0 OR (action_pct >= 1 AND action_pct <= 100)),  -- POURCENT
     rb_pct             REAL NOT NULL CHECK(rb_pct = 0 OR (rb_pct >= 1 AND rb_pct <= 100)),              -- POURCENT
     action_chips       REAL NOT NULL,                    -- action_pct/100 × winloss
-    rb_chips           REAL NOT NULL,                    -- rb_pct/100 × rake
+    rb_chips           REAL NOT NULL CHECK(rb_chips >= 0), -- rb_pct/100 × rake, rake ≥ 0
     due_chips          REAL NOT NULL,                    -- action_chips − rb_chips
     rate_chips_per_usd REAL NOT NULL CHECK(rate_chips_per_usd > 0),
     UNIQUE(player_id, week_start)
