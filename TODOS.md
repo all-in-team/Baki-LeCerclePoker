@@ -44,6 +44,20 @@ Deferred work from /plan-ceo-review (2026-04-28).
   `getPlayerWalletStats` (`lib/queries.ts:806-808`) applique `action_pct` à tout mouvement,
   donc fabrique un `my_pnl` à partir d'un versement de règlement. Même geste à faire.
 
+### SQL libre sur les tables d'argent — `db-diagnostic` (P0) et `query_db` (à cadrer)
+- **`app/api/admin/db-diagnostic/route.ts`** : hors auth, clé en dur dans le repo
+  (`db-diag-20260518`), action `run-sql` qui exécute du SQL arbitraire — un `run()` en
+  écriture si la requête ne commence pas par SELECT. Trou connu, acté par Baki le
+  2026-09-13 après une lecture prod SELECT-only (chantier XPoker). **Plus jamais un
+  chemin de travail par défaut** : toute lecture prod se demande à Baki.
+- **`query_db` de l'agent IA** (`lib/agent-tools.ts` → `runReadonlyQuery`) : même
+  famille — SQL libre sur `manual_settlements`, `wallet_transactions`, etc. — mais avec
+  de vraies gardes : connexion `getReadonlyDb()` (SQLite refuse l'écriture), SELECT/WITH
+  seuls, une instruction, denylist de mots-clés et de tables credentials, 200 lignes.
+  Risque résiduel = lecture/mésinterprétation de chiffres d'argent par l'agent, pas
+  d'écriture. À cadrer avec db-diagnostic (auth, journalisation des requêtes), hors
+  périmètre du chantier XPoker.
+
 ## P1 — High value, build next
 
 ### Smart alerts (loss threshold)

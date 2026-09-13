@@ -22,6 +22,13 @@ import { nameKey as dzpkNameKey } from "./funnels/dzpk/name-key";
 // Module pur (aucun import) : le DDL du suivi multi-comptes « AK multi-Account »,
 // partagé avec scripts/pool-engine.test.ts pour que les tests exercent la même SQL.
 import { POOL_SCHEMA_SQL, POOL_GAME_INSERT_SQL, POOL_MIGRATION_V1 } from "./pool/schema";
+// Module pur : le DDL et la migration de la game XPoker Twd, partagés avec
+// scripts/xpoker-schema.test.ts (même SQL en test et en prod).
+import { runXpokerMigrationV1, XPOKER_MIGRATION_V1 } from "./games/xpoker/schema";
+import {
+  XPOKER_GAME_NAME, XPOKER_DEFAULT_ACTION_PCT, XPOKER_SEED_CHIPS_PER_USD,
+  XPOKER_SEED_RATE_EFFECTIVE_FROM, XPOKER_SEED_AGENCY_ACCOUNTS,
+} from "./games/xpoker/config";
 
 // Quarantaine des mouvements wallet — cf. la migration en bas de ce fichier.
 export const WALLET_TX_QUARANTINE_V1 = "add_wallet_tx_quarantine_v1";
@@ -3922,5 +3929,32 @@ function initSchema(db: Database.Database) {
     }
   } catch (err: any) {
     console.error(`[MIGRATION:${POOL_MIGRATION_V1}] FAILED (sera rejouée au prochain boot):`, err.message);
+  }
+
+  // ── Game « XPoker Twd » (GO partiel Baki 2026-09-13, étape 2c) ─────────────
+  //
+  // Room réglée EN CHIPS par le club d'après un sheet hebdo ; joueur → N Player
+  // ID ; deal versionné HORS player_game_deals ; grand livre chips agence. Le
+  // modèle complet, ses invariants et les preuves des deux ALTER additifs
+  // (player_game_ids, manual_settlements) sont en tête de lib/games/xpoker/schema.ts.
+  //
+  // La migration elle-même vit dans le module pur : marqueur posé APRÈS le
+  // travail, ROLLBACK dans le catch, corps rejouable, et report au boot suivant
+  // (sans marqueur) si une migration antérieure a laissé une transaction ouverte.
+  try {
+    const r = runXpokerMigrationV1(db, {
+      gameName: XPOKER_GAME_NAME,
+      defaultActionPct: XPOKER_DEFAULT_ACTION_PCT,
+      seedChipsPerUsd: XPOKER_SEED_CHIPS_PER_USD,
+      seedRateEffectiveFrom: XPOKER_SEED_RATE_EFFECTIVE_FROM,
+      agencyAccounts: XPOKER_SEED_AGENCY_ACCOUNTS,
+    });
+    if (r === "applied") console.log(`[MIGRATION] ${XPOKER_MIGRATION_V1} applied`);
+    else if (r === "deferred") console.error(
+      `[MIGRATION:${XPOKER_MIGRATION_V1}] transaction déjà ouverte par une migration antérieure — ` +
+      `reportée au prochain boot (aucun marqueur posé).`,
+    );
+  } catch (err: any) {
+    console.error(`[MIGRATION:${XPOKER_MIGRATION_V1}] FAILED, ROLLBACK fait (sera rejouée au prochain boot):`, err.message);
   }
 }
