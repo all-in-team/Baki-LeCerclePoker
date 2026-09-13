@@ -34,7 +34,7 @@ import {
 import {
   commitImportOn, deleteImportOn, unlinkedMembersOn, linkMemberIdOn, archiveAccountOn, accountsForPlayerOn,
   deleteGameIdRowOn, setDealOn, dealForWeekOn, dealHistoryOn, playerWeeksOn, addLedgerLineOn, agencyStockOn, playerMovementsOn,
-  importSettlementStatusOn, rateAtOn, addRateOn, xpokerGameIdOn,
+  importSettlementStatusOn, rateAtOn, addRateOn, xpokerGameIdOn, relinkMemberIdOn, relinkLogOn,
 } from "../lib/games/xpoker/engine";
 import { block, CAS1, CAS2, type FixRow } from "./xpoker-fixture";
 
@@ -284,6 +284,41 @@ console.log("\n── 5. GARDE : DELETE générique refusé sur un ID porteur de
   eq("réactivation relie la semaine orpheline, sans doublon de ligne", [re.ok ? re.rows_linked : re, db.prepare(`SELECT COUNT(*) n FROM player_game_ids WHERE external_id = '3062825'`).get().n], [1, 1]);
   eq("statut redevenu actif", accountsForPlayerOn(db, ALICE)[0].status, "active");
   check("intégrité", db.pragma("integrity_check")[0].integrity_check === "ok" && db.pragma("foreign_key_check").length === 0);
+}
+
+console.log("\n── 6. R1 : déplacer un Player ID rattaché à tort — explicite, tracé, refusé si réglé ──");
+{
+  // 3062825 est chez Alice avec 2 semaines (7/13 et 8/03) et un cash-out ; en fait c'est Carol.
+  const aliceBefore = playerWeeksOn(db, ALICE).map(w => w.week_start);
+  const carolBefore = playerWeeksOn(db, CAROL).map(w => w.week_start);
+  eq("avant : Alice a 7/13 + 8/03, Carol n'a pas 8/03", [aliceBefore, carolBefore.includes("2026-08-03")], [["2026-08-03", "2026-07-13"], false]);
+  check("ID inconnu ⇒ refus", !relinkMemberIdOn(db, { member_id: "9999999", to_player_id: CAROL }).ok);
+  check("vers le même joueur ⇒ refus", !relinkMemberIdOn(db, { member_id: "3062825", to_player_id: ALICE }).ok);
+  check("vers un joueur inexistant ⇒ refus", !relinkMemberIdOn(db, { member_id: "3062825", to_player_id: 99 }).ok);
+  // Une semaine réglée chez l'ancien joueur bloque (étape 4 n'existe pas encore : on simule la ligne figée).
+  const gid = xpokerGameIdOn(db);
+  const sid = Number(db.prepare(`INSERT INTO manual_settlements (game_id, player_id, amount_due_usdt, amount_due_native, native_currency, fx_rate_applied) VALUES (?, ?, -94.75, -3126.74, 'TWD', 33)`).run(gid, ALICE).lastInsertRowid);
+  db.prepare(`INSERT INTO xpoker_settlement_weeks (settlement_id, player_id, week_start, winloss_chips, rake_chips, action_pct, rb_pct, action_chips, rb_chips, due_chips, rate_chips_per_usd) VALUES (?, ?, '2026-07-13', -31267.4, 4647.88, 10, 0, -3126.74, 0, -3126.74, 33)`).run(sid, ALICE);
+  const blocked = relinkMemberIdOn(db, { member_id: "3062825", to_player_id: CAROL, reason: "erreur de saisie" });
+  check("semaine réglée ⇒ refus nommé avec la liste", !blocked.ok && /2026-07-13 \(Alice, règlement #/.test((blocked as any).error), JSON.stringify(blocked));
+  eq("… la liste dit qui et quel règlement", (blocked as any).blocking, [{ week_start: "2026-07-13", player_id: ALICE, player_name: "Alice", settlement_id: sid }]);
+  eq("rien n'a bougé", playerWeeksOn(db, ALICE).map(w => w.week_start), aliceBefore);
+  eq("aucune trace écrite sur un refus", relinkLogOn(db, "3062825"), []);
+  db.prepare(`DELETE FROM xpoker_settlement_weeks WHERE settlement_id = ?`).run(sid);
+  db.prepare(`DELETE FROM manual_settlements WHERE id = ?`).run(sid);
+  const moved = relinkMemberIdOn(db, { member_id: "3062825", to_player_id: CAROL, reason: "erreur de saisie : 冲浪者 = Carol" });
+  check("déplacement accepté", moved.ok, JSON.stringify(moved));
+  if (moved.ok) {
+    eq("2 semaines et 1 mouvement (le cash-out) déplacés", { w: moved.weeks, m: moved.movements, from: moved.from_player_id, to: moved.to_player_id }, { w: ["2026-07-13", "2026-08-03"], m: 1, from: ALICE, to: CAROL });
+  }
+  eq("Alice n'a plus rien sur cet ID", playerWeeksOn(db, ALICE), []);
+  eq("Carol a maintenant 7/13 et 8/03 en plus", playerWeeksOn(db, CAROL).map(w => w.week_start), ["2026-08-03", "2026-07-27", "2026-07-13"]);
+  eq4("recalcul côté Carol : 7/13 = ses deux comptes, à SON deal (10 %)", playerWeeksOn(db, CAROL).find(w => w.week_start === "2026-07-13")!.action_chips, 0.10 * (-31267.4 - 11722.87));
+  eq("le compte est chez Carol, actif", accountsForPlayerOn(db, CAROL).map(a => [a.member_id, a.status]).sort(), [["3062825", "active"], ["4136708", "active"]]);
+  eq("le cash-out a suivi", playerMovementsOn(db, CAROL).cashout_chips, 2000);
+  const log = relinkLogOn(db, "3062825");
+  eq("trace : de qui vers qui, quelles semaines, combien de mouvements, pourquoi", log.map(l => [l.from_name, l.to_name, l.weeks, l.movements, l.reason, l.actor]), [["Alice", "Carol", ["2026-07-13", "2026-08-03"], 1, "erreur de saisie : 冲浪者 = Carol", "baki"]]);
+  check("intégrité après déplacement", db.pragma("integrity_check")[0].integrity_check === "ok" && db.pragma("foreign_key_check").length === 0);
 }
 
 console.log(`\n${passed} ✔  ${failures.length} ✘`);

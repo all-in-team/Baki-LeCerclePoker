@@ -113,6 +113,72 @@ export function linkMemberIdOn(
   return { ok: true, ...r };
 }
 
+export type RelinkResult =
+  | { ok: true; from_player_id: number; to_player_id: number; weeks: string[]; movements: number; log_id: number }
+  | { ok: false; error: string; blocking?: { week_start: string; player_id: number; player_name: string; settlement_id: number }[] };
+
+/**
+ * R1 — Déplace un Player ID d'un joueur vers un autre, EXPLICITEMENT.
+ *   • toutes les semaines importées sous cet ID changent de joueur (les résultats
+ *     et parts d'action sont dérivés à la lecture : les deux côtés sont donc
+ *     recalculés d'eux-mêmes, l'ancien perd, le nouveau gagne) ;
+ *   • les buy-ins / cash-outs saisis sur ce compte suivent (un mouvement est
+ *     rattaché à un COMPTE, et le compte change de propriétaire) ;
+ *   • REFUS si une semaine concernée est déjà réglée (xpoker_settlement_weeks),
+ *     chez l'ancien comme chez le nouveau : on rend la liste, Baki tranche ;
+ *   • une ligne xpoker_relink_log est écrite dans la même transaction.
+ */
+export function relinkMemberIdOn(
+  db: DB, args: { member_id: string; to_player_id: number; reason?: string | null; actor?: string },
+): RelinkResult {
+  const member_id = String(args.member_id ?? "").trim();
+  const gid = xpokerGameIdOn(db);
+  const acc = db.prepare(`SELECT id, player_id FROM player_game_ids WHERE game_id = ? AND external_id = ?`).get(gid, member_id) as { id: number; player_id: number } | undefined;
+  if (!acc) return { ok: false, error: `Player ID ${member_id} n'est rattaché à personne — utilise le rattachement, pas le déplacement` };
+  if (acc.player_id === args.to_player_id) return { ok: false, error: `Player ID ${member_id} est déjà chez ce joueur` };
+  const to = db.prepare(`SELECT id, name FROM players WHERE id = ?`).get(args.to_player_id) as { id: number; name: string } | undefined;
+  if (!to) return { ok: false, error: `Joueur ${args.to_player_id} introuvable` };
+  const from = db.prepare(`SELECT id, name FROM players WHERE id = ?`).get(acc.player_id) as { id: number; name: string } | undefined;
+  const weeks = (db.prepare(`SELECT DISTINCT week_start FROM xpoker_week_rows WHERE member_id = ? ORDER BY week_start`).all(member_id) as { week_start: string }[]).map(r => r.week_start);
+  if (weeks.length > 0) {
+    const ph = weeks.map(() => "?").join(", ");
+    const blocking = db.prepare(`
+      SELECT sw.week_start, sw.player_id, p.name AS player_name, sw.settlement_id
+      FROM xpoker_settlement_weeks sw JOIN players p ON p.id = sw.player_id
+      WHERE sw.player_id IN (?, ?) AND sw.week_start IN (${ph}) ORDER BY sw.week_start
+    `).all(acc.player_id, args.to_player_id, ...weeks) as { week_start: string; player_id: number; player_name: string; settlement_id: number }[];
+    if (blocking.length > 0) {
+      return {
+        ok: false, blocking,
+        error: `${blocking.length} semaine(s) déjà réglée(s) bloquent le déplacement : `
+             + blocking.map(b => `${b.week_start} (${b.player_name}, règlement #${b.settlement_id})`).join(", ")
+             + ` — déverrouille-les d'abord, ou renonce.`,
+      };
+    }
+  }
+  const run = db.transaction(() => {
+    db.prepare(`UPDATE player_game_ids SET player_id = ?, status = 'active' WHERE id = ?`).run(args.to_player_id, acc.id);
+    db.prepare(`UPDATE xpoker_week_rows SET player_id = ? WHERE member_id = ? AND is_agency = 0`).run(args.to_player_id, member_id);
+    const movements = db.prepare(`UPDATE xpoker_chip_ledger SET player_id = ? WHERE member_id = ? AND kind IN ('buyin','cashout')`).run(args.to_player_id, member_id).changes;
+    const log = db.prepare(`
+      INSERT INTO xpoker_relink_log (member_id, from_player_id, to_player_id, from_name, to_name, weeks, movements, reason, actor)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(member_id, acc.player_id, args.to_player_id, from?.name ?? null, to.name, JSON.stringify(weeks), movements, args.reason ?? null, args.actor ?? "baki");
+    return { movements, log_id: Number(log.lastInsertRowid) };
+  });
+  const r = run();
+  return { ok: true, from_player_id: acc.player_id, to_player_id: args.to_player_id, weeks, movements: r.movements, log_id: r.log_id };
+}
+
+export type RelinkLogRow = { id: number; member_id: string; from_player_id: number | null; to_player_id: number | null; from_name: string | null; to_name: string | null; weeks: string[]; movements: number; reason: string | null; actor: string; created_at: string };
+
+export function relinkLogOn(db: DB, memberId?: string): RelinkLogRow[] {
+  const rows = (memberId
+    ? db.prepare(`SELECT * FROM xpoker_relink_log WHERE member_id = ? ORDER BY id DESC`).all(memberId)
+    : db.prepare(`SELECT * FROM xpoker_relink_log ORDER BY id DESC LIMIT 100`).all()) as (Omit<RelinkLogRow, "weeks"> & { weeks: string })[];
+  return rows.map(r => ({ ...r, weeks: JSON.parse(r.weeks) as string[] }));
+}
+
 /** Archive (soft) un Player ID : l'historique reste, un import futur sous cet ID repart en réconciliation. */
 export function archiveAccountOn(db: DB, accountId: number, playerId: number): { ok: boolean; error?: string } {
   const gid = xpokerGameIdOn(db);

@@ -105,7 +105,7 @@ console.log("\n── A1. Application nominale ──");
   check("marqueur posé", marker(db));
   eq("tables créées", tables(db), [
     "xpoker_agency_accounts", "xpoker_chip_ledger", "xpoker_chip_rates", "xpoker_imports",
-    "xpoker_player_deals", "xpoker_settlement_weeks", "xpoker_week_rows",
+    "xpoker_player_deals", "xpoker_relink_log", "xpoker_settlement_weeks", "xpoker_week_rows",
   ]);
   for (const c of XPOKER_ADDED_COLUMNS) check(`colonne ${c.table}.${c.column}`, cols(db, c.table).includes(c.column));
   const g = db.prepare(`SELECT id, name, status, default_action_pct, currency FROM games WHERE name = ?`).get(XPOKER_GAME_NAME);
@@ -272,7 +272,7 @@ console.log("\n── B. Chaîne complète d'initSchema sur une COPIE de data/le
     const newMarkers = applied.length - nBefore;
     console.log(`   marqueurs : ${nBefore} → ${applied.length} (nouveaux : ${newMarkers}) = ${applied.filter(n => !fixesBefore.includes(n)).join(", ")}`);
     check("le nouveau marqueur est bien le nôtre", applied.includes(XPOKER_MIGRATION_V1));
-    eq("tables xpoker_*", tables(db).length, 7);
+    eq("tables xpoker_*", tables(db).length, 8);
     eq("colonnes manual_settlements (prod supposée ≡ local)", cols(db, "manual_settlements"),
        ["id","game_id","player_id","net_selected_usdt","action_pct_applied","amount_due_usdt","status","tx_hash","notes",
         "locked_at","paid_at","created_at","paid_date","kind","amount_due_native","native_currency","fx_rate_applied"]);

@@ -228,6 +228,27 @@ export const XPOKER_SCHEMA_SQL = `
   CREATE UNIQUE INDEX IF NOT EXISTS idx_xpoker_ledger_import
     ON xpoker_chip_ledger(import_id) WHERE kind = 'club_settlement';
 
+  -- ── TRACE des déplacements de Player ID (R1, fonction de premier rang) ────
+  -- Un ID rattaché au mauvais joueur est un cas NORMAL (pseudos qui ressemblent
+  -- à des ID : XP40049772 ≠ 4025681). relinkMemberIdOn le déplace explicitement,
+  -- recalcule des deux côtés (les résultats sont dérivés à la lecture), refuse
+  -- si une semaine concernée est déjà réglée, et laisse CETTE ligne. Jamais de
+  -- déplacement silencieux.
+  CREATE TABLE IF NOT EXISTS xpoker_relink_log (
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    member_id      TEXT NOT NULL,
+    from_player_id INTEGER REFERENCES players(id) ON DELETE SET NULL,
+    to_player_id   INTEGER REFERENCES players(id) ON DELETE SET NULL,
+    from_name      TEXT,                                 -- figé : le nom peut changer ensuite
+    to_name        TEXT,
+    weeks          TEXT NOT NULL,                        -- JSON des week_start déplacées
+    movements      INTEGER NOT NULL DEFAULT 0,           -- lignes du grand livre déplacées
+    reason         TEXT,
+    actor          TEXT NOT NULL DEFAULT 'baki',         -- pas d'auth (v1)
+    created_at     TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+  CREATE INDEX IF NOT EXISTS idx_xpoker_relink_member ON xpoker_relink_log(member_id, created_at);
+
   -- ── Semaines couvertes par un règlement joueur (étape 4) ──────────────────
   -- Pattern nexa_action_settlement_weeks : UNIQUE(player_id, week_start) rend
   -- le double règlement impossible au niveau du schéma ; ON DELETE CASCADE
