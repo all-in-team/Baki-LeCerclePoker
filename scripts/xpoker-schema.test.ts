@@ -198,7 +198,12 @@ console.log("\n── A5. Contraintes du schéma ──");
   throws("buy-in sans compte ⇒ refusé", () => led("buyin", "out", { player_id: 1 }), /CHECK constraint failed/);
   check("buy-in avec joueur + compte ⇒ ok", led("buyin", "out", { player_id: 1, member_id: "3062825" }).changes === 1);
   throws("règlement club rattaché à un joueur ⇒ refusé", () => led("club_settlement", "in", { player_id: 1 }), /CHECK constraint failed/);
-  check("règlement club anonyme ⇒ ok", led("club_settlement", "in").changes === 1);
+  throws("règlement club SANS import ⇒ refusé (F1 money-auditor)", () => led("club_settlement", "in"), /CHECK constraint failed/);
+  check("règlement club adossé à un import ⇒ ok", (() => {
+    insImport(0, null, 199.1325);
+    const iid = db.prepare(`SELECT id FROM xpoker_imports`).get().id;
+    return db.prepare(`INSERT INTO xpoker_chip_ledger (occurred_at, kind, direction, chips, rate_chips_per_usd, import_id) VALUES ('2026-08-03','club_settlement','in',199.1325,33,?)`).run(iid).changes === 1;
+  })());
   throws("chips ≤ 0 ⇒ refusé", () => db.prepare(`INSERT INTO xpoker_chip_ledger (occurred_at, kind, direction, chips, rate_chips_per_usd) VALUES ('2026-08-03','adjustment','in',0,33)`).run(), /CHECK constraint failed/);
   const sid = db.prepare(`INSERT INTO manual_settlements (game_id, player_id, amount_due_usdt, amount_due_native, native_currency, fx_rate_applied) VALUES (?, 1, 3.03, 100, 'TWD', 33)`).run(gid).lastInsertRowid;
   check("mouvement de règlement", led("action_paid", "out", { player_id: 1, settlement_id: sid }).changes === 1);

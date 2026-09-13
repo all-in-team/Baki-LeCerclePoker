@@ -119,11 +119,22 @@ export function parsePct(v: unknown): number | null {
   return Number.isFinite(n) ? n : null;
 }
 
-/** Nombre ou null — "" n'est PAS 0. "1,234.56" accepté. */
+/**
+ * Nombre ou null — "" n'est PAS 0. "1,234.56" (virgule = milliers) et "-136,2"
+ * (virgule décimale, locale FR : pas de point, 1-2 décimales) acceptés. "1,234"
+ * reste lu comme mille deux cent trente-quatre — la virgule suivie de 3 chiffres
+ * est un séparateur de milliers ; un CSV en locale FR à 3 décimales ferait
+ * échouer le checksum, jamais un import silencieux.
+ */
 export function parseNum(v: unknown): number | null {
   if (v === null || v === undefined || v === "") return null;
   if (typeof v === "number") return Number.isFinite(v) ? v : null;
-  const n = parseFloat(String(v).replace(/,/g, "").trim());
+  const s = String(v).trim();
+  const decimalComma = /^-?\d+,\d{1,2}$/.test(s);
+  const normalized = decimalComma ? s.replace(",", ".") : s.replace(/,/g, "");
+  // Match COMPLET exigé : parseFloat("-31 267.4") rendrait −31 en silence.
+  if (!/^-?\d+(\.\d+)?$/.test(normalized)) return null;
+  const n = parseFloat(normalized);
   return Number.isFinite(n) ? n : null;
 }
 

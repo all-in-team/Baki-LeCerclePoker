@@ -206,7 +206,11 @@ export const XPOKER_SCHEMA_SQL = `
     created_at         TEXT NOT NULL DEFAULT (datetime('now')),
     -- Un buy-in / cash-out est rattaché à un COMPTE (member_id) et remonte au joueur.
     CHECK (kind NOT IN ('buyin','cashout') OR (player_id IS NOT NULL AND member_id IS NOT NULL)),
-    CHECK (kind != 'club_settlement' OR (player_id IS NULL AND member_id IS NULL))
+    CHECK (kind != 'club_settlement' OR (player_id IS NULL AND member_id IS NULL)),
+    -- Un règlement club est TOUJOURS adossé à un import : sans ça il se ressaisit à
+    -- l'infini et le stock agence ment (faille F1, money-auditor 2026-09-13). Avec
+    -- l'index unique ci-dessous, un import = un règlement, au niveau du schéma.
+    CHECK (kind != 'club_settlement' OR import_id IS NOT NULL)
   );
   CREATE INDEX IF NOT EXISTS idx_xpoker_ledger_player
     ON xpoker_chip_ledger(player_id, occurred_at) WHERE player_id IS NOT NULL;

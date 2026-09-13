@@ -114,10 +114,13 @@ export default function PlayerDetailClient({ player, transactions, gameDeals: in
   }
 
   async function removeGameId(rowId: number) {
-    await fetch(`/api/players/${player.id}/game-ids`, {
+    const res = await fetch(`/api/players/${player.id}/game-ids`, {
       method: "DELETE", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ game_id_row_id: rowId }),
     });
+    // 409 = garde serveur (ID XPoker porteur de semaines importées) : la ligne reste,
+    // l'écran ne doit pas montrer une suppression qui n'a pas eu lieu.
+    if (!res.ok) { const d = await res.json().catch(() => ({})); alert(d.error ?? "Suppression refusée"); return; }
     setGameIds(ids => ids.filter(x => x.id !== rowId));
   }
 
