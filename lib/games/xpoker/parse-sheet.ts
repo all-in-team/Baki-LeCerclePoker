@@ -77,7 +77,8 @@ export type XpokerParsedRow = {
 
 export type XpokerParsedBlock = {
   tab_label: string;
-  params: { club: string; chip_value: number; rb_pct: number; tax_pct: number };
+  /** Taux du sheet en FRACTIONS (0.8 = 80 %) — l'unité est dans le nom, cf. club-math.ts. */
+  params: { club: string; chip_value: number; rb_fraction: number; tax_fraction: number };
   footer: { total_winloss: number; total_rake: number; tax: number; rb_amount: number; rb_rate_label: number | null; total: number };
   /** « 總交收 » du bloc de règlement (B20) — NULL si absent. */
   cleared: number | null;
@@ -94,7 +95,7 @@ export type XpokerParsedBlock = {
     rb_ok: boolean;                     // recompute.rb ≈ footer.rb_amount
     tax_ok: boolean;                    // recompute.tax ≈ footer.tax
     cleared_matches: boolean | null;    // 總交收 ≈ Total (null si 總交收 absent)
-    rb_rate_label_matches: boolean | null; // T21 (taux affiché au pied) ≈ 反水 des paramètres
+    rb_rate_label_matches: boolean | null; // T21 (taux affiché au pied) ≈ rb_fraction des paramètres
     sub_agent_present: boolean;
     foreign_rows: number;
   };
@@ -199,8 +200,8 @@ export function parseXpokerTab(ws: XLSX.WorkSheet, tabLabel: string, opts: Xpoke
   if (club !== opts.clubName) {
     throw new XpokerParseError(`club des paramètres = « ${club ?? ""} », attendu « ${opts.clubName} »`, tabLabel);
   }
-  const chip_value = parseNum(pRow[hChip.c]), rb_pct = parsePct(pRow[hRb.c]), tax_pct = parsePct(pRow[hTax.c]);
-  if (chip_value === null || rb_pct === null || tax_pct === null) {
+  const chip_value = parseNum(pRow[hChip.c]), rb_fraction = parsePct(pRow[hRb.c]), tax_fraction = parsePct(pRow[hTax.c]);
+  if (chip_value === null || rb_fraction === null || tax_fraction === null) {
     throw new XpokerParseError(`paramètre vide (幣值=${pRow[hChip.c]}, 反水=${pRow[hRb.c]}, TAX=${pRow[hTax.c]}) — vide ≠ zéro`, tabLabel);
   }
 
@@ -287,7 +288,7 @@ export function parseXpokerTab(ws: XLSX.WorkSheet, tabLabel: string, opts: Xpoke
   if (rows.length === 0) throw new XpokerParseError(`aucune ligne joueur pour l'agent ${opts.agentId} dans le bloc`, tabLabel);
 
   // 6. Recalcul et contrôles.
-  const recompute = clubSettlement(rows, { rb_pct, tax_pct });
+  const recompute = clubSettlement(rows, { rb_fraction, tax_fraction });
   const check_delta = recompute.total - footer.total;
   const checks = {
     checksum_ok: withinTolerance(recompute.total, footer.total, tol),
@@ -295,7 +296,7 @@ export function parseXpokerTab(ws: XLSX.WorkSheet, tabLabel: string, opts: Xpoke
     rb_ok: withinTolerance(recompute.rb, footer.rb_amount, tol),
     tax_ok: withinTolerance(recompute.tax, footer.tax, tol),
     cleared_matches: cleared === null ? null : withinTolerance(cleared, footer.total, tol),
-    rb_rate_label_matches: footer.rb_rate_label === null ? null : withinTolerance(footer.rb_rate_label, rb_pct, 1e-9),
+    rb_rate_label_matches: footer.rb_rate_label === null ? null : withinTolerance(footer.rb_rate_label, rb_fraction, 1e-9),
     sub_agent_present: rows.some(r => r.scope === "sub_agent"),
     foreign_rows: foreign_rows.length,
   };
@@ -303,9 +304,9 @@ export function parseXpokerTab(ws: XLSX.WorkSheet, tabLabel: string, opts: Xpoke
     warnings.push(`Σ des lignes retenues (W/L ${recompute.total_winloss}, rake ${recompute.total_rake}) ≠ totaux du pied (${footer.total_winloss}, ${footer.total_rake})`);
   }
   if (!checks.tax_ok && checks.rb_ok) {
-    warnings.push(`TAX recalculée ${recompute.tax} ≠ TAX du pied ${footer.tax} : le taux TAX des paramètres (${tax_pct}) ne correspond pas à la formule de la feuille`);
+    warnings.push(`TAX recalculée ${recompute.tax} ≠ TAX du pied ${footer.tax} : le taux TAX des paramètres (${tax_fraction}) ne correspond pas à la formule de la feuille`);
   }
-  if (checks.rb_rate_label_matches === false) warnings.push(`taux affiché au pied (${footer.rb_rate_label}) ≠ 反水 des paramètres (${rb_pct})`);
+  if (checks.rb_rate_label_matches === false) warnings.push(`taux affiché au pied (${footer.rb_rate_label}) ≠ 反水 des paramètres (${rb_fraction})`);
   if (checks.cleared_matches === false) warnings.push(`« ${L.cleared} » (${cleared}) ≠ « Total » (${footer.total}) : le montant réglé et le total calculé divergent`);
   if (cleared_club_line !== null && cleared !== null && !withinTolerance(cleared_club_line, cleared, tol)) {
     warnings.push(`ligne « ${opts.clubName} » du bloc de règlement (${cleared_club_line}) ≠ « ${L.cleared} » (${cleared}) : d'autres clubs sont sommés dans ce bloc`);
@@ -313,7 +314,7 @@ export function parseXpokerTab(ws: XLSX.WorkSheet, tabLabel: string, opts: Xpoke
   if (foreign_rows.length) warnings.push(`${foreign_rows.length} ligne(s) hors périmètre (ni agent ni super-agent = ${opts.agentId}) : ${foreign_rows.map(r => r.member_id).join(", ")}`);
   if (checks.sub_agent_present) warnings.push(`sous-agent présent : ${rows.filter(r => r.scope === "sub_agent").map(r => `${r.member_id} (agent ${r.agent ?? r.agent_id})`).join(", ")} — partage de revenu à confirmer`);
 
-  return { tab_label: tabLabel, params: { club, chip_value, rb_pct, tax_pct }, footer, cleared, cleared_club_line, rows, foreign_rows, recompute, checks, warnings };
+  return { tab_label: tabLabel, params: { club, chip_value, rb_fraction, tax_fraction }, footer, cleared, cleared_club_line, rows, foreign_rows, recompute, checks, warnings };
 }
 
 // ── classeur ─────────────────────────────────────────────────────────────────

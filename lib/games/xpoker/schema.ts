@@ -68,8 +68,12 @@ export const XPOKER_SCHEMA_SQL = `
   CREATE TABLE IF NOT EXISTS xpoker_player_deals (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
     player_id  INTEGER NOT NULL REFERENCES players(id) ON DELETE CASCADE,
-    action_pct REAL NOT NULL CHECK(action_pct >= 0 AND action_pct <= 100),
-    rb_pct     REAL NOT NULL DEFAULT 0 CHECK(rb_pct >= 0 AND rb_pct <= 100),
+    -- UNITÉ DANS LE NOM (R2 money-auditor, décision Baki 2026-09-13) : *_pct est un
+    -- POURCENT (10 = 10 %). Les taux du sheet, eux, sont des FRACTIONS et s'appellent
+    -- *_fraction (xpoker_imports.rb_fraction = 0.8). Le CHECK refuse l'entre-deux
+    -- ]0, 1[ : « 0.8 » saisi ici serait une fraction déguisée, pas 0,8 %.
+    action_pct REAL NOT NULL CHECK(action_pct = 0 OR (action_pct >= 1 AND action_pct <= 100)),
+    rb_pct     REAL NOT NULL DEFAULT 0 CHECK(rb_pct = 0 OR (rb_pct >= 1 AND rb_pct <= 100)),
     start_week TEXT NOT NULL,
     end_week   TEXT,
     note       TEXT,
@@ -99,10 +103,11 @@ export const XPOKER_SCHEMA_SQL = `
     filename            TEXT,
     file_hash           TEXT,
     club_name           TEXT NOT NULL,
-    -- Paramètres lus dans le bloc (fractions : 0.8 pour 80 %).
+    -- Paramètres lus dans le bloc — FRACTIONS (0.8 pour 80 %), l'unité est dans le
+    -- nom et le CHECK la tient : jamais un pourcent ici (cf. xpoker_player_deals).
     chip_value          REAL NOT NULL,
-    rb_pct              REAL NOT NULL,
-    tax_pct             REAL NOT NULL,
+    rb_fraction         REAL NOT NULL CHECK(rb_fraction >= 0 AND rb_fraction <= 1),
+    tax_fraction        REAL NOT NULL CHECK(tax_fraction >= 0 AND tax_fraction <= 1),
     -- Pied de bloc, tel que lu.
     sheet_total_winloss REAL NOT NULL,
     sheet_total_rake    REAL NOT NULL,
@@ -238,8 +243,8 @@ export const XPOKER_SCHEMA_SQL = `
     week_start         TEXT NOT NULL,
     winloss_chips      REAL NOT NULL,
     rake_chips         REAL NOT NULL,
-    action_pct         REAL NOT NULL,
-    rb_pct             REAL NOT NULL,
+    action_pct         REAL NOT NULL CHECK(action_pct = 0 OR (action_pct >= 1 AND action_pct <= 100)),  -- POURCENT
+    rb_pct             REAL NOT NULL CHECK(rb_pct = 0 OR (rb_pct >= 1 AND rb_pct <= 100)),              -- POURCENT
     action_chips       REAL NOT NULL,                    -- action_pct/100 × winloss
     rb_chips           REAL NOT NULL,                    -- rb_pct/100 × rake
     due_chips          REAL NOT NULL,                    -- action_chips − rb_chips

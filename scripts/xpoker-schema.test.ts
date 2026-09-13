@@ -166,7 +166,7 @@ console.log("\n── A5. Contraintes du schéma ──");
   runXpokerMigrationV1(db, SEED);
   const gid = db.prepare(`SELECT id FROM games WHERE name = ?`).get(XPOKER_GAME_NAME).id;
   const insImport = (delta: number, override: string | null, cleared: number | null) => db.prepare(`
-    INSERT INTO xpoker_imports (week_start, week_end, tab_label, source, club_name, chip_value, rb_pct, tax_pct,
+    INSERT INTO xpoker_imports (week_start, week_end, tab_label, source, club_name, chip_value, rb_fraction, tax_fraction,
       sheet_total_winloss, sheet_total_rake, sheet_tax, sheet_rb_amount, sheet_total, sheet_cleared,
       recomputed_rb, recomputed_tax, recomputed_total, check_delta, override_reason, rate_chips_per_usd, rows_total)
     VALUES (@ws, date(@ws, '+6 days'), '8/3', 'xlsx', '花順', 1, 0.8, 0.05,
@@ -218,6 +218,15 @@ console.log("\n── A5. Contraintes du schéma ──");
   sw("2026-07-13");
   throws("double règlement d'une semaine ⇒ impossible", () => sw("2026-07-13"), /UNIQUE/);
   throws("deal : % hors bornes", () => db.prepare(`INSERT INTO xpoker_player_deals (player_id, action_pct, start_week) VALUES (1, 101, '2026-03-16')`).run(), /CHECK constraint failed/);
+  throws("deal : 0.8 (fraction déguisée en pourcent) ⇒ refusé par le SCHÉMA (R2)", () => db.prepare(`INSERT INTO xpoker_player_deals (player_id, action_pct, rb_pct, start_week) VALUES (1, 10, 0.8, '2026-03-16')`).run(), /CHECK constraint failed/);
+  check("deal : 10 / 20 (pourcents) ⇒ ok", db.prepare(`INSERT INTO xpoker_player_deals (player_id, action_pct, rb_pct, start_week) VALUES (1, 10, 20, '2026-03-16')`).run().changes === 1);
+  throws("import : rb_fraction = 80 (pourcent déguisé en fraction) ⇒ refusé par le SCHÉMA (R2)", () => db.prepare(`
+    INSERT INTO xpoker_imports (week_start, week_end, source, club_name, chip_value, rb_fraction, tax_fraction, sheet_total_winloss, sheet_total_rake, sheet_tax, sheet_rb_amount, sheet_total,
+      recomputed_rb, recomputed_tax, recomputed_total, check_delta, rate_chips_per_usd, rows_total)
+    VALUES ('2026-09-07', '2026-09-13', 'xlsx', '花順', 1, 80, 0.05, 0, 0, 0, 0, 0, 0, 0, 0, 0, 33, 0)`).run(), /CHECK constraint failed/);
+  throws("settlement_weeks : rb_pct = 0.8 ⇒ refusé par le SCHÉMA (R2)", () => db.prepare(`
+    INSERT INTO xpoker_settlement_weeks (settlement_id, player_id, week_start, winloss_chips, rake_chips, action_pct, rb_pct, action_chips, rb_chips, due_chips, rate_chips_per_usd)
+    VALUES (?, 1, '2026-06-01', 0, 0, 10, 0.8, 0, 0, 0, 33)`).run(sid), /CHECK constraint failed/);
   throws("player_game_ids.status hors valeurs", () => db.prepare(`UPDATE player_game_ids SET status = 'deleted'`).run(), /CHECK constraint failed/);
 }
 

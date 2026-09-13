@@ -145,6 +145,8 @@ console.log("\n── 3. Deals versionnés, parts d'action dans les deux sens, i
   eq("deal Alice 10 % / RB 0 depuis 2026-03-16", setDealOn(db, { player_id: ALICE, action_pct: 10, rb_pct: 0, start_week: "2026-03-16" }), { ok: true });
   eq("deal Bob 10 % / RB 20 depuis 2026-07-13", setDealOn(db, { player_id: BOB, action_pct: 10, rb_pct: 20, start_week: "2026-07-13" }), { ok: true });
   check("start_week non lundi ⇒ refus", !setDealOn(db, { player_id: BOB, action_pct: 10, rb_pct: 0, start_week: "2026-07-14" }).ok);
+  const frac = setDealOn(db, { player_id: BOB, action_pct: 10, rb_pct: 0.8, start_week: "2026-07-27" });
+  check("deal rb_pct = 0.8 (fraction déguisée) ⇒ refus moteur nommé (R2)", !frac.ok && /fraction/.test(frac.error ?? ""), frac.error);
   const a = playerWeeksOn(db, ALICE).find(w => w.week_start === "2026-07-13")!;
   eq4("Alice perd 31267.4 → action −3126.74 : JE LUI DOIS", a.action_chips, -3126.74);
   eq4("Alice RB 0", a.rb_chips, 0);

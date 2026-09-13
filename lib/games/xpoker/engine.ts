@@ -13,7 +13,7 @@
 
 import type Database from "better-sqlite3";
 import type { XpokerParsedBlock } from "./parse-sheet";
-import { actionShareChips, rakebackChips, chipsToUsd } from "./club-math";
+import { actionShareChips, rakebackChips, chipsToUsd, assertPct } from "./club-math";
 import { XPOKER_CHECK_TOLERANCE } from "./schema";
 import { XPOKER_GAME_NAME } from "./config";
 
@@ -201,15 +201,15 @@ export function commitImportOn(db: DB, a: CommitImportArgs): CommitImportResult 
     const run = db.transaction(() => {
       const ins = db.prepare(`
         INSERT INTO xpoker_imports (week_start, week_end, tab_label, source, filename, file_hash, club_name,
-          chip_value, rb_pct, tax_pct, sheet_total_winloss, sheet_total_rake, sheet_tax, sheet_rb_amount, sheet_total, sheet_cleared,
+          chip_value, rb_fraction, tax_fraction, sheet_total_winloss, sheet_total_rake, sheet_tax, sheet_rb_amount, sheet_total, sheet_cleared,
           recomputed_rb, recomputed_tax, recomputed_total, check_delta, override_reason, sub_agent_present, rate_chips_per_usd, rows_total, note)
         VALUES (@week_start, @week_end, @tab_label, @source, @filename, @file_hash, @club,
-          @chip_value, @rb_pct, @tax_pct, @twl, @trake, @stax, @srb, @stotal, @cleared,
+          @chip_value, @rb_fraction, @tax_fraction, @twl, @trake, @stax, @srb, @stotal, @cleared,
           @rrb, @rtax, @rtotal, @delta, @override, @sub, @rate, @rows_total, @note)
       `).run({
         week_start: a.week_start, week_end: a.week_end, tab_label: b.tab_label, source: a.source,
         filename: a.filename ?? null, file_hash: a.file_hash ?? null, club: b.params.club,
-        chip_value: b.params.chip_value, rb_pct: b.params.rb_pct, tax_pct: b.params.tax_pct,
+        chip_value: b.params.chip_value, rb_fraction: b.params.rb_fraction, tax_fraction: b.params.tax_fraction,
         twl: b.footer.total_winloss, trake: b.footer.total_rake, stax: b.footer.tax, srb: b.footer.rb_amount, stotal: b.footer.total, cleared: b.cleared,
         rrb: b.recompute.rb, rtax: b.recompute.tax, rtotal: b.recompute.total, delta: b.checks.check_delta,
         override: b.checks.checksum_ok ? null : a.override_reason!.trim(), sub: b.checks.sub_agent_present ? 1 : 0,
@@ -296,7 +296,8 @@ export type XpokerDeal = { action_pct: number; rb_pct: number; start_week: strin
 /**
  * Pose un deal à partir d'une semaine : la période en cours est fermée la
  * semaine d'avant, la nouvelle s'ouvre. Taux en POURCENT (10 = 10 %) — pas la
- * fraction du sheet (xpoker_imports.rb_pct = 0.8) ; l'écran devra le dire.
+ * fraction du sheet (xpoker_imports.rb_fraction = 0.8) : l'unité est dans le nom,
+ * assertPct refuse ]0, 1[ et le CHECK du schéma aussi (R2).
  *
  * UN DEAL NE RÉÉCRIT JAMAIS UNE SEMAINE DÉJÀ IMPORTÉE (faille F2, money-auditor
  * 2026-09-13) : sinon la part d'action affichée d'une semaine change après coup,
@@ -309,7 +310,9 @@ export type XpokerDeal = { action_pct: number; rb_pct: number; start_week: strin
 export function setDealOn(db: DB, args: { player_id: number; action_pct: number; rb_pct: number; start_week: string; note?: string | null }): { ok: boolean; error?: string } {
   assertIsoDate(args.start_week, "start_week");
   if (!isMonday(args.start_week)) return { ok: false, error: `start_week doit être un lundi (${args.start_week})` };
-  if (!(args.action_pct >= 0 && args.action_pct <= 100) || !(args.rb_pct >= 0 && args.rb_pct <= 100)) return { ok: false, error: "pourcentages hors [0, 100]" };
+  // POURCENT (10 = 10 %). ]0, 1[ refusé : « 0.8 » serait la fraction du sheet déguisée (R2).
+  try { assertPct(args.action_pct, "action_pct"); assertPct(args.rb_pct, "rb_pct"); }
+  catch (e: any) { return { ok: false, error: e.message }; }
   const current = db.prepare(`SELECT id, start_week FROM xpoker_player_deals WHERE player_id = ? AND end_week IS NULL`).get(args.player_id) as { id: number; start_week: string } | undefined;
   const hasAny = !!db.prepare(`SELECT 1 FROM xpoker_player_deals WHERE player_id = ?`).get(args.player_id);
   if (hasAny) {

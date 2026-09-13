@@ -58,7 +58,7 @@ console.log("\n── 1. Cas d'acceptation 1 — 1 joueur, TAX négative ──"
   eq4("反水 80 %", b.recompute.rb, 205.144);
   eq4("TAX signée", b.recompute.tax, -6.0115);
   eq4("Total", b.recompute.total, 199.1325);
-  eq("paramètres lus", b.params, { club: "花順", chip_value: 1, rb_pct: 0.8, tax_pct: 0.05 });
+  eq("paramètres lus", b.params, { club: "花順", chip_value: 1, rb_fraction: 0.8, tax_fraction: 0.05 });
   eq("contrôles", b.checks, { checksum_ok: true, check_delta: b.checks.check_delta, rb_ok: true, tax_ok: true, cleared_matches: true, rb_rate_label_matches: true, sub_agent_present: false, foreign_rows: 0 });
   check("check_delta ≈ 0", Math.abs(b.checks.check_delta) < 1e-9, String(b.checks.check_delta));
   eq("R et T stockés comme libellés, rattachement sur S", { m: b.rows[0].member_id, r: b.rows[0].id_label, t: b.rows[0].nickname }, { m: "3062825", r: "冲浪者", t: "Carolina" });
@@ -108,7 +108,7 @@ console.log("\n── 4. CSV natif : taux en texte « 80% », onglet « Sheet1 �
   eq("sans BOM : même lecture", readXpokerWorkbook(Buffer.from(csv, "utf8")).tabs[0].label, "Sheet1");
   eq("un seul onglet, pas modèle", wb.tabs.map(t => [t.label, t.is_template]), [["Sheet1", false]]);
   const b = parseXpokerTab(wb.tabs[0].ws, wb.tabs[0].label, OPTS);
-  eq("taux lus depuis « 80% » / « 5% »", { rb: b.params.rb_pct, tax: b.params.tax_pct }, { rb: 0.8, tax: 0.05 });
+  eq("taux lus depuis « 80% » / « 5% »", { rb: b.params.rb_fraction, tax: b.params.tax_fraction }, { rb: 0.8, tax: 0.05 });
   eq4("Total", b.recompute.total, 9115.0755);
   check("checksum ok", b.checks.checksum_ok);
   eq("libellé chinois survit à l'aller-retour UTF-8", b.params.club, "花順");
@@ -143,7 +143,7 @@ console.log("\n── 6. Vide ≠ zéro ──");
 console.log("\n── 7. TAX paramètre ≠ formule de la feuille (onglet 3/23 : D2 = 0) ──");
 {
   const b = parseXpokerTab(sheet({ rows: CAS1, taxParam: 0, taxFormula: 0.05 }), "3/23", OPTS);
-  eq("tax_pct lu = 0", b.params.tax_pct, 0);
+  eq("tax_fraction lu = 0", b.params.tax_fraction, 0);
   check("checksum KO", !b.checks.checksum_ok);
   check("rb ok, tax KO — l'écart est localisé", b.checks.rb_ok && !b.checks.tax_ok);
   eq4("écart = la TAX que la feuille a appliquée", b.checks.check_delta, 6.0115);
@@ -225,12 +225,28 @@ console.log("\n── 12bis. SENS DE LA PART D'ACTION — fixé dans les deux di
   ];
   for (const w of week) eq4(`${w.id} wl=${w.wl} → ${w.want} (${w.sens})`, actionShareChips(w.wl, 10), w.want);
   // Le règlement CLUB de la même semaine est positif : deux flux, aucun net entre eux.
-  const club = clubSettlement(week.map(w => ({ winloss: w.wl, rake: 0 })), { rb_pct: 0.8, tax_pct: 0.05 });
+  const club = clubSettlement(week.map(w => ({ winloss: w.wl, rake: 0 })), { rb_fraction: 0.8, tax_fraction: 0.05 });
   check("le club et les joueurs ne se nettent pas : Σ parts joueurs ≠ règlement club", Math.abs(week.reduce((s, w) => s + actionShareChips(w.wl, 10), 0) - club.total) > 1);
   // CONTREFACTUELS : signe retourné / valeur absolue — vus échouer sur les mêmes données.
   const flipped = (wl: number) => -(10 / 100) * wl, abs = (wl: number) => (10 / 100) * Math.abs(wl);
   check("contrefactuel signe retourné ≠ règle", flipped(14053.56).toFixed(4) !== "1405.3560" && flipped(-11722.87).toFixed(4) !== "-1172.2870");
   check("contrefactuel valeur absolue ≠ règle sur un perdant", abs(-11722.87).toFixed(4) !== "-1172.2870");
+}
+
+console.log("\n── 12ter. UNITÉS : fraction (sheet) ≠ pourcent (deal) — l'inverse est REFUSÉ (R2) ──");
+{
+  const rows = [{ winloss: -136.2, rake: 256.43 }];
+  const thr = (fn: () => unknown) => { try { fn(); return null; } catch (e: any) { return String(e.message); } };
+  eq4("fraction correcte : 0.8 → rb 205.144", clubSettlement(rows, { rb_fraction: 0.8, tax_fraction: 0.05 }).rb, 205.144);
+  check("un POURCENT passé comme fraction (80) ⇒ refusé", /rb_fraction.*\[0, 1\].*80/.test(thr(() => clubSettlement(rows, { rb_fraction: 80, tax_fraction: 0.05 })) ?? ""));
+  check("idem pour tax (5) ⇒ refusé", /tax_fraction/.test(thr(() => clubSettlement(rows, { rb_fraction: 0.8, tax_fraction: 5 })) ?? ""));
+  eq4("pourcent correct : 20 → rb 569.076", rakebackChips(2845.38, 20), 569.076);
+  check("une FRACTION passée comme pourcent (0.8) ⇒ refusée, pas 0,8 %", /rb_pct.*fraction.*80 %/.test(thr(() => rakebackChips(2845.38, 0.8)) ?? ""));
+  check("idem action_pct 0.1 ⇒ refusé", /action_pct.*fraction/.test(thr(() => actionShareChips(1000, 0.1)) ?? ""));
+  eq4("0 % reste permis (RB par défaut)", rakebackChips(2845.38, 0), 0);
+  eq4("1 % reste permis (plus petit pourcent)", actionShareChips(1000, 1), 10);
+  // CONTREFACTUEL : sans la garde, 0.8 « passe » et calcule 2.05144 au lieu de 205.144.
+  check("contrefactuel : (0.8/100) × 256.43 = 2.05144 ≠ 205.144", ((0.8 / 100) * 256.43).toFixed(4) !== "205.1440");
 }
 
 console.log("\n── 12. Math pure ──");
@@ -239,7 +255,7 @@ console.log("\n── 12. Math pure ──");
   eq4("dû net = action − RB (+ = il doit)", weekDueChips(14053.56, 2845.38, 10, 20), 1405.356 - 569.076);
   eq4("équivalent USD à 33 (affichage)", chipsToUsd(9115.0755, 33), 276.2144);
   check("taux invalide ⇒ erreur", (() => { try { chipsToUsd(1, 0); return false; } catch { return true; } })());
-  eq("clubSettlement sur 0 ligne = 0 partout", clubSettlement([], { rb_pct: 0.8, tax_pct: 0.05 }), { total_winloss: 0, total_rake: 0, rb: 0, tax: 0, total: 0 });
+  eq("clubSettlement sur 0 ligne = 0 partout", clubSettlement([], { rb_fraction: 0.8, tax_fraction: 0.05 }), { total_winloss: 0, total_rake: 0, rb: 0, tax: 0, total: 0 });
 }
 
 console.log(`\n${passed} ✔  ${failures.length} ✘`);

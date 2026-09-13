@@ -30,8 +30,25 @@
 // dans /payments, jamais un net de 1105.
 // ─────────────────────────────────────────────────────────────────────────────
 
+// ─────────────────────────────────────────────────────────────────────────────
+// DEUX UNITÉS, DEUX NOMS — jamais le même mot pour les deux (R2, 2026-09-13) :
+//   *_fraction : taux du SHEET, 0.8 pour 80 %   (ClubParams, xpoker_imports)
+//   *_pct      : taux du DEAL, 10 pour 10 %      (xpoker_player_deals, actionShareChips…)
+// Les gardes ci-dessous refusent l'unité inverse à l'EXÉCUTION : une fraction > 1
+// n'existe pas, un pourcent dans ]0, 1[ est une fraction déguisée. Une validation
+// d'écran se contourne ; celles-ci, non.
+// ─────────────────────────────────────────────────────────────────────────────
+
 /** Taux du bloc, en FRACTIONS (0.8 pour 80 %), tels que lus dans le fichier. */
-export type ClubParams = { rb_pct: number; tax_pct: number };
+export type ClubParams = { rb_fraction: number; tax_fraction: number };
+
+export function assertFraction(v: number, what: string): void {
+  if (!(Number.isFinite(v) && v >= 0 && v <= 1)) throw new Error(`${what} : fraction attendue dans [0, 1], reçu ${v} — un pourcent (${v} %) n'a rien à faire ici`);
+}
+export function assertPct(v: number, what: string): void {
+  if (!Number.isFinite(v) || v < 0 || v > 100) throw new Error(`${what} : pourcent attendu dans [0, 100], reçu ${v}`);
+  if (v > 0 && v < 1) throw new Error(`${what} : ${v} ressemble à une fraction (${v * 100} %) — les deals sont en POURCENT (10 = 10 %)`);
+}
 
 export type ClubSettlement = {
   total_winloss: number;
@@ -55,10 +72,11 @@ export type ClubSettlement = {
  * (agence et sous-agent comprises) — sinon le checksum ne peut pas retomber.
  */
 export function clubSettlement(rows: { winloss: number; rake: number }[], p: ClubParams): ClubSettlement {
+  assertFraction(p.rb_fraction, "rb_fraction"); assertFraction(p.tax_fraction, "tax_fraction");
   let total_winloss = 0, total_rake = 0;
   for (const r of rows) { total_winloss += r.winloss; total_rake += r.rake; }
-  const rb = p.rb_pct * total_rake;
-  const tax = p.tax_pct * (-total_winloss - total_rake);
+  const rb = p.rb_fraction * total_rake;
+  const tax = p.tax_fraction * (-total_winloss - total_rake);
   return { total_winloss, total_rake, rb, tax, total: rb + tax };
 }
 
@@ -68,11 +86,13 @@ export function clubSettlement(rows: { winloss: number; rake: number }[], p: Clu
  * doit à l'agence (il a gagné), NÉGATIF = l'agence lui doit (il a perdu).
  */
 export function actionShareChips(winloss: number, action_pct: number): number {
+  assertPct(action_pct, "action_pct");
   return (action_pct / 100) * winloss;
 }
 
 /** Rakeback dû au joueur sur SON rake (donnée interne, jamais notifiée). Toujours ≥ 0. */
 export function rakebackChips(rake: number, rb_pct: number): number {
+  assertPct(rb_pct, "rb_pct");
   return (rb_pct / 100) * rake;
 }
 
