@@ -273,6 +273,30 @@ console.log("\n── 11. Nom d'onglet ⇒ candidats, jamais d'année (Q7) ─�
   eq("date inexistante ⇒ null", proposeWeek({ month: 2, day: 30, label: "2/30" }, 2026), null);
 }
 
+console.log("\n── 12bis. SENS DE LA PART D'ACTION — fixé dans les deux directions (Baki 2026-09-13) ──");
+{
+  // Ce bloc DOIT échouer si quelqu'un retourne le signe (−pct × wl, ou |wl|).
+  eq4("gagne 1000 à 10 % → +100 : le joueur me doit", actionShareChips(1000, 10), 100);
+  eq4("perd 1000 à 10 % → −100 : je dois au joueur", actionShareChips(-1000, 10), -100);
+  check("gagnant ⇒ strictement positif", actionShareChips(1000, 10) > 0);
+  check("perdant ⇒ strictement négatif", actionShareChips(-1000, 10) < 0);
+  check("symétrie exacte, pas de plancher, pas de makeup", actionShareChips(1000, 10) === -actionShareChips(-1000, 10));
+  // Même semaine, un gagnant et deux perdants — le cas de référence chiffré.
+  const week = [
+    { id: "4107823", wl: 14053.56, want: 1405.356, sens: "il me doit" },
+    { id: "4136708", wl: -11722.87, want: -1172.287, sens: "je lui dois" },
+    { id: "3062825", wl: -31267.4, want: -3126.74, sens: "je lui dois" },
+  ];
+  for (const w of week) eq4(`${w.id} wl=${w.wl} → ${w.want} (${w.sens})`, actionShareChips(w.wl, 10), w.want);
+  // Le règlement CLUB de la même semaine est positif : deux flux, aucun net entre eux.
+  const club = clubSettlement(week.map(w => ({ winloss: w.wl, rake: 0 })), { rb_pct: 0.8, tax_pct: 0.05 });
+  check("le club et les joueurs ne se nettent pas : Σ parts joueurs ≠ règlement club", Math.abs(week.reduce((s, w) => s + actionShareChips(w.wl, 10), 0) - club.total) > 1);
+  // CONTREFACTUELS : signe retourné / valeur absolue — vus échouer sur les mêmes données.
+  const flipped = (wl: number) => -(10 / 100) * wl, abs = (wl: number) => (10 / 100) * Math.abs(wl);
+  check("contrefactuel signe retourné ≠ règle", flipped(14053.56).toFixed(4) !== "1405.3560" && flipped(-11722.87).toFixed(4) !== "-1172.2870");
+  check("contrefactuel valeur absolue ≠ règle sur un perdant", abs(-11722.87).toFixed(4) !== "-1172.2870");
+}
+
 console.log("\n── 12. Math pure ──");
 {
   eq4("rakeback joueur 20 % sur 2845.38", rakebackChips(2845.38, 20), 569.076);

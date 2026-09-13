@@ -3,6 +3,32 @@
 // Tout est en chips. L'arrondi se fait à l'AFFICHAGE et sur le montant réglé,
 // jamais ici : le sheet garde 4 décimales sur ses intermédiaires et les deux cas
 // d'acceptation du brief (§4) doivent retomber au 1/100 de centime.
+//
+// ─────────────────────────────────────────────────────────────────────────────
+// RÈGLE DE SIGNE DE LA PART D'ACTION — confirmée par Baki le 2026-09-13.
+//
+//   part d'action = action_pct × winloss du joueur, DU POINT DE VUE AGENCE.
+//
+//   joueur gagne 1000 → action 10 % = +100 → LE JOUEUR ME DOIT 100
+//   joueur perd  1000 → action 10 % = −100 → JE DOIS 100 AU JOUEUR
+//
+// Symétrique et sans exception : je prends ma part de ses gains, je couvre ma
+// part de ses pertes. Pas de plancher à zéro, pas de makeup, pas de traitement
+// différent selon le signe. C'est la convention de manual_settlements et du hub
+// /payments (due > 0 = « Il nous doit », vert · due < 0 = « On lui doit », rouge).
+//
+// Cas de référence (semaine à 3 joueurs, action 10 %, onglet 7/20) :
+//   4107823  wl = +14053,56 → +1405,356 → il me doit 1405,356
+//   4136708  wl = −11722,87 → −1172,287 → je lui dois 1172,287
+//   3062825  wl = −31267,4  → −3126,74  → je lui dois 3126,74
+// Ces trois lignes coexistent la même semaine où le règlement CLUB est de
+// +9115,0755 : deux flux distincts (le club me règle en chips ; je règle chaque
+// joueur sur SON résultat), jamais nettés l'un contre l'autre.
+//
+// Et avec XPoker HORS compensation inter-rooms (Baki Q1) : un joueur qui me doit
+// 1405 chips XPoker et à qui je dois 300 USDT sur KKPOKER, ce sont DEUX lignes
+// dans /payments, jamais un net de 1105.
+// ─────────────────────────────────────────────────────────────────────────────
 
 /** Taux du bloc, en FRACTIONS (0.8 pour 80 %), tels que lus dans le fichier. */
 export type ClubParams = { rb_pct: number; tax_pct: number };
@@ -38,9 +64,8 @@ export function clubSettlement(rows: { winloss: number; rake: number }[], p: Clu
 
 /**
  * Part d'action d'UNE ligne, sur SON win/lose — jamais un % appliqué au total du
- * bloc puis réparti. Convention de signe du repo (manual_settlements, NEXA) :
- * POSITIF = le joueur doit à l'agence (il a gagné), NÉGATIF = l'agence lui verse.
- * Cas §5 : 4107823, +14053.56 à 10 % → +1405.356.
+ * bloc puis réparti. Signe : voir la règle en tête de fichier — POSITIF = le joueur
+ * doit à l'agence (il a gagné), NÉGATIF = l'agence lui doit (il a perdu).
  */
 export function actionShareChips(winloss: number, action_pct: number): number {
   return (action_pct / 100) * winloss;
