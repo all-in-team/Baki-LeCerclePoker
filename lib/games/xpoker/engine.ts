@@ -307,7 +307,7 @@ export type XpokerDeal = { action_pct: number; rb_pct: number; start_week: strin
  * exception : le PREMIER deal, qui peut couvrir l'historique déjà importé (c'est
  * le geste normal après un import initial).
  */
-export function setDealOn(db: DB, args: { player_id: number; action_pct: number; rb_pct: number; start_week: string; note?: string | null }): { ok: boolean; error?: string } {
+export function setDealOn(db: DB, args: { player_id: number; action_pct: number; rb_pct: number; start_week: string; note?: string | null }): { ok: boolean; error?: string; blocking_weeks?: string[] } {
   assertIsoDate(args.start_week, "start_week");
   if (!isMonday(args.start_week)) return { ok: false, error: `start_week doit être un lundi (${args.start_week})` };
   // POURCENT (10 = 10 %). ]0, 1[ refusé : « 0.8 » serait la fraction du sheet déguisée (R2).
@@ -316,9 +316,19 @@ export function setDealOn(db: DB, args: { player_id: number; action_pct: number;
   const current = db.prepare(`SELECT id, start_week FROM xpoker_player_deals WHERE player_id = ? AND end_week IS NULL`).get(args.player_id) as { id: number; start_week: string } | undefined;
   const hasAny = !!db.prepare(`SELECT 1 FROM xpoker_player_deals WHERE player_id = ?`).get(args.player_id);
   if (hasAny) {
-    const last = db.prepare(`SELECT MAX(week_start) AS w FROM xpoker_week_rows WHERE player_id = ?`).get(args.player_id) as { w: string | null };
-    if (last.w && args.start_week <= last.w) {
-      return { ok: false, error: `la semaine ${last.w} est déjà importée avec le deal en vigueur — un nouveau deal commence après (${addDays(last.w, 7)} au plus tôt)` };
+    // Refus NOMMÉ avec la LISTE des semaines qui bloquent (formulaire étape 3) : Baki
+    // voit exactement ce qu'un changement rétroactif réécrirait, et choisit la
+    // semaine d'effet en connaissance de cause.
+    const blocking = (db.prepare(
+      `SELECT DISTINCT week_start FROM xpoker_week_rows WHERE player_id = ? AND week_start >= ? ORDER BY week_start`
+    ).all(args.player_id, args.start_week) as { week_start: string }[]).map(r => r.week_start);
+    if (blocking.length > 0) {
+      const last = blocking[blocking.length - 1];
+      return {
+        ok: false, blocking_weeks: blocking,
+        error: `${blocking.length} semaine(s) déjà importée(s) à partir du ${args.start_week} garderaient leur deal : ${blocking.join(", ")} — `
+             + `un nouveau deal commence après la dernière (${addDays(last, 7)} au plus tôt)`,
+      };
     }
     if (current && args.start_week <= current.start_week) {
       return { ok: false, error: `la période en cours commence le ${current.start_week} — un deal ne se réécrit pas dans le passé` };
@@ -333,6 +343,35 @@ export function setDealOn(db: DB, args: { player_id: number; action_pct: number;
   });
   run();
   return { ok: true };
+}
+
+/**
+ * Pour le formulaire : la période EN COURS (valeur actuelle + depuis quand), les
+ * périodes précédentes avec leurs bornes, et la première semaine d'effet possible
+ * pour un changement (= lendemain de la dernière semaine importée, ou de la
+ * période en cours). Aucun calcul d'argent ici.
+ */
+export type DealHistory = {
+  current: (XpokerDeal & { id: number; note: string | null }) | null;
+  previous: (XpokerDeal & { id: number; note: string | null })[];
+  /** Lundi le plus tôt accepté par setDealOn (null = aucun deal encore : n'importe quel lundi). */
+  earliest_change_week: string | null;
+  last_imported_week: string | null;
+};
+
+export function dealHistoryOn(db: DB, playerId: number): DealHistory {
+  const rows = db.prepare(
+    `SELECT id, action_pct, rb_pct, start_week, end_week, note FROM xpoker_player_deals WHERE player_id = ? ORDER BY start_week DESC`
+  ).all(playerId) as (XpokerDeal & { id: number; note: string | null })[];
+  const current = rows.find(r => r.end_week === null) ?? null;
+  const previous = rows.filter(r => r.end_week !== null);
+  const last = (db.prepare(`SELECT MAX(week_start) AS w FROM xpoker_week_rows WHERE player_id = ?`).get(playerId) as { w: string | null }).w;
+  let earliest: string | null = null;
+  if (rows.length > 0) {
+    const candidates = [last ? addDays(last, 7) : null, current ? addDays(current.start_week, 7) : null].filter((x): x is string => !!x);
+    earliest = candidates.sort().pop() ?? null;
+  }
+  return { current, previous, earliest_change_week: earliest, last_imported_week: last };
 }
 
 export function dealForWeekOn(db: DB, playerId: number, weekStart: string): XpokerDeal | null {

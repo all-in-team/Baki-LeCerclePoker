@@ -33,7 +33,7 @@ import {
 } from "../lib/games/xpoker/config";
 import {
   commitImportOn, deleteImportOn, unlinkedMembersOn, linkMemberIdOn, archiveAccountOn, accountsForPlayerOn,
-  deleteGameIdRowOn, setDealOn, dealForWeekOn, playerWeeksOn, addLedgerLineOn, agencyStockOn, playerMovementsOn,
+  deleteGameIdRowOn, setDealOn, dealForWeekOn, dealHistoryOn, playerWeeksOn, addLedgerLineOn, agencyStockOn, playerMovementsOn,
   importSettlementStatusOn, rateAtOn, addRateOn, xpokerGameIdOn,
 } from "../lib/games/xpoker/engine";
 import { block, CAS1, CAS2, type FixRow } from "./xpoker-fixture";
@@ -185,8 +185,22 @@ console.log("\n── 3. Deals versionnés, parts d'action dans les deux sens, i
   // APRÈS le début de la période mais AVANT une semaine déjà importée → refus.
   const mid = setDealOn(db, { player_id: CAROL, action_pct: 50, rb_pct: 0, start_week: "2026-07-20" });
   check("deal entre le début de période et une semaine importée ⇒ refus (F2)", !mid.ok && /déjà importée/.test(mid.error ?? ""), mid.error);
+  eq("… le refus LISTE les semaines qui bloquent", mid.blocking_weeks, ["2026-07-27"]);
+  const early = setDealOn(db, { player_id: CAROL, action_pct: 50, rb_pct: 0, start_week: "2026-07-06" });
+  eq("depuis 7/06 : les deux semaines importées bloquent", early.blocking_weeks, ["2026-07-13", "2026-07-27"]);
+  // Historique pour le formulaire : valeur actuelle + depuis quand, périodes précédentes, première semaine d'effet.
+  const h0 = dealHistoryOn(db, CAROL);
+  eq("historique Carol : en cours 10 % depuis 7/13, rien avant, changement possible dès le 8/03",
+     { cur: [h0.current?.action_pct, h0.current?.start_week], prev: h0.previous.length, earliest: h0.earliest_change_week, last: h0.last_imported_week },
+     { cur: [10, "2026-07-13"], prev: 0, earliest: "2026-08-03", last: "2026-07-27" });
   eq4("Carol 7/27 toujours à 10 %", playerWeeksOn(db, CAROL).find(w => w.week_start === "2026-07-27")!.action_chips, -917.366);
   eq("deal Carol à partir du 8/03 (après la dernière semaine importée) ⇒ ok", setDealOn(db, { player_id: CAROL, action_pct: 50, rb_pct: 0, start_week: "2026-08-03" }), { ok: true });
+  const h1 = dealHistoryOn(db, CAROL);
+  eq("historique après changement : 50 % depuis 8/03, 10 % du 7/13 au 7/27 en précédent",
+     { cur: [h1.current?.action_pct, h1.current?.start_week], prev: h1.previous.map(p => [p.action_pct, p.start_week, p.end_week]), earliest: h1.earliest_change_week },
+     { cur: [50, "2026-08-03"], prev: [[10, "2026-07-13", "2026-07-27"]], earliest: "2026-08-10" });
+  eq("joueur sans deal : historique vide, n'importe quel lundi", dealHistoryOn(db, 99), { current: null, previous: [], earliest_change_week: null, last_imported_week: null });
+  eq("0 % d'action et 0 % de RB : accepté (défaut de la plupart des joueurs)", setDealOn(db, { player_id: CAROL, action_pct: 0, rb_pct: 0, start_week: "2026-08-10" }), { ok: true });
   // Multi-comptes : un 2ᵉ Player ID pour Bob, même semaine ⇒ somme au niveau joueur, détail par compte.
   eq("2ᵉ compte Bob", linkMemberIdOn(db, { player_id: BOB, member_id: "4004977" }).ok, true);
   db.prepare(`INSERT INTO xpoker_week_rows (import_id, week_start, member_id, winloss_chips, rake_chips, player_id) VALUES (?, '2026-07-27', '4004977', -1000, 100, ?)`).run((r2 as any).import_id, BOB);
