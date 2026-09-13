@@ -113,16 +113,25 @@ export default function XpokerClient({ dash, today, periodLabel }: { dash: Xpoke
 // ── Graphe ───────────────────────────────────────────────────────────────────
 
 function RevenueChart({ weeks, rate, periodLabel }: { weeks: XpokerChartWeek[]; rate: number | null; periodLabel: string }) {
-  const data = useMemo(() => weeks.map(w => ({
-    week: w.week_start.slice(5),
-    club: w.club_sheet_total,
-    // Un null RESTE null : recharts ne dessine pas la barre, il n'invente pas un zéro.
-    action: w.action_chips,
-    incalculable: w.incalculable, unlinked: w.unlinked_rows, flagged: !w.check_ok,
-  })), [weeks]);
-  // ResponsiveContainer se mesure au montage ; pendant l'animation d'entrée du
-  // template (pageIn, 0.3 s) la mesure a été observée fausse (largeur doublée,
-  // graphe invisible jusqu'au premier scroll). On monte le graphe APRÈS.
+  const data = useMemo(() => {
+    // Hauteur de la barre hachurée « incalculable » : celle du plus grand montant du
+    // graphe. Elle ne représente AUCUN montant — c'est un marqueur « données présentes,
+    // calcul impossible », distinct d'un vide qui se lirait « pas de données ».
+    const yMax = Math.max(1, ...weeks.flatMap(w => [Math.abs(w.club_sheet_total), Math.abs(w.action_chips ?? 0)]));
+    return weeks.map(w => ({
+      week: w.week_start.slice(5),
+      club: w.club_sheet_total,
+      // Un null RESTE null : recharts ne dessine pas la barre, il n'invente pas un zéro.
+      action: w.action_chips,
+      incal: w.action_chips === null ? yMax : null,
+      incalculable: w.incalculable, unlinked: w.unlinked_rows, flagged: !w.check_ok,
+    }));
+  }, [weeks]);
+  // Le graphe est CLIENT-ONLY (ResponsiveContainer se mesure au montage) : il
+  // n'apparaît qu'après l'hydratation, qui peut prendre plusieurs secondes en dev
+  // (constaté : > 5 s au premier chargement, DOM sans SVG puis 8 barres). Pendant
+  // ce temps la zone dit qu'elle charge, plutôt que de ressembler à un bug. Le
+  // montage est aussi décalé après l'animation d'entrée du template (pageIn).
   const [ready, setReady] = useState(false);
   useEffect(() => { const t = setTimeout(() => setReady(true), 400); return () => clearTimeout(t); }, []);
   if (weeks.length === 0) return null;
@@ -130,19 +139,35 @@ function RevenueChart({ weeks, rate, periodLabel }: { weeks: XpokerChartWeek[]; 
     <div style={card}>
       <h2 style={h2}>Par semaine — {periodLabel}</h2>
       <p style={help}>Or : règlement club (Total du sheet). Vert/rouge : Σ parts d&apos;action des joueurs (+ = ils me doivent). Deux flux distincts, jamais nettés. Une semaine sans barre verte a un joueur sans deal.</p>
-      <div style={{ width: "100%", height: 240 }}>
+      <div style={{ width: "100%", height: 240, display: "flex", alignItems: "center", justifyContent: "center" }}>
+        {!ready && <span style={{ fontSize: 12, color: MUTED }}>graphe en cours de chargement…</span>}
         {ready && <ResponsiveContainer width="100%" height={240} debounce={50}>
           <BarChart data={data} barSize={34} barGap={4} barCategoryGap="30%" margin={{ top: 6, right: 8, left: 0, bottom: 0 }}>
             <XAxis dataKey="week" stroke={MUTED} fontSize={11} />
             <YAxis stroke={MUTED} fontSize={11} tickFormatter={v => `${Math.round(v / 1000)}k`} />
             <ReferenceLine y={0} stroke="var(--border)" />
+            <defs>
+              <pattern id="xpoker-hatch" patternUnits="userSpaceOnUse" width="6" height="6" patternTransform="rotate(45)">
+                <rect width="6" height="6" fill="rgba(136,136,160,0.10)" />
+                <line x1="0" y1="0" x2="0" y2="6" stroke="#8888A0" strokeWidth="1.5" />
+              </pattern>
+            </defs>
             <Tooltip contentStyle={{ background: "#1a1c22", border: "1px solid var(--border)", fontSize: 12 }}
-              formatter={(v: number, name: string) => [`${fmt(v)} chips${rate ? ` ≈ ${fmt(v / rate)} USD` : ""}`, name === "club" ? "Règlement club (sheet)" : "Parts d'action joueurs"]} />
-            <Legend formatter={(v: string) => v === "club" ? "Règlement club" : "Parts d'action joueurs"} wrapperStyle={{ fontSize: 11 }} />
+              formatter={(v: number, name: string, item: { payload?: { incalculable?: number } }) => {
+                if (name === "incal") return [`incalculable — ${item.payload?.incalculable ?? "?"} joueur(s) sans deal`, "Parts d'action joueurs"];
+                return [`${fmt(v)} chips${rate ? ` ≈ ${fmt(v / rate)} USD` : ""}`, name === "club" ? "Règlement club (sheet)" : "Parts d'action joueurs"];
+              }} />
+            <Legend payload={[
+              { value: "Règlement club", type: "square", color: GOLD },
+              { value: "Parts d'action joueurs", type: "square", color: GREEN },
+              { value: "incalculable (joueur sans deal)", type: "square", color: "#8888A0" },
+            ]} wrapperStyle={{ fontSize: 11 }} />
             <Bar dataKey="club" fill={GOLD} radius={[4, 4, 0, 0]} isAnimationActive={false} />
-            <Bar dataKey="action" fill={GREEN} radius={[4, 4, 0, 0]} isAnimationActive={false}>
+            {/* Même stackId : la barre hachurée occupe le créneau de la part d'action quand celle-ci est null. */}
+            <Bar dataKey="action" stackId="players" fill={GREEN} radius={[4, 4, 0, 0]} isAnimationActive={false}>
               {data.map((d, i) => <Cell key={i} fill={(d.action ?? 0) >= 0 ? GREEN : RED} />)}
             </Bar>
+            <Bar dataKey="incal" stackId="players" fill="url(#xpoker-hatch)" stroke="#8888A0" strokeWidth={1} radius={[4, 4, 0, 0]} isAnimationActive={false} />
           </BarChart>
         </ResponsiveContainer>}
       </div>
