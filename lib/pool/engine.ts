@@ -203,7 +203,9 @@ export function isPoolTimestamp(ts: string): boolean {
   return !Number.isNaN(d.getTime()) && d.toISOString().slice(0, 19).replace("T", " ") === ts;
 }
 
-export type SettlementDateResult = { ok: true; occurred_at: string } | { ok: false; error: string };
+export type SettlementDateResult =
+  | { ok: true; occurred_at: string; precision: "day" }
+  | { ok: false; error: string };
 
 /**
  * À quel INSTANT dater le mouvement de règlement, quand /payments ne donne qu'un JOUR.
@@ -223,11 +225,18 @@ export type SettlementDateResult = { ok: true; occurred_at: string } | { ok: fal
  *   occurred_at = max( paid_date 00:00:00 , closed_at + 1 s )
  *
  * Le même jour que la clôture → une seconde après elle, dans la période suivante.
- * Un jour ultérieur → ce jour à 00:00:00 (l'heure exacte est inconnue et sans
- * importance : la seule frontière qui compte est la clôture réglée, et la règle
- * d'exploitation ci-dessous garantit qu'aucune autre clôture ne s'est glissée
- * entre). C'est l'analogue des « late transactions belong to the next open week »
- * de weekly_settlements.
+ * Un jour ultérieur → ce jour à 00:00:00. C'est l'analogue des « late
+ * transactions belong to the next open week » de weekly_settlements.
+ *
+ * ⚠️ L'HEURE EXACTE N'EST PAS SANS IMPORTANCE — une première version l'affirmait,
+ * à tort (constat money-auditor 2026-09-13, phase 2 A). La clôture N+1 peut être
+ * POSTÉRIEURE dans l'outil (le blocker impose « payer d'abord, clôturer ensuite »)
+ * et ANTÉRIEURE dans le réel : photo à 17:59, virement à 19:00, saisie le soir.
+ * Daté 00:00:00, le mouvement tombe dans N+1 dont la photo ne le contient pas →
+ * gain fictif de |part|, part fantôme. D'où `precision: "day"` : le résultat est
+ * une approximation à résoudre (resolveSettlementInstantsOn, depuis la ligne
+ * agence du grand livre de la main), et tant qu'un mouvement au jour partage le
+ * jour d'une clôture, previewPoolPeriodOn REFUSE de figer.
  *
  * paid_date ANTÉRIEUR au jour de la clôture → REFUS : payé avant la photo, le
  * montant est déjà DANS pool_close et la part a été calculée dessus. Cette
@@ -247,19 +256,28 @@ export function settlementOccurredAt(paidDate: string, settledClosedAt: string):
   if (!isPoolTimestamp(`${paidDate} 00:00:00`)) return { ok: false, error: `Date de paiement « ${paidDate} » — attendu YYYY-MM-DD, date existante.` };
   if (!isPoolTimestamp(settledClosedAt)) return { ok: false, error: `Clôture « ${settledClosedAt} » hors format YYYY-MM-DD HH:MM:SS ou hors calendrier.` };
   const closedDay = settledClosedAt.slice(0, 10);
-  if (paidDate < closedDay) {
+  // Tolérance d'UN jour : paid_date est en calendrier UTC, la clôture en jour OkPay
+  // (fuseau non établi). « La veille » peut être le même instant réel — une photo à
+  // 00:30 OkPay payée à 16:40 UTC la veille. On date alors clôture + 1 s en 'day' :
+  // la règle ±1 jour bloque les clôtures voisines jusqu'à résolution, et une ligne
+  // agence réellement antérieure à la photo déclenche paid_before_close. Deux jours
+  // avant, en revanche, c'est avant la photo quel que soit le fuseau. (Constat
+  // money-auditor 2026-09-13, phase 2 R4.)
+  const prevDay = new Date(`${closedDay}T00:00:00Z`); prevDay.setUTCDate(prevDay.getUTCDate() - 1);
+  if (paidDate < prevDay.toISOString().slice(0, 10)) {
     return { ok: false, error: `Date de paiement ${paidDate} antérieure à la clôture réglée (${settledClosedAt}) : payé avant la photo, `
                               + `le montant est déjà dans le pool de fin et la part a été calculée dessus. Déverrouille la période au lieu de la payer.` };
   }
   const dayStart = `${paidDate} 00:00:00`;
   const after = oneSecondAfter(settledClosedAt);
-  return { ok: true, occurred_at: dayStart > after ? dayStart : after };
+  return { ok: true, occurred_at: dayStart > after ? dayStart : after, precision: "day" };
 }
 
 // ── Signaux de cohérence des soldes (cas limite n°3 et OkPay ≠ 0) ────────────
 
 export type PoolWarning = {
-  code: "observation_spread" | "okpay_nonzero" | "main_stale";
+  code: "observation_spread" | "okpay_nonzero" | "main_stale" | "main_conflict" | "double_declared"
+      | "resolution_ambiguous" | "paid_before_close";
   message: string;
 };
 

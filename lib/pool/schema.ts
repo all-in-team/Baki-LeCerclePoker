@@ -63,8 +63,12 @@ export const POOL_SCHEMA_SQL = `
     created_at       TEXT NOT NULL DEFAULT (datetime('now')),
     UNIQUE(player_id, game_id)
   );
-  CREATE INDEX IF NOT EXISTS idx_pool_players_main
-    ON pool_players(main_okpay_tg_id) WHERE main_okpay_tg_id IS NOT NULL;
+  -- UNE wallet OkPay n'appartient qu'à UN pool : deux joueurs déclarant la même
+  -- main verraient le même solde compté deux fois, en silence (constat
+  -- money-auditor 2026-09-13, phase 2 B). Le contrôle croisé main ≠ compte ≠
+  -- agence vit dans la couche DB (enrollPoolPlayerOn / addAccountOn).
+  CREATE UNIQUE INDEX IF NOT EXISTS idx_pool_players_main
+    ON pool_players(game_id, main_okpay_tg_id) WHERE main_okpay_tg_id IS NOT NULL;
 
   -- ── N comptes par joueur × game — variable, SOFT-CLOSE ────────────────────
   -- ON N'EFFACE JAMAIS UNE LIGNE : les soldes des périodes passées la
@@ -86,8 +90,10 @@ export const POOL_SCHEMA_SQL = `
   );
   CREATE INDEX IF NOT EXISTS idx_pool_accounts_player
     ON pool_accounts(player_id, game_id);
-  CREATE INDEX IF NOT EXISTS idx_pool_accounts_okpay
-    ON pool_accounts(okpay_tg_id) WHERE okpay_tg_id IS NOT NULL;
+  -- Même règle pour les OkPay de compte, parmi les comptes OUVERTS (un compte
+  -- clos peut avoir cédé sa wallet).
+  CREATE UNIQUE INDEX IF NOT EXISTS idx_pool_accounts_okpay
+    ON pool_accounts(game_id, okpay_tg_id) WHERE okpay_tg_id IS NOT NULL AND closed_at IS NULL;
 
   -- ── UNE ligne par clôture : PROVENANCE FIGÉE + RÉSULTAT ───────────────────
   -- Les périodes sont des intervalles ]opened_at, closed_at] CONTIGUS par
@@ -128,10 +134,6 @@ export const POOL_SCHEMA_SQL = `
     note             TEXT,
     locked_at        TEXT NOT NULL DEFAULT (datetime('now')),
     UNIQUE(player_id, game_id, closed_at),
-    -- Deux périodes ouvertes au même instant = deux résultats pour le même
-    -- intervalle. La contiguïté complète (opened_at = closed_at précédent) reste
-    -- un garde applicatif ; celui-ci ferme le cas le plus grossier au schéma.
-    UNIQUE(player_id, game_id, opened_at),
     CHECK(closed_at >= opened_at),
     -- UN SEUL FORMAT pour tous les horodatages du pool : « YYYY-MM-DD HH:MM:SS »,
     -- heure murale OkPay. Un ISO avec « T » ou une date sans heure se compare
@@ -160,6 +162,14 @@ export const POOL_SCHEMA_SQL = `
   -- Un règlement ne porte qu'UNE période (et une période qu'un règlement).
   CREATE UNIQUE INDEX IF NOT EXISTS idx_pool_periods_settlement
     ON pool_periods(settlement_id) WHERE settlement_id IS NOT NULL;
+  -- Deux périodes ouvertes au même instant = deux résultats pour le même
+  -- intervalle. PARTIEL : la PREMIÈRE période a opened_at = closed_at (intervalle
+  -- vide, pool de départ saisi) et la deuxième repart de ce même instant — un
+  -- UNIQUE plein les faisait entrer en collision (constat harnais phase 2). La
+  -- contiguïté complète (opened_at = closed_at précédent) reste un garde
+  -- applicatif (previewPoolPeriodOn) ; l'index ferme le cas grossier au schéma.
+  CREATE UNIQUE INDEX IF NOT EXISTS idx_pool_periods_opened
+    ON pool_periods(player_id, game_id, opened_at) WHERE opened_at != closed_at;
   CREATE INDEX IF NOT EXISTS idx_pool_periods_player
     ON pool_periods(player_id, game_id, closed_at);
 
@@ -214,6 +224,21 @@ export const POOL_SCHEMA_SQL = `
     occurred_at   TEXT NOT NULL,
     kind          TEXT NOT NULL CHECK(kind IN ('declared','settlement')),
     settlement_id INTEGER REFERENCES manual_settlements(id),
+    -- 'day' : occurred_at est DÉRIVÉ d'un paid_date (jour seul, calendrier UTC de
+    -- /payments) — max(jour 00:00:00, clôture réglée + 1 s). L'instant réel est
+    -- inconnu, ET LE JOUR LUI-MÊME PEUT DIFFÉRER D'UN JOUR de celui du grand livre
+    -- OkPay (fuseau OkPay inconnu, saisie approximative). Donc : previewPoolPeriodOn
+    -- BLOQUE toute clôture à ±1 jour du jour d'un mouvement 'day' — qu'il soit dans
+    -- l'intervalle ou non — et resolveSettlementInstantsOn cherche la ligne agence
+    -- sur [jour−1, jour+1]. (Constats money-auditor 2026-09-13, phase 2 A et A' :
+    -- payé à 19:00 le jour d'une photo à 17:59 → daté 00:00:00 → compté contre une
+    -- photo qui ne le contient pas ; et la même faille un jour plus tard dès que
+    -- paid_date UTC ≠ jour OkPay.)
+    -- 'second' : instant réel, lu sur le grand livre (okpay_line_id) ou déclaré.
+    occurred_precision TEXT NOT NULL DEFAULT 'second' CHECK(occurred_precision IN ('second','day')),
+    -- La ligne agence qui a donné la seconde. Sert à signaler une résolution devenue
+    -- ambiguë (une 2e candidate arrive après coup).
+    okpay_line_id INTEGER REFERENCES okpay_ledger_lines(id),
     note          TEXT,
     created_at    TEXT NOT NULL DEFAULT (datetime('now')),
     -- Un mouvement de règlement porte son règlement, un mouvement déclaré n'en
@@ -231,6 +256,12 @@ export const POOL_SCHEMA_SQL = `
   -- et l'index le garantit au niveau du schéma.
   CREATE UNIQUE INDEX IF NOT EXISTS idx_pool_movements_settlement
     ON pool_external_movements(settlement_id) WHERE settlement_id IS NOT NULL;
+  -- Une ligne OkPay ne date qu'UN mouvement : deux règlements de même montant à un
+  -- jour d'écart se résolvaient sur la même ligne agence → ext_in doublé (constat
+  -- money-auditor 2026-09-13, phase 2 R1). settlementCandidatesOn exclut les lignes
+  -- déjà portées ; l'index est la garantie.
+  CREATE UNIQUE INDEX IF NOT EXISTS idx_pool_movements_okpay_line
+    ON pool_external_movements(okpay_line_id) WHERE okpay_line_id IS NOT NULL;
 
   -- ── FAITS BRUTS : les lignes OkPay parsées depuis les messages transférés ─
   -- Une ligne par opération, pour la wallet identifiée par l'en-tête du message.
