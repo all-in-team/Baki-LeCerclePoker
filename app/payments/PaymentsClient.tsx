@@ -20,11 +20,11 @@ import type {
  * et à des sommes de présentation sur des montants déjà figés en USDT. Arrondi au rendu
  * uniquement (invariant #9), jamais de comparaison de flottants à l'égalité.
  *
- * Convention de signe, identique aux pages room :
- *   amount_due_usdt > 0  →  sortie, on doit au joueur
- *   amount_due_usdt < 0  →  entrée, le joueur nous doit
+ * Convention de signe, identique aux pages room (décision Baki 2026-07-25, détail plus bas) :
+ *   amount_due_usdt > 0  →  entrée, le joueur nous doit (« Il nous doit », vert)
+ *   amount_due_usdt < 0  →  sortie, on doit au joueur   (« On lui doit », rouge)
  * C'est ce signe qui fait la compensation cross-room du solde net par joueur : −300 sur
- * KKPOKER + 500 sur A5NUTS = +200, on lui doit 200. Le net est une VUE : il n'est jamais
+ * KKPOKER + 500 sur A5NUTS = +200, il nous doit 200. Le net est une VUE : il n'est jamais
  * persisté et jamais passé à une action. Tout « Marquer payé » agit sur des settlement_id
  * réels, un par un.
  *

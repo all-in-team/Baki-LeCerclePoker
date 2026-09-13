@@ -51,7 +51,7 @@ export interface SettlementPreview {
   total_withdrawn_usdt: number;
   net_selected_usdt: number;     // Σ withdrawals − Σ deposits (USDT, symmetric)
   action_pct: number;
-  amount_due_usdt: number;       // net_selected_usdt × action_pct / 100 (positive = operator owes player)
+  amount_due_usdt: number;       // net_selected_usdt × action_pct / 100 (positive = player owes the Cercle, cf. computeSelection)
 }
 
 export interface ManualSettlementRow {
