@@ -18,10 +18,10 @@ import XpokerClient from "./XpokerClient";
  * pas de synchro on-chain ici, la room est réglée EN CHIPS par le club et
  * l'agence est dépositaire des jetons (lib/games/xpoker/schema.ts).
  *
- * L'IMPORT HEBDO N'EST PAS CÂBLÉ : la source (classeur, club 246579 = 花順 ?,
- * format) attend la confirmation du club. Le moteur (commitImportOn) et le
- * parseur existent et sont testés sur fixtures ; la route d'import viendra avec
- * la confirmation. L'écran le dit, plutôt que d'offrir un bouton qui ment.
+ * IMPORT HEBDO (source confirmée par Baki le 2026-09-13) : dépôt du XLSX/CSV,
+ * aperçu sans écriture, plage de dates confirmée à la main, commit par onglet
+ * (app/api/xpoker/import, lib/games/xpoker/import.ts). Mapping par libellés :
+ * un onglet futur passe comme l'historique.
  *
  * Défaut « lifetime » comme NEXAPOKER : les données arrivent par report hebdo
  * après coup ; « cette semaine » ouvrirait sur des cartes à zéro.

@@ -22,6 +22,7 @@ import Btn from "@/components/Btn";
 import { MOVEMENT_COLOR } from "@/components/ledger/MovementAmount";
 import type { XpokerDashboard, XpokerDashboardPlayer, XpokerChartWeek } from "@/lib/games/xpoker/dashboard";
 import type { PlayerWeek } from "@/lib/games/xpoker/engine";
+import type { WorkbookPreview, TabPreview } from "@/lib/games/xpoker/import";
 
 const GREEN = "#10B981", RED = "#EF4444", GOLD = "#F5C518", DIM = "var(--text-dim)", MUTED = "#8888A0";
 const EPS = 0.005;
@@ -103,7 +104,7 @@ export default function XpokerClient({ dash, today, periodLabel }: { dash: Xpoke
       </div>
 
       <Reconciliation dash={dash} onChanged={() => router.refresh()} />
-      <ImportPlaceholder />
+      <ImportPanel onChanged={() => router.refresh()} />
       <Ledger dash={dash} rate={rate} today={today} onChanged={() => router.refresh()} />
       {dash.relink_log.length > 0 && <RelinkLog dash={dash} />}
     </>
@@ -582,19 +583,117 @@ function Reconciliation({ dash, onChanged }: { dash: XpokerDashboard; onChanged:
   );
 }
 
-// ── Import hebdo (non câblé) ─────────────────────────────────────────────────
+// ── Import hebdo ─────────────────────────────────────────────────────────────
+//
+// Dépôt d'un XLSX (classeur entier ou onglet) ou d'un CSV natif → APERÇU de tous
+// les onglets, zéro écriture → pour chaque onglet, une plage de dates PROPOSÉE
+// (libellé + année suggérée, convention « lundi de règlement = semaine précédente »)
+// que Baki CONFIRME → commit d'UN onglet à la fois (le serveur reparse le fichier).
+// Checksum KO ⇒ import refusé ; seule sortie : « importer quand même, écart acté »
+// avec motif, la semaine reste marquée. Un onglet futur passe comme l'historique :
+// le mapping est dérivé des libellés, pas d'adresses.
 
-function ImportPlaceholder() {
+function ImportPanel({ onChanged }: { onChanged: () => void }) {
+  const [file, setFile] = useState<File | null>(null);
+  const [year, setYear] = useState(String(new Date().getUTCFullYear()));
+  const [preview, setPreview] = useState<WorkbookPreview | null>(null);
+  const [busy, setBusy] = useState(false); const [msg, setMsg] = useState<string | null>(null);
+  async function doPreview() {
+    if (!file) return;
+    setBusy(true); setMsg(null); setPreview(null);
+    const fd = new FormData(); fd.append("file", file); fd.append("action", "preview"); fd.append("year", year);
+    const res = await fetch("/api/xpoker/import", { method: "POST", body: fd });
+    const j = await res.json().catch(() => ({}));
+    setBusy(false);
+    if (!res.ok || !j.ok) { setMsg(j.error ?? "aperçu impossible"); return; }
+    setPreview(j.preview);
+  }
   return (
-    <div style={{ ...card, borderStyle: "dashed" }}>
-      <h2 style={h2}>Import hebdo — en attente de la source</h2>
-      <p style={{ ...help, margin: 0 }}>
-        L&apos;import n&apos;est pas câblé tant que le club n&apos;a pas confirmé : 花順 = club 246579 ? quel classeur fait foi ? format inchangé ?
-        Le parseur (libellés, checksum au centime, B20 et U22 stockés tous les deux) et le moteur d&apos;import existent et sont testés sur fixtures.
-        La semaine sera toujours une plage de dates confirmée à la main ; le nom d&apos;onglet n&apos;est qu&apos;une suggestion.
+    <div style={card}>
+      <h2 style={h2}>Import hebdo — dépose l&apos;export du sheet (XLSX ou CSV)</h2>
+      <p style={help}>
+        Aperçu d&apos;abord, rien n&apos;est écrit. Puis, onglet par onglet : tu confirmes la plage de dates (le nom d&apos;onglet n&apos;est qu&apos;une suggestion — pas d&apos;année dedans, « 111 » = 1/11 ou 11/1),
+        le checksum doit retomber au centime, sinon l&apos;import est refusé. Les Player ID inconnus partent en réconciliation. Le mapping suit les libellés du sheet, pas des cellules.
       </p>
+      <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+        <input type="file" accept=".xlsx,.xls,.csv" style={{ fontSize: 12, color: MUTED }} onChange={e => { setFile(e.target.files?.[0] ?? null); setPreview(null); }} />
+        <label style={{ fontSize: 11, color: MUTED }}>Année suggérée <input style={{ ...input, width: 70 }} value={year} onChange={e => setYear(e.target.value)} /></label>
+        <Btn size="sm" variant="secondary" onClick={doPreview} disabled={!file || busy}>{busy ? "lecture…" : "Aperçu"}</Btn>
+        {preview && <span style={{ fontSize: 11, color: MUTED }}>{preview.filename} · {preview.source} · {preview.tabs.length} onglet(s) · sha256 {preview.file_hash.slice(0, 12)}…</span>}
+      </div>
+      {msg && <div style={{ color: "#FCA5A5", fontSize: 12, marginTop: 6 }}>{msg}</div>}
+      {preview && file && (
+        <div style={{ marginTop: 12, display: "flex", flexDirection: "column", gap: 8 }}>
+          {preview.tabs.map(t => <TabCard key={t.label} t={t} file={file} onChanged={() => { onChanged(); doPreview(); }} />)}
+        </div>
+      )}
     </div>
   );
+}
+
+function TabCard({ t, file, onChanged }: { t: TabPreview; file: File; onChanged: () => void }) {
+  const first = t.proposals[0];
+  const [ws, setWs] = useState(first?.week_start ?? "");
+  const [reason, setReason] = useState(""); const [note, setNote] = useState("");
+  const [busy, setBusy] = useState(false); const [msg, setMsg] = useState<string | null>(null); const [done, setDone] = useState<string | null>(null);
+  const we = ws ? addDaysIso(ws, 6) : "";
+  const monday = ws ? new Date(ws + "T00:00:00Z").getUTCDay() === 1 : false;
+  const b = t.block;
+  const ok = !!b && b.checks.checksum_ok;
+  async function commit() {
+    setBusy(true); setMsg(null);
+    const fd = new FormData(); fd.append("file", file); fd.append("action", "commit"); fd.append("tab_label", t.label);
+    fd.append("week_start", ws); fd.append("week_end", we); if (reason) fd.append("override_reason", reason); if (note) fd.append("note", note);
+    const res = await fetch("/api/xpoker/import", { method: "POST", body: fd });
+    const j = await res.json().catch(() => ({}));
+    setBusy(false);
+    if (!res.ok || !j.ok) { setMsg(j.error ?? "refus"); return; }
+    setDone(`importé (#${j.import_id}) — ${j.rows} ligne(s)${j.unlinked?.length ? `, ${j.unlinked.length} Player ID à réconcilier : ${j.unlinked.join(", ")}` : ""}${j.agency?.length ? `, agence : ${j.agency.join(", ")}` : ""}`);
+    onChanged();
+  }
+  const border = t.is_template ? "var(--border)" : t.error ? "rgba(239,68,68,0.4)" : t.already_imported ? "var(--border)" : ok ? "rgba(16,185,129,0.35)" : "rgba(245,197,24,0.45)";
+  return (
+    <div style={{ border: `1px solid ${border}`, borderRadius: 8, padding: "10px 12px", opacity: t.is_template || t.already_imported ? 0.6 : 1 }}>
+      <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap", fontSize: 12 }}>
+        <b style={{ fontSize: 14 }}>onglet « {t.label} »</b>
+        {t.is_template && <span style={{ color: MUTED }}>modèle — ignoré</span>}
+        {t.error && <span style={{ color: "#FCA5A5" }}>illisible : {t.error}</span>}
+        {b && (
+          <>
+            <span style={{ color: MUTED }}>{b.rows.length} ligne(s) · 反水 {pct(b.params.rb_fraction * 100)} · TAX {pct(b.params.tax_fraction * 100)}</span>
+            <span style={{ color: ok ? GREEN : GOLD, fontWeight: 700 }}>
+              {ok ? "checksum ✓" : `checksum ✗ (écart ${fmt(b.checks.check_delta)})`} · Total sheet {fmt(b.footer.total)} · recalcul {fmt(b.recompute.total)}
+            </span>
+            {b.checks.cleared_matches === false && <span style={{ color: GOLD }}>總交收 {fmt(b.cleared ?? 0)} ≠ Total</span>}
+            {b.checks.sub_agent_present && <span style={{ color: GOLD }}>sous-agent présent</span>}
+            {t.unlinked.length > 0 && <span style={{ color: RED }}>{t.unlinked.length} Player ID inconnu(s) : {t.unlinked.join(", ")}</span>}
+          </>
+        )}
+        {t.already_imported && <span style={{ color: MUTED }}>déjà importé (#{t.already_imported.import_id}, semaine du {t.already_imported.week_start})</span>}
+      </div>
+      {b && b.warnings.length > 0 && <div style={{ fontSize: 11, color: GOLD, marginTop: 4 }}>{b.warnings.map((w, i) => <div key={i}>⚠ {w}</div>)}</div>}
+      {b && !t.is_template && (
+        <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginTop: 8, fontSize: 12 }}>
+          <span style={{ color: MUTED }}>
+            {t.ambiguous ? (t.proposals.length > 1 ? `libellé ambigu (${t.proposals.map(p => p.tab_date).join(" ou ")})` : "libellé sans date") : `proposé d'après « ${t.label} » (${first!.tab_day} ${first!.tab_date}, semaine précédente)`}
+          </span>
+          <label style={{ color: MUTED }}>Semaine du (lundi) <input type="date" style={{ ...input, width: 150 }} value={ws} onChange={e => setWs(e.target.value)} /></label>
+          <span style={{ color: monday ? MUTED : RED }}>→ dimanche {we || "?"}{ws && !monday ? " — ce n'est pas un lundi" : ""}</span>
+          {!ok && <input style={{ ...input, width: 260 }} placeholder="motif obligatoire : importer quand même, écart acté" value={reason} onChange={e => setReason(e.target.value)} />}
+          <input style={{ ...input, width: 160 }} placeholder="note (optionnel)" value={note} onChange={e => setNote(e.target.value)} />
+          <Btn size="sm" variant={ok ? "primary" : "danger"} onClick={commit} disabled={busy || !ws || !monday || !!t.already_imported || (!ok && !reason.trim()) || !!done}>
+            {ok ? "Importer cette semaine" : "Importer quand même (écart acté)"}
+          </Btn>
+        </div>
+      )}
+      {msg && <div style={{ color: "#FCA5A5", fontSize: 12, marginTop: 6 }}>{msg}</div>}
+      {done && <div style={{ color: GREEN, fontSize: 12, marginTop: 6 }}>✓ {done}</div>}
+    </div>
+  );
+}
+
+function addDaysIso(iso: string, n: number): string {
+  const d = new Date(iso + "T00:00:00Z"); if (Number.isNaN(d.getTime())) return ""; d.setUTCDate(d.getUTCDate() + n); return d.toISOString().slice(0, 10);
 }
 
 // ── Grand livre chips (agence) ───────────────────────────────────────────────

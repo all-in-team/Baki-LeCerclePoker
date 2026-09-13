@@ -182,10 +182,13 @@ Contrefactuel : `(0.8/100) × 256.43 = 2.05144 ≠ 205.144`. La TAX n'existe qu'
   concernées portent `sub_agent_present = 1` et un champ d'ajustement manuel **non utilisé**
   tant que le club n'a pas confirmé un partage.
 - **`playerWeeksOn` calculé deux fois** par joueur dans `dashboard.ts` : perf, pas argent.
-- **Import hebdo non câblé** sur le classeur réel tant que le club n'a pas confirmé :
-  花順 = 246579 ? quel classeur fait foi (le dernier onglet est le 8/3, cinq lundis sans onglet
-  au 13/09) ? format inchangé ? Le parseur est dérivé des libellés : un nouveau classeur se
-  teste en changeant la config, pas le code.
+- **Source confirmée** (Baki, 2026-09-13) : le classeur du lien fait foi, le format ne
+  change pas ; 花順 ↔ 246579 reste une assertion de config, jamais vérifiée ni bloquante.
+  Import câblé (`lib/games/xpoker/import.ts`, `/api/xpoker/import`, panneau de `/xpoker`) :
+  aperçu de tous les onglets sans écriture, plage proposée d'après le libellé + l'année
+  suggérée, **confirmée à la main**, commit par onglet (le fichier est reparsé). Vérifié sur
+  le classeur réel : 19 onglets lus, 18 checksums ✓, 3/23 ✗ (TAX = 0), CSV natif accepté.
+  Le dernier onglet est le 8/3 ; un onglet futur passe comme l'historique (libellés).
 
 ## 9. Au premier déploiement — à savoir avant le `railway up`
 
