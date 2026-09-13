@@ -15,7 +15,7 @@ import type Database from "better-sqlite3";
 import type { XpokerParsedBlock } from "./parse-sheet";
 import { actionShareChips, rakebackChips, chipsToUsd, assertPct } from "./club-math";
 import { XPOKER_CHECK_TOLERANCE } from "./schema";
-import { XPOKER_GAME_NAME } from "./config";
+import { XPOKER_GAME_NAME, XPOKER_CLUB_ID } from "./config";
 
 type DB = Database.Database;
 
@@ -57,13 +57,13 @@ export function addRateOn(db: DB, args: { effective_from: string; chips_per_usd:
 
 export type XpokerAccount = {
   id: number; player_id: number; member_id: string; nickname: string | null;
-  status: "active" | "archived"; added_at: string | null; weeks_imported: number;
+  status: "active" | "archived"; added_at: string | null; archived_at: string | null; weeks_imported: number;
 };
 
 export function accountsForPlayerOn(db: DB, playerId: number): XpokerAccount[] {
   const gid = xpokerGameIdOn(db);
   return db.prepare(`
-    SELECT g.id, g.player_id, g.external_id AS member_id, g.nickname, g.status, g.added_at,
+    SELECT g.id, g.player_id, g.external_id AS member_id, g.nickname, g.status, g.added_at, g.archived_at,
            (SELECT COUNT(*) FROM xpoker_week_rows r WHERE r.member_id = g.external_id) AS weeks_imported
     FROM player_game_ids g WHERE g.player_id = ? AND g.game_id = ?
     ORDER BY g.status, g.added_at, g.id
@@ -118,7 +118,7 @@ export function linkMemberIdOn(
   const run = db.transaction(() => {
     let account_id: number;
     if (existing) {
-      db.prepare(`UPDATE player_game_ids SET status = 'active', nickname = COALESCE(?, nickname) WHERE id = ?`)
+      db.prepare(`UPDATE player_game_ids SET status = 'active', archived_at = NULL, nickname = COALESCE(?, nickname) WHERE id = ?`)
         .run(args.nickname ?? null, existing.id);
       account_id = existing.id;
     } else {
@@ -179,7 +179,7 @@ export function relinkMemberIdOn(
     }
   }
   const run = db.transaction(() => {
-    db.prepare(`UPDATE player_game_ids SET player_id = ?, status = 'active' WHERE id = ?`).run(args.to_player_id, acc.id);
+    db.prepare(`UPDATE player_game_ids SET player_id = ?, status = 'active', archived_at = NULL WHERE id = ?`).run(args.to_player_id, acc.id);
     db.prepare(`UPDATE xpoker_week_rows SET player_id = ? WHERE member_id = ? AND is_agency = 0`).run(args.to_player_id, member_id);
     const movements = db.prepare(`UPDATE xpoker_chip_ledger SET player_id = ? WHERE member_id = ? AND kind IN ('buyin','cashout')`).run(args.to_player_id, member_id).changes;
     const log = db.prepare(`
@@ -236,7 +236,7 @@ function mondayOf(iso: string): string {
 /** Archive (soft) un Player ID : l'historique reste, un import futur sous cet ID repart en réconciliation. */
 export function archiveAccountOn(db: DB, accountId: number, playerId: number): { ok: boolean; error?: string } {
   const gid = xpokerGameIdOn(db);
-  const r = db.prepare(`UPDATE player_game_ids SET status = 'archived' WHERE id = ? AND player_id = ? AND game_id = ?`)
+  const r = db.prepare(`UPDATE player_game_ids SET status = 'archived', archived_at = datetime('now') WHERE id = ? AND player_id = ? AND game_id = ?`)
     .run(accountId, playerId, gid);
   return r.changes === 1 ? { ok: true } : { ok: false, error: "compte introuvable pour ce joueur" };
 }
@@ -320,15 +320,15 @@ export function commitImportOn(db: DB, a: CommitImportArgs): CommitImportResult 
   try {
     const run = db.transaction(() => {
       const ins = db.prepare(`
-        INSERT INTO xpoker_imports (week_start, week_end, tab_label, source, filename, file_hash, club_name,
-          chip_value, rb_fraction, tax_fraction, sheet_total_winloss, sheet_total_rake, sheet_tax, sheet_rb_amount, sheet_total, sheet_cleared,
+        INSERT INTO xpoker_imports (week_start, week_end, tab_label, source, filename, file_hash, club_name, club_id,
+          chip_value, rb_fraction, tax_fraction, sheet_total_winloss, sheet_total_rake, sheet_tax, sheet_rb_amount, sheet_total, sheet_cleared, sheet_cleared_club_line,
           recomputed_rb, recomputed_tax, recomputed_total, check_delta, override_reason, sub_agent_present, rate_chips_per_usd, rows_total, note)
-        VALUES (@week_start, @week_end, @tab_label, @source, @filename, @file_hash, @club,
-          @chip_value, @rb_fraction, @tax_fraction, @twl, @trake, @stax, @srb, @stotal, @cleared,
+        VALUES (@week_start, @week_end, @tab_label, @source, @filename, @file_hash, @club, @club_id,
+          @chip_value, @rb_fraction, @tax_fraction, @twl, @trake, @stax, @srb, @stotal, @cleared, @cleared_club,
           @rrb, @rtax, @rtotal, @delta, @override, @sub, @rate, @rows_total, @note)
       `).run({
         week_start: a.week_start, week_end: a.week_end, tab_label: b.tab_label, source: a.source,
-        filename: a.filename ?? null, file_hash: a.file_hash ?? null, club: b.params.club,
+        filename: a.filename ?? null, file_hash: a.file_hash ?? null, club: b.params.club, club_id: XPOKER_CLUB_ID, cleared_club: b.cleared_club_line,
         chip_value: b.params.chip_value, rb_fraction: b.params.rb_fraction, tax_fraction: b.params.tax_fraction,
         twl: b.footer.total_winloss, trake: b.footer.total_rake, stax: b.footer.tax, srb: b.footer.rb_amount, stotal: b.footer.total, cleared: b.cleared,
         rrb: b.recompute.rb, rtax: b.recompute.tax, rtotal: b.recompute.total, delta: b.checks.check_delta,
@@ -594,6 +594,7 @@ export function addLedgerLineOn(db: DB, a: LedgerLineArgs): { ok: true; id: numb
   if (!(a.chips > 0)) return { ok: false, error: "chips doit être > 0 (le sens est porté par direction)" };
   if (a.kind === "buyin" && a.direction !== "out") return { ok: false, error: "un buy-in SORT du stock agence (direction 'out')" };
   if (a.kind === "cashout" && a.direction !== "in") return { ok: false, error: "un cash-out ENTRE dans le stock agence (direction 'in')" };
+  if (a.kind === "adjustment" && !a.note?.trim()) return { ok: false, error: "un ajustement manuel exige un motif (note)" };
   if ((a.kind === "buyin" || a.kind === "cashout")) {
     if (!a.player_id || !a.member_id) return { ok: false, error: "buy-in / cash-out : joueur ET Player ID requis" };
     const gid = xpokerGameIdOn(db);
@@ -614,6 +615,32 @@ export function addLedgerLineOn(db: DB, a: LedgerLineArgs): { ok: true; id: numb
     `).run(a.occurred_at, a.kind, a.direction, a.chips, rate,
       a.kind === "club_settlement" ? null : a.player_id ?? null, a.kind === "club_settlement" ? null : a.member_id ?? null,
       a.import_id ?? null, a.note ?? null);
+    return { ok: true, id: Number(r.lastInsertRowid) };
+  } catch (e: any) { return { ok: false, error: e?.message ?? String(e) }; }
+}
+
+/**
+ * CONTRE-PASSATION — le grand livre est append-only : une ligne fausse ne s'efface
+ * pas, on écrit son inverse (kind 'adjustment', sens opposé, même montant, motif
+ * obligatoire, reverses_id). Refusé sur une ligne née d'un règlement (action_paid /
+ * rb_paid) : celle-là se corrige en déverrouillant le règlement, pas en la niant.
+ * Une ligne ne s'annule qu'une fois (index unique).
+ */
+export function reverseLedgerLineOn(db: DB, args: { line_id: number; occurred_at: string; note: string }): { ok: true; id: number } | { ok: false; error: string } {
+  const line = db.prepare(`SELECT id, kind, direction, chips, player_id, member_id, settlement_id FROM xpoker_chip_ledger WHERE id = ?`).get(args.line_id) as
+    { id: number; kind: string; direction: "in" | "out"; chips: number; player_id: number | null; member_id: string | null; settlement_id: number | null } | undefined;
+  if (!line) return { ok: false, error: `ligne #${args.line_id} introuvable` };
+  if (line.settlement_id !== null) return { ok: false, error: `ligne #${args.line_id} issue du règlement #${line.settlement_id} — elle ne se contre-passe pas, on déverrouille le règlement` };
+  if (!args.note?.trim()) return { ok: false, error: "motif obligatoire" };
+  if (db.prepare(`SELECT 1 FROM xpoker_chip_ledger WHERE reverses_id = ?`).get(args.line_id)) return { ok: false, error: `ligne #${args.line_id} déjà contre-passée` };
+  try { assertIsoDate(args.occurred_at, "occurred_at"); } catch (e: any) { return { ok: false, error: e.message }; }
+  let rate: number;
+  try { rate = rateAtOn(db, args.occurred_at); } catch (e: any) { return { ok: false, error: e.message }; }
+  try {
+    const r = db.prepare(`
+      INSERT INTO xpoker_chip_ledger (occurred_at, kind, direction, chips, rate_chips_per_usd, player_id, member_id, reverses_id, note)
+      VALUES (?, 'adjustment', ?, ?, ?, ?, ?, ?, ?)
+    `).run(args.occurred_at, line.direction === "in" ? "out" : "in", line.chips, rate, line.player_id, line.member_id, line.id, `contre-passation de #${line.id} (${line.kind}) — ${args.note.trim()}`);
     return { ok: true, id: Number(r.lastInsertRowid) };
   } catch (e: any) { return { ok: false, error: e?.message ?? String(e) }; }
 }

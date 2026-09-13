@@ -148,13 +148,15 @@ export function lockXpokerSettlementOn(db: DB, args: { player_id: number; week_s
         ].filter(Boolean).join(" — ") || null,
       });
       const settlementId = Number(ins.lastInsertRowid);
+      const importOf = db.prepare(`SELECT id FROM xpoker_imports WHERE week_start = ?`);
       const insWeek = db.prepare(`
         INSERT INTO xpoker_settlement_weeks
-          (settlement_id, player_id, week_start, winloss_chips, rake_chips, action_pct, rb_pct, action_chips, rb_chips, due_chips, rate_chips_per_usd)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          (settlement_id, player_id, week_start, import_id, winloss_chips, rake_chips, action_pct, rb_pct, action_chips, rb_chips, due_chips, rate_chips_per_usd)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `);
       for (const w of weeks) {
-        insWeek.run(settlementId, args.player_id, w.week_start, w.winloss_chips, w.rake_chips, w.action_pct, w.rb_pct, w.action_chips, w.rb_chips, w.due_chips, w.rate_chips_per_usd);
+        const imp = importOf.get(w.week_start) as { id: number } | undefined;
+        insWeek.run(settlementId, args.player_id, w.week_start, imp?.id ?? null, w.winloss_chips, w.rake_chips, w.action_pct, w.rb_pct, w.action_chips, w.rb_chips, w.due_chips, w.rate_chips_per_usd);
       }
       return settlementId;
     });

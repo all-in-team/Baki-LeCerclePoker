@@ -173,6 +173,10 @@ console.log("\n── A5. Contraintes du schéma ──");
       -136.2, 256.43, -6.0115, 205.144, 199.1325, @cleared,
       205.144, -6.0115, 199.1325 + @delta, @delta, @override, 33, 1)
   `).run({ ws: "2026-07-27", delta, override, cleared });
+  const insImportAt = (ws: string, we: string) => db.prepare(`
+    INSERT INTO xpoker_imports (week_start, week_end, source, club_name, chip_value, rb_fraction, tax_fraction, sheet_total_winloss, sheet_total_rake, sheet_tax, sheet_rb_amount, sheet_total,
+      recomputed_rb, recomputed_tax, recomputed_total, check_delta, rate_chips_per_usd, rows_total)
+    VALUES (?, ?, 'xlsx', '花順', 1, 0.8, 0.05, 0, 0, 0, 0, 0, 0, 0, 0, 0, 33, 0)`).run(ws, we);
   throws("checksum hors tolérance sans motif ⇒ refusé par la base",
     () => insImport(0.01, null, 199.1325), /CHECK constraint failed/);
   check("checksum hors tolérance AVEC motif ⇒ accepté", insImport(0.01, "TAX=0 en D2, formule à 5 % — écart acté", 199.1325).changes === 1);
@@ -217,8 +221,22 @@ console.log("\n── A5. Contraintes du schéma ──");
   `).run(sid, week);
   sw("2026-07-13");
   throws("double règlement d'une semaine ⇒ impossible", () => sw("2026-07-13"), /UNIQUE/);
+  // Revue « dernière fenêtre » : dates ISO, lundis, une période ouverte, ledger append-only.
+  throws("date non ISO ⇒ refusée (taux)", () => db.prepare(`INSERT INTO xpoker_chip_rates (effective_from, chips_per_usd) VALUES ('13/09/2026', 30)`).run(), /CHECK constraint failed/);
+  throws("import : week_start pas un lundi ⇒ refusé", () => insImportAt("2026-07-28", "2026-08-03"), /CHECK constraint failed/);
+  throws("import : week_end ≠ lundi + 6 ⇒ refusé", () => insImportAt("2026-08-10", "2026-08-15"), /CHECK constraint failed/);
+  check("import : lundi → dimanche ⇒ ok", insImportAt("2026-08-10", "2026-08-16").changes === 1);
+  throws("deal : start_week pas un lundi ⇒ refusé", () => db.prepare(`INSERT INTO xpoker_player_deals (player_id, action_pct, start_week) VALUES (1, 10, '2026-03-17')`).run(), /CHECK constraint failed/);
+  db.exec(`DELETE FROM xpoker_player_deals`);
+  db.prepare(`INSERT INTO xpoker_player_deals (player_id, action_pct, start_week) VALUES (1, 10, '2026-03-23')`).run();
+  throws("deal : deux périodes OUVERTES pour un joueur ⇒ refusé (index partiel)", () => db.prepare(`INSERT INTO xpoker_player_deals (player_id, action_pct, start_week) VALUES (1, 20, '2026-03-30')`).run(), /UNIQUE/);
+  throws("ligne agence avec player_id ⇒ refusée", () => db.prepare(`INSERT INTO xpoker_week_rows (import_id, week_start, member_id, winloss_chips, rake_chips, is_agency, player_id) VALUES ((SELECT MAX(id) FROM xpoker_imports), '2026-08-10', '3970004', 0, 0, 1, 1)`).run(), /CHECK constraint failed/);
+  throws("ajustement sans motif ⇒ refusé", () => db.prepare(`INSERT INTO xpoker_chip_ledger (occurred_at, kind, direction, chips, rate_chips_per_usd) VALUES ('2026-08-03','adjustment','in',10,33)`).run(), /CHECK constraint failed/);
+  throws("action_paid sans règlement ⇒ refusé", () => db.prepare(`INSERT INTO xpoker_chip_ledger (occurred_at, kind, direction, chips, rate_chips_per_usd, player_id) VALUES ('2026-08-03','action_paid','in',10,33,1)`).run(), /CHECK constraint failed/);
+  throws("contre-passation qui n'est pas un ajustement ⇒ refusée", () => db.prepare(`INSERT INTO xpoker_chip_ledger (occurred_at, kind, direction, chips, rate_chips_per_usd, player_id, member_id, reverses_id, note) VALUES ('2026-08-03','buyin','out',10,33,1,'3062825',1,'x')`).run(), /CHECK constraint failed/);
   throws("deal : % hors bornes", () => db.prepare(`INSERT INTO xpoker_player_deals (player_id, action_pct, start_week) VALUES (1, 101, '2026-03-16')`).run(), /CHECK constraint failed/);
   throws("deal : 0.8 (fraction déguisée en pourcent) ⇒ refusé par le SCHÉMA (R2)", () => db.prepare(`INSERT INTO xpoker_player_deals (player_id, action_pct, rb_pct, start_week) VALUES (1, 10, 0.8, '2026-03-16')`).run(), /CHECK constraint failed/);
+  db.exec(`DELETE FROM xpoker_player_deals`);   // la période ouverte posée plus haut (une seule par joueur)
   check("deal : 10 / 20 (pourcents) ⇒ ok", db.prepare(`INSERT INTO xpoker_player_deals (player_id, action_pct, rb_pct, start_week) VALUES (1, 10, 20, '2026-03-16')`).run().changes === 1);
   throws("import : rb_fraction = 80 (pourcent déguisé en fraction) ⇒ refusé par le SCHÉMA (R2)", () => db.prepare(`
     INSERT INTO xpoker_imports (week_start, week_end, source, club_name, chip_value, rb_fraction, tax_fraction, sheet_total_winloss, sheet_total_rake, sheet_tax, sheet_rb_amount, sheet_total,
@@ -276,7 +294,7 @@ console.log("\n── B. Chaîne complète d'initSchema sur une COPIE de data/le
     eq("colonnes manual_settlements (prod supposée ≡ local)", cols(db, "manual_settlements"),
        ["id","game_id","player_id","net_selected_usdt","action_pct_applied","amount_due_usdt","status","tx_hash","notes",
         "locked_at","paid_at","created_at","paid_date","kind","amount_due_native","native_currency","fx_rate_applied"]);
-    check("colonnes player_game_ids", ["nickname","status","added_at"].every(c => cols(db, "player_game_ids").includes(c)));
+    check("colonnes player_game_ids", ["nickname","status","added_at","archived_at"].every(c => cols(db, "player_game_ids").includes(c)));
     // Sur une copie locale en retard, add_pool_settlement_v1 s'applique dans le même
     // boot et ajoute sa propre ligne games : on la compte, on n'invente rien.
     const poolAppliedNow = logs.some(l => l.includes("add_pool_settlement_v1 applied")) ? 1 : 0;

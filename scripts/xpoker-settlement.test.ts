@@ -127,6 +127,8 @@ let aliceSid = 0, bobSid = 0;
     const ms = db.prepare(`SELECT game_id, player_id, kind, amount_due_native, native_currency, fx_rate_applied, amount_due_usdt, action_pct_applied, status, notes FROM manual_settlements WHERE id = ?`).get(aliceSid);
     eq("manual_settlements : natif chips, TWD, taux figé 33, kind xpoker, locked", { ...ms, amount_due_native: +ms.amount_due_native.toFixed(4), amount_due_usdt: +ms.amount_due_usdt.toFixed(4) },
        { game_id: db.prepare(`SELECT id FROM games WHERE name='XPOKER_TWD'`).get().id, player_id: ALICE, kind: "xpoker", amount_due_native: +dueA.toFixed(4), native_currency: "TWD", fx_rate_applied: 33, amount_due_usdt: +(dueA / 33).toFixed(4), action_pct_applied: 10, status: "locked", notes: "semaines de juillet" });
+    eq("chaque semaine figée porte l'import d'origine", db.prepare(`SELECT COUNT(*) n FROM xpoker_settlement_weeks sw JOIN xpoker_imports i ON i.id = sw.import_id AND i.week_start = sw.week_start WHERE settlement_id = ?`).get(aliceSid).n, 2);
+    // Le règlement club se contre-passe ? Non : une ligne née d'un règlement JOUEUR ne se nie pas.
     const sw = db.prepare(`SELECT week_start, winloss_chips, rake_chips, action_pct, rb_pct, action_chips, rb_chips, due_chips, rate_chips_per_usd FROM xpoker_settlement_weeks WHERE settlement_id = ? ORDER BY week_start`).all(aliceSid);
     eq("semaines figées : chips, deal, taux", sw.map((w: any) => [w.week_start, w.winloss_chips, w.action_pct, w.rb_pct, +w.due_chips.toFixed(4), w.rate_chips_per_usd]),
        [["2026-07-13", -31267.4, 10, 20, +(-3126.74 - 929.576).toFixed(4), 33], ["2026-07-27", -136.2, 10, 20, +(-13.62 - 51.286).toFixed(4), 33]]);
@@ -172,6 +174,9 @@ console.log("\n── A5. Grand livre au markPaid : date réelle obligatoire, ac
   eq4("stock agence = −(3140.36 + 980.862)", agencyStockOn(db).stock_chips, -(3126.74 + 13.62 + 929.576 + 51.286));
   check("second markPaid ⇒ refusé par le SCHÉMA (UNIQUE settlement_id, kind)", (() => { try { writeXpokerLedgerOnPaidOn(db, aliceSid, "2026-08-04"); return false; } catch (e: any) { return /UNIQUE/.test(e.message); } })());
   eq("toujours 2 lignes", db.prepare(`SELECT COUNT(*) n FROM xpoker_chip_ledger WHERE settlement_id = ?`).get(aliceSid).n, 2);
+  const paidLine = db.prepare(`SELECT id FROM xpoker_chip_ledger WHERE settlement_id = ? AND kind = 'action_paid'`).get(aliceSid).id;
+  const rv = (require("../lib/games/xpoker/engine") as typeof import("../lib/games/xpoker/engine")).reverseLedgerLineOn(db, { line_id: paidLine, occurred_at: "2026-08-04", note: "tentative" });
+  check("une ligne de règlement ne se contre-passe pas (on déverrouille le règlement)", !rv.ok && /règlement #/.test((rv as any).error), JSON.stringify(rv));
   const wb = writeXpokerLedgerOnPaidOn(db, bobSid, "2026-08-03");
   eq("Bob : 1 ligne (action IN, pas de RB)", wb, { written: 1 });
   eq("action_paid IN 1405.356 : il me règle", db.prepare(`SELECT kind, direction, chips FROM xpoker_chip_ledger WHERE settlement_id = ?`).all(bobSid).map((l: any) => [l.kind, l.direction, +l.chips.toFixed(4)]), [["action_paid", "in", 1405.356]]);

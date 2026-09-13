@@ -34,7 +34,7 @@ import {
 import {
   commitImportOn, deleteImportOn, unlinkedMembersOn, linkMemberIdOn, archiveAccountOn, accountsForPlayerOn,
   deleteGameIdRowOn, setDealOn, dealForWeekOn, dealHistoryOn, playerWeeksOn, addLedgerLineOn, agencyStockOn, playerMovementsOn,
-  importSettlementStatusOn, rateAtOn, addRateOn, xpokerGameIdOn, relinkMemberIdOn, relinkLogOn,
+  importSettlementStatusOn, rateAtOn, addRateOn, xpokerGameIdOn, relinkMemberIdOn, relinkLogOn, reverseLedgerLineOn,
 } from "../lib/games/xpoker/engine";
 import { block, CAS1, CAS2, type FixRow } from "./xpoker-fixture";
 
@@ -227,7 +227,8 @@ console.log("\n── 4. Grand livre chips : sens imposés, deux compteurs disti
   check("buy-in en 'in' ⇒ refus", !addLedgerLineOn(db, { occurred_at: "2026-07-21", kind: "buyin", direction: "in", chips: 10, player_id: BOB, member_id: "4107823" }).ok);
   check("buy-in sur un ID qui n'est pas au joueur ⇒ refus", !addLedgerLineOn(db, { occurred_at: "2026-07-21", kind: "buyin", direction: "out", chips: 10, player_id: BOB, member_id: "3062825" }).ok);
   check("chips ≤ 0 ⇒ refus", !addLedgerLineOn(db, { occurred_at: "2026-07-21", kind: "adjustment", direction: "in", chips: 0 }).ok);
-  check("date invalide ⇒ refus", !addLedgerLineOn(db, { occurred_at: "hier", kind: "adjustment", direction: "in", chips: 1 }).ok);
+  check("date invalide ⇒ refus", !addLedgerLineOn(db, { occurred_at: "hier", kind: "adjustment", direction: "in", chips: 1, note: "x" }).ok);
+  check("ajustement sans motif ⇒ refus moteur", /motif/.test((addLedgerLineOn(db, { occurred_at: "2026-07-21", kind: "adjustment", direction: "in", chips: 1 }) as any).error ?? ""));
   const stock = agencyStockOn(db);
   eq4("stock agence = 9115.0755 + 2000 − 5000", stock.stock_chips, 6115.0755);
   eq("par nature", stock.by_kind, { buyin: { in: 0, out: 5000 }, cashout: { in: 2000, out: 0 }, club_settlement: { in: 9115.0755, out: 0 } });
@@ -250,6 +251,16 @@ console.log("\n── 4. Grand livre chips : sens imposés, deux compteurs disti
   eq("import 7/13 toujours à 33", db.prepare(`SELECT rate_chips_per_usd r FROM xpoker_imports WHERE week_start = '2026-07-13'`).get().r, 33);
   eq("mouvement du 22/07 toujours à 33", db.prepare(`SELECT rate_chips_per_usd r FROM xpoker_chip_ledger WHERE kind = 'cashout'`).get().r, 33);
   eq("mais un mouvement du 05/08 prend 30", (() => { addLedgerLineOn(db, { occurred_at: "2026-08-05", kind: "adjustment", direction: "in", chips: 1, note: "test" }); return db.prepare(`SELECT rate_chips_per_usd r FROM xpoker_chip_ledger WHERE kind = 'adjustment'`).get().r; })(), 30);
+  // Contre-passation (append-only) : la ligne fausse reste, son inverse s'ajoute, une seule fois.
+  const wrong = addLedgerLineOn(db, { occurred_at: "2026-07-23", kind: "buyin", direction: "out", chips: 999, player_id: BOB, member_id: "4107823", note: "faute de frappe" });
+  const stockBeforeRev = agencyStockOn(db).stock_chips;
+  const rev = reverseLedgerLineOn(db, { line_id: (wrong as any).id, occurred_at: "2026-07-24", note: "999 saisi pour 99" });
+  check("contre-passation ok", rev.ok, JSON.stringify(rev));
+  eq4("le stock revient de +999", agencyStockOn(db).stock_chips, stockBeforeRev + 999);
+  eq("la ligne inverse : adjustment, in, 999, même joueur/compte, reverses_id", db.prepare(`SELECT kind, direction, chips, player_id, member_id, reverses_id FROM xpoker_chip_ledger WHERE id = ?`).get((rev as any).id), { kind: "adjustment", direction: "in", chips: 999, player_id: BOB, member_id: "4107823", reverses_id: (wrong as any).id });
+  check("la ligne fausse est toujours là (append-only)", db.prepare(`SELECT COUNT(*) n FROM xpoker_chip_ledger WHERE id = ?`).get((wrong as any).id).n === 1);
+  check("deuxième contre-passation ⇒ refus", !reverseLedgerLineOn(db, { line_id: (wrong as any).id, occurred_at: "2026-07-24", note: "encore" }).ok);
+  check("contre-passer une ligne inexistante ⇒ refus", !reverseLedgerLineOn(db, { line_id: 9999, occurred_at: "2026-07-24", note: "x" }).ok);
   check("supprimer l'import porteur d'un règlement club ⇒ refus", !deleteImportOn(db, impId).ok);
   const impMar = db.prepare(`SELECT id FROM xpoker_imports WHERE week_start = '2026-03-16'`).get().id;
   eq("supprimer l'import de mars (écart acté, sans mouvement) ⇒ ok, lignes en cascade", [deleteImportOn(db, impMar).ok, db.prepare(`SELECT COUNT(*) n FROM xpoker_week_rows WHERE week_start = '2026-03-16'`).get().n], [true, 0]);
@@ -277,12 +288,14 @@ console.log("\n── 5. GARDE : DELETE générique refusé sur un ID porteur de
   // Archivage : l'historique reste, un import futur repart en réconciliation, la réactivation relie.
   eq("archiver 3062825", archiveAccountOn(db, aliceRow, ALICE), { ok: true });
   eq("statut archivé, semaines conservées", accountsForPlayerOn(db, ALICE).map(a => [a.member_id, a.status, a.weeks_imported]), [["3062825", "archived", 1]]);
+  check("archived_at posé", accountsForPlayerOn(db, ALICE)[0].archived_at !== null);
   const r3 = commitImportOn(db, { block: block({ rows: CAS1 }, "8/10"), week_start: "2026-08-03", week_end: "2026-08-09", source: "xlsx" });
   eq("ID archivé ⇒ la nouvelle semaine est orpheline", r3.ok ? r3.unlinked : r3, ["3062825"]);
   eq("la réconciliation signale « archivé chez Alice »", unlinkedMembersOn(db)[0].archived_on, { player_id: ALICE, name: "Alice" });
   const re = linkMemberIdOn(db, { player_id: ALICE, member_id: "3062825" });
   eq("réactivation relie la semaine orpheline, sans doublon de ligne", [re.ok ? re.rows_linked : re, db.prepare(`SELECT COUNT(*) n FROM player_game_ids WHERE external_id = '3062825'`).get().n], [1, 1]);
-  eq("statut redevenu actif", accountsForPlayerOn(db, ALICE)[0].status, "active");
+  eq("statut redevenu actif, archived_at effacé", [accountsForPlayerOn(db, ALICE)[0].status, accountsForPlayerOn(db, ALICE)[0].archived_at], ["active", null]);
+  eq("l'import porte club_id et la ligne club du bloc de règlement (B11)", db.prepare(`SELECT club_id, sheet_cleared_club_line FROM xpoker_imports WHERE week_start = '2026-07-13'`).get(), { club_id: "246579", sheet_cleared_club_line: 9115.0755 });
   check("intégrité", db.pragma("integrity_check")[0].integrity_check === "ok" && db.pragma("foreign_key_check").length === 0);
 }
 

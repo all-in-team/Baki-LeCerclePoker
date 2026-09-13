@@ -40,13 +40,18 @@ export const XPOKER_MIGRATION_V1 = "add_xpoker_twd_v1";
 /** Tolérance du checksum d'import : au centime (le sheet garde 4 décimales, l'écart réel est ~1e-10). */
 export const XPOKER_CHECK_TOLERANCE = 0.005;
 
+/** Une date ISO 'YYYY-MM-DD' — un '13/09/2026' ou un 'hier' ne trierait jamais avec les autres. */
+const ISO = "GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]'";
+/** Un lundi ISO : toute semaine du modèle est ancrée sur son lundi, sans exception. */
+const MONDAY = (col: string) => `(${col} ${ISO} AND strftime('%w', ${col}) = '1')`;
+
 export const XPOKER_SCHEMA_SQL = `
   -- ── Taux chips/USD, historisé par date d'effet ────────────────────────────
   -- Le taux applicable à une date = la ligne d'effective_from la plus récente
   -- ≤ cette date. Jamais mis à jour en place : on AJOUTE une date d'effet.
   CREATE TABLE IF NOT EXISTS xpoker_chip_rates (
     id             INTEGER PRIMARY KEY AUTOINCREMENT,
-    effective_from TEXT NOT NULL UNIQUE,                 -- 'YYYY-MM-DD'
+    effective_from TEXT NOT NULL UNIQUE CHECK(effective_from ${ISO}),
     chips_per_usd  REAL NOT NULL CHECK(chips_per_usd > 0),
     note           TEXT,
     created_at     TEXT NOT NULL DEFAULT (datetime('now'))
@@ -74,14 +79,19 @@ export const XPOKER_SCHEMA_SQL = `
     -- ]0, 1[ : « 0.8 » saisi ici serait une fraction déguisée, pas 0,8 %.
     action_pct REAL NOT NULL CHECK(action_pct = 0 OR (action_pct >= 1 AND action_pct <= 100)),
     rb_pct     REAL NOT NULL DEFAULT 0 CHECK(rb_pct = 0 OR (rb_pct >= 1 AND rb_pct <= 100)),
-    start_week TEXT NOT NULL,
-    end_week   TEXT,
+    start_week TEXT NOT NULL CHECK(${MONDAY("start_week")}),
+    end_week   TEXT CHECK(end_week IS NULL OR ${MONDAY("end_week")}),
     note       TEXT,
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
-    CHECK (end_week IS NULL OR end_week >= start_week)
+    CHECK (end_week IS NULL OR end_week >= start_week),
+    UNIQUE(player_id, start_week)
   );
   CREATE INDEX IF NOT EXISTS idx_xpoker_deals_player
     ON xpoker_player_deals(player_id, start_week);
+  -- UNE seule période en cours par joueur : deux end_week NULL, c'est deux taux
+  -- pour la même semaine et un dealForWeekOn qui choisirait en silence.
+  CREATE UNIQUE INDEX IF NOT EXISTS idx_xpoker_deals_one_open
+    ON xpoker_player_deals(player_id) WHERE end_week IS NULL;
 
   -- ── UN import = UNE semaine du sheet, avec sa PROVENANCE FIGÉE ────────────
   -- La semaine est une PLAGE DE DATES CONFIRMÉE À LA MAIN (Baki) ; tab_label est
@@ -96,13 +106,17 @@ export const XPOKER_SCHEMA_SQL = `
   -- calcule.
   CREATE TABLE IF NOT EXISTS xpoker_imports (
     id                  INTEGER PRIMARY KEY AUTOINCREMENT,
-    week_start          TEXT NOT NULL UNIQUE,            -- lundi ISO, confirmé
-    week_end            TEXT NOT NULL,                   -- dimanche ISO, confirmé
+    week_start          TEXT NOT NULL UNIQUE CHECK(${MONDAY("week_start")}),   -- lundi, confirmé
+    week_end            TEXT NOT NULL CHECK(week_end = date(week_start, '+6 days')), -- son dimanche
     tab_label           TEXT,                            -- '8/3', '83', 'Sheet1'… opaque
     source              TEXT NOT NULL CHECK(source IN ('xlsx','csv')),
     filename            TEXT,
     file_hash           TEXT,
+    -- Identité du club telle que l'import l'a vue : le nom lu dans la feuille ET
+    -- l'ID club de la config. Si un second club arrive un jour, l'historique dit
+    -- déjà à qui appartient chaque semaine.
     club_name           TEXT NOT NULL,
+    club_id             TEXT,
     -- Paramètres lus dans le bloc — FRACTIONS (0.8 pour 80 %), l'unité est dans le
     -- nom et le CHECK la tient : jamais un pourcent ici (cf. xpoker_player_deals).
     chip_value          REAL NOT NULL,
@@ -114,7 +128,8 @@ export const XPOKER_SCHEMA_SQL = `
     sheet_tax           REAL NOT NULL,
     sheet_rb_amount     REAL NOT NULL,
     sheet_total         REAL NOT NULL,                   -- U22 « Total »
-    sheet_cleared       REAL,                            -- B20 « 總交收 », NULL si absent
+    sheet_cleared       REAL,                            -- B20 « 總交收 » (bloc de règlement, tous clubs), NULL si absent
+    sheet_cleared_club_line REAL,                        -- B11, la ligne « <club> » du même bloc — diverge de B20 si d'autres clubs y sont sommés
     -- Recalcul ligne à ligne sur TOUTES les lignes du bloc (agence et
     -- sous-agent comprises : le club les compte, donc le checksum aussi).
     recomputed_rb       REAL NOT NULL,
@@ -157,7 +172,7 @@ export const XPOKER_SCHEMA_SQL = `
   CREATE TABLE IF NOT EXISTS xpoker_week_rows (
     id             INTEGER PRIMARY KEY AUTOINCREMENT,
     import_id      INTEGER NOT NULL REFERENCES xpoker_imports(id) ON DELETE CASCADE,
-    week_start     TEXT NOT NULL,
+    week_start     TEXT NOT NULL CHECK(${MONDAY("week_start")}),
     member_id      TEXT NOT NULL,
     id_label       TEXT,
     nickname       TEXT,
@@ -167,14 +182,18 @@ export const XPOKER_SCHEMA_SQL = `
     rake_chips     REAL NOT NULL CHECK(rake_chips >= 0),   -- un rake est toujours ≥ 0 (F2)
     -- 1 = compte agence (xpoker_agency_accounts au moment de l'import) : jamais
     -- de position joueur. 1 = sous-agent présent sur cette ligne.
-    is_agency      INTEGER NOT NULL DEFAULT 0,
-    is_sub_agent   INTEGER NOT NULL DEFAULT 0,
+    is_agency      INTEGER NOT NULL DEFAULT 0 CHECK(is_agency IN (0, 1)),
+    is_sub_agent   INTEGER NOT NULL DEFAULT 0 CHECK(is_sub_agent IN (0, 1)),
     player_id      INTEGER REFERENCES players(id) ON DELETE SET NULL,
     created_at     TEXT NOT NULL DEFAULT (datetime('now')),
-    UNIQUE(week_start, member_id)
+    UNIQUE(week_start, member_id),
+    -- Un compte agence n'a jamais de joueur : le CHECK le tient, pas seulement l'import.
+    CHECK (is_agency = 0 OR player_id IS NULL)
   );
   CREATE INDEX IF NOT EXISTS idx_xpoker_rows_player
     ON xpoker_week_rows(player_id, week_start);
+  CREATE INDEX IF NOT EXISTS idx_xpoker_rows_import
+    ON xpoker_week_rows(import_id);
   CREATE INDEX IF NOT EXISTS idx_xpoker_rows_member
     ON xpoker_week_rows(member_id, week_start);
   -- Alimente l'écran de réconciliation.
@@ -200,7 +219,7 @@ export const XPOKER_SCHEMA_SQL = `
   -- doit échouer au niveau du schéma plutôt que laisser un mouvement orphelin.
   CREATE TABLE IF NOT EXISTS xpoker_chip_ledger (
     id                 INTEGER PRIMARY KEY AUTOINCREMENT,
-    occurred_at        TEXT NOT NULL,
+    occurred_at        TEXT NOT NULL CHECK(occurred_at ${ISO}),
     kind               TEXT NOT NULL CHECK(kind IN ('club_settlement','buyin','cashout','action_paid','rb_paid','adjustment')),
     direction          TEXT NOT NULL CHECK(direction IN ('in','out')),
     chips              REAL NOT NULL CHECK(chips > 0),
@@ -209,11 +228,21 @@ export const XPOKER_SCHEMA_SQL = `
     member_id          TEXT,
     import_id          INTEGER REFERENCES xpoker_imports(id),
     settlement_id      INTEGER REFERENCES manual_settlements(id),
+    -- Grand livre APPEND-ONLY : une ligne fausse ne s'efface pas, elle se contre-passe
+    -- (kind 'adjustment', sens inverse, même montant, motif). reverses_id pointe la
+    -- ligne annulée ; une ligne ne s'annule qu'une fois (index unique ci-dessous).
+    reverses_id        INTEGER REFERENCES xpoker_chip_ledger(id),
     note               TEXT,
     created_at         TEXT NOT NULL DEFAULT (datetime('now')),
     -- Un buy-in / cash-out est rattaché à un COMPTE (member_id) et remonte au joueur.
     CHECK (kind NOT IN ('buyin','cashout') OR (player_id IS NOT NULL AND member_id IS NOT NULL)),
     CHECK (kind != 'club_settlement' OR (player_id IS NULL AND member_id IS NULL)),
+    -- Un versement de règlement porte toujours son règlement ET son joueur.
+    CHECK (kind NOT IN ('action_paid','rb_paid') OR (settlement_id IS NOT NULL AND player_id IS NOT NULL)),
+    -- Un ajustement manuel sans motif est une ligne qu'on ne saura pas relire dans 3 mois.
+    CHECK (kind != 'adjustment' OR (note IS NOT NULL AND length(trim(note)) > 0)),
+    -- Une contre-passation est un ajustement.
+    CHECK (reverses_id IS NULL OR kind = 'adjustment'),
     -- Un règlement club est TOUJOURS adossé à un import : sans ça il se ressaisit à
     -- l'infini et le stock agence ment (faille F1, money-auditor 2026-09-13). Avec
     -- l'index unique ci-dessous, un import = un règlement, au niveau du schéma.
@@ -231,6 +260,9 @@ export const XPOKER_SCHEMA_SQL = `
   -- Un règlement club par import.
   CREATE UNIQUE INDEX IF NOT EXISTS idx_xpoker_ledger_import
     ON xpoker_chip_ledger(import_id) WHERE kind = 'club_settlement';
+  -- Une ligne ne se contre-passe qu'une fois.
+  CREATE UNIQUE INDEX IF NOT EXISTS idx_xpoker_ledger_reverses
+    ON xpoker_chip_ledger(reverses_id) WHERE reverses_id IS NOT NULL;
 
   -- ── TRACE des déplacements de Player ID (R1, fonction de premier rang) ────
   -- Un ID rattaché au mauvais joueur est un cas NORMAL (pseudos qui ressemblent
@@ -265,7 +297,9 @@ export const XPOKER_SCHEMA_SQL = `
     id                 INTEGER PRIMARY KEY AUTOINCREMENT,
     settlement_id      INTEGER NOT NULL REFERENCES manual_settlements(id) ON DELETE CASCADE,
     player_id          INTEGER NOT NULL REFERENCES players(id) ON DELETE CASCADE,
-    week_start         TEXT NOT NULL,
+    week_start         TEXT NOT NULL CHECK(${MONDAY("week_start")}),
+    -- L'import d'où viennent les chiffres figés — pour l'audit, et deleteImportOn le protège.
+    import_id          INTEGER REFERENCES xpoker_imports(id),
     winloss_chips      REAL NOT NULL,
     rake_chips         REAL NOT NULL,
     action_pct         REAL NOT NULL CHECK(action_pct = 0 OR (action_pct >= 1 AND action_pct <= 100)),  -- POURCENT
@@ -285,7 +319,7 @@ export const XPOKER_SCHEMA_SQL = `
  * constant, posées une par une sous garde pragma_table_info (rejouable).
  *
  * player_game_ids : nickname (T du sheet, libellé), status ('active'|'archived'),
- *   added_at. Preuve étape 2a : 12 lecteurs nomment leurs colonnes, 7 écrivains
+ *   added_at, archived_at. Preuve étape 2a : 12 lecteurs nomment leurs colonnes, 7 écrivains
  *   listent les leurs, aucun `SELECT *`, `status` jamais lu sur cette table.
  * manual_settlements : amount_due_native (le montant RÉGLÉ, en chips),
  *   native_currency ('TWD'), fx_rate_applied (chips/USD figé au lock). Sur ces
@@ -298,6 +332,9 @@ export const XPOKER_ADDED_COLUMNS: { table: string; column: string; ddl: string 
   { table: "player_game_ids", column: "nickname", ddl: "TEXT" },
   { table: "player_game_ids", column: "status", ddl: "TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active','archived'))" },
   { table: "player_game_ids", column: "added_at", ddl: "TEXT" },
+  // Revue « dernière fenêtre » 2026-09-13 : sans date d'archivage, un compte archivé ne
+  // dit pas depuis quand — et un import ultérieur sous cet ID ne peut pas être situé.
+  { table: "player_game_ids", column: "archived_at", ddl: "TEXT" },
   { table: "manual_settlements", column: "amount_due_native", ddl: "REAL" },
   { table: "manual_settlements", column: "native_currency", ddl: "TEXT" },
   { table: "manual_settlements", column: "fx_rate_applied", ddl: "REAL" },
