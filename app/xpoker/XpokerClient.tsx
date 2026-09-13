@@ -15,7 +15,7 @@
 // dû < 0 = « je lui dois » rouge (même sens que /payments) ; trois états, jamais
 // de total partiel ; chips toujours accompagnées de leur équivalent USD.
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { BarChart, Bar, Cell, XAxis, YAxis, Tooltip, ResponsiveContainer, ReferenceLine, Legend } from "recharts";
 import Btn from "@/components/Btn";
@@ -35,9 +35,9 @@ function Chips({ n, rate, sign = false, color }: { n: number | null; rate: numbe
   if (n === null) return <span style={{ color: MUTED, fontStyle: "italic" }}>incalculable</span>;
   const c = color ?? (sign ? (Math.abs(n) < EPS ? MUTED : n > 0 ? GREEN : RED) : undefined);
   return (
-    <span style={{ fontVariantNumeric: "tabular-nums", color: c }}>
-      {sign ? signed(n) : fmt(n)} <span style={{ fontSize: 10, color: MUTED }}>chips</span>
-      {rate !== null && <span style={{ fontSize: 10, color: MUTED }}> ≈ {sign ? signed(n / rate) : fmt(n / rate)} USD</span>}
+    <span style={{ display: "inline-block", fontVariantNumeric: "tabular-nums", color: c, lineHeight: 1.2 }}>
+      {sign ? signed(n) : fmt(n)}
+      <span style={{ display: "block", fontSize: 10, color: MUTED, fontWeight: 400 }}>{rate !== null ? `≈ ${sign ? signed(n / rate) : fmt(n / rate)} USD` : "chips"}</span>
     </span>
   );
 }
@@ -88,7 +88,7 @@ export default function XpokerClient({ dash, today, periodLabel }: { dash: Xpoke
             <table style={{ width: "100%", borderCollapse: "collapse" }}>
               <thead><tr>
                 <th style={thL}>Action %</th><th style={thL}>RB %</th><th style={thL}>Joueur</th><th style={thL}>Comptes</th>
-                <th style={th}>Sem.</th><th style={th}>Win/Lose</th><th style={th}>Rake</th><th style={th}>Part d&apos;action</th><th style={th}>RB joueur</th><th style={th}>Dû net</th><th style={th}>Buy-in / Cash-out</th>
+                <th style={th}>Sem.</th><th style={th}>Win/Lose (chips)</th><th style={th}>Rake</th><th style={th}>Part d&apos;action</th><th style={th}>RB joueur</th><th style={th}>Dû net</th>
               </tr></thead>
               <tbody>
                 {dash.players.map(p => (
@@ -120,26 +120,31 @@ function RevenueChart({ weeks, rate, periodLabel }: { weeks: XpokerChartWeek[]; 
     action: w.action_chips,
     incalculable: w.incalculable, unlinked: w.unlinked_rows, flagged: !w.check_ok,
   })), [weeks]);
+  // ResponsiveContainer se mesure au montage ; pendant l'animation d'entrée du
+  // template (pageIn, 0.3 s) la mesure a été observée fausse (largeur doublée,
+  // graphe invisible jusqu'au premier scroll). On monte le graphe APRÈS.
+  const [ready, setReady] = useState(false);
+  useEffect(() => { const t = setTimeout(() => setReady(true), 400); return () => clearTimeout(t); }, []);
   if (weeks.length === 0) return null;
   return (
     <div style={card}>
       <h2 style={h2}>Par semaine — {periodLabel}</h2>
       <p style={help}>Or : règlement club (Total du sheet). Vert/rouge : Σ parts d&apos;action des joueurs (+ = ils me doivent). Deux flux distincts, jamais nettés. Une semaine sans barre verte a un joueur sans deal.</p>
-      <div style={{ height: 240 }}>
-        <ResponsiveContainer>
-          <BarChart data={data} maxBarSize={38}>
+      <div style={{ width: "100%", height: 240 }}>
+        {ready && <ResponsiveContainer width="100%" height={240} debounce={50}>
+          <BarChart data={data} barSize={34} barGap={4} barCategoryGap="30%" margin={{ top: 6, right: 8, left: 0, bottom: 0 }}>
             <XAxis dataKey="week" stroke={MUTED} fontSize={11} />
             <YAxis stroke={MUTED} fontSize={11} tickFormatter={v => `${Math.round(v / 1000)}k`} />
             <ReferenceLine y={0} stroke="var(--border)" />
             <Tooltip contentStyle={{ background: "#1a1c22", border: "1px solid var(--border)", fontSize: 12 }}
               formatter={(v: number, name: string) => [`${fmt(v)} chips${rate ? ` ≈ ${fmt(v / rate)} USD` : ""}`, name === "club" ? "Règlement club (sheet)" : "Parts d'action joueurs"]} />
             <Legend formatter={(v: string) => v === "club" ? "Règlement club" : "Parts d'action joueurs"} wrapperStyle={{ fontSize: 11 }} />
-            <Bar dataKey="club" fill={GOLD} radius={[4, 4, 0, 0]} />
-            <Bar dataKey="action" radius={[4, 4, 0, 0]}>
+            <Bar dataKey="club" fill={GOLD} radius={[4, 4, 0, 0]} isAnimationActive={false} />
+            <Bar dataKey="action" fill={GREEN} radius={[4, 4, 0, 0]} isAnimationActive={false}>
               {data.map((d, i) => <Cell key={i} fill={(d.action ?? 0) >= 0 ? GREEN : RED} />)}
             </Bar>
           </BarChart>
-        </ResponsiveContainer>
+        </ResponsiveContainer>}
       </div>
       <div style={{ display: "flex", gap: 14, flexWrap: "wrap", fontSize: 11, color: MUTED, marginTop: 6 }}>
         {data.filter(d => d.incalculable > 0).map(d => <span key={d.week}>{d.week} : {d.incalculable} joueur(s) sans deal</span>)}
@@ -170,13 +175,15 @@ function PlayerRow({ p, rate, today, allPlayers, open, onToggle, onChanged }: {
         <td style={td}><Chips n={p.rake_chips} rate={rate} /></td>
         <td style={td}><Chips n={p.action_chips} rate={rate} sign /></td>
         <td style={td}><Chips n={p.rb_chips} rate={rate} /></td>
-        <td style={td}><Chips n={p.due_chips} rate={rate} sign /><div style={{ fontSize: 10, color: MUTED }}>{dueLabel(p.due_chips)}</div></td>
         <td style={td}>
-          <span style={{ color: MOVEMENT_COLOR.deposit }}>{fmt(p.movements.buyin_chips)}</span> / <span style={{ color: MOVEMENT_COLOR.withdrawal }}>{fmt(p.movements.cashout_chips)}</span>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "flex-end", gap: 8 }}>
+            <Chips n={p.due_chips} rate={rate} sign />
+            <span style={{ fontSize: 11, fontWeight: 700, color: p.due_chips === null ? MUTED : Math.abs(p.due_chips) < EPS ? MUTED : p.due_chips > 0 ? GREEN : RED, whiteSpace: "nowrap" }}>{dueLabel(p.due_chips)}</span>
+          </div>
         </td>
       </tr>
       {open && (
-        <tr><td colSpan={11} style={{ padding: "12px 14px 18px", borderTop: "1px solid var(--border)", background: "rgba(255,255,255,0.02)" }}>
+        <tr><td colSpan={10} style={{ padding: "12px 14px 18px", borderTop: "1px solid var(--border)", background: "rgba(255,255,255,0.02)" }}>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(340px, 1fr))", gap: 16 }}>
             <WeeksTable weeks={p.weeks} />
             <DealForm p={p} today={today} onChanged={onChanged} />
@@ -354,18 +361,24 @@ function MovementForm({ p, rate, today, onChanged }: { p: XpokerDashboardPlayer;
   return (
     <div>
       <div style={{ fontSize: 12, fontWeight: 700, color: "#E8E8EE", marginBottom: 6 }}>Buy-in / cash-out — trésorerie, jamais dans le règlement</div>
+      <div style={{ fontSize: 12, marginBottom: 8 }}>
+        <span style={{ color: MOVEMENT_COLOR.deposit }}>Buy-ins (dépôts) {fmt(p.movements.buyin_chips)} chips</span>
+        <span style={{ color: MUTED }}> · </span>
+        <span style={{ color: MOVEMENT_COLOR.withdrawal }}>Cash-outs (retraits) {fmt(p.movements.cashout_chips)} chips</span>
+        <span style={{ color: MUTED }}> · {p.movements.count} mouvement(s)</span>
+      </div>
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
-        <select style={{ ...input, color: kind === "buyin" ? MOVEMENT_COLOR.deposit : MOVEMENT_COLOR.withdrawal }} value={kind} onChange={e => setKind(e.target.value as "buyin" | "cashout")}>
+        <select style={{ ...input, width: 240, color: kind === "buyin" ? MOVEMENT_COLOR.deposit : MOVEMENT_COLOR.withdrawal }} value={kind} onChange={e => setKind(e.target.value as "buyin" | "cashout")}>
           <option value="buyin">Buy-in (je crédite son compte)</option>
           <option value="cashout">Cash-out (il me rend des chips)</option>
         </select>
-        <select style={input} value={member} onChange={e => setMember(e.target.value)}>
+        <select style={{ ...input, width: 200 }} value={member} onChange={e => setMember(e.target.value)}>
           {active.length === 0 && <option value="">aucun compte actif</option>}
           {active.map(a => <option key={a.member_id} value={a.member_id}>{a.member_id}{a.nickname ? ` · ${a.nickname}` : ""}</option>)}
         </select>
         <input style={{ ...input, width: 110 }} placeholder="chips" value={chips} onChange={e => setChips(e.target.value)} />
         <span style={{ fontSize: 11, color: MUTED }}>{Number.isFinite(n) && n > 0 && rate ? `≈ ${fmt(n / rate)} USD` : ""}</span>
-        <input type="date" style={input} value={date} onChange={e => setDate(e.target.value)} />
+        <input type="date" style={{ ...input, width: 150 }} value={date} onChange={e => setDate(e.target.value)} />
         <input style={{ ...input, width: 140 }} placeholder="note" value={note} onChange={e => setNote(e.target.value)} />
         <Btn size="sm" variant="secondary" onClick={submit} disabled={!member || !(n > 0)}>Enregistrer</Btn>
       </div>
@@ -512,15 +525,15 @@ function Ledger({ dash, rate, today, onChanged }: { dash: XpokerDashboard; rate:
       )}
       {pending.length > 0 && (
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
-          <select style={input} value={importId} onChange={e => { setImportId(e.target.value); const w = pending.find(x => String(x.import_id) === e.target.value); if (w) { setChips(String(Math.abs(w.club_sheet_total))); setDir(w.club_sheet_total >= 0 ? "in" : "out"); } }}>
+          <select style={{ ...input, width: 260 }} value={importId} onChange={e => { setImportId(e.target.value); const w = pending.find(x => String(x.import_id) === e.target.value); if (w) { setChips(String(Math.abs(w.club_sheet_total))); setDir(w.club_sheet_total >= 0 ? "in" : "out"); } }}>
             <option value="">— semaine —</option>
             {pending.map(w => <option key={w.import_id} value={w.import_id}>{w.week_start} (sheet {signed(w.club_sheet_total)})</option>)}
           </select>
-          <select style={input} value={dir} onChange={e => setDir(e.target.value as "in" | "out")}>
+          <select style={{ ...input, width: 190 }} value={dir} onChange={e => setDir(e.target.value as "in" | "out")}>
             <option value="in">reçu du club (entre)</option><option value="out">versé au club (sort)</option>
           </select>
           <input style={{ ...input, width: 120 }} placeholder="chips reçues" value={chips} onChange={e => setChips(e.target.value)} />
-          <input type="date" style={input} value={date} onChange={e => setDate(e.target.value)} />
+          <input type="date" style={{ ...input, width: 150 }} value={date} onChange={e => setDate(e.target.value)} />
           <Btn size="sm" variant="secondary" onClick={submit} disabled={!importId || !(Number(chips) > 0)}>Enregistrer le montant reçu</Btn>
           <span style={{ fontSize: 11, color: MUTED }}>Le montant que tu confirmes fait foi, pas celui que la feuille calcule.</span>
         </div>
