@@ -51,6 +51,15 @@ une période tant que le règlement de la précédente est `locked`.
 5. Solde main lu sur le message OkPay transféré (`Changed balance` de la dernière ligne
    ≤ `closed_at`), dédup `dedup_key UNIQUE` au schéma.
 
+**Format OkPay réel** (confronté le 2026-09-13, fixture dans le harnais) : `Type: ➕|➖` (emoji
+U+2795/U+2796, pas « + »/« − »), mentions `Transfer To :` / `Transfer From :` / `轉賬給 :`
+mélangées dans un même message, **soldes à 6 décimales** (`1539.817733`). Le grand livre
+garde les 6 décimales et la chaîne se vérifie au millionième ; l'arrondi au centime n'a lieu
+qu'à la frontière ledger → solde de clôture (`balanceAt().pool_balance`), parce que le
+moteur de règlement travaille au centime. Toute forme non vue (mention chinoise de
+l'entrant, séparateur de milliers, Type ASCII…) est **refusée en nommant le bloc** : Baki
+fournit l'échantillon, on l'ajoute — on ne devine pas.
+
 **Horodatages** : un seul format, `YYYY-MM-DD HH:MM:SS`, heure murale OkPay, lus comme UTC
 en interne (jamais l'heure locale du serveur — Railway ≠ Mac). Le fuseau réel d'OkPay reste
 à confirmer sur un vrai message.
@@ -58,7 +67,7 @@ en interne (jamais l'heure locale du serveur — Railway ≠ Mac). Le fuseau ré
 ## Phases
 
 - **1 — FAIT** : schéma + migration `add_pool_settlement_v1` + moteur pur + parseur OkPay
-  + harnais `scripts/pool-engine.test.ts` (156 assertions, contrefactuels). Audit
+  + harnais `scripts/pool-engine.test.ts` (164 assertions, contrefactuels, fixture réelle). Audit
   money-auditor : NO-GO → corrections A1/A2/A3 → GO SOUS RÉSERVE (réserves ci-dessous).
 - **2 — couche DB** `lib/pool/periods.ts` : comptes, preview = lock (même fonction, rien
   persisté avant le clic), unlock (dernière période seulement, jamais si payée), hook
@@ -88,9 +97,9 @@ en interne (jamais l'heure locale du serveur — Railway ≠ Mac). Le fuseau ré
   `account_id` (subsumé par le schéma à l'INSERT, pas sur le chemin preview).
 - `ON DELETE CASCADE` sur `players` : supprimer un joueur efface ses périodes figées —
   même risque assumé qu'en NEXA, à garder en tête.
-- Format réel OkPay : confronter le parseur à un vrai message AVANT mise en service
-  (si le vrai format porte un `Transaction: <id>` par bloc, tout est refusé — sûr, mais
-  inutilisable).
+- Format OkPay : un seul vrai message vu (wallet agence). Variantes à collecter au fil de
+  l'eau (forme chinoise de l'entrant, dépôts sans contrepartie) — chaque refus « mention
+  inconnue » est un échantillon à demander.
 
 ## Limites documentées (pas des bugs)
 

@@ -354,9 +354,22 @@ export type LedgerLine = {
   counterparty_tg_id?: string | null;
 };
 
+/**
+ * PRÉCISION DU GRAND LIVRE OKPAY : SIX DÉCIMALES, pas le centime.
+ * Les soldes OkPay sont au millionième (« 1539.817733 », constaté sur un vrai
+ * message le 2026-09-13). La chaîne ne se vérifie qu'à cette précision — au
+ * centime, 810.917733 + 728.9 = 1539.817733 passerait par hasard, et un écart
+ * de 0.004 réel serait avalé. round6 rend les sommes exactes au millionième
+ * (même raisonnement que round2 au centime) ; l'égalité se juge à LEDGER_EPS.
+ */
+export function round6(x: number): number {
+  return (Math.sign(x) * Math.round(Math.abs(x) * 1e6)) / 1e6 || 0;
+}
+export const LEDGER_EPS = 5e-7;
+
 /** Le solde attendu après `cur` si elle suit une ligne dont le solde était `prevBalance`. */
 function expectedAfter(prevBalance: number, cur: LedgerLine): number {
-  return round2(prevBalance + (cur.direction === "+" ? cur.amount : -cur.amount));
+  return round6(prevBalance + (cur.direction === "+" ? cur.amount : -cur.amount));
 }
 
 function permutations<T>(xs: readonly T[]): T[][] {
@@ -430,13 +443,13 @@ export function sortLedgerDetailed<T extends LedgerLine>(lines: readonly T[]): S
     const coherent = (order: T[]): boolean => {
       let bal = prev ? prev.balance_after : order[0].balance_after;
       for (let k = prev ? 0 : 1; k < order.length; k++) {
-        if (Math.abs(expectedAfter(bal, order[k]) - order[k].balance_after) > EPS) return false;
+        if (Math.abs(expectedAfter(bal, order[k]) - order[k].balance_after) > LEDGER_EPS) return false;
         bal = order[k].balance_after;
       }
       return true;
     };
     const chainsToNext = (order: T[]): boolean =>
-      next !== null && Math.abs(expectedAfter(order[order.length - 1].balance_after, next) - next.balance_after) <= EPS;
+      next !== null && Math.abs(expectedAfter(order[order.length - 1].balance_after, next) - next.balance_after) <= LEDGER_EPS;
 
     const candidates = permutations(group).filter(coherent);
     let chosen: T[];
@@ -462,12 +475,12 @@ export function sortLedger<T extends LedgerLine>(lines: readonly T[]): T[] {
 
 /**
  * Solde de la wallet À L'INSTANT `at` : le balance_after de la dernière ligne
- * ≤ at. Les lignes postérieures sont IGNORÉES (elles appartiennent à la période
+ * ≤ at (au millionième) et son arrondi au centime pour le pool (pool_balance). Les lignes postérieures sont IGNORÉES (elles appartiennent à la période
  * suivante). null si aucune ligne n'est antérieure : le solde est inconnu, il se
  * demande, il ne se suppose pas à 0.
  */
 export function balanceAt(lines: readonly LedgerLine[], at: string):
-  { line: LedgerLine; balance: number; ambiguity: LedgerAmbiguity | null } | null {
+  { line: LedgerLine; balance: number; pool_balance: number; ambiguity: LedgerAmbiguity | null } | null {
   const { sorted, ambiguities } = sortLedgerDetailed(lines);
   const upTo = sorted.filter(l => l.occurred_at <= at);
   if (upTo.length === 0) return null;
@@ -476,7 +489,12 @@ export function balanceAt(lines: readonly LedgerLine[], at: string):
   // une ambiguïté sur une seconde antérieure est déjà résorbée (prev + Σ), seule
   // celle de la dernière seconde retenue rend ce solde indéterminable.
   const ambiguity = ambiguities.find(a => a.occurred_at === line.occurred_at) ?? null;
-  return { line, balance: line.balance_after, ambiguity };
+  // LA FRONTIÈRE. `balance` est le fait OkPay, au millionième. `pool_balance` est
+  // ce qui entre dans le pool de clôture : le moteur de règlement travaille au
+  // centime (computeBankrollWeek exige des entrées cent-exactes), donc l'arrondi
+  // a lieu ICI, une fois, et nulle part avant. L'écart ≤ 0.005 ne se cumule pas :
+  // chaque clôture repart du vrai solde OkPay, pas du solde arrondi précédent.
+  return { line, balance: line.balance_after, pool_balance: round2(line.balance_after), ambiguity };
 }
 
 export type ChainBreak = {
@@ -497,8 +515,8 @@ export type ChainBreak = {
  *
  * Si l'égalité casse entre n−1 et n, il manque des lignes entre occurred_at[n−1]
  * et occurred_at[n] : Baki réclame la page. missing_delta dit combien d'argent
- * net a bougé dans le trou. Comparaison au centime via round2, JAMAIS avec == :
- * les balance_after sont lus dans du texte, les amounts aussi, et 0.1 + 0.2 ≠ 0.3.
+ * net a bougé dans le trou. Comparaison au MILLIONIÈME via round6/LEDGER_EPS,
+ * JAMAIS avec == : les soldes sont lus dans du texte, et 0.1 + 0.2 ≠ 0.3.
  *
  * Une chaîne d'une ligne ou vide ne casse pas — elle ne prouve rien non plus.
  */
@@ -508,9 +526,9 @@ export function checkLedgerChain(lines: readonly LedgerLine[]): ChainBreak[] {
   for (let n = 1; n < sorted.length; n++) {
     const prev = sorted[n - 1], cur = sorted[n];
     const expected = expectedAfter(prev.balance_after, cur);
-    if (Math.abs(expected - cur.balance_after) > EPS) {
+    if (Math.abs(expected - cur.balance_after) > LEDGER_EPS) {
       breaks.push({ before: prev, after: cur, expected_after: expected,
-                    missing_delta: round2(cur.balance_after - expected) });
+                    missing_delta: round6(cur.balance_after - expected) });
     }
   }
   return breaks;

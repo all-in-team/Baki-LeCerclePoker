@@ -20,9 +20,9 @@
  * │ test ne prouve rien.                                                     │
  * └─────────────────────────────────────────────────────────────────────────┘
  * ┌─ CE QU'ILS NE PROUVENT PAS ─────────────────────────────────────────────┐
- * │ • Le FORMAT RÉEL d'un message OkPay : l'échantillon est SYNTHÉTISÉ depuis │
- * │   la description de Baki. Un vrai message transféré doit être passé au   │
- * │   parseur avant la mise en service (espaces, caractères pleine largeur). │
+ * │ • Le parseur n'est validé que contre UN vrai message (agence, 5 lignes,  │
+ * │   Transfer To/From + 轉賬給). La forme chinoise de l'entrant et tout      │
+ * │   autre libellé sont REFUSÉS jusqu'à échantillon — sûr, pas prouvé.     │
  * │ • Les contrefactuels A1/A2/A3 de l'audit du 2026-09-13 sont intégrés :    │
  * │   deux en-têtes collés, même seconde en ordre inverse, paid_date = jour   │
  * │   de clôture — chacun montre le chiffre faux que le bug produisait.       │
@@ -47,7 +47,7 @@ import {
   type BalanceReading, type LedgerLine,
 } from "../lib/pool/engine";
 import { computeBankrollWeek } from "../lib/funnels/nexa/bankroll-engine";
-import { parseOkpayMessage, parseCounterparty, okpayDedupKey } from "../lib/pool/okpay-parse";
+import { parseOkpayMessage, parseCounterparty, okpayDedupKey, parseOkpayNumber } from "../lib/pool/okpay-parse";
 
 let passed = 0;
 const failures: string[] = [];
@@ -349,109 +349,130 @@ console.log("\n■ 5. Historique OkPay : solde à un instant, chaîne, classific
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
-console.log("\n■ 6. Parseur OkPay (échantillon SYNTHÉTISÉ depuis la description — à confronter à un vrai message)");
+console.log("\n■ 6. Parseur OkPay — fixture : VRAI message transféré (Baki, 2026-09-13)");
 {
-  const MSG = [
-    "PlayerOne Transaction:600200100",
-    "Type: +",
-    "Details: Transfer From : Baki Agency【ID 1486389037】",
-    "Amount: 45",
-    "Currency: USDT",
-    "Changed balance: 595.10",
-    "date: 2026-09-15 09:00:00",
+  // Tel que reçu, brut. Wallet agence (1486389037), 5 opérations, chaîne parfaite à 6 décimales.
+  const REAL = [
+    "HugoRoine Transaction:1486389037",
     "",
-    "Type: −",                                   // U+2212, le moins mathématique
-    "Details: 轉賬給 : 小明【ID 777001】",
-    "Amount: 300",
+    "Type: ➖",
+    "Details: Transfer To : 火焰骑士团【ID 6105025057】",
+    "Amount: 550",
     "Currency: USDT",
-    "Changed balance: 700",
-    "date: 2026-09-09 11:00:00",
+    "Changed balance: 1467.817733",
+    "date: 2026-09-13 13:28:55",
     "",
-    "Type: -",
-    "Details: 轉賬給 : Compte2【ID 777002】",
-    "Amount: 1,150.10",                          // séparateur de milliers
+    "Type: ➕",
+    "Details: Transfer From : 冷静不偷【ID 6646842987】",
+    "Amount: 478",
     "Currency: USDT",
-    "Changed balance: 549.9",
-    "date: 2026-09-10 12:00:00",
+    "Changed balance: 2017.817733",
+    "date: 2026-09-13 11:22:33",
+    "",
+    "Type: ➕",
+    "Details: Transfer From : 赢500下桌【ID 7308983551】",
+    "Amount: 728.9",
+    "Currency: USDT",
+    "Changed balance: 1539.817733",
+    "date: 2026-09-13 11:21:10",
+    "",
+    "Type: ➖",
+    "Details: 轉賬給 : X1【ID 2082550914】",
+    "Amount: 500",
+    "Currency: USDT",
+    "Changed balance: 810.917733",
+    "date: 2026-09-12 15:21:35",
+    "",
+    "Type: ➖",
+    "Details: 轉賬給 : 赢500下桌【ID 7308983551】",
+    "Amount: 500",
+    "Currency: USDT",
+    "Changed balance: 1310.917733",
+    "date: 2026-09-12 15:18:10",
   ].join("\n");
 
-  const r = parseOkpayMessage(MSG);
-  check("message parsé", r.ok, JSON.stringify(r));
+  const r = parseOkpayMessage(REAL);
+  check("message réel parsé", r.ok, JSON.stringify(r));
   if (r.ok) {
-    eq("wallet identifiée par l'en-tête", [r.wallet_tg_id, r.wallet_label], ["600200100", "PlayerOne"]);
-    eq("3 lignes, 0 sautée", [r.lines.length, r.skipped.length], [3, 0]);
-    const [a, b, c] = r.lines;
-    eq("ligne 1 : entrante, contrepartie agence", [a.direction, a.amount, a.balance_after, a.counterparty_tg_id, a.counterparty_name],
-       ["+", 45, 595.1, "1486389037", "Baki Agency"]);
-    eq("ligne 2 : U+2212 lu comme sortant, pseudo chinois, ID", [b.direction, b.amount, b.balance_after, b.counterparty_tg_id, b.counterparty_name, b.occurred_at],
-       ["-", 300, 700, "777001", "小明", "2026-09-09 11:00:00"]);
-    eq("ligne 3 : « 1,150.10 » → 1150.10", [c.amount, c.balance_after], [1150.1, 549.9]);
-    check("raw_text conservé", /Changed balance: 549\.9/.test(c.raw_text));
+    eq("wallet = l'agence, label = pseudo", [r.wallet_tg_id, r.wallet_label], [POOL_AGENCY_OKPAY_TG_ID, "HugoRoine"]);
+    eq("5 lignes, 0 sautée", [r.lines.length, r.skipped.length], [5, 0]);
+    eq("ligne 1 : ➖ (U+2796) → sortant, « Transfer To » anglais, 6 décimales conservées",
+       [r.lines[0].direction, r.lines[0].amount, r.lines[0].balance_after, r.lines[0].counterparty_tg_id, r.lines[0].counterparty_name],
+       ["-", 550, 1467.817733, "6105025057", "火焰骑士团"]);
+    eq("ligne 3 : ➕ (U+2795) → entrant, « 728.9 » lu tel quel",
+       [r.lines[2].direction, r.lines[2].amount, r.lines[2].balance_after, r.lines[2].occurred_at],
+       ["+", 728.9, 1539.817733, "2026-09-13 11:21:10"]);
+    eq("ligne 4 : « 轉賬給 » chinois → sortant, dans le MÊME message que l'anglais",
+       [r.lines[3].direction, r.lines[3].counterparty_tg_id, r.lines[3].counterparty_name], ["-", "2082550914", "X1"]);
 
-    // Dédup : le même message deux fois → les mêmes clés. Et les clés sont distinctes entre lignes.
-    const again = parseOkpayMessage(MSG);
-    eq("même message → mêmes dedup_key", again.ok ? again.lines.map(l => l.dedup_key) : null, r.lines.map(l => l.dedup_key));
-    eq("3 clés distinctes", new Set(r.lines.map(l => l.dedup_key)).size, 3);
-    // Deux wallets différentes, même ligne → clés différentes (la wallet fait partie de la clé).
-    check("la clé dépend de la wallet", okpayDedupKey("111", a) !== okpayDedupKey("222", a));
-    // CONTREFACTUEL : sans balance_after dans la clé, deux opérations réelles de
-    // même montant à la même seconde se confondraient. Avec : non.
-    const twin = { ...a, balance_after: a.balance_after + a.amount };
-    check("deux opérations identiques sauf le solde après → clés distinctes", okpayDedupKey("600200100", a) !== okpayDedupKey("600200100", twin));
+    // La chaîne réelle tient AU MILLIONIÈME : 1310.917733 −500 → 810.917733 +728.9 → 1539.817733 +478 → 2017.817733 −550 → 1467.817733.
+    eq("chaîne parfaite → 0 rupture (au millionième)", checkLedgerChain(r.lines), []);
+    eq("ordre du message récent→ancien remis en chronologie", sortLedger(r.lines).map(l => l.balance_after), [1310.917733, 810.917733, 1539.817733, 2017.817733, 1467.817733]);
+    // CONTREFACTUEL : au centime, 810.917733 + 0.004 = 810.921733 passerait (|Δ| < 0.005). Au millionième, non.
+    const tampered = r.lines.map(l => l.balance_after === 810.917733 ? { ...l, balance_after: 810.921733 } : l);
+    eq("solde faussé de 0.004 → détecté au millionième (1 rupture à la ligne suivante, 1 à celle-ci = 2)", checkLedgerChain(tampered).length, 2);
+    check("contrefactuel : au centime (|Δ| ≤ 0.005) cette falsification passait", Math.abs(810.921733 - 810.917733) < 0.005);
+
+    const at = balanceAt(r.lines, "2026-09-13 12:00:00");
+    approx("solde à 12:00 le 13 = 2017.817733 (fait, 6 décimales)", at?.balance ?? NaN, 2017.817733);
+    approx("→ pool_balance = 2017.82 (arrondi au centime, à la frontière seulement)", at?.pool_balance ?? NaN, 2017.82);
+    approx("solde en fin de journée du 13 = 1467.817733", balanceAt(r.lines, "2026-09-13 23:59:59")?.balance ?? NaN, 1467.817733);
+    eq("aucune ambiguïté (secondes toutes distinctes)", at?.ambiguity, null);
+
+    // Dédup : même message → mêmes clés ; 5 clés distinctes ; la clé porte 6 décimales.
+    const again = parseOkpayMessage(REAL);
+    eq("même message transféré deux fois → mêmes dedup_key", again.ok ? again.lines.map(l => l.dedup_key) : null, r.lines.map(l => l.dedup_key));
+    eq("5 clés distinctes", new Set(r.lines.map(l => l.dedup_key)).size, 5);
+    check("la clé distingue deux soldes différant au millionième", okpayDedupKey("1", r.lines[0]) !== okpayDedupKey("1", { ...r.lines[0], balance_after: 1467.817734 }));
+    check("la clé dépend de la wallet", okpayDedupKey("111", r.lines[0]) !== okpayDedupKey("222", r.lines[0]));
   }
 
-  // Robustesse de forme.
-  const crlf = parseOkpayMessage(MSG.replace(/\n/g, "\r\n"));
-  eq("CRLF accepté", crlf.ok && crlf.lines.length, 3);
-  const fullwidth = parseOkpayMessage(MSG.replace("Transaction:600200100", "Transaction：600200100").replace("Changed balance: 700", "Changed balance： 700"));
-  eq("deux-points pleine largeur acceptés", fullwidth.ok && fullwidth.lines.length, 3);
+  // Robustesse de forme (variantes d'encodage, pas de format).
+  eq("CRLF accepté", (() => { const x = parseOkpayMessage(REAL.replace(/\n/g, "\r\n")); return x.ok && x.lines.length; })(), 5);
+  eq("➖ suivi du sélecteur U+FE0F accepté", (() => { const x = parseOkpayMessage(REAL.replace("Type: ➖", "Type: ➖\uFE0F")); return x.ok && x.lines.length; })(), 5);
+  eq("deux-points pleine largeur acceptés", (() => { const x = parseOkpayMessage(REAL.replace("Transaction:1486389037", "Transaction：1486389037")); return x.ok && x.lines.length; })(), 5);
 
-  // A1 — deux historiques collés : REFUS, jamais « tout à la première wallet ».
-  const MSG2 = ["Compte2 Transaction:777002", "Type: -", "Details: 轉賬給 : X【ID 600200100】", "Amount: 10", "Currency: USDT", "Changed balance: 0", "date: 2026-09-15 10:00:00"].join("\n");
-  const glued = parseOkpayMessage(MSG + "\n\n" + MSG2);
-  check("deux en-têtes → refus nommant les deux wallets", !glued.ok && /2 en-têtes/.test((glued as any).error) && /600200100/.test((glued as any).error) && /777002/.test((glued as any).error), JSON.stringify(glued));
-  // CONTREFACTUEL : accepté, la ligne « Changed balance: 0 » de Compte2 serait la
-  // plus récente de la MAIN → balanceAt rendrait 0 au lieu de 595,10.
-  const inDetails = parseOkpayMessage(MSG.split("\n").slice(1).join("\n").replace("Details: 轉賬給 : 小明【ID 777001】", "Details: Transaction: 999999999"));
-  check("« Transaction: » dans un bloc, sans vrai en-tête → refus (pas pris pour l'en-tête)", !inDetails.ok, JSON.stringify(inDetails));
-  const dupKey = parseOkpayMessage(MSG.replace("Amount: 300\n", "Amount: 300\nAmount: 3000\n"));
-  check("deux « Amount: » dans un bloc → refus (pas « le dernier gagne »)", !dupKey.ok && /deux fois/.test((dupKey as any).error), JSON.stringify(dupKey));
-  const contra = parseOkpayMessage(MSG.replace("Type: +\nDetails: Transfer From", "Type: -\nDetails: Transfer From"));
-  check("Type − avec « Transfer From » → refus (sens contradictoire)", !contra.ok && /contradictoire/.test((contra as any).error), JSON.stringify(contra));
-  const contra2 = parseOkpayMessage(MSG.replace("Type: −\nDetails: 轉賬給", "Type: +\nDetails: 轉賬給"));
-  check("Type + avec « 轉賬給 » → refus", !contra2.ok && /contradictoire/.test((contra2 as any).error));
-  const unknownWording = parseOkpayMessage(MSG.replace("Details: Transfer From : Baki Agency【ID 1486389037】", "Details: Deposit"));
-  check("mention inconnue : pas de contrôle de sens, ligne acceptée (contrepartie nulle)", unknownWording.ok && unknownWording.lines[0].counterparty_tg_id === null);
+  // « NE DEVINE PAS » : tout ce qui n'a pas été vu est refusé en nommant le bloc.
+  const asciiMinus = parseOkpayMessage(REAL.replace("Type: ➖", "Type: -"));
+  check("Type « - » ASCII (jamais vu) → refus nommant le bloc", !asciiMinus.ok && /bloc 1/.test((asciiMinus as any).error) && /➕ ou ➖/.test((asciiMinus as any).error), JSON.stringify(asciiMinus));
+  const unknownIn = parseOkpayMessage(REAL.replace("Details: Transfer From : 冷静不偷", "Details: 來自 : 冷静不偷"));
+  check("mention chinoise entrante (pas encore vue) → refus « mention inconnue », bloc 2", !unknownIn.ok && /bloc 2/.test((unknownIn as any).error) && /mention inconnue/.test((unknownIn as any).error), JSON.stringify(unknownIn));
+  const noId = parseOkpayMessage(REAL.replace("Details: Transfer To : 火焰骑士团【ID 6105025057】", "Details: Transfer To : 火焰骑士团"));
+  check("mention connue sans 【ID】 → refus (forme inconnue)", !noId.ok && /【ID/.test((noId as any).error), JSON.stringify(noId));
+  const thousands = parseOkpayMessage(REAL.replace("Amount: 550", "Amount: 1,550"));
+  check("« 1,550 » (séparateur jamais vu) → refus", !thousands.ok && /séparateur/.test((thousands as any).error), JSON.stringify(thousands));
+  const sevenDec = parseOkpayMessage(REAL.replace("Changed balance: 1467.817733", "Changed balance: 1467.8177331"));
+  check("7 décimales → refus", !sevenDec.ok);
+  const contra = parseOkpayMessage(REAL.replace("Type: ➖\nDetails: Transfer To", "Type: ➕\nDetails: Transfer To"));
+  check("➕ avec « Transfer To » → refus (sens contradictoire)", !contra.ok && /contradictoire/.test((contra as any).error), JSON.stringify(contra));
+  const contra2 = parseOkpayMessage(REAL.replace("Type: ➕\nDetails: Transfer From : 冷静不偷", "Type: ➖\nDetails: Transfer From : 冷静不偷"));
+  check("➖ avec « Transfer From » → refus", !contra2.ok && /contradictoire/.test((contra2 as any).error));
 
-  // Refus nommés.
-  const noHeader = parseOkpayMessage(MSG.split("\n").slice(1).join("\n"));
+  // A1 — deux historiques collés : refus, jamais « tout à la première wallet ».
+  const SECOND = ["X1 Transaction:2082550914", "Type: ➕", "Details: Transfer From : HugoRoine【ID 1486389037】", "Amount: 500", "Currency: USDT", "Changed balance: 0", "date: 2026-09-12 15:21:35"].join("\n");
+  const glued = parseOkpayMessage(REAL + "\n\n" + SECOND);
+  check("deux en-têtes → refus nommant les deux wallets", !glued.ok && /2 en-têtes/.test((glued as any).error) && /1486389037/.test((glued as any).error) && /2082550914/.test((glued as any).error), JSON.stringify(glued));
+  const noHeader = parseOkpayMessage(REAL.split("\n").slice(1).join("\n"));
   check("sans en-tête → refus", !noHeader.ok && /En-tête/.test((noHeader as any).error));
-  const noBalance = parseOkpayMessage(MSG.replace("Changed balance: 700\n", ""));
+  const inDetails = parseOkpayMessage(REAL.split("\n").slice(1).join("\n").replace("Details: 轉賬給 : X1【ID 2082550914】", "Details: Transaction: 999999999"));
+  check("« Transaction: » dans un bloc, sans vrai en-tête → refus", !inDetails.ok);
+
+  // Refus nommés sur champs.
+  const noBalance = parseOkpayMessage(REAL.replace("Changed balance: 2017.817733\n", ""));
   check("« Changed balance » manquant → refus nommant le bloc 2", !noBalance.ok && /bloc 2/.test((noBalance as any).error) && /Changed balance/.test((noBalance as any).error), JSON.stringify(noBalance));
-  const badDate = parseOkpayMessage(MSG.replace("2026-09-09 11:00:00", "2026-13-45 11:00:00"));
-  check("date 2026-13-45 → refus", !badDate.ok && /n'existe pas/.test((badDate as any).error), JSON.stringify(badDate));
-  const ambiguous = parseOkpayMessage(MSG.replace("Amount: 300", "Amount: 1,234"));
-  check("« 1,234 » ambigu → refus (milliers ou décimales ?)", !ambiguous.ok && /ambigu/.test((ambiguous as any).error), JSON.stringify(ambiguous));
-  const badType = parseOkpayMessage(MSG.replace("Type: +", "Type: in"));
-  check("Type « in » → refus", !badType.ok && /Type/.test((badType as any).error));
-  const threeDec = parseOkpayMessage(MSG.replace("Changed balance: 700", "Changed balance: 700.123"));
-  check("solde à 3 décimales → refus", !threeDec.ok);
-  const negAmount = parseOkpayMessage(MSG.replace("Amount: 300", "Amount: -300"));
-  check("Amount négatif → refus (le sens est dans Type)", !negAmount.ok && /négatif/.test((negAmount as any).error));
+  const dupKey = parseOkpayMessage(REAL.replace("Amount: 478\n", "Amount: 478\nAmount: 4780\n"));
+  check("deux « Amount: » dans un bloc → refus", !dupKey.ok && /deux fois/.test((dupKey as any).error));
+  const badDate = parseOkpayMessage(REAL.replace("2026-09-13 11:22:33", "2026-13-45 11:22:33"));
+  check("date 2026-13-45 → refus", !badDate.ok && /n'existe pas/.test((badDate as any).error));
+  // Autre devise : sautée et signalée ; le tout-ou-rien ne joue pas sur elle.
+  const otherCcy = parseOkpayMessage(REAL.replace("Currency: USDT\nChanged balance: 2017.817733", "Currency: TRX\nChanged balance: 2017.817733"));
+  check("bloc TRX sauté, 4 lignes USDT gardées", otherCcy.ok && otherCcy.lines.length === 4 && otherCcy.skipped.length === 1 && /TRX/.test(otherCcy.skipped[0].reason), JSON.stringify(otherCcy));
+  check("que des blocs TRX → refus (aucune ligne USDT)", !parseOkpayMessage(REAL.replace(/Currency: USDT/g, "Currency: TRX")).ok);
+  check("un bloc illisible → 0 ligne, pas 4 (tout-ou-rien)", !parseOkpayMessage(REAL.replace("Amount: 478", "Amount: abc")).ok);
 
-  // Autre devise : sautée et signalée, le reste passe.
-  const otherCcy = parseOkpayMessage(MSG.replace("Currency: USDT\nChanged balance: 700", "Currency: TRX\nChanged balance: 700"));
-  check("bloc TRX sauté, 2 lignes USDT gardées", otherCcy.ok && otherCcy.lines.length === 2 && otherCcy.skipped.length === 1 && /TRX/.test(otherCcy.skipped[0].reason), JSON.stringify(otherCcy));
-  const onlyOther = parseOkpayMessage(MSG.replace(/Currency: USDT/g, "Currency: TRX"));
-  check("que des blocs TRX → refus (aucune ligne USDT)", !onlyOther.ok);
-
-  // Le tout-ou-rien : un bloc illisible fait échouer le message ENTIER — jamais
-  // d'ingestion partielle (elle simulerait un trou dans la chaîne).
-  const partial = parseOkpayMessage(MSG.replace("Amount: 300", "Amount: abc"));
-  check("un bloc illisible → 0 ligne, pas 2", !partial.ok);
-
-  eq("parseCounterparty sans 【ID】", parseCounterparty("Deposit from exchange"), { id: null, name: "Deposit from exchange" });
   eq("parseCounterparty avec ID: et espaces", parseCounterparty("Transfer From : X Y 【 ID : 12345678 】"), { id: "12345678", name: "X Y" });
+  eq("parseOkpayNumber : 6 décimales ok, 7 refusées, virgule refusée",
+     [parseOkpayNumber("1539.817733").ok, parseOkpayNumber("1.1234567").ok, parseOkpayNumber("728,9").ok, parseOkpayNumber("550").ok], [true, false, false, true]);
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
