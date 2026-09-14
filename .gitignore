@@ -9,3 +9,4 @@ package-lock.json
 .agent-report-secret.txt
 .doer-ids.json
 .DS_Store
+lecercle-prod-*.db

@@ -158,10 +158,11 @@ console.log("\n■ 2. §4 — le règlement TRAVERSE le pool (contrefactuel dans
 
   // A3 — dater le mouvement quand /payments ne donne qu'un jour.
   eq("payé le jour de la clôture (15 à 18:00) → 1 s après la clôture, dans la période suivante",
-     settlementOccurredAt("2026-09-15", "2026-09-15 18:00:00"), { ok: true, occurred_at: "2026-09-15 18:00:01" });
-  eq("payé un jour plus tard → ce jour à 00:00:00", settlementOccurredAt("2026-09-17", "2026-09-15 18:00:00"), { ok: true, occurred_at: "2026-09-17 00:00:00" });
-  const before = settlementOccurredAt("2026-09-14", "2026-09-15 18:00:00");
-  check("payé AVANT la clôture → refus (déjà dans la photo, part calculée dessus)", !before.ok && /antérieure/.test((before as any).error));
+     settlementOccurredAt("2026-09-15", "2026-09-15 18:00:00"), { ok: true, occurred_at: "2026-09-15 18:00:01", precision: "day" });
+  eq("payé un jour plus tard → ce jour à 00:00:00, précision JOUR (à résoudre depuis le grand livre)", settlementOccurredAt("2026-09-17", "2026-09-15 18:00:00"), { ok: true, occurred_at: "2026-09-17 00:00:00", precision: "day" });
+  const before = settlementOccurredAt("2026-09-13", "2026-09-15 18:00:00");
+  check("payé 2 jours AVANT la clôture → refus (déjà dans la photo, part calculée dessus)", !before.ok && /antérieure/.test((before as any).error));
+  eq("payé la VEILLE (fuseau : peut être après la photo) → toléré, clôture + 1 s, précision jour", settlementOccurredAt("2026-09-14", "2026-09-15 18:00:00"), { ok: true, occurred_at: "2026-09-15 18:00:01", precision: "day" });
   check("paid_date mal formée → refus", !settlementOccurredAt("15/09/2026", "2026-09-15 18:00:00").ok);
   eq("+1 s passe minuit", oneSecondAfter("2026-09-30 23:59:59"), "2026-10-01 00:00:00");
   // CONTREFACTUEL A3 (illustration, pas assertion : « 2026-09-15 00:00:00 » ≤ « 2026-09-15 18:00:00 »

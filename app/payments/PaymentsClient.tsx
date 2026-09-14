@@ -396,10 +396,14 @@ export default function PaymentsClient({
    * absente vit dans le moteur (writeBankrollTransferOnPaid), où il couvre aussi
    * le lot et l'action du bot Telegram — et où il est testable.
    */
+  // AK multi-Account (pool) : même nature — le paiement TRAVERSE le pool du joueur
+  // (docs/POOL_MULTI_ACCOUNT.md §4), la date est celle affichée par OkPay sur la
+  // ligne agence, et le moteur (writePoolSettlementMovementOnPaid) la refuse absente.
   // XPoker Twd aussi : la date réelle du transfert de chips date les mouvements du grand
   // livre, et writeXpokerLedgerOnPaidOn refuse sans elle — donc pas de « aujourd'hui »
   // pré-rempli, même garde-fou d'écran que la bankroll NEXA.
-  const dateCritique = (s: HubSettlement) => (s.game_name === "NEXAPOKER" && s.kind === "action") || isNative(s);
+  const dateCritique = (s: HubSettlement) =>
+    ((s.game_name === "NEXAPOKER" || s.game_name === "AK multi-Account") && s.kind === "action") || isNative(s);
 
   function openPay(s: HubSettlement) {
     setPayTarget(s);
@@ -1023,6 +1027,10 @@ export default function PaymentsClient({
                     bankroll, le versement compte comme un dépôt dans la semaine où il tombe :
                     une date trop tardive fausse cette semaine-là du montant versé, et la
                     rend incorrigible une fois clôturée.
+                    {payTarget.game_name === "AK multi-Account" && (
+                      <> Sur AK multi-Account, c&apos;est la date <b>affichée par OkPay</b> sur le
+                      virement agence ↔ main (un jour d&apos;écart est absorbé, pas deux).</>
+                    )}
                   </span>
                 )}
               </label>

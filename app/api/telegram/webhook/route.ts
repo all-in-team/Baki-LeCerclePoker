@@ -371,6 +371,21 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ ok: true });
   }
 
+  // Page d'historique OkPay TRANSFÉRÉE (AK multi-Account) — reconnue à son en-tête
+  // « <Pseudo> Transaction:<id> » + ses blocs « Type: ». Ingérée dans le grand livre
+  // du pool AVANT tout funnel ou session : un propriétaire en pleine session
+  // d'onboarding ne doit pas voir sa page avalée par handleRawMessage. Le handler
+  // n'accepte que les propriétaires et les joueurs connus (players.telegram_id) ;
+  // pour un inconnu il rend false et la suite continue comme avant.
+  if (msg?.text && !msg.text.startsWith("/")) {
+    try {
+      const { looksLikeOkpayMessage, handleOkpayForward } = await import("@/lib/pool/okpay-forward");
+      if (looksLikeOkpayMessage(msg.text) && await handleOkpayForward(msg)) return NextResponse.json({ ok: true });
+    } catch (e: any) {
+      console.error("[POOL OKPAY FORWARD]", e?.message ?? e);
+    }
+  }
+
   // ── Live takeover : capture de TOUT message entrant d'un lead ───────────────────────────────
   // Placé APRÈS les blocs de commandes (qui retournent) et AVANT tout handler qui répondrait :
   // un message de lead doit être persisté et relayé même quand le scénario sait quoi en faire

@@ -24,6 +24,7 @@
 
 import { getDb } from "./db";
 import { toUsdt, getExchangeRate } from "./queries";
+import { writePoolSettlementMovementOnPaid, poolPeriodForSettlementOn } from "./pool/periods";
 // Règlement XPoker Twd (chips) : mouvements du grand livre écrits au markPaid, dans
 // la même transaction que le flip de statut — même doctrine que la bankroll NEXA.
 import { writeXpokerLedgerOnPaidOn, XPOKER_SETTLEMENT_KIND, XPOKER_NATIVE_CURRENCY } from "./games/xpoker/settlement";
@@ -374,7 +375,12 @@ export function markPaid(settlementId: number, txHash?: string, paidDate?: strin
     if (!isValidISODate(paidDate)) {
       return { ok: false, error: `Date de paiement invalide (${paidDate}) — format attendu YYYY-MM-DD` };
     }
-    if (paidDate > todayUTC()) {
+    // Règlement POOL : la date saisie est celle affichée par OkPay (fuseau non établi,
+    // possiblement en avance sur UTC) — on tolère le lendemain UTC, sinon impasse
+    // jusqu'au jour suivant quand OkPay a déjà changé de date. (money-auditor, R4.)
+    const poolBacked = poolPeriodForSettlementOn(db, settlementId) !== null;
+    const maxDay = poolBacked ? (() => { const d = new Date(`${todayUTC()}T00:00:00Z`); d.setUTCDate(d.getUTCDate() + 1); return d.toISOString().slice(0, 10); })() : todayUTC();
+    if (paidDate > maxDay) {
       return { ok: false, error: `Date de paiement dans le futur (${paidDate}) — refusé` };
     }
   }
@@ -401,6 +407,10 @@ export function markPaid(settlementId: number, txHash?: string, paidDate?: strin
       // XPoker Twd : action_paid / rb_paid au grand livre chips, datés paid_date
       // (obligatoire — jette sinon, et le règlement ne passe pas payé). No-op ailleurs.
       writeXpokerLedgerOnPaidOn(db, settlementId, paidDate ?? null);
+      // Règlement adossé à une période POOL (AK multi-Account) : le paiement traverse
+      // le pool du joueur, dans les deux sens. Même exigence de date réelle, même
+      // transaction, sans effet sur les autres règlements. Cf. lib/pool/periods.ts.
+      writePoolSettlementMovementOnPaid(db, settlementId, paidDate ?? null);
       return { ok: true };
     });
     const r = run();
@@ -622,6 +632,17 @@ export function unlockSettlement(settlementId: number): { ok: boolean; error?: s
     if (!/no such table/i.test(e?.message ?? "")) throw e;
   }
 
+  // Même logique pour une PÉRIODE POOL (AK multi-Account) : la FK de pool_periods
+  // est en NO ACTION, le DELETE échouerait de toute façon ; ici on nomme la sortie.
+  const pool = poolPeriodForSettlementOn(db, settlementId);
+  if (pool) {
+    return {
+      ok: false,
+      error: `Règlement issu de la période pool close le ${pool.closed_at} — délock interdit ici. `
+           + `Passe par « déverrouiller » sur la page AK multi-Account du joueur : lui seul retire aussi la période figée et ses soldes.`,
+    };
+  }
+
   try {
     let unflagged = 0;
     const runTx = db.transaction(() => {
@@ -681,6 +702,12 @@ export const SETTLE_ROOMS: SettleRoom[] = [
   // le miroir player_game_deals, deux choses fausses ici. Le hub, lui, les affiche comme les
   // autres : elles portent bien un game_id et un amount_due_usdt dans la même convention.
   { label: "NEXAPOKER", games: ["NEXAPOKER"],        basePath: "/nexapoker",   color: "#22D3EE" },
+  // AK multi-Account : règlement sur le POOL des soldes (lib/pool/periods.ts), pas sur des
+  // transactions. Ses lignes manual_settlements (kind='action') portent game_id et amount_due
+  // dans la même convention ; markPaid exige la date réelle (writePoolSettlementMovementOnPaid).
+  // Sans cette entrée, un règlement pool serait INVISIBLE dans /payments — donc impayable, donc
+  // la période suivante inclôturable (blocker « règlement précédent locked »).
+  { label: "AK MULTI",  games: ["AK multi-Account"],  basePath: "/ak-multi",    color: "#F59E0B" },
   // XPOKER TWD : réglé EN CHIPS. amount_due_native ('TWD') est le montant réglé ;
   // amount_due_usdt n'est qu'un équivalent d'affichage au taux figé. Ces lignes
   // sont EXCLUES de la compensation inter-rooms (net par joueur, totaux) — deux
