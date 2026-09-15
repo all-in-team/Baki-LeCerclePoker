@@ -277,7 +277,7 @@ export function settlementOccurredAt(paidDate: string, settledClosedAt: string):
 
 export type PoolWarning = {
   code: "observation_spread" | "okpay_nonzero" | "main_stale" | "main_conflict" | "double_declared"
-      | "resolution_ambiguous" | "paid_before_close";
+      | "resolution_ambiguous" | "paid_before_close" | "declared_time_mismatch";
   message: string;
 };
 

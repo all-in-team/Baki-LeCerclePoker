@@ -62,6 +62,26 @@ uniques par game (index partiels) et croisés (main ≠ compte ≠ agence) dans
 fois (audit phase 2, B, B1). **Changer de main** est refusé tant que le dernier solde main
 figé ≠ 0 — même danger que clore un compte plein (B4).
 
+## Retours d'usage (2026-09-15)
+
+- **Le pool de départ n'est pas modifiable, mais il se CORRIGE** : « corriger… » crée un
+  mouvement externe déclaré daté clôture + 1 s, avec motif obligatoire, delta calculé
+  contre le départ **effectif** (reprise + corrections déjà posées). La clôture figée reste
+  vraie ; la correction se retire comme tout mouvement déclaré ; l'unlock de cette
+  clôture est refusé tant qu'une correction y est posée (sinon elle deviendrait
+  orpheline). Un règlement reçu ou versé n'est PAS une correction : il compte comme
+  mouvement de la période, l'écran affiche « le pool de fin qui donne un résultat nul ».
+- **« préciser l'heure »** d'un règlement daté au jour : déclaration de l'instant réel du
+  virement (jour ± 1, après la photo réglée, pas dans une période figée, pas dans le
+  futur) — lève le blocker ±1 jour quand la page OkPay de la main n'est pas disponible.
+  Irréversible si l'heure est du mauvais côté de la photo (le `confirm()` le dit) ; une
+  page OkPay ultérieure qui contredit l'heure déclare `declared_time_mismatch`, même si
+  la ligne a été revendiquée par un autre règlement.
+- Bug corrigé : l'aperçu (qui porte la liste des mouvements) n'était pas recalculé après
+  « retirer » / « déclarer » — un mouvement supprimé restait affiché.
+- L'instant de clôture saisi est préservé après ces actions (remis à « maintenant »
+  seulement au changement de joueur et après lock/unlock).
+
 ## Cas limites (décidés)
 
 1. Supprimer un compte = soft-close (`closed_at`), refusé si ses derniers soldes figés ≠ 0.

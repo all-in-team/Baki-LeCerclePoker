@@ -34,6 +34,7 @@ import {
   ingestOkpayMessageOn, getLedgerOn, addDeclaredMovementOn, deleteDeclaredMovementOn, listMovementsOn,
   previewPoolPeriodOn, lockPoolPeriodOn, unlockPoolPeriodOn, getPeriodsOn, getPeriodBalancesOn,
   writePoolSettlementMovementOnPaid, poolPeriodForSettlementOn, walletOwnerOn, resolveSettlementInstantsOn,
+  setSettlementInstantOn, addPoolOpenCorrectionOn, poolOpenEffectiveOn,
 } from "../lib/pool/periods";
 import { computePoolPeriod, settlementOccurredAt } from "../lib/pool/engine";
 
@@ -608,6 +609,184 @@ console.log("\n■ 8. Réserves 3e passe — (R1) une ligne agence ne date qu'un
   // (R4) veille tolérée : paid_date = jour de clôture − 1 → clôture + 1 s, 'day' ; − 2 → refus.
   eq("(R4) paid_date = veille de la clôture → +1 s, précision jour", settlementOccurredAt("2026-09-12", "2026-09-13 00:30:00"), { ok: true, occurred_at: "2026-09-13 00:30:01", precision: "day" });
   check("(R4) paid_date = avant-veille → refus « avant la photo »", !settlementOccurredAt("2026-09-11", "2026-09-13 00:30:00").ok);
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+console.log("\n■ 9. Retours Baki 2026-09-15 — heure déclarée d'un règlement, correction tracée du pool de départ");
+{
+  const NOW9 = "2026-09-20 12:00:00";
+  const T1 = "2026-09-14 06:57:29";
+  const bal = (c1: number, c2: number, main: number, obs: string) => [
+    { account_id: 1, wallet_kind: "ak" as const, balance: c1, observed_at: obs }, { account_id: 1, wallet_kind: "okpay" as const, balance: 0, observed_at: obs },
+    { account_id: 2, wallet_kind: "ak" as const, balance: c2, observed_at: obs }, { account_id: 2, wallet_kind: "okpay" as const, balance: 0, observed_at: obs },
+    { account_id: null, wallet_kind: "main" as const, balance: main, observed_at: obs },
+  ];
+  // Le scénario de la capture : 1000 → 2700 (+1700, 50 % → il me doit 850), payé le 15, clôture voulue le 15.
+  const { db: d } = freshDb();
+  enrollPoolPlayerOn(d, 2, "7076908900"); addAccountOn(d, { player_id: 2 }); addAccountOn(d, { player_id: 2 });
+  d.prepare(`UPDATE player_game_deals SET action_pct = 50 WHERE player_id = 2`).run();
+  const l1 = lockPoolPeriodOn(d, { player_id: 2, closed_at: T1, balances: bal(1200, 500, 1000, "2026-09-14 06:57:00"), pool_open_manual: 1000, now: NOW9 });
+  check("P1 figée : +1700, il me doit 850", l1.ok && l1.computed.action_amount === 850, errOf(l1));
+  const sid = (l1 as any).settlement_id as number;
+  d.prepare(`UPDATE manual_settlements SET status='paid', paid_date='2026-09-15' WHERE id = ?`).run(sid);
+  writePoolSettlementMovementOnPaid(d, sid, "2026-09-15");
+  const mv = listMovementsOn(d, 2)[0];
+  eq("règlement 'out' 850 daté 15 00:00:00 (jour)", [mv.direction, mv.amount, mv.occurred_at, mv.occurred_precision], ["out", 850, "2026-09-15 00:00:00", "day"]);
+  const blocked = previewPoolPeriodOn(d, { player_id: 2, closed_at: "2026-09-15 07:00:41", balances: bal(1000, 400, 450, "2026-09-15 07:00:00"), now: NOW9 });
+  check("clôture le 15 → bloquée (±1 jour) — c'est ce que Baki a vu", blocked.ok && blocked.preview.blockers.some(b => /jour ± 1/.test(b)));
+  eq("le règlement est déjà compté en sortie : ext_out 850, pool de départ 2700 inchangé", blocked.ok && [blocked.preview.ext_out, blocked.preview.pool_open], [850, 2700]);
+
+  // Heure déclarée : refus hors fenêtre, avant la clôture réglée, sur un mouvement déjà 'second' ; ok sinon.
+  check("heure hors fenêtre (17) → refus", !setSettlementInstantOn(d, mv.id, "2026-09-17 10:00:00").ok);
+  check("heure ≤ clôture réglée (14 06:00) → refus « payé avant la photo »", !setSettlementInstantOn(d, mv.id, "2026-09-14 06:00:00").ok && /avant la photo/.test(errOf(setSettlementInstantOn(d, mv.id, "2026-09-14 06:00:00"))));
+  check("heure hors calendrier → refus", !setSettlementInstantOn(d, mv.id, "2026-09-15 25:00:00").ok);
+  const ok = setSettlementInstantOn(d, mv.id, "2026-09-15 06:30:00");
+  check("heure déclarée 15 06:30 → ok", ok.ok, errOf(ok));
+  eq("mouvement re-daté à la seconde, sans ligne OkPay (déclaré)", [listMovementsOn(d, 2)[0].occurred_at, listMovementsOn(d, 2)[0].occurred_precision, listMovementsOn(d, 2)[0].okpay_line_id], ["2026-09-15 06:30:00", "second", null]);
+  check("re-déclarer → refus (déjà à la seconde)", !setSettlementInstantOn(d, mv.id, "2026-09-15 06:31:00").ok);
+  const after = previewPoolPeriodOn(d, { player_id: 2, closed_at: "2026-09-15 07:00:41", balances: bal(1000, 400, 450, "2026-09-15 07:00:00"), now: NOW9 });
+  check("clôture le 15 07:00 débloquée : 06:30 dans l'intervalle → ext_out 850, résultat = (1850 + 850) − 2700 = 0", after.ok && after.preview.blockers.length === 0 && after.preview.ext_out === 850 && after.preview.computed!.result === 0, JSON.stringify(after.ok && [after.preview.blockers, after.preview.computed]));
+  // Si la page arrive ensuite avec une autre seconde → warning, la ligne fait foi.
+  ingestOkpayMessageOn(d, ["Iacopo Transaction:7076908900", "", "Type: ➖", "Details: Transfer To : HugoRoine【ID " + POOL_AGENCY_OKPAY_TG_ID + "】", "Amount: 850", "Currency: USDT", "Changed balance: 450", "date: 2026-09-15 06:45:12"].join("\n"), "telegram_forward");
+  const mismatch = previewPoolPeriodOn(d, { player_id: 2, closed_at: "2026-09-15 07:00:41", balances: bal(1000, 400, 450, "2026-09-15 07:00:00"), now: NOW9 });
+  check("page OkPay avec la ligne agence à 06:45:12 ≠ 06:30 déclaré → warning declared_time_mismatch", mismatch.ok && mismatch.preview.warnings.some(w => w.code === "declared_time_mismatch" && /06:45:12/.test(w.message)), JSON.stringify(mismatch.ok && mismatch.preview.warnings));
+  check("la ligne OkPay n'a PAS re-daté le mouvement déclaré (jamais un 'second')", listMovementsOn(d, 2)[0].occurred_at === "2026-09-15 06:30:00");
+  // Un mouvement déclaré (pas un règlement) ne se re-date pas par ce chemin.
+  const decl = addDeclaredMovementOn(d, { player_id: 2, direction: "out", amount: 10, occurred_at: "2026-09-16 10:00:00" });
+  check("PATCH sur un mouvement déclaré → refus", !setSettlementInstantOn(d, (decl as any).id, "2026-09-16 11:00:00").ok);
+  deleteDeclaredMovementOn(d, (decl as any).id);
+  // Ceinture : heure dans une période figée postérieure → refus.
+  {
+    const { db: d2 } = freshDb();
+    enrollPoolPlayerOn(d2, 1, "600200100"); addAccountOn(d2, { player_id: 1 });
+    const b2 = (m: number, obs: string) => [{ account_id: 1, wallet_kind: "ak" as const, balance: 450, observed_at: obs }, { account_id: 1, wallet_kind: "okpay" as const, balance: 0, observed_at: obs }, { account_id: null, wallet_kind: "main" as const, balance: m, observed_at: obs }];
+    const a = lockPoolPeriodOn(d2, { player_id: 1, closed_at: "2026-09-13 18:00:00", balances: b2(400, "2026-09-13 17:59:00"), pool_open_manual: 1000, now: NOW9 });
+    const s2 = (a as any).settlement_id as number;
+    d2.prepare(`UPDATE manual_settlements SET status='paid', paid_date='2026-09-13' WHERE id = ?`).run(s2);
+    writePoolSettlementMovementOnPaid(d2, s2, "2026-09-13");
+    lockPoolPeriodOn(d2, { player_id: 1, closed_at: "2026-09-16 18:00:00", balances: b2(445, "2026-09-16 17:59:00"), now: NOW9 });
+    const m2 = listMovementsOn(d2, 1)[0];
+    check("ceinture : heure déclarée dans la période figée close le 16 → refus", !setSettlementInstantOn(d2, m2.id, "2026-09-14 10:00:00").ok && /figée/.test(errOf(setSettlementInstantOn(d2, m2.id, "2026-09-14 10:00:00"))));
+  }
+
+  // Correction tracée du pool de départ.
+  check("sans période → refus (la première se saisit)", !addPoolOpenCorrectionOn(freshDb().db, { player_id: 1, new_pool_open: 500, note: "x" }).ok);
+  check("sans motif → refus", !addPoolOpenCorrectionOn(d, { player_id: 2, new_pool_open: 2600, note: "" }).ok);
+  check("même valeur → refus", !addPoolOpenCorrectionOn(d, { player_id: 2, new_pool_open: 2700, note: "rien" }).ok);
+  check("3 décimales → refus", !addPoolOpenCorrectionOn(d, { player_id: 2, new_pool_open: 2600.001, note: "typo" }).ok);
+  const c = addPoolOpenCorrectionOn(d, { player_id: 2, new_pool_open: 2600, note: "100 comptés en trop sur Compte 2 le 14" });
+  check("2700 → 2600 : mouvement 'out' 100 daté clôture + 1 s, motif conservé", c.ok && c.delta === -100, errOf(c));
+  const cm = listMovementsOn(d, 2).find(m => m.id === (c as any).id)!;
+  eq("le mouvement de correction", [cm.direction, cm.amount, cm.occurred_at, cm.kind], ["out", 100, "2026-09-14 06:57:30", "declared"]);
+  check("motif tracé", /Correction du pool de départ : 2700.00 → 2600.00 — 100 comptés/.test(cm.note ?? ""));
+  const pv = previewPoolPeriodOn(d, { player_id: 2, closed_at: "2026-09-15 07:00:41", balances: bal(1000, 400, 350, "2026-09-15 07:00:00"), now: NOW9 });
+  check("effet : partir de 2600 ≡ pool fin 1750 + sorties 950 − 2700 = 0 — le pool de départ AFFICHÉ reste 2700 (la clôture figée ne ment pas)", pv.ok && pv.preview.pool_open === 2700 && pv.preview.ext_out === 950 && pv.preview.computed!.result === 0, JSON.stringify(pv.ok && [pv.preview.pool_open, pv.preview.ext_out, pv.preview.computed]));
+  // F1 — corrections successives : le delta se calcule contre le départ EFFECTIF.
+  const c2 = addPoolOpenCorrectionOn(d, { player_id: 2, new_pool_open: 2650, note: "je remonte de 50" });
+  check("(F1) 2600 → 2650 : delta +50 → mouvement 'in' 50 (et non 'out' 50)", c2.ok && c2.delta === 50, errOf(c2));
+  approx("(F1) départ effectif = 2700 − 100 + 50 = 2650", poolOpenEffectiveOn(d, 2, getPeriodsOn(d, 2)[0]), 2650);
+  const pv2 = previewPoolPeriodOn(d, { player_id: 2, closed_at: "2026-09-15 07:00:41", balances: bal(1000, 400, 400, "2026-09-15 07:00:00"), now: NOW9 });
+  check("(F1) pool fin 1800 + out 950 − (2700 + in 50) = 0", pv2.ok && pv2.preview.computed!.result === 0, JSON.stringify(pv2.ok && pv2.preview.computed));
+  const same = addPoolOpenCorrectionOn(d, { player_id: 2, new_pool_open: 2650, note: "double clic" });
+  check("(F1) même valeur effective → refus nommant reprise + corrections", !same.ok && /effectif est déjà 2650.00/.test(errOf(same)), errOf(same));
+  // F2 — unlock refusé tant qu'une correction est posée sur la clôture.
+  const un = unlockPoolPeriodOn(d, 2, getPeriodsOn(d, 2)[0].id);
+  check("(F2) unlock d'une période PAYÉE → refus (règle antérieure, prioritaire)", !un.ok && /payé/.test(errOf(un)), errOf(un));
+  check("la correction se retire comme tout mouvement déclaré", deleteDeclaredMovementOn(d, cm.id).ok && deleteDeclaredMovementOn(d, (c2 as any).id).ok);
+  // N3 — les corrections d'une clôture PASSÉE n'entrent pas dans l'effectif de la suivante.
+  {
+    const c3 = addPoolOpenCorrectionOn(d, { player_id: 2, new_pool_open: 2600, note: "corr P1" });
+    check("(N3) correction P1 posée (−100)", c3.ok && c3.delta === -100, errOf(c3));
+    setSettlementInstantOn(d, listMovementsOn(d, 2).find(m => m.kind === "settlement")!.id, "2026-09-15 06:30:00", NOW9); // déjà 'second' → refus silencieux, sans effet
+    const l2 = lockPoolPeriodOn(d, { player_id: 2, closed_at: "2026-09-16 12:00:00", balances: bal(1000, 400, 350, "2026-09-16 11:59:00"), now: NOW9 });
+    check("(N3) P2 figée : fin 1750 + sorties 950 − 2700 = 0", l2.ok && l2.computed.result === 0, errOf(l2));
+    const lastP = getPeriodsOn(d, 2)[1];
+    approx("(N3) effectif P3 = pool_close P2 = 1750, la correction de P1 n'y entre PAS", poolOpenEffectiveOn(d, 2, lastP), 1750);
+    const c4 = addPoolOpenCorrectionOn(d, { player_id: 2, new_pool_open: 1700, note: "corr P3" });
+    check("(N3) correction P3 : delta −50 (contre 1750, pas 1650)", c4.ok && c4.delta === -50 && listMovementsOn(d, 2).find(m => m.id === (c4 as any).id)!.occurred_at === "2026-09-16 12:00:01", errOf(c4));
+    deleteDeclaredMovementOn(d, (c4 as any).id);
+    unlockPoolPeriodOn(d, 2, lastP.id);
+    deleteDeclaredMovementOn(d, (c3 as any).id);
+  }
+  // F2 bis — première période avec des mouvements antérieurs → blocker.
+  {
+    const { db: d3 } = freshDb();
+    enrollPoolPlayerOn(d3, 1, "600200100"); addAccountOn(d3, { player_id: 1 });
+    const b3 = (m: number, obs: string) => [{ account_id: 1, wallet_kind: "ak" as const, balance: 450, observed_at: obs }, { account_id: 1, wallet_kind: "okpay" as const, balance: 0, observed_at: obs }, { account_id: null, wallet_kind: "main" as const, balance: m, observed_at: obs }];
+    const a = lockPoolPeriodOn(d3, { player_id: 1, closed_at: "2026-09-13 18:00:00", balances: b3(400, "2026-09-13 17:59:00"), pool_open_manual: 1000, now: NOW9 });
+    const corr3 = addPoolOpenCorrectionOn(d3, { player_id: 1, new_pool_open: 900, note: "test" });
+    const un3 = unlockPoolPeriodOn(d3, 1, (a as any).period_id);
+    check("(F2) unlock (non payé) avec une correction posée → refus nommé", !un3.ok && /correction du pool de départ/.test(errOf(un3)), errOf(un3));
+    deleteDeclaredMovementOn(d3, (corr3 as any).id);
+    addDeclaredMovementOn(d3, { player_id: 1, direction: "out", amount: 50, occurred_at: "2026-09-13 20:00:00" });
+    check("(F2) unlock sans correction → ok", unlockPoolPeriodOn(d3, 1, (a as any).period_id).ok);
+    const relock = previewPoolPeriodOn(d3, { player_id: 1, closed_at: "2026-09-13 21:00:00", balances: b3(400, "2026-09-13 20:59:00"), pool_open_manual: 1000, now: NOW9 });
+    check("(F2) re-lock plus tard avec un mouvement déclaré antérieur → blocker « ne compterait nulle part »", relock.ok && relock.preview.blockers.some(b => /nulle part/.test(b)), JSON.stringify(relock.ok && relock.preview.blockers));
+    const relockOk = previewPoolPeriodOn(d3, { player_id: 1, closed_at: "2026-09-13 19:00:00", balances: b3(400, "2026-09-13 18:59:00"), pool_open_manual: 1000, now: NOW9 });
+    check("(F2) re-lock AVANT le mouvement → pas de blocker", relockOk.ok && !relockOk.preview.blockers.some(b => /nulle part/.test(b)));
+  }
+  // R1/R3/R6 — heure future, période réglée absente, bornes exactes.
+  {
+    const { db: d4 } = freshDb();
+    enrollPoolPlayerOn(d4, 1, "600200100"); addAccountOn(d4, { player_id: 1 });
+    const b4 = (m: number, obs: string) => [{ account_id: 1, wallet_kind: "ak" as const, balance: 450, observed_at: obs }, { account_id: 1, wallet_kind: "okpay" as const, balance: 0, observed_at: obs }, { account_id: null, wallet_kind: "main" as const, balance: m, observed_at: obs }];
+    const a = lockPoolPeriodOn(d4, { player_id: 1, closed_at: "2026-09-13 18:00:00", balances: b4(400, "2026-09-13 17:59:00"), pool_open_manual: 1000, now: NOW9 });
+    const s4 = (a as any).settlement_id as number;
+    d4.prepare(`UPDATE manual_settlements SET status='paid', paid_date='2026-09-13' WHERE id = ?`).run(s4);
+    writePoolSettlementMovementOnPaid(d4, s4, "2026-09-13");
+    const m4 = listMovementsOn(d4, 1)[0];
+    check("(R1) heure dans le futur → refus", !setSettlementInstantOn(d4, m4.id, "2026-09-14 10:00:00", "2026-09-14 09:00:00").ok);
+    check("(R6) heure == clôture réglée → refus (borne stricte)", !setSettlementInstantOn(d4, m4.id, "2026-09-13 18:00:00", NOW9).ok);
+    lockPoolPeriodOn(d4, { player_id: 1, closed_at: "2026-09-16 18:00:00", balances: b4(445, "2026-09-16 17:59:00"), now: NOW9 });
+    check("(R6) heure dans une période figée postérieure (14 18:00 ∈ ]13 18:00, 16 18:00]) → refus", !setSettlementInstantOn(d4, m4.id, "2026-09-14 18:00:00", NOW9).ok);
+    // Borne exacte == closed_at d'une autre période figée : INATTEIGNABLE (le blocker ±1 jour empêche de figer une période dans la fenêtre d'un 'day'). Non testée, documentée.
+    d4.pragma("foreign_keys = OFF");
+    d4.prepare(`UPDATE pool_periods SET settlement_id = NULL WHERE settlement_id = ?`).run(s4);
+    check("(R3) période réglée introuvable → refus (pas de garde sautée)", !setSettlementInstantOn(d4, m4.id, "2026-09-13 19:00:00", NOW9).ok && /incohérent/.test(errOf(setSettlementInstantOn(d4, m4.id, "2026-09-13 19:00:00", NOW9))));
+  }
+  // M19/M20 — le warning declared_time_mismatch : exact = pas de warning ; mouvement résolu = pas ce warning ; ligne revendiquée par un autre → warning quand même (R2).
+  {
+    const { db: d5 } = freshDb();
+    enrollPoolPlayerOn(d5, 1, "600200100"); addAccountOn(d5, { player_id: 1 });
+    const b5 = (m: number, obs: string) => [{ account_id: 1, wallet_kind: "ak" as const, balance: 450, observed_at: obs }, { account_id: 1, wallet_kind: "okpay" as const, balance: 0, observed_at: obs }, { account_id: null, wallet_kind: "main" as const, balance: m, observed_at: obs }];
+    const a = lockPoolPeriodOn(d5, { player_id: 1, closed_at: "2026-09-13 18:00:00", balances: b5(400, "2026-09-13 17:59:00"), pool_open_manual: 1000, now: NOW9 });
+    const s5 = (a as any).settlement_id as number;
+    d5.prepare(`UPDATE manual_settlements SET status='paid', paid_date='2026-09-13' WHERE id = ?`).run(s5);
+    writePoolSettlementMovementOnPaid(d5, s5, "2026-09-13");
+    setSettlementInstantOn(d5, listMovementsOn(d5, 1)[0].id, "2026-09-13 19:00:00", NOW9);
+    const line = (bal: string, date: string) => ["JoueurA Transaction:600200100", "", "Type: ➕", "Details: Transfer From : HugoRoine【ID " + POOL_AGENCY_OKPAY_TG_ID + "】", "Amount: 45", "Currency: USDT", `Changed balance: ${bal}`, `date: ${date}`].join("\n");
+    ingestOkpayMessageOn(d5, line("445", "2026-09-13 19:00:00"), "telegram_forward");
+    const p5 = previewPoolPeriodOn(d5, { player_id: 1, closed_at: "2026-09-20 18:00:00", balances: b5(445, "2026-09-20 17:59:00"), now: NOW9 });
+    check("(M19) heure déclarée = ligne OkPay exacte → pas de warning", p5.ok && !p5.preview.warnings.some(w => w.code === "declared_time_mismatch"), JSON.stringify(p5.ok && p5.preview.warnings));
+    // (R2) deux règlements égaux : la ligne du 1er (déclaré 19:00 mais vraie ligne 20:30) est revendiquée par le 2e → le mismatch doit quand même sortir.
+    const l2 = lockPoolPeriodOn(d5, { player_id: 1, closed_at: "2026-09-20 18:00:00", balances: b5(295, "2026-09-20 17:59:00"), now: NOW9 }); // 850+45 → 745 : perte 150 → −45 aussi
+    const s6 = (l2 as any).settlement_id as number;
+    d5.prepare(`UPDATE manual_settlements SET status='paid', paid_date='2026-09-20' WHERE id = ?`).run(s6);
+    writePoolSettlementMovementOnPaid(d5, s6, "2026-09-20");
+    ingestOkpayMessageOn(d5, line("490", "2026-09-20 20:30:00"), "telegram_forward");
+    const p6 = previewPoolPeriodOn(d5, { player_id: 1, closed_at: "2026-09-27 18:00:00", balances: b5(490, "2026-09-27 17:59:00"), now: NOW9 });
+    check("(M20) règlement résolu sur sa ligne → pas de declared_time_mismatch pour lui", p6.ok && !p6.preview.warnings.some(w => w.code === "declared_time_mismatch" && new RegExp(`#${s6} `).test(w.message)));
+    // (N9 / R2) le 1er règlement (déclaré 19:00 le 13) : sa vraie ligne est le 13 19:00 → pas de mismatch. On rejoue R2 :
+    // un 1er règlement déclaré à une heure FAUSSE, dont la vraie ligne est ensuite revendiquée par le 2e → le mismatch doit sortir quand même.
+    const { db: d6 } = freshDb();
+    enrollPoolPlayerOn(d6, 1, "600200100"); addAccountOn(d6, { player_id: 1 });
+    const a6 = lockPoolPeriodOn(d6, { player_id: 1, closed_at: "2026-09-13 18:00:00", balances: b5(400, "2026-09-13 17:59:00"), pool_open_manual: 1000, now: NOW9 });
+    const sA = (a6 as any).settlement_id as number;
+    d6.prepare(`UPDATE manual_settlements SET status='paid', paid_date='2026-09-13' WHERE id = ?`).run(sA);
+    writePoolSettlementMovementOnPaid(d6, sA, "2026-09-13");
+    setSettlementInstantOn(d6, listMovementsOn(d6, 1)[0].id, "2026-09-13 19:00:00", NOW9);          // déclaré 19:00 — FAUX : vraie ligne 13 22:00
+    // 2e période close le 13 à 21:00, payée le 13. (L'heure déclarée 19:00 met les 45 en ext_in de P2 :
+    // main 295 → pool 745 → 745 − (850 + 45) = −150 → −45 aussi.)
+    const b6 = lockPoolPeriodOn(d6, { player_id: 1, closed_at: "2026-09-13 21:00:00", balances: b5(295, "2026-09-13 20:59:00"), now: NOW9 });
+    const sB = (b6 as any).settlement_id as number;
+    check("(N9) 2e règlement −45 figé", b6.ok && b6.computed.action_amount === -45, b6.ok ? JSON.stringify(b6.computed) : errOf(b6));
+    d6.prepare(`UPDATE manual_settlements SET status='paid', paid_date='2026-09-13' WHERE id = ?`).run(sB);
+    writePoolSettlementMovementOnPaid(d6, sB, "2026-09-13");
+    const ing6 = ingestOkpayMessageOn(d6, line("295", "2026-09-13 22:00:00"), "telegram_forward");      // la ligne du 1er (22:00), > 21:00 → candidate du 2e → revendiquée par lui
+    check("(N9) la ligne 13 22:00 est revendiquée par le 2e règlement (résolution)", ing6.ok && ing6.resolved_settlements === 1, JSON.stringify(ing6));
+    const p7 = previewPoolPeriodOn(d6, { player_id: 1, closed_at: "2026-09-21 18:00:00", balances: b5(295, "2026-09-21 17:59:00"), now: NOW9 });
+    check("(N9) mismatch sur le 1er règlement (déclaré 19:00, ligne 22:00 revendiquée par un autre) → le warning sort malgré la revendication", p7.ok && p7.preview.warnings.some(w => w.code === "declared_time_mismatch" && new RegExp(`#${sA} `).test(w.message) && /22:00:00/.test(w.message)), JSON.stringify(p7.ok && p7.preview.warnings));
+  }
 }
 
 console.log(`\n${passed} ✔ · ${failures.length} ✘`);

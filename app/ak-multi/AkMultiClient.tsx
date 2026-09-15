@@ -68,6 +68,11 @@ export default function AkMultiClient({ initialPlayers, serverNow }: { initialPl
   const [preview, setPreview] = useState<Preview | null>(null);
   const [previewErr, setPreviewErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  // Incrémenté à chaque mutation côté serveur (mouvement, compte, page OkPay, lock,
+  // unlock) : l'aperçu — qui porte la liste des mouvements — doit être recalculé
+  // même si aucune saisie n'a changé. Sans ça, un mouvement retiré restait affiché.
+  const [revision, setRevision] = useState(0);
+  const [previewPending, setPreviewPending] = useState(false);
   const [flash, setFlash] = useState<{ kind: "ok" | "err"; text: string } | null>(null);
 
   const say = (kind: "ok" | "err", text: string) => { setFlash({ kind, text }); setTimeout(() => setFlash(null), 8000); };
@@ -77,13 +82,17 @@ export default function AkMultiClient({ initialPlayers, serverNow }: { initialPl
     if (j.ok) { setPlayers(j.enrolled); setCandidates(j.candidates); }
   }, []);
 
-  const refreshPlayer = useCallback(async (pid: number) => {
+  const refreshPlayer = useCallback(async (pid: number, opts: { resetClock?: boolean } = {}) => {
     const [a, m, p] = await Promise.all([
       api(`/api/ak-multi/accounts?player_id=${pid}`), api(`/api/ak-multi/movements?player_id=${pid}`), api(`/api/ak-multi/period?player_id=${pid}`),
     ]);
     if (a.ok) setAccounts(a.accounts);
     if (m.ok) setMovements(m.movements);
-    if (p.ok) { setPeriods(p.periods); if (p.now) setClosedAt(toLocal(p.now)); }
+    // L'instant de clôture saisi par Baki est PRÉSERVÉ après « déclarer », « retirer »,
+    // « préciser l'heure », « corriger » : il ne se remet à « maintenant » qu'au
+    // changement de joueur et après un lock/unlock (constat money-auditor 2026-09-15).
+    if (p.ok) { setPeriods(p.periods); if (opts.resetClock && p.now) setClosedAt(toLocal(p.now)); }
+    setRevision(r => r + 1);
     const pl = players.find(x => x.player_id === pid);
     if (pl?.main_okpay_tg_id) {
       const l = await api(`/api/ak-multi/okpay?wallet=${pl.main_okpay_tg_id}`);
@@ -93,7 +102,7 @@ export default function AkMultiClient({ initialPlayers, serverNow }: { initialPl
 
   useEffect(() => { refreshPlayers(); }, [refreshPlayers]);
   useEffect(() => {
-    if (selected !== null) { refreshPlayer(selected); setPreview(null); setAcked(new Set()); setBal({}); setMainManual(""); setPoolOpenManual(""); }
+    if (selected !== null) { refreshPlayer(selected, { resetClock: true }); setPreview(null); setAcked(new Set()); setBal({}); setMainManual(""); setPoolOpenManual(""); }
   }, [selected, refreshPlayer]);
 
   const openAccounts = useMemo(() => accounts.filter(a => a.closed_at === null), [accounts]);
@@ -117,21 +126,27 @@ export default function AkMultiClient({ initialPlayers, serverNow }: { initialPl
   const previewArgs = useMemo(() => selected === null ? null : ({
     player_id: selected, closed_at: toPool(closedAt), balances: balancesPayload,
     pool_open_manual: parseMontant(poolOpenManual) ?? null, note: note || null,
-  }), [selected, closedAt, balancesPayload, poolOpenManual, note]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }), [selected, closedAt, balancesPayload, poolOpenManual, note, revision]);
 
   // Aperçu à la volée, débouncé : la même fonction serveur que le lock.
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => {
     if (!previewArgs) return;
     if (timer.current) clearTimeout(timer.current);
+    // Tant qu'un aperçu est en attente, le bouton « Régler » est inerte : le chiffre
+    // lu par Baki doit être celui que le serveur figera (le serveur recalcule de toute
+    // façon, mais l'écran ne doit pas montrer autre chose).
+    setPreviewPending(true);
     timer.current = setTimeout(async () => {
       const j = await api("/api/ak-multi/period", { method: "POST", body: JSON.stringify({ mode: "preview", ...previewArgs }) });
       if (j.ok) { setPreview(j.preview); setPreviewErr(null); } else { setPreview(null); setPreviewErr(j.error ?? "aperçu impossible"); }
+      setPreviewPending(false);
     }, 350);
     return () => { if (timer.current) clearTimeout(timer.current); };
   }, [previewArgs]);
 
-  const canLock = !!preview && preview.blockers.length === 0 && !!preview.computed && preview.pool_open !== null
+  const canLock = !previewPending && !!preview && preview.blockers.length === 0 && !!preview.computed && preview.pool_open !== null
     && preview.warnings.every(w => acked.has(w.code + w.message));
 
   async function lock() {
@@ -143,7 +158,7 @@ export default function AkMultiClient({ initialPlayers, serverNow }: { initialPl
     say("ok", `Période figée. Résultat ${fmt(j.computed.result)} · ma part ${fmt(j.computed.action_amount)}`
       + (j.settlement_id ? ` · règlement #${j.settlement_id} à régler dans /payments` : " · part nulle, aucun règlement"));
     setBal({}); setMainManual(""); setPoolOpenManual(""); setNote(""); setAcked(new Set());
-    if (selected !== null) refreshPlayer(selected);
+    if (selected !== null) refreshPlayer(selected, { resetClock: true });
   }
 
   async function unlock(periodId: number) {
@@ -151,7 +166,7 @@ export default function AkMultiClient({ initialPlayers, serverNow }: { initialPl
     const j = await api(`/api/ak-multi/period?player_id=${selected}&period_id=${periodId}`, { method: "DELETE" });
     if (!j.ok) { say("err", j.error); return; }
     say("ok", `Période close le ${j.closed_at} déverrouillée.`);
-    refreshPlayer(selected);
+    refreshPlayer(selected, { resetClock: true });
   }
 
   // ── Comptes, mouvements, inscription, OkPay ──
@@ -169,6 +184,31 @@ export default function AkMultiClient({ initialPlayers, serverNow }: { initialPl
     refreshPlayer(selected);
   }
   const [newMv, setNewMv] = useState<{ direction: "in" | "out"; amount: string; at: string; note: string }>({ direction: "in", amount: "", at: "", note: "" });
+  const [instant, setInstant] = useState<Record<number, string>>({});
+  async function declareInstant(m: Movement) {
+    const at = instant[m.id];
+    if (!at || busy) return;
+    if (!confirm(`Dater le règlement #${m.settlement_id} à ${toPool(at)} ?\n\nC'est une déclaration : si l'argent était encore sur la main au moment de la photo de clôture, l'heure doit être APRÈS la photo, sinon la période suivante sera fausse et ne se corrigera plus une fois payée.`)) return;
+    setBusy(true);
+    const j = await api("/api/ak-multi/movements", { method: "PATCH", body: JSON.stringify({ id: m.id, occurred_at: toPool(at) }) });
+    setBusy(false);
+    if (!j.ok) { say("err", j.error); return; }
+    say("ok", `Règlement #${m.settlement_id} daté ${j.occurred_at} (heure déclarée).`);
+    if (selected !== null) refreshPlayer(selected);
+  }
+  const [corr, setCorr] = useState<{ open: boolean; value: string; note: string }>({ open: false, value: "", note: "" });
+  async function correctPoolOpen() {
+    if (selected === null || busy) return;
+    const v = parseMontant(corr.value);
+    if (v === undefined) { say("err", "Pool de départ illisible."); return; }
+    setBusy(true);
+    const j = await api("/api/ak-multi/movements", { method: "POST", body: JSON.stringify({ player_id: selected, correct_pool_open: v, note: corr.note }) });
+    setBusy(false);
+    if (!j.ok) { say("err", j.error); return; }
+    say("ok", `Correction enregistrée comme mouvement ${j.delta > 0 ? "entrée" : "sortie"} de ${fmt(Math.abs(j.delta))}, daté juste après la dernière clôture.`);
+    setCorr({ open: false, value: "", note: "" });
+    refreshPlayer(selected);
+  }
   async function addMovement() {
     if (selected === null) return;
     const amount = parseMontant(newMv.amount);
@@ -263,7 +303,25 @@ export default function AkMultiClient({ initialPlayers, serverNow }: { initialPl
                 <b style={{ color: TEXT }}>{preview?.pool_open !== null && preview?.pool_open !== undefined ? fmt(preview.pool_open) : lastPeriod ? fmt(lastPeriod.pool_close) : "—"}</b>
               )}
               {preview?.carried_from && <span style={{ fontSize: 11, color: DIM }}>repris de la clôture du {preview.carried_from}</span>}
+              {preview && !preview.is_first && (
+                <Btn size="sm" variant="ghost" onClick={() => setCorr(c => ({ ...c, open: !c.open }))} title="Le pool de départ est repris de la clôture figée. Le corriger crée un mouvement externe tracé, avec motif.">corriger…</Btn>
+              )}
             </div>
+            {preview && !preview.is_first && (preview.ext_in > 0 || preview.ext_out > 0) && preview.pool_open !== null && (
+              <div style={{ fontSize: 11, color: DIM, marginTop: -8 }}>
+                Avec les mouvements de la période (+{fmt(preview.ext_in)} / −{fmt(preview.ext_out)}), le pool de fin qui donne un résultat nul est <b style={{ color: MUTED }}>{fmt(preview.pool_open + preview.ext_in - preview.ext_out)}</b>
+                {" "}— un règlement reçu ou versé compte ici, pas dans le pool de départ.
+              </div>
+            )}
+            {corr.open && (
+              <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", padding: "8px 10px", border: `1px solid ${GOLD}`, borderRadius: 8, fontSize: 12 }}>
+                <span style={{ color: GOLD }}>Corriger le pool de départ →</span>
+                <input placeholder="nouveau pool de départ" value={corr.value} onChange={e => setCorr(c => ({ ...c, value: e.target.value }))} style={{ ...INPUT, width: 160 }} />
+                <input placeholder="motif (obligatoire)" value={corr.note} onChange={e => setCorr(c => ({ ...c, note: e.target.value }))} style={{ ...INPUT, flex: 1, minWidth: 200 }} />
+                <Btn size="sm" variant="primary" onClick={correctPoolOpen} disabled={busy || !corr.value || corr.note.trim().length < 3}>enregistrer la correction</Btn>
+                <span style={{ color: DIM, width: "100%" }}>La clôture précédente reste figée : l'écart devient un mouvement externe daté juste après elle, visible ci-dessous, avec ton motif.</span>
+              </div>
+            )}
 
             <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
               <thead><tr style={{ color: MUTED, fontSize: 11, textAlign: "left" }}>
@@ -314,6 +372,18 @@ export default function AkMultiClient({ initialPlayers, serverNow }: { initialPl
             {/* Mouvements externes de l'intervalle */}
             <div style={{ fontSize: 13 }}>
               <div style={{ color: MUTED, marginBottom: 6 }}>Mouvements externes {preview ? <span style={{ color: DIM, fontSize: 11 }}>dans ]{preview.opened_at}, {preview.closed_at}]</span> : null}</div>
+              {movements.filter(m => m.kind === "settlement" && m.occurred_precision === "day" && !(preview?.movements ?? []).some(x => x.id === m.id)).map(m => (
+                <div key={`d${m.id}`} style={{ display: "flex", gap: 10, alignItems: "center", padding: "3px 0", borderTop: "1px solid rgba(255,255,255,0.04)", opacity: 0.85 }}>
+                  <span style={{ color: m.direction === "in" ? GREEN : RED, width: 60 }}>{m.direction === "in" ? "entrée" : "sortie"}</span>
+                  <b style={{ color: TEXT, width: 90 }}>{fmt(m.amount)}</b>
+                  <span style={{ color: MUTED, fontSize: 12 }}>{m.occurred_at} (jour, heure inconnue) — hors intervalle</span>
+                  <span style={{ color: DIM, fontSize: 11 }}>règlement #{m.settlement_id}</span>
+                  <span style={{ display: "inline-flex", gap: 6, alignItems: "center", marginLeft: "auto" }}>
+                    <input type="datetime-local" step={1} value={instant[m.id] ?? toLocal(m.occurred_at)} onChange={e => setInstant(s => ({ ...s, [m.id]: e.target.value }))} style={{ ...INPUT, fontSize: 11 }} />
+                    <Btn size="sm" onClick={() => declareInstant(m)} disabled={busy || !instant[m.id]}>préciser l'heure</Btn>
+                  </span>
+                </div>
+              ))}
               {(preview?.movements ?? []).map(m => (
                 <div key={m.id} style={{ display: "flex", gap: 10, alignItems: "center", padding: "3px 0", borderTop: "1px solid rgba(255,255,255,0.04)" }}>
                   <span style={{ color: m.direction === "in" ? GREEN : RED, width: 60 }}>{m.direction === "in" ? "entrée" : "sortie"}</span>
@@ -321,6 +391,12 @@ export default function AkMultiClient({ initialPlayers, serverNow }: { initialPl
                   <span style={{ color: MUTED, fontSize: 12 }}>{m.occurred_at}{m.occurred_precision === "day" ? " (jour, heure inconnue)" : ""}</span>
                   <span style={{ color: DIM, fontSize: 11 }}>{m.kind === "settlement" ? `règlement #${m.settlement_id}` : m.note ?? "déclaré"}</span>
                   {m.kind === "declared" && <Btn size="sm" variant="ghost" onClick={() => deleteMovement(m.id)}>retirer</Btn>}
+                  {m.kind === "settlement" && m.occurred_precision === "day" && (
+                    <span style={{ display: "inline-flex", gap: 6, alignItems: "center", marginLeft: "auto" }}>
+                      <input type="datetime-local" step={1} value={instant[m.id] ?? toLocal(m.occurred_at)} onChange={e => setInstant(s => ({ ...s, [m.id]: e.target.value }))} style={{ ...INPUT, fontSize: 11 }} title="Heure réelle du virement OkPay (agence ↔ main)" />
+                      <Btn size="sm" onClick={() => declareInstant({ ...m })} disabled={busy || !instant[m.id]}>préciser l'heure</Btn>
+                    </span>
+                  )}
                 </div>
               ))}
               <div style={{ display: "flex", gap: 6, alignItems: "center", marginTop: 6 }}>

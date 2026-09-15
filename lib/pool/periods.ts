@@ -31,7 +31,7 @@ import {
 } from "./schema";
 import {
   EPS, round2, isCentExact, computePoolPeriod, carriedPoolOpen, sumPool, settlementMovementFor,
-  observationSpread, nonZeroOkpayWarnings, balanceAt, isPoolTimestamp, settlementOccurredAt,
+  observationSpread, nonZeroOkpayWarnings, balanceAt, isPoolTimestamp, settlementOccurredAt, oneSecondAfter,
   type BalanceReading, type PoolPeriodComputed, type PoolWarning, type LedgerLine, type WalletKind,
 } from "./engine";
 import { parseOkpayMessage } from "./okpay-parse";
@@ -293,6 +293,7 @@ function shiftDay(day: string, n: number): string {
  */
 function settlementCandidatesOn(
   db: DB, mainTgId: string, m: { direction: "in" | "out"; amount: number; occurred_at: string; closed_at: string },
+  opts: { includeClaimed?: boolean } = {},
 ): { id: number; occurred_at: string }[] {
   const day = m.occurred_at.slice(0, 10);
   // « NOT IN … okpay_line_id » : une ligne déjà attribuée à un règlement ne peut pas
@@ -302,7 +303,7 @@ function settlementCandidatesOn(
     SELECT id, occurred_at FROM okpay_ledger_lines
      WHERE wallet_tg_id = ? AND counterparty_tg_id = ? AND direction = ?
        AND substr(occurred_at, 1, 10) BETWEEN ? AND ? AND abs(amount - ?) < 0.005 AND occurred_at > ?
-       AND id NOT IN (SELECT okpay_line_id FROM pool_external_movements WHERE okpay_line_id IS NOT NULL)
+       ${opts.includeClaimed ? "" : "AND id NOT IN (SELECT okpay_line_id FROM pool_external_movements WHERE okpay_line_id IS NOT NULL)"}
      ORDER BY occurred_at, id
   `).all(mainTgId, POOL_AGENCY_OKPAY_TG_ID, m.direction === "in" ? "+" : "-", shiftDay(day, -1), shiftDay(day, 1), m.amount, m.closed_at) as
     { id: number; occurred_at: string }[];
@@ -399,6 +400,100 @@ export function addDeclaredMovementOn(
     VALUES (?, ?, ?, ?, ?, 'declared', ?)
   `).run(args.player_id, gid, args.direction, args.amount, args.occurred_at, args.note ?? null);
   return { ok: true, id: Number(ins.lastInsertRowid) };
+}
+
+/**
+ * Baki DÉCLARE l'heure exacte d'un règlement daté au jour (pas de page OkPay de la
+ * main sous la main, ou main saisie à la main). C'est une déclaration, comme
+ * paid_date : elle lève le blocker ±1 jour en assumant l'heure. Gardes :
+ *   • le mouvement est un règlement encore 'day' ;
+ *   • l'instant reste dans [jour−1, jour+1] du jour déclaré (la règle ±1 est la
+ *     tolérance de fuseau, pas une licence pour changer de semaine) ;
+ *   • strictement après la clôture réglée (avant = payé avant la photo, refusé) ;
+ *   • jamais dans une période déjà figée du joueur (sa somme est figée sans lui).
+ * okpay_line_id reste NULL : si la page arrive ensuite avec une autre seconde,
+ * previewPoolPeriodOn le signale (declared_time_mismatch) — la ligne fait foi.
+ */
+export function setSettlementInstantOn(db: DB, movementId: number, occurredAt: string, now?: string): Result<{ occurred_at: string }> {
+  const gid = poolGameIdOn(db);
+  const m = db.prepare(`
+    SELECT m.*, pp.closed_at AS settled_closed_at FROM pool_external_movements m
+      LEFT JOIN pool_periods pp ON pp.settlement_id = m.settlement_id
+     WHERE m.id = ? AND m.game_id = ?
+  `).get(movementId, gid) as (MovementRow & { player_id: number; settled_closed_at: string | null }) | undefined;
+  if (!m) return { ok: false, error: `Mouvement ${movementId} introuvable.` };
+  if (m.kind !== "settlement") return { ok: false, error: `Le mouvement ${movementId} n'est pas un règlement : sa date se corrige en le retirant et en le redéclarant.` };
+  if (m.occurred_precision !== "day") return { ok: false, error: `Règlement #${m.settlement_id} déjà daté à la seconde (${m.occurred_at}).` };
+  if (!isPoolTimestamp(occurredAt)) return { ok: false, error: `Heure « ${occurredAt} » — attendu YYYY-MM-DD HH:MM:SS, date existante.` };
+  if (now !== undefined && occurredAt > now) return { ok: false, error: `Heure ${occurredAt} dans le futur (maintenant ${now}).` };
+  // La période réglée doit exister : un règlement pool sans période (DELETE SQL brut)
+  // n'a plus de photo de référence — on refuse plutôt que de sauter la garde.
+  if (m.settled_closed_at === null) return { ok: false, error: `Règlement #${m.settlement_id} : période réglée introuvable — état incohérent, ne pas dater.` };
+  const day = m.occurred_at.slice(0, 10), newDay = occurredAt.slice(0, 10);
+  if (newDay < shiftDay(day, -1) || newDay > shiftDay(day, 1)) {
+    return { ok: false, error: `Heure ${occurredAt} hors de la fenêtre du jour déclaré (${day} ± 1). Pour un autre jour, c'est la date de paiement qui est fausse : elle se corrige dans /payments (déverrouille et re-marque payé).` };
+  }
+  if (occurredAt <= m.settled_closed_at) {
+    return { ok: false, error: `Heure ${occurredAt} antérieure ou égale à la clôture réglée (${m.settled_closed_at}) : payé avant la photo, le montant était déjà dans le pool de fin — la période réglée est fausse, pas l'heure.` };
+  }
+  const gele = db.prepare(`
+    SELECT closed_at FROM pool_periods WHERE player_id = ? AND game_id = ? AND settlement_id IS NOT ? AND closed_at >= ? ORDER BY closed_at LIMIT 1
+  `).get(m.player_id, gid, m.settlement_id, occurredAt) as { closed_at: string } | undefined;
+  if (gele) return { ok: false, error: `Heure ${occurredAt} dans la période déjà figée close le ${gele.closed_at} : sa somme est figée sans ce mouvement. Déverrouille-la d'abord.` };
+  const upd = db.prepare(`UPDATE pool_external_movements SET occurred_at = ?, occurred_precision = 'second' WHERE id = ? AND occurred_precision = 'day'`).run(occurredAt, movementId);
+  if (upd.changes !== 1) return { ok: false, error: `Règlement #${m.settlement_id} : l'heure a été fixée entre-temps.` };
+  return { ok: true, occurred_at: occurredAt };
+}
+
+/**
+ * CORRIGER LE POOL DE DÉPART — sans réécrire l'histoire.
+ *
+ * Le pool de départ est REPRIS de la clôture précédente (règle Baki : non
+ * modifiable), et cette clôture est figée. Le seul moyen honnête de « partir
+ * d'un autre chiffre » est un mouvement externe DÉCLARÉ, daté juste après la
+ * clôture, avec le motif : partir de X au lieu de Y ≡ une entrée de (X − Y)
+ * dans ]clôture, …] — puisque résultat = (fin + sorties) − (début + entrées).
+ * L'écart reste visible dans les mouvements, la période figée reste vraie, et le
+ * moteur ne connaît qu'une seule formule. Refusé sans motif.
+ */
+export const POOL_OPEN_CORRECTION_PREFIX = "Correction du pool de départ :";
+
+/** Les corrections du pool de départ posées sur la dernière clôture : les mouvements déclarés datés closed_at + 1 s. */
+export function poolOpenCorrectionsOn(db: DB, playerId: number, last: PoolPeriodRow): MovementRow[] {
+  const at = oneSecondAfter(last.closed_at);
+  return listMovementsOn(db, playerId).filter(m => m.kind === "declared" && m.occurred_at === at && (m.note ?? "").startsWith(POOL_OPEN_CORRECTION_PREFIX));
+}
+
+/** Reprise + corrections : ce dont la période courante part VRAIMENT. */
+export function poolOpenEffectiveOn(db: DB, playerId: number, last: PoolPeriodRow): number {
+  const carry = carriedPoolOpen(last);
+  return round2(poolOpenCorrectionsOn(db, playerId, last).reduce((acc, m) => acc + (m.direction === "in" ? m.amount : -m.amount), carry));
+}
+
+export function addPoolOpenCorrectionOn(db: DB, args: { player_id: number; new_pool_open: number; note: string }): Result<{ id: number; delta: number }> {
+  const gid = poolGameIdOn(db);
+  const last = lastPeriodOn(db, args.player_id, gid);
+  if (!last) return { ok: false, error: `Aucune période figée : le pool de départ de la première période se SAISIT directement.` };
+  if (!Number.isFinite(args.new_pool_open) || args.new_pool_open < 0 || !isCentExact(args.new_pool_open)) {
+    return { ok: false, error: `Pool de départ « ${args.new_pool_open} » invalide — positif, deux décimales maximum.` };
+  }
+  const note = (args.note ?? "").trim();
+  if (note.length < 3) return { ok: false, error: `Un motif est obligatoire : pourquoi partir de ${args.new_pool_open.toFixed(2)} au lieu de ${last.pool_close.toFixed(2)} ?` };
+  // Le delta se calcule contre le départ EFFECTIF — la reprise PLUS les corrections
+  // déjà posées — jamais contre la reprise seule : sinon « 2700 → 2600 » puis
+  // « → 2650 » posait une seconde sortie de 50 au lieu d'une entrée, et un
+  // double-clic doublait la correction. (Constat money-auditor 2026-09-15, F1.)
+  const carry = carriedPoolOpen(last);
+  const effective = poolOpenEffectiveOn(db, args.player_id, last);
+  const delta = round2(args.new_pool_open - effective);
+  if (Math.abs(delta) <= EPS) return { ok: false, error: `Le pool de départ effectif est déjà ${effective.toFixed(2)}${Math.abs(effective - carry) > EPS ? ` (reprise ${carry.toFixed(2)} + corrections)` : ""}.` };
+  const r = addDeclaredMovementOn(db, {
+    player_id: args.player_id, direction: delta > 0 ? "in" : "out", amount: Math.abs(delta),
+    occurred_at: oneSecondAfter(last.closed_at),
+    note: `${POOL_OPEN_CORRECTION_PREFIX} ${effective.toFixed(2)} → ${args.new_pool_open.toFixed(2)} — ${note}`,
+  });
+  if (!r.ok) return r;
+  return { ok: true, id: r.id, delta };
 }
 
 /** Retire un mouvement DÉCLARÉ, tant qu'il n'est pas figé dans une période. Un mouvement de règlement ne se retire pas ici. */
@@ -528,6 +623,12 @@ export function previewPoolPeriodOn(db: DB, args: PreviewArgs): Result<{ preview
   } else {
     // Première période : l'intervalle est vide, le pool de départ est SAISI.
     openedAt = args.closed_at;
+    // Des mouvements déclarés antérieurs à cette clôture (possibles après un unlock)
+    // ne compteraient nulle part, et deviendraient insupprimables : on refuse.
+    const orphans = listMovementsOn(db, args.player_id).filter(m => m.occurred_at <= args.closed_at);
+    if (orphans.length > 0) {
+      blockers.push(`${orphans.length} mouvement(s) daté(s) avant cette première clôture (${orphans.map(m => `${m.direction} ${m.amount.toFixed(2)} @ ${m.occurred_at}`).join(", ")}) : ils ne compteraient nulle part. Retire-les, ou clôture avant.`);
+    }
     if (args.pool_open_manual !== null && args.pool_open_manual !== undefined) {
       if (!Number.isFinite(args.pool_open_manual) || args.pool_open_manual < 0 || !isCentExact(args.pool_open_manual)) {
         blockers.push(`Pool de départ « ${args.pool_open_manual} » invalide — positif, deux décimales maximum.`);
@@ -648,6 +749,17 @@ export function previewPoolPeriodOn(db: DB, args: PreviewArgs): Result<{ preview
       // settlementCandidatesOn exclut les lignes déjà portées — donc la sienne : toute
       // AUTRE candidate libre rend la résolution ambiguë.
       const others = settlementCandidatesOn(db, pp.main_okpay_tg_id, { ...m, closed_at: per.closed_at });
+      // Heure DÉCLARÉE à la main (setSettlementInstantOn) alors que le grand livre porte
+      // une ligne agence identique à une autre seconde : la ligne fait foi, on le dit.
+      // Ici on regarde AUSSI les lignes déjà revendiquées par un autre règlement : la
+      // ligne de ce règlement-ci a pu être attribuée à un autre parce que celui-ci
+      // avait une heure déclarée (constat money-auditor 2026-09-15, R2).
+      if (m.occurred_precision === "second" && m.okpay_line_id === null) {
+        const all = settlementCandidatesOn(db, pp.main_okpay_tg_id, { ...m, closed_at: per.closed_at }, { includeClaimed: true });
+        if (all.length > 0 && !all.some(c => c.occurred_at === m.occurred_at)) {
+          warnings.push({ code: "declared_time_mismatch", message: `Règlement #${m.settlement_id} daté à la main ${m.occurred_at}, mais le grand livre OkPay porte une ligne agence identique à ${all.map(c => c.occurred_at).join(", ")} : c'est elle qui fait foi — corrige l'heure.` });
+        }
+      }
       if (m.occurred_precision === "second" && m.okpay_line_id !== null && others.length > 0) {
         warnings.push({ code: "resolution_ambiguous", message: `Règlement #${m.settlement_id} daté sur la ligne OkPay ${m.occurred_at}, mais ${others.length} autre(s) ligne(s) agence identique(s) existe(nt) (${others.map(c => c.occurred_at).join(", ")}) : vérifie laquelle est le règlement — l'autre est un mouvement externe à déclarer.` });
       }
@@ -755,6 +867,13 @@ export function unlockPoolPeriodOn(db: DB, playerId: number, periodId: number): 
     const st = db.prepare(`SELECT status FROM manual_settlements WHERE id = ?`).get(row.settlement_id) as { status: string } | undefined;
     if (st?.status === "paid") return { ok: false, error: `Règlement #${row.settlement_id} déjà marqué payé — déverrouillage interdit. De l'argent sorti ne se dé-règle pas.` };
   }
+  // Une correction du pool de départ posée sur CETTE clôture (datée closed_at + 1 s)
+  // deviendrait orpheline si la période est re-figée plus tard : comptée nulle part,
+  // insupprimable. On la retire d'abord. (Constat money-auditor 2026-09-15, F2.)
+  const corrections = poolOpenCorrectionsOn(db, playerId, row);
+  if (corrections.length > 0) {
+    return { ok: false, error: `Une correction du pool de départ (${corrections.map(c => `${c.direction} ${c.amount.toFixed(2)}`).join(", ")}) est posée sur cette clôture : retire-la avant de déverrouiller, sinon elle ne compterait plus nulle part.` };
+  }
   // Les comptes clos dans cette période vont RÉOUVRIR : leur wallet a pu être reprise
   // entre-temps (main d'un autre joueur, autre compte). Refus nommé plutôt qu'un état
   // double, ou qu'une erreur UNIQUE brute. (Constat money-auditor 2026-09-13, B1/B2.)
@@ -856,6 +975,8 @@ export const getLedger = (walletTgId: string) => getLedgerOn(getDb(), walletTgId
 export const listMovements = (playerId: number) => listMovementsOn(getDb(), playerId);
 export const addDeclaredMovement = (args: Parameters<typeof addDeclaredMovementOn>[1]) => addDeclaredMovementOn(getDb(), args);
 export const deleteDeclaredMovement = (id: number) => deleteDeclaredMovementOn(getDb(), id);
+export const setSettlementInstant = (id: number, at: string, now?: string) => setSettlementInstantOn(getDb(), id, at, now);
+export const addPoolOpenCorrection = (args: Parameters<typeof addPoolOpenCorrectionOn>[1]) => addPoolOpenCorrectionOn(getDb(), args);
 export const resolveSettlementInstants = (playerId: number) => resolveSettlementInstantsOn(getDb(), playerId);
 export const getPeriods = (playerId: number) => getPeriodsOn(getDb(), playerId);
 export const getPeriodBalances = (periodId: number) => getPeriodBalancesOn(getDb(), periodId);
