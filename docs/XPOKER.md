@@ -150,9 +150,30 @@ Contrefactuel : `(0.8/100) × 256.43 = 2.05144 ≠ 205.144`. La TAX n'existe qu'
   `action_pct`, `rb_pct`, `action_chips`, `rb_chips`, `due_chips`, taux, `import_id`. Le
   montant est **recalculé par le moteur** au lock (l'écran envoie des semaines, jamais des
   montants) puis ne bouge plus.
-- **Garde F2** : un deal ne commence jamais avant ni sur une semaine **importée** (donc a
-  fortiori réglée) — sauf le premier deal d'un joueur, qui peut couvrir l'historique. Le refus
-  liste les semaines qui bloquent.
+- **Garde F2 — ce qui est figé, c'est la semaine RÉGLÉE, pas la semaine importée** (recalibrée
+  le 2026-09-21, cas Léo : une semaine importée « aucun deal » ne pouvait plus recevoir de deal
+  dès qu'un deal existait sur une semaine plus récente, alors que rien n'était figé). Un deal
+  peut commencer sur une semaine importée tant qu'**aucune semaine de la plage écrite** n'est
+  dans un règlement (`xpoker_settlement_weeks`, locked **ou** paid). Une seule l'est ⇒ refus
+  dur, nommé (semaine, règlement #), rien écrit. La plage écrite va de la semaine d'effet à la
+  fin de la période qui la contient, sinon à la veille de la période suivante : une période plus
+  récente n'est jamais réécrite par un deal posé avant elle (« 15 % sur la seule semaine 09-07 »
+  avec un 10 % depuis 09-14 donne deux périodes ; mêmes taux ⇒ fusion en une seule). Ce qui
+  reste interdit, c'est la réécriture **silencieuse** : tout changement rétroactif (semaine
+  importée non réglée recalculée, ou période insérée avant une période existante) rend d'abord
+  un **aperçu** semaine par semaine — win/lose, deal, part d'action, RB, dû : avant → après, et
+  le total du dû — sans rien écrire, puis exige `confirm_retroactive` (un clic). La trace
+  s'écrit **d'office** dans la note de la période (`[rétroactif <date>] [motif] — semaines
+  recalculées … ; dû total avant → après`) ; le motif est optionnel (Baki, 2026-09-21). Le
+  « total du dû » somme **toutes** les semaines importées, réglées comprises (ce n'est pas un
+  reste à régler) ; une semaine incalculable en est **exclue et le dit** — à l'écran et dans
+  la trace (`(1 semaine incalculable exclue)`), jamais un zéro inventé (F-A, audit 2026-09-21).
+  Le premier deal d'un joueur couvre l'historique sans confirmation (rien à réécrire). Le
+  panneau propose comme première semaine d'effet le lendemain de la dernière semaine
+  **réglée** (aucune ⇒ aucune limite). Harnais : `scripts/xpoker-deal-retro.test.ts` (cas
+  nommés, dont Léo) et `scripts/xpoker-deal-fuzz.test.ts` (≈ 4 800 appels aléatoires, 4
+  graines : une seule période ouverte, aucun chevauchement, semaine réglée jamais recalculée
+  à un autre taux, aperçu == résultat écrit).
 - **Garde R1** : déplacer un Player ID (`relinkMemberIdOn`) recalcule les deux joueurs mais
   **refuse** si une semaine concernée est réglée (liste nommée), et laisse une trace
   (`xpoker_relink_log`). Rattacher un ID orphelin sur une semaine déjà réglée chez le joueur

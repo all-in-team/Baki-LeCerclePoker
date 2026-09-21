@@ -161,17 +161,31 @@ console.log("\n── 3. Deals versionnés, parts d'action dans les deux sens, i
   eq("PREMIER deal de Carol : peut couvrir la semaine déjà importée (geste normal après import initial)",
      setDealOn(db, { player_id: CAROL, action_pct: 10, rb_pct: 0, start_week: "2026-07-13" }), { ok: true });
   eq4("… et la semaine devient calculable : −1172.287", playerWeeksOn(db, CAROL)[0].action_chips, -1172.287);
-  check("mais un 2ᵉ deal sur cette même semaine ⇒ refus (F2)", !setDealOn(db, { player_id: CAROL, action_pct: 50, rb_pct: 0, start_week: "2026-07-13" }).ok);
+  // F2 recalibrée (2026-09-21) : une semaine IMPORTÉE non réglée n'est pas figée — mais la
+  // réécrire n'est jamais silencieux : sans confirmation, aperçu et rien d'écrit.
+  const again = setDealOn(db, { player_id: CAROL, action_pct: 50, rb_pct: 0, start_week: "2026-07-13" });
+  check("un 2ᵉ deal sur cette même semaine importée ⇒ pas appliqué : confirmation demandée (F2)", !again.ok && again.needs_confirmation === true, JSON.stringify(again));
+  eq4("… la semaine 7/13 de Carol n'a pas bougé", playerWeeksOn(db, CAROL)[0].action_chips, -1172.287);
   // Versionnement : nouveau taux à partir de la semaine suivante, la semaine passée ne bouge pas.
   eq("deal Bob 15 % depuis 2026-07-27", setDealOn(db, { player_id: BOB, action_pct: 15, rb_pct: 20, start_week: "2026-07-27" }), { ok: true });
   eq("période précédente fermée au 2026-07-20", dealForWeekOn(db, BOB, "2026-07-13")?.end_week, "2026-07-20");
   eq4("semaine 7/13 toujours à 10 %", playerWeeksOn(db, BOB).find(w => w.week_start === "2026-07-13")!.action_chips, 1405.356);
   const back = setDealOn(db, { player_id: BOB, action_pct: 50, rb_pct: 0, start_week: "2026-07-13" });
-  check("réécrire un deal sur une semaine importée ⇒ refus (F2)", !back.ok && /déjà importée/.test(back.error ?? ""), back.error);
+  check("réécrire un deal sur une semaine importée non réglée ⇒ pas un refus, une confirmation (F2 recalibrée)", !back.ok && back.needs_confirmation === true && /rétroactif/.test(back.error), back.error);
+  eq("… l'aperçu nomme la semaine recalculée et la plage écrite (7/13 → 7/20 : la période 7/27 est conservée)",
+     !back.ok && back.preview ? { weeks: back.preview.weeks.map(w => [w.week_start, w.before?.action_pct, w.after.action_pct]), range: [back.preview.start_week, back.preview.end_week] } : null,
+     { weeks: [["2026-07-13", 10, 50]], range: ["2026-07-13", "2026-07-20"] });
+  eq4("… et rien écrit : Bob 7/13 toujours à 10 %", playerWeeksOn(db, BOB).find(w => w.week_start === "2026-07-13")!.action_chips, 1405.356);
+  // Remplacer la période OUVERTE sur son propre début alors que RIEN n'y est importé (7/27 pas
+  // encore importée) : simple correction, appliquée en place, sans confirmation.
   const sameStart = setDealOn(db, { player_id: BOB, action_pct: 90, rb_pct: 0, start_week: "2026-07-27" });
-  check("remplacer la période OUVERTE sur son propre début ⇒ refus (F2)", !sameStart.ok, sameStart.error);
-  eq4("semaine 7/13 toujours à 10 % après ces refus", playerWeeksOn(db, BOB).find(w => w.week_start === "2026-07-13")!.action_chips, 1405.356);
-  eq("période en cours intacte (15 % depuis 7/27)", dealForWeekOn(db, BOB, "2026-07-27"), { action_pct: 15, rb_pct: 20, start_week: "2026-07-27", end_week: null });
+  check("corriger la période OUVERTE sur son propre début, rien d'importé ⇒ appliqué en place", sameStart.ok && !sameStart.retroactive, JSON.stringify(sameStart));
+  eq("… 90 %/0 depuis 7/27, une seule période ouverte, l'ancien taux tracé dans la note",
+     { d: dealForWeekOn(db, BOB, "2026-07-27"), n: (db.prepare(`SELECT COUNT(*) n FROM xpoker_player_deals WHERE player_id = ? AND end_week IS NULL`).get(BOB) as any).n, note: /avant : 15 %\/20 %/.test(dealHistoryOn(db, BOB).current?.note ?? "") },
+     { d: { action_pct: 90, rb_pct: 0, start_week: "2026-07-27", end_week: null }, n: 1, note: true });
+  check("… et on remet 15 %/20 (même geste)", setDealOn(db, { player_id: BOB, action_pct: 15, rb_pct: 20, start_week: "2026-07-27" }).ok);
+  eq4("semaine 7/13 toujours à 10 % après tout ça", playerWeeksOn(db, BOB).find(w => w.week_start === "2026-07-13")!.action_chips, 1405.356);
+  eq("période en cours (15 % depuis 7/27)", dealForWeekOn(db, BOB, "2026-07-27"), { action_pct: 15, rb_pct: 20, start_week: "2026-07-27", end_week: null });
   // Semaine suivante : Bob seul, 15 %.
   const rows2: FixRow[] = [
     { id: "jsuisAll-in", pid: "4107823", nick: "jsuisAll-in", wl: 26411.41, rake: 4854.14 },
@@ -180,26 +194,32 @@ console.log("\n── 3. Deals versionnés, parts d'action dans les deux sens, i
   const r2 = commitImportOn(db, { block: block({ rows: rows2 }, "8/3"), ...W_727, source: "csv" });
   check("2ᵉ import ok", r2.ok, JSON.stringify(r2));
   eq4("semaine 7/27 à 15 %", playerWeeksOn(db, BOB).find(w => w.week_start === "2026-07-27")!.action_chips, 0.15 * 26411.41);
-  // F2, le cas que seule la garde « semaine importée » attrape : Carol a une période
-  // ouverte depuis 7/13 et la semaine 7/27 importée ; un deal à partir du 7/20 est
-  // APRÈS le début de la période mais AVANT une semaine déjà importée → refus.
+  // F2 recalibrée : Carol a une période ouverte depuis 7/13 et la semaine 7/27 importée ;
+  // un deal à partir du 7/20 est APRÈS le début de la période mais recalculerait 7/27
+  // (importée, non réglée) → pas un refus : aperçu, confirmation, motif.
   const mid = setDealOn(db, { player_id: CAROL, action_pct: 50, rb_pct: 0, start_week: "2026-07-20" });
-  check("deal entre le début de période et une semaine importée ⇒ refus (F2)", !mid.ok && /déjà importée/.test(mid.error ?? ""), mid.error);
-  eq("… le refus LISTE les semaines qui bloquent", mid.blocking_weeks, ["2026-07-27"]);
+  check("deal entre le début de période et une semaine importée non réglée ⇒ confirmation demandée (F2)", !mid.ok && mid.needs_confirmation === true, mid.error);
+  eq("… l'aperçu LISTE les semaines recalculées", !mid.ok ? mid.preview?.weeks.map(w => w.week_start) : null, ["2026-07-27"]);
+  // Avant le début de la période (7/06) : rien d'importé au 7/06, mais une période s'insérerait
+  // AVANT une période existante → confirmation aussi (jamais d'insertion discrète dans le passé).
   const early = setDealOn(db, { player_id: CAROL, action_pct: 50, rb_pct: 0, start_week: "2026-07-06" });
-  eq("depuis 7/06 : les deux semaines importées bloquent", early.blocking_weeks, ["2026-07-13", "2026-07-27"]);
-  // Historique pour le formulaire : valeur actuelle + depuis quand, périodes précédentes, première semaine d'effet.
+  eq("depuis 7/06 : insertion avant la période 7/13 ⇒ confirmation, aucune semaine recalculée, plage 7/06 → 7/06",
+     !early.ok && early.preview ? { c: early.needs_confirmation, w: early.preview.weeks.length, r: [early.preview.start_week, early.preview.end_week] } : early,
+     { c: true, w: 0, r: ["2026-07-06", "2026-07-06"] });
+  eq("… rien écrit : Carol a toujours une seule période", (db.prepare(`SELECT COUNT(*) n FROM xpoker_player_deals WHERE player_id = ?`).get(CAROL) as any).n, 1);
+  // Historique pour le formulaire : valeur actuelle + depuis quand, périodes précédentes, première
+  // semaine d'effet = lendemain de la dernière semaine RÉGLÉE (aucune ici ⇒ aucune limite).
   const h0 = dealHistoryOn(db, CAROL);
-  eq("historique Carol : en cours 10 % depuis 7/13, rien avant, changement possible dès le 8/03",
-     { cur: [h0.current?.action_pct, h0.current?.start_week], prev: h0.previous.length, earliest: h0.earliest_change_week, last: h0.last_imported_week },
-     { cur: [10, "2026-07-13"], prev: 0, earliest: "2026-08-03", last: "2026-07-27" });
+  eq("historique Carol : en cours 10 % depuis 7/13, rien avant, aucune semaine réglée ⇒ aucune limite",
+     { cur: [h0.current?.action_pct, h0.current?.start_week], prev: h0.previous.length, earliest: h0.earliest_change_week, settled: h0.last_settled_week, last: h0.last_imported_week },
+     { cur: [10, "2026-07-13"], prev: 0, earliest: null, settled: null, last: "2026-07-27" });
   eq4("Carol 7/27 toujours à 10 %", playerWeeksOn(db, CAROL).find(w => w.week_start === "2026-07-27")!.action_chips, -917.366);
   eq("deal Carol à partir du 8/03 (après la dernière semaine importée) ⇒ ok", setDealOn(db, { player_id: CAROL, action_pct: 50, rb_pct: 0, start_week: "2026-08-03" }), { ok: true });
   const h1 = dealHistoryOn(db, CAROL);
   eq("historique après changement : 50 % depuis 8/03, 10 % du 7/13 au 7/27 en précédent",
      { cur: [h1.current?.action_pct, h1.current?.start_week], prev: h1.previous.map(p => [p.action_pct, p.start_week, p.end_week]), earliest: h1.earliest_change_week },
-     { cur: [50, "2026-08-03"], prev: [[10, "2026-07-13", "2026-07-27"]], earliest: "2026-08-10" });
-  eq("joueur sans deal : historique vide, n'importe quel lundi", dealHistoryOn(db, 99), { current: null, previous: [], earliest_change_week: null, last_imported_week: null });
+     { cur: [50, "2026-08-03"], prev: [[10, "2026-07-13", "2026-07-27"]], earliest: null });
+  eq("joueur sans deal : historique vide, n'importe quel lundi", dealHistoryOn(db, 99), { current: null, previous: [], earliest_change_week: null, last_settled_week: null, last_imported_week: null });
   eq("0 % d'action et 0 % de RB : accepté (défaut de la plupart des joueurs)", setDealOn(db, { player_id: CAROL, action_pct: 0, rb_pct: 0, start_week: "2026-08-10" }), { ok: true });
   // Multi-comptes : un 2ᵉ Player ID pour Bob, même semaine ⇒ somme au niveau joueur, détail par compte.
   eq("2ᵉ compte Bob", linkMemberIdOn(db, { player_id: BOB, member_id: "4004977" }).ok, true);
