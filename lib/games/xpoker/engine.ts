@@ -421,70 +421,205 @@ export function unlinkedMembersOn(db: DB): UnlinkedMember[] {
 // ── Deals (versionnés par semaine) ───────────────────────────────────────────
 
 export type XpokerDeal = { action_pct: number; rb_pct: number; start_week: string; end_week: string | null };
+type DealRow = XpokerDeal & { id: number; note: string | null };
+
+/** Une semaine importée recalculée par un changement de deal : avant (null = incalculable) → après. */
+export type DealWeekPreview = {
+  week_start: string;
+  winloss_chips: number;
+  rake_chips: number;
+  rate_chips_per_usd: number;
+  before: { action_pct: number; rb_pct: number; action_chips: number; rb_chips: number; due_chips: number } | null;
+  after: { action_pct: number; rb_pct: number; action_chips: number; rb_chips: number; due_chips: number };
+};
+export type DealChangePreview = {
+  /** Bornes de la période écrite (end_week null = ouverte). */
+  start_week: string;
+  end_week: string | null;
+  /** Semaines importées, NON réglées, dont le deal change — dans l'ordre chronologique. */
+  weeks: DealWeekPreview[];
+  /**
+   * Σ dû sur TOUTES les semaines importées du joueur, réglées comprises (ce n'est pas un
+   * reste à régler). Une semaine incalculable est EXCLUE de la somme : le compteur
+   * incalculable_* doit être affiché et tracé dès qu'il est > 0 (zéro inventé, F-A audit).
+   */
+  total_due_before: number;
+  total_due_after: number;
+  incalculable_before: number;
+  incalculable_after: number;
+};
+export type SetDealArgs = {
+  player_id: number; action_pct: number; rb_pct: number; start_week: string; note?: string | null;
+  /** Confirmation EXPLICITE d'un changement rétroactif (semaines importées non réglées recalculées) — un clic sur l'aperçu. */
+  confirm_retroactive?: boolean;
+};
+export type SetDealResult =
+  | { ok: true; retroactive?: true; preview?: DealChangePreview }
+  | {
+      ok: false; error: string;
+      /** true = pas un refus : l'aperçu est là, il manque la confirmation. */
+      needs_confirmation?: boolean;
+      preview?: DealChangePreview;
+      /** Refus dur : semaines de la plage déjà dans un règlement (locked ou paid). */
+      settled_weeks?: { week_start: string; settlement_id: number }[];
+    };
+
+function samePct(a: { action_pct: number; rb_pct: number }, b: { action_pct: number; rb_pct: number }): boolean {
+  return Math.abs(a.action_pct - b.action_pct) < 1e-9 && Math.abs(a.rb_pct - b.rb_pct) < 1e-9;
+}
+const pctLabel = (d: { action_pct: number; rb_pct: number } | null) => d ? `${d.action_pct} %/${d.rb_pct} %` : "∅";
+const money = (n: number) => n.toFixed(2).replace(".", ",");
+/** Un total qui exclut des semaines incalculables le DIT (zéro inventé, doctrine dashboard.ts) — avant comme après. */
+const excluded = (n: number) => n > 0 ? ` (${n} semaine${n > 1 ? "s" : ""} incalculable${n > 1 ? "s" : ""} exclue${n > 1 ? "s" : ""})` : "";
 
 /**
- * Pose un deal à partir d'une semaine : la période en cours est fermée la
- * semaine d'avant, la nouvelle s'ouvre. Taux en POURCENT (10 = 10 %) — pas la
+ * Pose un deal à partir d'une semaine. Taux en POURCENT (10 = 10 %) — pas la
  * fraction du sheet (xpoker_imports.rb_fraction = 0.8) : l'unité est dans le nom,
  * assertPct refuse ]0, 1[ et le CHECK du schéma aussi (R2).
  *
- * UN DEAL NE RÉÉCRIT JAMAIS UNE SEMAINE DÉJÀ IMPORTÉE (faille F2, money-auditor
- * 2026-09-13) : sinon la part d'action affichée d'une semaine change après coup,
- * et à l'étape 4 elle divergerait du montant figé dans xpoker_settlement_weeks.
- * Donc, dès qu'un deal existe, start_week doit être STRICTEMENT après la dernière
- * semaine importée du joueur ET après le début de la période en cours. Seule
- * exception : le PREMIER deal, qui peut couvrir l'historique déjà importé (c'est
- * le geste normal après un import initial).
+ * PLAGE ÉCRITE : [start_week, fin] où la fin est celle de la période qui contient
+ * start_week, sinon la veille de la période suivante, sinon ouverte. Une période
+ * plus récente n'est JAMAIS réécrite par un deal posé avant elle : « 15 % sur la
+ * seule semaine 09-07 » avec un 10 % depuis 09-14 donne deux périodes. Les
+ * périodes adjacentes à taux identiques sont fusionnées (une seule période, pas
+ * deux tronçons au même taux).
+ *
+ * CE QUI EST FIGÉ, C'EST LA SEMAINE RÉGLÉE — pas la semaine importée (F2
+ * recalibrée, 2026-09-21 : les montants ne sont figés qu'au lock, dans
+ * xpoker_settlement_weeks ; une semaine importée non réglée n'a rien de figé).
+ *   • une semaine de la plage dans un règlement (locked OU paid) ⇒ refus dur,
+ *     nommé (semaine, règlement #), rien écrit ;
+ *   • changement RÉTROACTIF (le joueur a déjà un deal, et la plage recalcule des
+ *     semaines importées non réglées OU s'insère avant une période existante) :
+ *     jamais silencieux (le vrai F2). Sans confirm_retroactive, on rend l'aperçu
+ *     semaine par semaine (deal, part d'action, RB, dû : avant → après, et le
+ *     total) SANS rien écrire ; confirmé (un clic), la trace est écrite d'office
+ *     dans la note de la période — le motif est optionnel (Baki, 2026-09-21) ;
+ *   • le PREMIER deal d'un joueur couvre l'historique importé sans confirmation
+ *     (rien à réécrire : ses semaines étaient incalculables) — geste normal après
+ *     un import initial ;
+ *   • changement en fin de chronologie sans semaine importée touchée (le cas
+ *     courant : nouveau taux à partir de la semaine prochaine) ⇒ appliqué direct.
  */
-export function setDealOn(db: DB, args: { player_id: number; action_pct: number; rb_pct: number; start_week: string; note?: string | null }): { ok: boolean; error?: string; blocking_weeks?: string[] } {
+export function setDealOn(db: DB, args: SetDealArgs): SetDealResult {
   assertIsoDate(args.start_week, "start_week");
   if (!isMonday(args.start_week)) return { ok: false, error: `start_week doit être un lundi (${args.start_week})` };
   // POURCENT (10 = 10 %). ]0, 1[ refusé : « 0.8 » serait la fraction du sheet déguisée (R2).
   try { assertPct(args.action_pct, "action_pct"); assertPct(args.rb_pct, "rb_pct"); }
   catch (e: any) { return { ok: false, error: e.message }; }
-  const current = db.prepare(`SELECT id, start_week FROM xpoker_player_deals WHERE player_id = ? AND end_week IS NULL`).get(args.player_id) as { id: number; start_week: string } | undefined;
-  const hasAny = !!db.prepare(`SELECT 1 FROM xpoker_player_deals WHERE player_id = ?`).get(args.player_id);
-  if (hasAny) {
-    // Refus NOMMÉ avec la LISTE des semaines qui bloquent (formulaire étape 3) : Baki
-    // voit exactement ce qu'un changement rétroactif réécrirait, et choisit la
-    // semaine d'effet en connaissance de cause.
-    const blocking = (db.prepare(
-      `SELECT DISTINCT week_start FROM xpoker_week_rows WHERE player_id = ? AND week_start >= ? ORDER BY week_start`
-    ).all(args.player_id, args.start_week) as { week_start: string }[]).map(r => r.week_start);
-    if (blocking.length > 0) {
-      const last = blocking[blocking.length - 1];
+  const S = args.start_week;
+  const rows = db.prepare(`SELECT id, action_pct, rb_pct, start_week, end_week, note FROM xpoker_player_deals WHERE player_id = ? ORDER BY start_week`).all(args.player_id) as DealRow[];
+  const containing = rows.find(r => r.start_week <= S && (r.end_week === null || r.end_week >= S)) ?? null;
+  const next = rows.find(r => r.start_week > S) ?? null;
+  const newEnd = containing ? containing.end_week : next ? addDays(next.start_week, -7) : null;
+  if (containing && samePct(containing, args)) return { ok: true };   // déjà en vigueur : rien à écrire
+
+  // Semaines de la plage : importées (comptes joueur), et parmi elles les réglées.
+  const touched = (db.prepare(
+    `SELECT DISTINCT week_start FROM xpoker_week_rows WHERE player_id = ? AND is_agency = 0 AND week_start >= ? AND (? IS NULL OR week_start <= ?) ORDER BY week_start`
+  ).all(args.player_id, S, newEnd, newEnd) as { week_start: string }[]).map(r => r.week_start);
+  const settledMap = new Map((db.prepare(`SELECT week_start, settlement_id FROM xpoker_settlement_weeks WHERE player_id = ?`).all(args.player_id) as { week_start: string; settlement_id: number }[]).map(r => [r.week_start, r.settlement_id]));
+  const settled = touched.filter(w => settledMap.has(w)).map(w => ({ week_start: w, settlement_id: settledMap.get(w)! }));
+  if (settled.length > 0) {
+    return {
+      ok: false, settled_weeks: settled,
+      error: `${settled.length} semaine(s) de la plage ${S} → ${newEnd ?? "…"} déjà réglée(s) — figées, un deal ne les réécrit pas : `
+           + settled.map(s => `${s.week_start} (règlement #${s.settlement_id})`).join(", "),
+    };
+  }
+
+  // Rétroactif = tout ce qui n'est pas « prolonger la chronologie par la fin » : une
+  // semaine importée recalculée, ou une période insérée avant une période existante.
+  const retroactive = rows.length > 0 && (touched.length > 0 || next !== null || (containing !== null && containing.end_week !== null));
+  let preview: DealChangePreview | undefined;
+  if (retroactive) {
+    preview = previewDealChangeOn(db, { player_id: args.player_id, action_pct: args.action_pct, rb_pct: args.rb_pct, start_week: S, end_week: newEnd });
+    if (!args.confirm_retroactive) {
       return {
-        ok: false, blocking_weeks: blocking,
-        error: `${blocking.length} semaine(s) déjà importée(s) à partir du ${args.start_week} garderaient leur deal : ${blocking.join(", ")} — `
-             + `un nouveau deal commence après la dernière (${addDays(last, 7)} au plus tôt)`,
+        ok: false, needs_confirmation: true, preview,
+        error: touched.length > 0
+          ? `changement rétroactif : ${touched.length} semaine(s) importée(s) non réglée(s) seraient recalculées (${touched.join(", ")}) — confirmation explicite requise`
+          : `changement rétroactif : période insérée du ${S} au ${newEnd ?? "…"} avant une période existante, aucune semaine importée recalculée — confirmation explicite requise`,
       };
     }
-    if (current && args.start_week <= current.start_week) {
-      return { ok: false, error: `la période en cours commence le ${current.start_week} — un deal ne se réécrit pas dans le passé` };
-    }
-    const closedAfter = db.prepare(`SELECT 1 FROM xpoker_player_deals WHERE player_id = ? AND end_week IS NOT NULL AND end_week >= ?`).get(args.player_id, args.start_week);
-    if (closedAfter) return { ok: false, error: `une période de deal déjà fermée couvre ${args.start_week} — un deal ne se réécrit pas dans le passé` };
   }
-  const run = db.transaction(() => {
-    if (current) db.prepare(`UPDATE xpoker_player_deals SET end_week = ? WHERE id = ?`).run(addDays(args.start_week, -7), current.id);
-    db.prepare(`INSERT INTO xpoker_player_deals (player_id, action_pct, rb_pct, start_week, note) VALUES (?, ?, ?, ?, ?)`)
-      .run(args.player_id, args.action_pct, args.rb_pct, args.start_week, args.note ?? null);
-  });
-  run();
-  return { ok: true };
+
+  // Trace AUTOMATIQUE d'un changement rétroactif, motif ou pas : date, semaines
+  // recalculées (deal avant → après), dû total avant → après.
+  const note = retroactive
+    ? `[rétroactif ${new Date().toISOString().slice(0, 10)}]${args.note?.trim() ? ` ${args.note.trim()}` : ""} — semaines recalculées : `
+      + (preview!.weeks.map(w => `${w.week_start} (${pctLabel(w.before)} → ${pctLabel(w.after)})`).join(", ") || "aucune")
+      + ` ; dû total ${money(preview!.total_due_before)}${excluded(preview!.incalculable_before)} → ${money(preview!.total_due_after)}${excluded(preview!.incalculable_after)}`
+    : (args.note?.trim() || null);
+  const joinNote = (a: string | null, b: string | null) => [a, b].filter(Boolean).join(" · ") || null;
+
+  db.transaction(() => {
+    if (containing && containing.start_week === S) {
+      // Même début : la période change de taux en place (ses bornes ne bougent pas), l'ancien taux reste dans la note.
+      db.prepare(`UPDATE xpoker_player_deals SET action_pct = ?, rb_pct = ?, note = ? WHERE id = ?`)
+        .run(args.action_pct, args.rb_pct, joinNote(containing.note, retroactive ? note : joinNote(`avant : ${pctLabel(containing)}`, note)), containing.id);
+    } else {
+      if (containing) db.prepare(`UPDATE xpoker_player_deals SET end_week = ? WHERE id = ?`).run(addDays(S, -7), containing.id);
+      db.prepare(`INSERT INTO xpoker_player_deals (player_id, action_pct, rb_pct, start_week, end_week, note) VALUES (?, ?, ?, ?, ?, ?)`)
+        .run(args.player_id, args.action_pct, args.rb_pct, S, newEnd, note);
+    }
+    coalesceDealPeriodsOn(db, args.player_id);
+  })();
+  return retroactive ? { ok: true, retroactive: true, preview } : { ok: true };
+}
+
+/** Fusionne les périodes adjacentes à taux identiques (la plus ancienne absorbe la suivante, notes concaténées). */
+function coalesceDealPeriodsOn(db: DB, playerId: number) {
+  const rows = db.prepare(`SELECT id, action_pct, rb_pct, start_week, end_week, note FROM xpoker_player_deals WHERE player_id = ? ORDER BY start_week`).all(playerId) as DealRow[];
+  for (let i = 0; i + 1 < rows.length; i++) {
+    const a = rows[i], b = rows[i + 1];
+    if (a.end_week !== null && addDays(a.end_week, 7) === b.start_week && samePct(a, b)) {
+      db.prepare(`DELETE FROM xpoker_player_deals WHERE id = ?`).run(b.id);
+      db.prepare(`UPDATE xpoker_player_deals SET end_week = ?, note = ? WHERE id = ?`).run(b.end_week, [a.note, b.note].filter(Boolean).join(" · ") || null, a.id);
+      rows.splice(i + 1, 1); a.end_week = b.end_week; a.note = [a.note, b.note].filter(Boolean).join(" · ") || null; i--;
+    }
+  }
+}
+
+/**
+ * Aperçu d'un changement de deal sur [start_week, end_week] — PURE LECTURE, même
+ * formule que playerWeeksOn (ligne par ligne puis somme). Rend les semaines
+ * importées non réglées dont le deal change, et le total du dû avant/après sur
+ * toutes les semaines du joueur.
+ */
+export function previewDealChangeOn(db: DB, a: { player_id: number; action_pct: number; rb_pct: number; start_week: string; end_week: string | null }): DealChangePreview {
+  const settled = new Set((db.prepare(`SELECT week_start FROM xpoker_settlement_weeks WHERE player_id = ?`).all(a.player_id) as { week_start: string }[]).map(r => r.week_start));
+  const inRange = (w: string) => w >= a.start_week && (a.end_week === null || w <= a.end_week);
+  const weeks: DealWeekPreview[] = [];
+  let total_due_before = 0, total_due_after = 0, incalculable_before = 0, incalculable_after = 0;
+  for (const w of playerWeeksOn(db, a.player_id).slice().reverse()) {     // chronologique
+    const before = w.deal ? { action_pct: w.deal.action_pct, rb_pct: w.deal.rb_pct, action_chips: w.action_chips!, rb_chips: w.rb_chips!, due_chips: w.due_chips! } : null;
+    let after = before;
+    if (inRange(w.week_start) && !settled.has(w.week_start)) {
+      const action_chips = w.accounts.reduce((s, x) => s + actionShareChips(x.winloss_chips, a.action_pct), 0);
+      const rb_chips = w.accounts.reduce((s, x) => s + rakebackChips(x.rake_chips, a.rb_pct), 0);
+      after = { action_pct: a.action_pct, rb_pct: a.rb_pct, action_chips, rb_chips, due_chips: action_chips - rb_chips };
+      weeks.push({ week_start: w.week_start, winloss_chips: w.winloss_chips, rake_chips: w.rake_chips, rate_chips_per_usd: w.rate_chips_per_usd, before, after });
+    }
+    if (before) total_due_before += before.due_chips; else incalculable_before++;
+    if (after) total_due_after += after.due_chips; else incalculable_after++;
+  }
+  return { start_week: a.start_week, end_week: a.end_week, weeks, total_due_before, total_due_after, incalculable_before, incalculable_after };
 }
 
 /**
  * Pour le formulaire : la période EN COURS (valeur actuelle + depuis quand), les
- * périodes précédentes avec leurs bornes, et la première semaine d'effet possible
- * pour un changement (= lendemain de la dernière semaine importée, ou de la
- * période en cours). Aucun calcul d'argent ici.
+ * périodes précédentes avec leurs bornes, et la première semaine d'effet proposée
+ * = lendemain de la dernière semaine RÉGLÉE (null = aucun règlement : n'importe
+ * quel lundi ; une semaine importée non réglée n'est pas une limite, elle demande
+ * une confirmation). Aucun calcul d'argent ici.
  */
 export type DealHistory = {
   current: (XpokerDeal & { id: number; note: string | null }) | null;
   previous: (XpokerDeal & { id: number; note: string | null })[];
-  /** Lundi le plus tôt accepté par setDealOn (null = aucun deal encore : n'importe quel lundi). */
+  /** Lundi qui suit la dernière semaine réglée (null = aucune semaine réglée). */
   earliest_change_week: string | null;
+  last_settled_week: string | null;
   last_imported_week: string | null;
 };
 
@@ -495,12 +630,8 @@ export function dealHistoryOn(db: DB, playerId: number): DealHistory {
   const current = rows.find(r => r.end_week === null) ?? null;
   const previous = rows.filter(r => r.end_week !== null);
   const last = (db.prepare(`SELECT MAX(week_start) AS w FROM xpoker_week_rows WHERE player_id = ?`).get(playerId) as { w: string | null }).w;
-  let earliest: string | null = null;
-  if (rows.length > 0) {
-    const candidates = [last ? addDays(last, 7) : null, current ? addDays(current.start_week, 7) : null].filter((x): x is string => !!x);
-    earliest = candidates.sort().pop() ?? null;
-  }
-  return { current, previous, earliest_change_week: earliest, last_imported_week: last };
+  const lastSettled = (db.prepare(`SELECT MAX(week_start) AS w FROM xpoker_settlement_weeks WHERE player_id = ?`).get(playerId) as { w: string | null }).w;
+  return { current, previous, earliest_change_week: lastSettled ? addDays(lastSettled, 7) : null, last_settled_week: lastSettled, last_imported_week: last };
 }
 
 export function dealForWeekOn(db: DB, playerId: number, weekStart: string): XpokerDeal | null {

@@ -150,8 +150,10 @@ let aliceSid = 0, bobSid = 0;
 
 console.log("\n── A4. Ce qui ne bouge plus : deal (F2), joueur (R1), taux ──");
 {
-  const f2 = setDealOn(db, { player_id: ALICE, action_pct: 50, rb_pct: 0, start_week: "2026-07-13" });
-  check("changer le deal sur une semaine réglée ⇒ refus (F2)", !f2.ok, f2.error);
+  const f2 = setDealOn(db, { player_id: ALICE, action_pct: 50, rb_pct: 0, start_week: "2026-07-13", confirm_retroactive: true });
+  check("changer le deal sur une semaine réglée ⇒ refus DUR (F2), pas une demande de confirmation, même confirmé",
+        !f2.ok && !f2.needs_confirmation && (f2.settled_weeks ?? []).some(w => w.week_start === "2026-07-13" && w.settlement_id === aliceSid), JSON.stringify(f2));
+  eq("… et le deal d'Alice n'a pas bougé", db.prepare(`SELECT action_pct, rb_pct, start_week, end_week FROM xpoker_player_deals WHERE player_id = ?`).all(ALICE), [{ action_pct: 10, rb_pct: 20, start_week: "2026-07-06", end_week: null }]);
   const r1 = relinkMemberIdOn(db, { member_id: "3062825", to_player_id: BOB, reason: "test" });
   check("déplacer l'ID d'une semaine réglée ⇒ refus (R1) nommant le règlement", !r1.ok && new RegExp(`règlement #${aliceSid}`).test((r1 as any).error), (r1 as any).error);
   addRateOn(db, { effective_from: "2026-08-01", chips_per_usd: 30 });

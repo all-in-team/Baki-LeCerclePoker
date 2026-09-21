@@ -339,7 +339,16 @@ function SettlePanel({ p, rate, onChanged }: { p: XpokerDashboardPlayer; rate: n
   );
 }
 
-// ── Deal : valeur actuelle, historique, semaine d'effet, refus nommé ─────────
+// ── Deal : valeur actuelle, historique, semaine d'effet, aperçu rétroactif, refus nommé ──
+
+type DealPreview = {
+  start_week: string; end_week: string | null;
+  weeks: { week_start: string; winloss_chips: number; rake_chips: number;
+           before: { action_pct: number; rb_pct: number; action_chips: number; rb_chips: number; due_chips: number } | null;
+           after: { action_pct: number; rb_pct: number; action_chips: number; rb_chips: number; due_chips: number } }[];
+  total_due_before: number; total_due_after: number; incalculable_before: number; incalculable_after: number;
+};
+type DealRefusal = { error: string; settled_weeks: { week_start: string; settlement_id: number }[] };
 
 function DealForm({ p, today, onChanged }: { p: XpokerDashboardPlayer; today: string; onChanged: () => void }) {
   const h = p.deal;
@@ -347,15 +356,27 @@ function DealForm({ p, today, onChanged }: { p: XpokerDashboardPlayer; today: st
   const [rb, setRb] = useState(String(h.current?.rb_pct ?? 0));
   const [week, setWeek] = useState(h.earliest_change_week ?? mondayOf(today));
   const [note, setNote] = useState("");
-  const [err, setErr] = useState<{ error: string; blocking_weeks: string[] } | null>(null);
+  const [err, setErr] = useState<DealRefusal | null>(null);
+  const [pending, setPending] = useState<DealPreview | null>(null);   // aperçu d'un changement rétroactif, en attente de confirmation
   const [busy, setBusy] = useState(false);
-  async function submit() {
+  // Un champ vidé n'est pas 0 % : NaN, que assertPct refuse côté moteur (Number("") vaudrait 0).
+  const num = (s: string) => s.trim() === "" ? NaN : Number(s);
+  const body = () => ({ player_id: p.player_id, action_pct: num(action), rb_pct: num(rb), start_week: week, note: note.trim() || null });
+  async function submit(confirm: boolean) {
     setBusy(true); setErr(null);
-    const r = await post("/api/xpoker/deals", { player_id: p.player_id, action_pct: Number(action), rb_pct: Number(rb), start_week: week, note: note || null });
+    const r = await post("/api/xpoker/deals", { ...body(), confirm_retroactive: confirm });
     setBusy(false);
-    if (!r.ok) { setErr({ error: r.error ?? "refus", blocking_weeks: (r.blocking_weeks as string[]) ?? [] }); return; }
-    setNote(""); onChanged();
+    if (!r.ok) {
+      if (r.needs_confirmation && r.preview) { setPending(r.preview as DealPreview); return; }
+      setPending(null);
+      setErr({ error: r.error ?? "refus", settled_weeks: (r.settled_weeks as DealRefusal["settled_weeks"]) ?? [] });
+      return;
+    }
+    setPending(null); setNote(""); onChanged();
   }
+  const arrow = (a: string, b: string) => a === b ? <span>{a}</span> : <span><span style={{ color: MUTED }}>{a}</span> → <b>{b}</b></span>;
+  const pctOr = (d: { action_pct: number; rb_pct: number } | null) => d ? `${pct(d.action_pct)} / RB ${pct(d.rb_pct)}` : "aucun deal";
+  const chipsOr = (n: number | null | undefined) => n === null || n === undefined ? "incalculable" : signed(n);
   return (
     <div>
       <div style={{ fontSize: 12, fontWeight: 700, color: "#E8E8EE", marginBottom: 6 }}>Deal — en POURCENT (10 = 10 %), versionné par semaine</div>
@@ -370,17 +391,47 @@ function DealForm({ p, today, onChanged }: { p: XpokerDashboardPlayer; today: st
         </div>
       )}
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
-        <label style={{ fontSize: 11, color: MUTED }}>Action %<br /><input style={{ ...input, width: 70 }} value={action} onChange={e => setAction(e.target.value)} /></label>
-        <label style={{ fontSize: 11, color: MUTED }}>RB %<br /><input style={{ ...input, width: 70 }} value={rb} onChange={e => setRb(e.target.value)} /></label>
-        <label style={{ fontSize: 11, color: MUTED }}>À partir de la semaine du (lundi)<br /><input type="date" style={input} value={week} onChange={e => setWeek(e.target.value)} /></label>
-        <label style={{ fontSize: 11, color: MUTED }}>Note<br /><input style={{ ...input, width: 160 }} value={note} onChange={e => setNote(e.target.value)} /></label>
-        <Btn size="sm" onClick={submit} disabled={busy}>{h.current ? "Changer le deal" : "Poser le deal"}</Btn>
+        <label style={{ fontSize: 11, color: MUTED }}>Action %<br /><input style={{ ...input, width: 70 }} value={action} onChange={e => { setAction(e.target.value); setPending(null); }} /></label>
+        <label style={{ fontSize: 11, color: MUTED }}>RB %<br /><input style={{ ...input, width: 70 }} value={rb} onChange={e => { setRb(e.target.value); setPending(null); }} /></label>
+        <label style={{ fontSize: 11, color: MUTED }}>À partir de la semaine du (lundi)<br /><input type="date" style={input} value={week} onChange={e => { setWeek(e.target.value); setPending(null); }} /></label>
+        <label style={{ fontSize: 11, color: MUTED }}>Note{pending ? " (motif, optionnel)" : ""}<br /><input style={{ ...input, width: 160 }} value={note} onChange={e => setNote(e.target.value)} /></label>
+        {!pending && <Btn size="sm" onClick={() => submit(false)} disabled={busy}>{h.current ? "Changer le deal" : "Poser le deal"}</Btn>}
       </div>
-      {h.earliest_change_week && <div style={{ fontSize: 11, color: MUTED, marginTop: 6 }}>Première semaine d&apos;effet possible : {h.earliest_change_week} (dernière semaine importée : {h.last_imported_week ?? "aucune"}). Les semaines déjà importées gardent leur taux.</div>}
+      <div style={{ fontSize: 11, color: MUTED, marginTop: 6 }}>
+        {h.earliest_change_week
+          ? <>Première semaine d&apos;effet possible : <b>{h.earliest_change_week}</b> (dernière semaine réglée : {h.last_settled_week}, figée). </>
+          : <>Aucune semaine réglée : n&apos;importe quel lundi. </>}
+        Dernière semaine importée : {h.last_imported_week ?? "aucune"}. Une semaine importée mais non réglée peut être recalculée — après un aperçu avant/après, tracé dans la note.
+      </div>
+      {pending && (
+        <div style={{ marginTop: 8, padding: "10px 12px", borderRadius: 8, background: "rgba(245,197,24,0.08)", border: `1px solid ${GOLD}`, fontSize: 12 }}>
+          <div style={{ fontWeight: 700, color: GOLD, marginBottom: 6 }}>
+            Changement rétroactif — période écrite du {pending.start_week} au {pending.end_week ?? "…"} : {pending.weeks.length} semaine(s) importée(s) non réglée(s) recalculée(s). Rien n&apos;est écrit tant que tu n&apos;appliques pas.
+          </div>
+          {pending.weeks.map(w => (
+            <div key={w.week_start} style={{ padding: "6px 0", borderTop: "1px solid var(--border)", lineHeight: 1.6 }}>
+              <div><b>{w.week_start}</b> <span style={{ color: MUTED }}>— Win/Lose {signed(w.winloss_chips)} · rake {fmt(w.rake_chips)}</span></div>
+              <div><span style={{ color: MUTED }}>Deal : </span>{arrow(pctOr(w.before), pctOr(w.after))}</div>
+              <div><span style={{ color: MUTED }}>Part d&apos;action : </span>{arrow(chipsOr(w.before?.action_chips), chipsOr(w.after.action_chips))}<span style={{ color: MUTED }}> · RB : </span>{arrow(chipsOr(w.before?.rb_chips), chipsOr(w.after.rb_chips))}</div>
+              <div><span style={{ color: MUTED }}>Dû : </span>{arrow(chipsOr(w.before?.due_chips), chipsOr(w.after.due_chips))}</div>
+            </div>
+          ))}
+          <div style={{ marginTop: 6, paddingTop: 6, borderTop: "1px solid var(--border)", fontWeight: 600 }}>
+            Total du dû (toutes semaines importées, réglées comprises) : {arrow(signed(pending.total_due_before), signed(pending.total_due_after))} chips
+            {(pending.incalculable_before > 0 || pending.incalculable_after > 0) && <span style={{ color: GOLD }}> — semaines incalculables EXCLUES du total : {pending.incalculable_before} → {pending.incalculable_after}</span>}
+            <span style={{ color: MUTED }}> · {dueLabel(pending.total_due_after)}</span>
+          </div>
+          <div style={{ display: "flex", gap: 8, marginTop: 8, alignItems: "center" }}>
+            <Btn size="sm" onClick={() => submit(true)} disabled={busy}>Appliquer rétroactivement</Btn>
+            <Btn size="sm" variant="ghost" onClick={() => setPending(null)} disabled={busy}>Annuler</Btn>
+            <span style={{ fontSize: 11, color: MUTED }}>La trace (date, semaines recalculées, dû avant → après{note.trim() ? ", motif" : ""}) s&apos;écrit dans la note de la période.</span>
+          </div>
+        </div>
+      )}
       {err && (
         <div style={{ marginTop: 8, padding: "8px 10px", borderRadius: 8, background: "rgba(239,68,68,0.10)", border: "1px solid rgba(239,68,68,0.3)", fontSize: 12, color: "#FCA5A5" }}>
           {err.error}
-          {err.blocking_weeks.length > 0 && <div style={{ marginTop: 4 }}>Semaines qui bloquent : <b>{err.blocking_weeks.join(", ")}</b></div>}
+          {err.settled_weeks.length > 0 && <div style={{ marginTop: 4 }}>Semaines réglées qui bloquent : <b>{err.settled_weeks.map(s => `${s.week_start} (règlement #${s.settlement_id})`).join(", ")}</b></div>}
         </div>
       )}
     </div>

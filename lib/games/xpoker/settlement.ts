@@ -18,9 +18,10 @@
 // LE MONTANT EST RECALCULÉ PAR LE MOTEUR AU LOCK (playerWeeksOn), jamais repris
 // de l'appelant. Tout est FIGÉ dans xpoker_settlement_weeks : chips, taux du
 // deal, taux chips/USD. Une semaine réglée ne peut plus changer de deal (F2 —
-// setDealOn refuse toute semaine importée, a fortiori réglée) ni de joueur (R1 —
-// relinkMemberIdOn refuse). UNIQUE(player_id, week_start) rend le double
-// règlement impossible au niveau du schéma.
+// setDealOn refuse toute semaine présente ici, locked ou paid ; une semaine
+// seulement importée n'a rien de figé et se recalcule sur confirmation, aperçu à l'appui)
+// ni de joueur (R1 — relinkMemberIdOn refuse). UNIQUE(player_id, week_start)
+// rend le double règlement impossible au niveau du schéma.
 //
 // JAMAIS LOCKÉ : une semaine INCALCULABLE (joueur sans deal), une semaine d'un
 // import EN ÉCART NON ACTÉ — et aussi en écart acté : « jamais réglable en un
