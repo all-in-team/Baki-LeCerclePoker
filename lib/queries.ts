@@ -1025,6 +1025,32 @@ export function getAllWalletMereAddressesAnyStatus(): Set<string> {
   return new Set(rows.map(r => r.address.toLowerCase()));
 }
 
+// Mères dont l'argent est celui de l'OPÉRATEUR (kind='operator'), tous statuts.
+//
+// C'est CE jeu-là, et pas toutes les mères, que le Pass 1 du sync doit refuser
+// d'importer comme dépôt : un versement de ta wallet de paiement vers la wallet
+// de dépôt d'un joueur est ton argent, pas un buy-in.
+//
+// Les mères 'room_hot' en sont exclues — le hot wallet d'une room verse l'argent
+// de la room, donc un entrant sur une wallet de dépôt EST un vrai dépôt. Elles
+// restent intégralement prises en compte par le Pass 2
+// (getActiveWalletMeresForGame), qui détecte les cashouts qu'elles paient.
+//
+// (2026-09-23 : la hot wallet OkPay, mère active AKS + OKPOKER, écartait en
+// silence les dépôts A5POKER qu'elle finançait — 5 lignes / 2 525 USDT chez Raph.)
+export function getOperatorMereAddressesAnyStatus(): Set<string> {
+  // Exclusion par ADRESSE, pas par ligne : la nature d'une wallet est celle de
+  // l'adresse, pas du couple (adresse, game). Une même adresse a plusieurs lignes
+  // — la hot wallet OkPay en a deux, AKS et OKPOKER. Filtrer ligne à ligne
+  // laisserait un ré-enregistrement (addWalletMere, qui pose 'operator' par
+  // défaut) faire revenir l'adresse dans ce jeu, et le bug avec elle.
+  const rows = getDb().prepare(`
+    SELECT address FROM wallet_meres
+    WHERE LOWER(address) NOT IN (SELECT LOWER(address) FROM wallet_meres WHERE kind = 'room_hot')
+  `).all() as { address: string }[];
+  return new Set(rows.map(r => r.address.toLowerCase()));
+}
+
 // Each player's OWN cashout addresses (all games + legacy TELE column), lowercased.
 // Exception to the Pass 1 skip rule above: money arriving on a game wallet FROM the
 // player's own cashout address is the player re-injecting his cashed-out funds — a
@@ -1055,9 +1081,16 @@ export function listAllWalletMeres(): WalletMere[] {
   `).all() as WalletMere[];
 }
 
-export function addWalletMere(address: string, label: string | null, gameId?: number): WalletMere {
-  const result = getDb().prepare(`INSERT INTO wallet_meres (address, label, game_id, status) VALUES (?, ?, ?, 'active')`)
-    .run(address, label || null, gameId ?? null);
+export function addWalletMere(address: string, label: string | null, gameId?: number, kind?: "operator" | "room_hot"): WalletMere {
+  // `kind` hérite de ce que l'adresse porte déjà : ré-enregistrer une hot wallet
+  // de room (autre game, ou après un retrait) ne doit pas la reclasser en argent
+  // opérateur — ce serait le retour silencieux du bug du 2026-09-22.
+  const db0 = getDb();
+  const known = kind ?? ((db0.prepare(
+    `SELECT kind FROM wallet_meres WHERE LOWER(address) = LOWER(?) AND kind = 'room_hot' LIMIT 1`
+  ).get(address) as { kind: string } | undefined)?.kind ?? "operator");
+  const result = db0.prepare(`INSERT INTO wallet_meres (address, label, game_id, status, kind) VALUES (?, ?, ?, 'active', ?)`)
+    .run(address, label || null, gameId ?? null, known);
   return { id: Number(result.lastInsertRowid), address, label: label || null, game_id: gameId ?? null, status: "active", created_at: new Date().toISOString() };
 }
 

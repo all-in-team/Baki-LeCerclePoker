@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getDb } from "@/lib/db";
-import { insertWalletTransactionByHash, getActiveWalletMeresForGame, getAllWalletMereAddressesAnyStatus, getAllGameWalletsByPlayer, getAllCashoutsByPlayer, getOwnCashoutAddrsByPlayer, getPlayersOnGame, getPlayerIdsWithDealOnGame, isGameArchived } from "@/lib/queries";
+import { insertWalletTransactionByHash, getActiveWalletMeresForGame, getOperatorMereAddressesAnyStatus, getAllGameWalletsByPlayer, getAllCashoutsByPlayer, getOwnCashoutAddrsByPlayer, getPlayersOnGame, getPlayerIdsWithDealOnGame, isGameArchived } from "@/lib/queries";
+import { classifyIncomingOnGameWallet } from "@/lib/wallet-sync-rules";
 import { isKnownTokenContract, tokenContractLabel, PLAUSIBILITY_THRESHOLD_USDT } from "@/lib/wallet-address";
 
 const USDT_CONTRACT = "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t";
@@ -130,10 +131,15 @@ export async function POST(req: NextRequest) {
   if (mereAddrs.size === 0) {
     console.warn(`[SYNC] No active wallet_mère for game=${gameName}, withdrawals cannot be detected`);
   }
-  // ANY status: a transfer from a retired mère is still operator money, never a
-  // player deposit (history: retired KKPOKER mère funding a player's OKPOKER/AKS
-  // game wallets got imported as 8 phantom deposits).
-  const allMereAddrs = getAllWalletMereAddressesAnyStatus();
+  // Mères de nature 'operator' UNIQUEMENT, tous statuts : un transfert venant
+  // d'une mère retirée reste de l'argent opérateur, jamais un dépôt joueur
+  // (history: retired KKPOKER mère funding a player's OKPOKER/AKS game wallets
+  // got imported as 8 phantom deposits).
+  // Les mères 'room_hot' en sont exclues — elles versent l'argent de la room, pas
+  // le tien, donc un entrant sur une wallet de dépôt EST un dépôt. Elles restent
+  // dans mereAddrs ci-dessus quand elles sont actives sur CE game, et le Pass 2
+  // continue de leur attribuer les cashouts qu'elles paient.
+  const operatorMereAddrs = getOperatorMereAddressesAnyStatus();
   // …EXCEPT when the sending address is the player's OWN registered cashout wallet:
   // that's the player re-injecting his cashed-out funds = a real buy-in (Baki
   // 2026-07-15, TJLB…/Max case — dual-registered as retired KK mère AND Max's
@@ -189,6 +195,9 @@ export async function POST(req: NextRequest) {
   let totalDeposits = 0;
   let totalCashouts = 0;
   let skippedFromMere = 0;
+  // Détail des lignes écartées par la garde mère — remonté à l'UI pour qu'un
+  // écart ne puisse plus passer inaperçu (le bouton n'affichait que `imported`).
+  const skippedDetails: { player: string; game_wallet: string; from: string; amount: number; tx_datetime: string; tron_tx_hash: string }[] = [];
   let skippedTokenContract = 0;
   let quarantined = 0;
 
@@ -228,19 +237,32 @@ export async function POST(req: NextRequest) {
         for (const tx of txs) {
           if ((tx.to ?? "").toLowerCase() !== gameAddr) continue;
           const fromLower = (tx.from ?? "").toLowerCase();
-          const fromGameMere = mereAddrs.has(fromLower);
+          // Règle unique, testable hors réseau : lib/wallet-sync-rules.ts.
           // Strict per-game rule (Baki 2026-07-07): a cashout of game X comes ONLY
-          // from a mère OF GAME X. An incoming from ANOTHER game's mère is that
-          // other game's cashout (its own sync imports it via Pass 2) — importing
-          // it here would stamp it with the wrong game_id. It is not a deposit
-          // either (operator money, not player funding), so skip entirely.
-          // Exception: the player's own cashout address (see ownCashoutsByPlayer).
-          const fromOwnCashout = ownCashoutsByPlayer.get(player.id)?.has(fromLower) ?? false;
-          if (!fromGameMere && allMereAddrs.has(fromLower) && !fromOwnCashout) {
+          // from a mère OF GAME X. An incoming from another game's mère OPÉRATEUR
+          // is your own money, never a buy-in, so it is skipped. Exceptions: the
+          // player's own cashout address (réinjection), et les mères 'room_hot'
+          // dont l'argent est celui de la room (→ vrai dépôt).
+          const verdict = classifyIncomingOnGameWallet({
+            from: fromLower,
+            gameMereAddrs: mereAddrs,
+            operatorMereAddrs,
+            ownCashoutAddrs: ownCashoutsByPlayer.get(player.id) ?? new Set<string>(),
+          });
+          if (verdict.action === "skip") {
             skippedFromMere++;
-            console.warn(`[SYNC ${gameName}] skip tx ${tx.transaction_id}: from mère ${fromLower.slice(0, 10)}… (another game or retired) → not a ${gameName} tx (player=${player.name})`);
+            skippedDetails.push({
+              player: player.name,
+              game_wallet: walletAddr,
+              from: tx.from ?? "",
+              amount: toAmt(tx),
+              tx_datetime: toDatetime(tx),
+              tron_tx_hash: tx.transaction_id,
+            });
+            console.warn(`[SYNC ${gameName}] skip tx ${tx.transaction_id}: from mère opérateur ${fromLower.slice(0, 10)}… (another game or retired) → not a ${gameName} tx (player=${player.name})`);
             continue;
           }
+          const fromGameMere = verdict.action === "withdrawal";
           // Garde n°4 : l'expéditeur ET la wallet scannée. Scanner le contrat USDT
           // lui-même (l'incident) tombe sur le second test — chaque transfert reçu
           // par le contrat aurait `to` = contrat.
@@ -354,6 +376,8 @@ export async function POST(req: NextRequest) {
     // of THIS game (another game's cashout, or a retired mère) — deliberately not
     // imported. Surfaced so a mis-registered cashout wallet doesn't fail silently.
     skipped_from_mere: skippedFromMere,
+    // Les lignes concrètes, pour que l'UI puisse les montrer plutôt qu'un compteur muet.
+    skipped_details: skippedDetails,
     // Transferts écartés parce que leur contrepartie (ou la wallet scannée) est un
     // contrat de token connu. > 0 = une wallet douteuse est encore enregistrée.
     skipped_token_contract: skippedTokenContract,

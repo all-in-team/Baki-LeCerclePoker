@@ -33,6 +33,11 @@ import {
 // Quarantaine des mouvements wallet — cf. la migration en bas de ce fichier.
 export const WALLET_TX_QUARANTINE_V1 = "add_wallet_tx_quarantine_v1";
 
+// Nature d'une wallet mère — cf. la migration en bas de ce fichier.
+export const WALLET_MERE_KIND_V1 = "add_wallet_mere_kind_v1";
+/** Hot wallet de la room OkPay, enregistrée comme mère AKS + OKPOKER. */
+export const OKPAY_ROOM_HOT_WALLET = "TYCBsKvJSrLoj6pudJCLFNFYdBcntNP1gU";
+
 const DATA_DIR = path.join(process.cwd(), "data");
 const DB_PATH = path.join(DATA_DIR, "lecercle.db");
 
@@ -3956,5 +3961,67 @@ function initSchema(db: Database.Database) {
     );
   } catch (err: any) {
     console.error(`[MIGRATION:${XPOKER_MIGRATION_V1}] FAILED, ROLLBACK fait (sera rejouée au prochain boot):`, err.message);
+  }
+
+  // ── Nature d'une wallet mère : opérateur vs hot wallet de room ─────────────
+  //
+  // `wallet_meres` mélangeait deux choses qui n'ont pas le même sens comptable :
+  //
+  //   'operator' — TES wallets de paiement (TVGMz…, TUidVgaT…, TRNCKKw4…, les
+  //                mères KK/QQPK/JVIP/TTPOKER). L'argent qui en sort est le tien.
+  //   'room_hot' — le hot wallet d'une ROOM. L'argent qui en sort est celui de
+  //                la room / du joueur, jamais le tien.
+  //
+  // Le sync (Pass 1) refusait d'importer tout entrant venant d'une mère, quelle
+  // qu'elle soit : « l'argent de l'opérateur n'est pas un dépôt joueur ». Vrai
+  // pour 'operator', FAUX pour 'room_hot' — et TYCBsKvJ… est le hot wallet de la
+  // room OkPay, enregistré mère sur AKS et OKPOKER parce que là-bas c'est la room
+  // qui paie les cashouts directement (116 retraits réels via le Pass 2).
+  // Résultat : ses versements vers les wallets de dépôt A5POKER étaient écartés
+  // en silence — 5 dépôts de Raph le 2026-09-22, 2 525 USDT, soit 1 262,50 USDT
+  // qui allaient être versés en trop sur un règlement à 50 %.
+  //
+  // Mesure on-chain qui distingue les deux natures sans ambiguïté : 200 transferts
+  // en 15 minutes pour TYCBsKvJ… (~19 000/jour), contre 200 en 150 à 226 HEURES
+  // pour les mères opérateur.
+  //
+  // La colonne ne change AUCUN solde par elle-même : seul le Pass 1 la lit, via
+  // getOperatorMereAddressesAnyStatus(). Le Pass 2 continue de lire TOUTES les
+  // mères actives du game (getActiveWalletMeresForGame), donc les cashouts AKS et
+  // OKPOKER payés depuis ce hot wallet restent détectés à l'identique.
+  //
+  // Défaut 'operator' : les 19 lignes existantes gardent leur comportement, seule
+  // l'adresse OkPay bascule.
+  try {
+    const already = db.prepare(`SELECT 1 FROM _applied_fixes WHERE name = ?`).get(WALLET_MERE_KIND_V1);
+    if (!already) {
+      const cols = new Set(
+        (db.prepare(`PRAGMA table_info(wallet_meres)`).all() as any[]).map(c => c.name)
+      );
+      if (!cols.has("kind")) {
+        db.exec(`ALTER TABLE wallet_meres ADD COLUMN kind TEXT NOT NULL DEFAULT 'operator'`);
+      }
+      // LOWER() des deux côtés : la colonne est en collation BINARY alors que
+      // TOUTES les lectures du sync minusculent. Une ligne saisie dans une autre
+      // casse échapperait à un `address = ?` et la migration serait inerte.
+      const r = db.prepare(`UPDATE wallet_meres SET kind = 'room_hot' WHERE LOWER(address) = LOWER(?)`)
+        .run(OKPAY_ROOM_HOT_WALLET);
+      // Marqueur posé SEULEMENT si la ligne a bougé. Sinon la migration se
+      // déclarerait faite sans avoir rien fait, et le correctif serait inerte en
+      // silence — alors que le code en aval suppose qu'il a pris. Sans marqueur,
+      // elle est simplement rejouée au prochain boot (coût : un UPDATE à vide).
+      if (r.changes > 0) {
+        db.prepare(`INSERT OR IGNORE INTO _applied_fixes (name) VALUES (?)`).run(WALLET_MERE_KIND_V1);
+        console.log(`[MIGRATION] ${WALLET_MERE_KIND_V1} applied — ${r.changes} mère(s) classée(s) room_hot`);
+      } else {
+        console.error(
+          `[MIGRATION:${WALLET_MERE_KIND_V1}] colonne kind en place, mais AUCUNE ligne wallet_meres ` +
+          `ne porte ${OKPAY_ROOM_HOT_WALLET} — non marquée, rejouée au prochain boot. ` +
+          `Si la mère existe, ses dépôts sont TOUJOURS écartés : vérifier l'adresse en base.`,
+        );
+      }
+    }
+  } catch (err: any) {
+    console.error(`[MIGRATION:${WALLET_MERE_KIND_V1}] FAILED (sera rejouée au prochain boot):`, err.message);
   }
 }
