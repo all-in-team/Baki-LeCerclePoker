@@ -96,3 +96,41 @@ Deferred work from /plan-ceo-review (2026-04-28).
 - **Effort:** ~2 hours (CC). Needs private key management (sensitive).
 - **Depends on:** Cashout queue (built in current phase), secure key storage strategy
 - **Risk:** Private key on Railway volume. Consider hardware wallet integration or manual approval step before broadcast.
+
+### Nature d'une wallet mère : aucun écran pour poser `kind`
+- **What:** `wallet_meres.kind` ('operator' | 'room_hot') n'est posé que par la migration
+  `add_wallet_mere_kind_v1`. Aucune route, aucun formulaire ne permet de le lire ni de le changer.
+  Ajouter la colonne à la gestion des mères (affichage + choix à la création) et à `addWalletMere`.
+- **Why:** F1 de l'audit money-auditor du 2026-09-23. Une hot wallet de room enregistrée comme
+  mère part en 'operator' par défaut : ses versements vers les wallets de dépôt sont écartés en
+  silence, exactement le bug des 7 dépôts de Raph (4 530 USDT). L'exclusion se fait aujourd'hui
+  par ADRESSE, ce qui protège d'un ré-ajout de l'adresse OkPay — mais pas d'une NOUVELLE room qui
+  paierait ses cashouts depuis son propre hot wallet.
+- **Effort:** ~30 min (CC). Colonne déjà en base, il ne manque que la lecture/écriture côté UI.
+- **Depends on:** rien. Le correctif est déjà en prod.
+
+### Bandeau des lignes écartées absent de deux écrans
+- **What:** `/api/wallets/sync` renvoie `skipped_from_mere` + `skipped_details`, mais seul
+  `components/ledger/extras/SyncWalletsButton.tsx` les affiche. `app/akpoker/pnl/TELEClient.tsx`
+  et `app/qqpk/pnl/QqpkStakingClient.tsx` appellent le même endpoint et n'affichent que `imported`.
+- **Why:** Sur ces deux écrans, une ligne écartée reste invisible — c'est le silence qui a coûté
+  les 7 dépôts de Raph. AKS notamment a 16 lignes écartées en attente d'arbitrage (Maxime, pid 181).
+- **Effort:** ~20 min (CC). Extraire le bandeau de SyncWalletsButton en composant partagé.
+- **Depends on:** rien.
+
+### Le résumé d'un sync disparaît quand tout s'est bien passé
+- **What:** `SyncWalletsButton` recharge la page 1,2 s après un sync dès que `imported > 0` et
+  qu'aucune ligne n'a été écartée. Le rechargement efface le compteur « +N importés » avant
+  qu'on ait pu le lire. Le cas `skipped_from_mere > 0` est déjà protégé (pas de rechargement) ;
+  c'est le cas nominal qui reste illisible.
+- **Why:** Demande Baki, 2026-09-23. On veut pouvoir lire le résumé d'un sync même quand il
+  s'est bien passé : combien de dépôts, combien de retraits, par joueur. Aujourd'hui, la seule
+  façon de savoir ce qu'un sync a fait est d'aller lire la base. Constaté pendant la validation
+  du correctif room_hot : le re-sync a bien importé les 7 dépôts de Raph, mais la capture d'écran
+  n'a rien pu montrer — la page s'était déjà rechargée.
+- **How:** Garder le résumé affiché et remplacer le rechargement automatique par un bouton
+  « Actualiser », ou différer le rechargement jusqu'à ce que l'utilisateur ferme le résumé.
+  Afficher le détail par joueur (`results[]` est déjà dans la réponse de l'API, jamais affiché).
+- **Effort:** ~20 min (CC). Aucun changement côté API.
+- **Depends on:** rien. À faire avec l'extraction du bandeau en composant partagé (entrée
+  ci-dessus) : c'est le même composant.
