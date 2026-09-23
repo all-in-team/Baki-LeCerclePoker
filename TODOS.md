@@ -117,3 +117,20 @@ Deferred work from /plan-ceo-review (2026-04-28).
   les 7 dépôts de Raph. AKS notamment a 16 lignes écartées en attente d'arbitrage (Maxime, pid 181).
 - **Effort:** ~20 min (CC). Extraire le bandeau de SyncWalletsButton en composant partagé.
 - **Depends on:** rien.
+
+### Le résumé d'un sync disparaît quand tout s'est bien passé
+- **What:** `SyncWalletsButton` recharge la page 1,2 s après un sync dès que `imported > 0` et
+  qu'aucune ligne n'a été écartée. Le rechargement efface le compteur « +N importés » avant
+  qu'on ait pu le lire. Le cas `skipped_from_mere > 0` est déjà protégé (pas de rechargement) ;
+  c'est le cas nominal qui reste illisible.
+- **Why:** Demande Baki, 2026-09-23. On veut pouvoir lire le résumé d'un sync même quand il
+  s'est bien passé : combien de dépôts, combien de retraits, par joueur. Aujourd'hui, la seule
+  façon de savoir ce qu'un sync a fait est d'aller lire la base. Constaté pendant la validation
+  du correctif room_hot : le re-sync a bien importé les 7 dépôts de Raph, mais la capture d'écran
+  n'a rien pu montrer — la page s'était déjà rechargée.
+- **How:** Garder le résumé affiché et remplacer le rechargement automatique par un bouton
+  « Actualiser », ou différer le rechargement jusqu'à ce que l'utilisateur ferme le résumé.
+  Afficher le détail par joueur (`results[]` est déjà dans la réponse de l'API, jamais affiché).
+- **Effort:** ~20 min (CC). Aucun changement côté API.
+- **Depends on:** rien. À faire avec l'extraction du bandeau en composant partagé (entrée
+  ci-dessus) : c'est le même composant.
