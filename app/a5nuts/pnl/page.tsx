@@ -63,6 +63,7 @@ export default async function A5NUTSPage({ searchParams }: { searchParams: Promi
           settlementsByPlayer={data.settlementsByPlayer}
           estimatedDueByPlayer={data.estimatedDueByPlayer}
           aliasByPlayer={data.aliasByPlayer}
+          activePlayerIds={data.activePlayerIds}
           updateActionPctAction={updateActionPctAction}
           updateWnActionPctAction={updateWnActionPctAction}
           previewAction={previewAction}

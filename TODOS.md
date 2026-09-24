@@ -82,6 +82,31 @@ Deferred work from /plan-ceo-review (2026-04-28).
 - **Effort:** ~45 min (CC). Extends existing bot + queries.
 - **Depends on:** telegram_chat_id on players table (built in current phase)
 
+### Filtre d'activité de période — NEXAPOKER et XPoker (chantier séparé, Baki 2026-09-25)
+- **Quoi :** le tableau joueurs de `LedgerTable` (A5NUTS, AKS/OK, KKPOKER, JVIP, TTPOKER)
+  n'affiche plus que les joueurs avec au moins un mouvement dans la période, plus ceux qui ont
+  un règlement en attente (marqués « hors période · à régler »). NEXAPOKER
+  (`app/nexapoker/NexaPokerClient.tsx`) et XPoker (`app/xpoker/XpokerClient.tsx`) ont leurs
+  propres tableaux : pas encore filtrés.
+- **Règles à reprendre telles quelles :** activité calculée sur les vraies transactions, jamais
+  sur un snapshot verrouillé ; un règlement en attente n'est jamais masqué ; compteur
+  « N actifs · M masqués » avec « tout afficher » ; Lifetime ne masque rien. Logique pure :
+  `components/ledger/period-presence.ts`.
+- **Attention :** NEXAPOKER = sens du grand livre ≠ sens de la bankroll, XPoker = réglé en chips
+  hors `player_game_deals` — « à régler » n'y a pas la même définition, à cadrer avant.
+
+### Filtre d'activité — un joueur dont le seul point ouvert est en quarantaine devient invisible
+- **Constat (money-auditor, 2026-09-25) :** « à régler » = tx `settled=0` **actives** ou règlement
+  `locked`. Une tx en quarantaine (`status` ≠ `active`) n'est ni comptée ni affichée. Un joueur
+  sans mouvement dans la période dont le SEUL point ouvert est une tx en quarantaine à arbitrer
+  sort du tableau — même en « tout afficher » il n'est marqué de rien.
+- **Pourquoi c'est à traiter :** c'est le même genre de silence que le bug du hot wallet de room
+  (dépôts écartés sans que rien ne le dise, `e5cbc3d`) : une décision en attente qui ne s'annonce
+  nulle part. Le badge « à régler » l'ignorait déjà, le filtre ajoute la disparition de la ligne.
+- **À faire :** traiter « tx en quarantaine à arbitrer » comme un point ouvert (ligne affichée,
+  marque dédiée distincte de « à régler »), après avoir cadré quels `status` signifient « à
+  arbitrer » vs « écarté définitivement ». Logique : `components/ledger/period-presence.ts`.
+
 ## P2 — Medium value, needs careful planning
 
 ### Refactor Telegram webhook into command modules

@@ -50,6 +50,7 @@ export default async function KKPOKERPage({ searchParams }: { searchParams: Prom
           settlementsByPlayer={data.settlementsByPlayer}
           estimatedDueByPlayer={data.estimatedDueByPlayer}
           aliasByPlayer={data.aliasByPlayer}
+          activePlayerIds={data.activePlayerIds}
           updateActionPctAction={updateActionPctAction}
           previewAction={previewAction}
           lockAction={lockAction}

@@ -49,6 +49,7 @@ export default async function JVIPPage({ searchParams }: { searchParams: Promise
           settlementsByPlayer={data.settlementsByPlayer}
           estimatedDueByPlayer={data.estimatedDueByPlayer}
           aliasByPlayer={data.aliasByPlayer}
+          activePlayerIds={data.activePlayerIds}
           updateActionPctAction={updateActionPctAction}
           previewAction={previewAction}
           lockAction={lockAction}

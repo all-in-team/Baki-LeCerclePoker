@@ -2,6 +2,7 @@ import { ArrowDownLeft, ArrowUpRight, TrendingUp, Wallet } from "lucide-react";
 import { getDb } from "@/lib/db";
 import {
   getLockAwareSummaryByPlayer,
+  getActivePlayerIdsInPeriod,
   getLockAwareKPIsWithExtras,
   getNetPnlSeries,
   getWalletMeresForGame,
@@ -66,6 +67,11 @@ export interface WalletLedgerData {
   estimatedDueByPlayer: Record<number, number>;
   /** Alias membership for the listed players (display-only "Vue alias"). Absent players have no alias. */
   aliasByPlayer: Record<number, AliasInfo>;
+  /**
+   * Players with at least one movement in the period (real tx, never the locked snapshot).
+   * null = nothing to filter (lifetime, or per-player view).
+   */
+  activePlayerIds: number[] | null;
 }
 
 export interface WalletLedgerGame {
@@ -110,6 +116,9 @@ export function loadWalletLedger(
       extras_net: 0,
     };
   }
+
+  // Per-player view (?player=) already narrows to one row — the period filter must not hide it.
+  const activePlayerIds = playerFilter ? null : getActivePlayerIdsInPeriod(filters);
 
   const netSeries = getNetPnlSeries({ ...filters, player_id: playerFilter }) as { day: string; cumulative_net: number }[];
 
@@ -251,5 +260,6 @@ export function loadWalletLedger(
     settlementsByPlayer,
     estimatedDueByPlayer,
     aliasByPlayer,
+    activePlayerIds,
   };
 }

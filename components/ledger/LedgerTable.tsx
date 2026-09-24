@@ -6,7 +6,8 @@ import { fmtSignedAmount } from "@/components/ledger/format";
 import PlayerWalletsPanel, { WalletBadgeButton, type WalletAddr } from "@/components/ledger/extras/PlayerWalletsPanel";
 import SettlementFlow, { dueLabel, type AvailableTx, type SettlementRow, type SettlementPreview } from "@/components/ledger/extras/SettlementFlow";
 import Btn from "@/components/Btn";
-import { Scale, Search, ChevronDown, ChevronUp, Users } from "lucide-react";
+import { summarizePresence, hasPendingSettlement, SETTLE_ONLY_LABEL } from "@/components/ledger/period-presence";
+import { Scale, Search, ChevronDown, ChevronUp, Users, Clock } from "lucide-react";
 
 export interface AliasInfo { alias_id: number; label: string; member_ids: number[] }
 
@@ -17,6 +18,11 @@ export interface AliasInfo { alias_id: number; label: string; member_ids: number
  * SettlementFlow). Promoted from the validated KKPOKER shadow table
  * (app/kkpoker/pnl/shadow/ShadowTable.tsx, which keeps its own copy until the
  * shadow routes are cleaned up).
+ *
+ * Period filter: only players who moved money in the period are listed, plus
+ * anyone with something to settle (marked "hors période · à régler") — see
+ * components/ledger/period-presence.ts. Hidden rows are counted in the header
+ * and one click shows them again. The "N à régler" badge counts ALL rows.
  *
  * Search + sort are display-only (filter/reorder the server-computed rows);
  * the estimated due badge shows the loader's previewSettlement result — no
@@ -47,6 +53,7 @@ export default function LedgerTable({
   walletsReadOnly = false,
   headerNote,
   aliasByPlayer,
+  activePlayerIds = null,
   updateActionPctAction,
 }: {
   rows: LedgerTableRow[];
@@ -79,6 +86,8 @@ export default function LedgerTable({
   walletsReadOnly?: boolean;
   /** Small muted note next to the table title (e.g. shadow banner). */
   headerNote?: string;
+  /** Players with a movement in the period (loader). null/absent = lifetime → nothing hidden. */
+  activePlayerIds?: number[] | null;
 }) {
   const [walletOpen, setWalletOpen] = useState<number | null>(null);
   const [settleOpen, setSettleOpen] = useState<number | null>(null);
@@ -88,6 +97,7 @@ export default function LedgerTable({
   const [aliasView, setAliasView] = useState(false); // default OFF → OFF render is byte-identical to prod
   const [aliasExpanded, setAliasExpanded] = useState<number | null>(null);
   const [rescanning, setRescanning] = useState(false);
+  const [showAll, setShowAll] = useState(false);
   const router = useRouter();
   const [editPctPlayer, setEditPctPlayer] = useState<number | null>(null); // player_id whose % is being edited
   const [editPctWnPlayer, setEditPctWnPlayer] = useState<number | null>(null);
@@ -150,9 +160,17 @@ export default function LedgerTable({
     else { setSortKey(key); setSortDir(key === "name" ? 1 : -1); }
   }
 
+  const activeSet = useMemo(() => (activePlayerIds ? new Set(activePlayerIds) : null), [activePlayerIds]);
+  const period = useMemo(() => summarizePresence(
+    rows.map(r => r.player_id),
+    activeSet,
+    id => hasPendingSettlement(availableByPlayer[id]?.length ?? 0, (settlementsByPlayer[id] ?? []).map(s => s.status)),
+  ), [rows, activeSet, availableByPlayer, settlementsByPlayer]);
+
   const displayed = useMemo(() => {
     const q = search.trim().toLowerCase();
-    const filtered = q ? rows.filter(r => r.player_name.toLowerCase().includes(q)) : rows;
+    const inPeriod = showAll ? rows : rows.filter(r => period.presence.get(r.player_id) !== "hidden");
+    const filtered = q ? inPeriod.filter(r => r.player_name.toLowerCase().includes(q)) : inPeriod;
     const val = (r: LedgerTableRow): number | string => {
       if (sortKey === "name") return r.player_name.toLowerCase();
       if (sortKey === "net") return r.net;
@@ -164,7 +182,7 @@ export default function LedgerTable({
       const cmp = typeof va === "string" ? va.localeCompare(vb as string) : (va as number) - (vb as number);
       return cmp * sortDir;
     });
-  }, [rows, search, sortKey, sortDir, estimatedDueByPlayer]);
+  }, [rows, search, sortKey, sortDir, estimatedDueByPlayer, showAll, period]);
 
   // Alias view (display-only): merge members of an alias into one summed row. Non-members
   // stay as normal rows. Pure addition of the server-computed net/my_pnl/due — no new math.
@@ -233,6 +251,20 @@ export default function LedgerTable({
         {headerNote && <span style={{ fontSize: 11, color: "var(--text-dim)" }}>{headerNote}</span>}
         {showSettlementPreview && nbToSettle > 0 && <span style={{ fontSize: 11, fontWeight: 700, color: "#F5C518", background: "rgba(245,197,24,0.12)", border: "1px solid rgba(245,197,24,0.3)", padding: "2px 8px", borderRadius: 10 }}>{nbToSettle} à régler</span>}
         {nbLocked > 0 && <span style={{ fontSize: 11, fontWeight: 700, color: "#10B981", background: "rgba(16,185,129,0.12)", border: "1px solid rgba(16,185,129,0.3)", padding: "2px 8px", borderRadius: 10 }}>{nbLocked} à payer</span>}
+        {activeSet && (
+          <span style={{ fontSize: 11, color: "var(--text-dim)", display: "inline-flex", alignItems: "center", gap: 6 }}>
+            <span>
+              {period.active} joueur{period.active > 1 ? "s" : ""} actif{period.active > 1 ? "s" : ""}
+              {period.settleOnly > 0 && <> · <span style={{ color: "#F5C518", fontWeight: 600 }}>{period.settleOnly} à régler hors période</span></>}
+              {period.hidden > 0 && <> · {period.hidden} {showAll ? "hors période" : `masqué${period.hidden > 1 ? "s" : ""}`}</>}
+            </span>
+            {period.hidden > 0 && (
+              <button onClick={() => setShowAll(v => !v)} style={{ background: "none", border: "none", padding: 0, cursor: "pointer", fontSize: 11, fontWeight: 600, color: "var(--text-muted)", textDecoration: "underline" }}>
+                {showAll ? "masquer les inactifs" : "tout afficher"}
+              </button>
+            )}
+          </span>
+        )}
         <div style={{ flex: 1 }} />
         {hasAliases && (
           <>
@@ -277,7 +309,9 @@ export default function LedgerTable({
           <tbody>
             {displayed.length === 0 ? (
               <tr><td colSpan={COLS} style={{ padding: 32, textAlign: "center", color: "var(--text-dim)", fontSize: 13 }}>
-                {search ? `Aucun joueur ne correspond à « ${search} »` : `Aucun joueur ${gameLabel} — ajoute un deal à un joueur depuis son profil`}
+                {search ? `Aucun joueur ne correspond à « ${search} »`
+                  : rows.length > 0 ? <>Aucun mouvement sur la période — {period.hidden} joueur{period.hidden > 1 ? "s" : ""} masqué{period.hidden > 1 ? "s" : ""} · <button onClick={() => setShowAll(true)} style={{ background: "none", border: "none", padding: 0, cursor: "pointer", fontSize: 13, color: "var(--text-muted)", textDecoration: "underline" }}>tout afficher</button></>
+                  : `Aucun joueur ${gameLabel} — ajoute un deal à un joueur depuis son profil`}
               </td></tr>
             ) : aliasUnits ? aliasUnits.map(unit => {
               if (unit.kind === "solo") return renderPlayerRow(unit.row);
@@ -328,13 +362,23 @@ export default function LedgerTable({
               const isWalletOpen = walletOpen === row.player_id;
               const isSettleOpen = settleOpen === row.player_id;
               const rowOpen = isWalletOpen || isSettleOpen;
+              const presence = period.presence.get(row.player_id) ?? "active";
               return (
                 <Fragment key={row.player_id}>
-                  <tr style={{ borderBottom: rowOpen ? "none" : "1px solid var(--border)", background: avail.length > 0 ? "rgba(245,197,24,0.04)" : (nested ? "rgba(139,92,246,0.03)" : undefined) }}>
-                    <td style={{ padding: "12px 16px", fontSize: 13, fontWeight: 600, color: "var(--text)" }}>
+                  <tr style={{ borderBottom: rowOpen ? "none" : "1px solid var(--border)", background: avail.length > 0 ? "rgba(245,197,24,0.04)" : (nested ? "rgba(139,92,246,0.03)" : undefined), opacity: presence === "hidden" ? 0.5 : undefined }}>
+                    <td style={{ padding: "12px 16px", fontSize: 13, fontWeight: 600, color: "var(--text)", boxShadow: presence === "settle-only" ? "inset 3px 0 0 #F5C518" : undefined }}>
                       <span style={{ display: "inline-flex", alignItems: "center", gap: 7 }}>
                         <WalletBadgeButton count={walletCount} isOpen={isWalletOpen} onClick={() => { setSettleOpen(null); setWalletOpen(isWalletOpen ? null : row.player_id); }} />
                         <span>{row.player_name}</span>
+                        {presence === "settle-only" && (
+                          // Shown even when showSettlementPreview=false (KK): it is the only
+                          // explanation of why an inactive player is listed.
+                          <span
+                            title="Aucun mouvement sur la période — affiché parce qu'un règlement est en attente"
+                            style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 10, fontWeight: 700, color: "#F5C518", border: "1px dashed rgba(245,197,24,0.6)", padding: "1px 7px", borderRadius: 10, whiteSpace: "nowrap", cursor: "help" }}>
+                            <Clock size={10} /> {SETTLE_ONLY_LABEL}
+                          </span>
+                        )}
                         {showSettlementPreview && avail.length > 0 && <span style={{ fontSize: 10, fontWeight: 700, color: "#F5C518", background: "rgba(245,197,24,0.12)", border: "1px solid rgba(245,197,24,0.3)", padding: "1px 7px", borderRadius: 10 }}>{avail.length} à régler</span>}
                         {showSettlementPreview && estimatedDueByPlayer[row.player_id] !== undefined && (
                           // Estimated due over ALL unsettled tx — value straight from
