@@ -1,4 +1,5 @@
 import { getDb } from "./db";
+import type Database from "better-sqlite3";
 import { toParisDate, toUTCISO, parisLocalToUTC, addMonthsParis } from "./date-utils";
 import { computeStakingBlock, projectStakingBlock, operatorPnlFromReglement } from "./qqpk-staking-engine";
 import { assertWalletAddress } from "./wallet-address";
@@ -683,6 +684,34 @@ export function getWalletSummaryByPlayer(filters?: { game_name?: string; game_na
     GROUP BY p.id, pgd.game_id ORDER BY my_pnl DESC
   `;
   return db.prepare(q).all(params);
+}
+
+// Players with at least one wallet movement (deposit OR withdrawal) in the period — drives which
+// rows the ledger table shows. Same tx filters as getWalletSummaryByPlayer (source, status, deal
+// window), but ALWAYS on the real transactions, never on the locked weekly_settlements snapshot:
+// that snapshot rebuilds deposited/withdrawn from the net, so a week whose movements cancel out
+// would look empty. Count only — no money math. Returns null for lifetime (no filtering).
+export function getActivePlayerIdsInPeriod(
+  filters: { game_name?: string; game_names?: string[]; since_date?: string; end_date?: string },
+  db: Database.Database = getDb(),
+): number[] | null {
+  if (!filters.since_date && !filters.end_date) return null;
+  const conditions: string[] = [];
+  const params: Record<string, unknown> = {};
+  pushGameCondition(conditions, params, filters);
+  if (filters.since_date) { conditions.push(`wt.tx_datetime >= @since_date`); params.since_date = filters.since_date; }
+  if (filters.end_date) { conditions.push(`wt.tx_datetime <= @end_date`); params.end_date = filters.end_date; }
+  const rows = db.prepare(`
+    SELECT DISTINCT wt.player_id
+    FROM wallet_transactions wt
+    JOIN player_game_deals pgd ON pgd.player_id = wt.player_id AND pgd.game_id = wt.game_id
+    JOIN games g ON g.id = pgd.game_id
+    WHERE (wt.source IS NULL OR wt.source != 'unknown') AND (wt.status IS NULL OR wt.status = 'active')
+      AND (pgd.start_date IS NULL OR wt.tx_datetime >= pgd.start_date)
+      AND (pgd.end_date IS NULL OR wt.tx_datetime <= pgd.end_date)
+      ${conditions.length > 0 ? "AND " + conditions.join(" AND ") : ""}
+  `).all(params) as { player_id: number }[];
+  return rows.map((r) => r.player_id);
 }
 
 export function getWalletKPIs(filters?: { game_name?: string; game_names?: string[]; since_date?: string; end_date?: string }) {

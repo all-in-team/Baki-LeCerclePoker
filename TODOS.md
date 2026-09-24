@@ -82,6 +82,19 @@ Deferred work from /plan-ceo-review (2026-04-28).
 - **Effort:** ~45 min (CC). Extends existing bot + queries.
 - **Depends on:** telegram_chat_id on players table (built in current phase)
 
+### Filtre d'activité de période — NEXAPOKER et XPoker (chantier séparé, Baki 2026-09-25)
+- **Quoi :** le tableau joueurs de `LedgerTable` (A5NUTS, AKS/OK, KKPOKER, JVIP, TTPOKER)
+  n'affiche plus que les joueurs avec au moins un mouvement dans la période, plus ceux qui ont
+  un règlement en attente (marqués « hors période · à régler »). NEXAPOKER
+  (`app/nexapoker/NexaPokerClient.tsx`) et XPoker (`app/xpoker/XpokerClient.tsx`) ont leurs
+  propres tableaux : pas encore filtrés.
+- **Règles à reprendre telles quelles :** activité calculée sur les vraies transactions, jamais
+  sur un snapshot verrouillé ; un règlement en attente n'est jamais masqué ; compteur
+  « N actifs · M masqués » avec « tout afficher » ; Lifetime ne masque rien. Logique pure :
+  `components/ledger/period-presence.ts`.
+- **Attention :** NEXAPOKER = sens du grand livre ≠ sens de la bankroll, XPoker = réglé en chips
+  hors `player_game_deals` — « à régler » n'y a pas la même définition, à cadrer avant.
+
 ## P2 — Medium value, needs careful planning
 
 ### Refactor Telegram webhook into command modules
