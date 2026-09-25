@@ -8,15 +8,16 @@ const THROTTLE_PER_DAY = Number(process.env.AGENT_NOTIF_THROTTLE_PER_DAY ?? 3);
 const SEND_DELAY_MS = Number(process.env.AGENT_NOTIF_SEND_DELAY_MS ?? 1500);
 const MAX_SENDS_PER_RUN = Number(process.env.AGENT_NOTIF_MAX_PER_RUN ?? 20);
 const NOTONB_MIN_AGE_DAYS = Number(process.env.AGENT_NOTIF_NOTONB_AGE_DAYS ?? 2); // grace period before "not onboarded" fires
-const COMMISSION_RATE = 0.50;
 const PORTAL_URL = "https://t.me/LeCercle_Lebot/portal"; // Direct Link → opens the Mini App in 1 tap
 
 const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
 const dashboardButton = { inline_keyboard: [[{ text: "🎰 Ouvre ton dashboard", url: PORTAL_URL }]] };
 const round2 = (n: number) => Math.round(n * 100) / 100;
 
-function tierMessage(cumul: number) {
-  return `🔥 L'agence est à <b>+${cumul.toFixed(0)} USDT</b> sur tes filleuls → ta part : <b>${(cumul * COMMISSION_RATE).toFixed(0)} USDT</b> 💪`;
+// La part de l'agent n'est plus cumul × 50 % : c'est la commission calculée par
+// filleul × game × semaine à son taux (computeAgentCommission.earned).
+function tierMessage(cumul: number, share: number) {
+  return `🔥 L'agence est à <b>+${cumul.toFixed(0)} USDT</b> sur tes filleuls → ta part : <b>${share.toFixed(0)} USDT</b> 💪`;
 }
 function notOnboardedMessage(name: string) {
   return `👋 Ton filleul <b>${name}</b> n'est pas encore setup. Vois avec lui pour qu'on l'avance 👇`;
@@ -24,7 +25,7 @@ function notOnboardedMessage(name: string) {
 
 /**
  * Agent notifications — two types:
- *  (A) profit_tier   : gross agency cumul (computeAgentCommission.cumul_agence_eligible, before ×50%,
+ *  (A) profit_tier   : gross agency cumul (computeAgentCommission.cumul_agence_eligible, before the per-filleul rates,
  *                      cross-makeup) crosses a new TIER_SIZE_USDT tier. Dedup per tier (anti-ping-pong).
  *  (B) not_onboarded : an active filleul is ULTRA-STRICTLY un-set-up (no group, no deal, no wallet)
  *                      AND the relationship is older than NOTONB_MIN_AGE_DAYS. Dedup once per filleul.
@@ -73,6 +74,8 @@ export async function POST(req: NextRequest) {
     if (onlyAgent && String(a.agent_id) !== onlyAgent) continue;
     const ac = computeAgentCommission(a.agent_id); // SAME source as CRM + portal
     const cumul = ac.cumul_agence_eligible;
+    if (ac.earned === null) { skipped.push({ type: "profit_tier", agent: a.agent_name, reason: "blocked_missing_rate" }); continue; }
+    const share = ac.earned;
     const currentTier = cumul >= tierSize ? Math.floor(cumul / tierSize) * tierSize : 0;
     if (currentTier <= 0) { skipped.push({ type: "profit_tier", agent: a.agent_name, cumul: round2(cumul), reason: "below_first_tier" }); continue; }
     const action_ref = `tier:${currentTier}`;
@@ -82,8 +85,8 @@ export async function POST(req: NextRequest) {
     if (!gate(a.agent_id, a.agent_tg, { type: "profit_tier", agent: a.agent_name, tier: currentTier })) continue;
     wouldSend.push({
       agent_id: a.agent_id, agent: a.agent_name, agent_tg: a.agent_tg, filleul_id: a.agent_id, action_type: "profit_tier",
-      action_ref, amount: round2(cumul), tier: currentTier, cumul_agence: round2(cumul), your_share: round2(cumul * COMMISSION_RATE),
-      message_preview: tierMessage(cumul),
+      action_ref, amount: round2(cumul), tier: currentTier, cumul_agence: round2(cumul), your_share: round2(share),
+      message_preview: tierMessage(cumul, share),
     });
   }
 
@@ -115,7 +118,7 @@ export async function POST(req: NextRequest) {
     });
   }
 
-  const config = { tier_size_usdt: tierSize, throttle_per_day: THROTTLE_PER_DAY, send_delay_ms: SEND_DELAY_MS, notonb_min_age_days: NOTONB_MIN_AGE_DAYS, commission_rate: COMMISSION_RATE };
+  const config = { tier_size_usdt: tierSize, throttle_per_day: THROTTLE_PER_DAY, send_delay_ms: SEND_DELAY_MS, notonb_min_age_days: NOTONB_MIN_AGE_DAYS, commission_rate: "par filleul × game × semaine (affiliate_agent_rates)" };
 
   if (!apply) {
     for (const w of wouldSend) recordDry.run(w.agent_id, w.filleul_id, w.action_type, w.action_ref, w.amount);

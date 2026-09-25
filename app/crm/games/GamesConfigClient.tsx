@@ -204,6 +204,16 @@ export default function GamesConfigClient({ games }: Props) {
             </div>
           </div>
         </div>
+        {/* Le « perçu » est la BASE de la commission de TOUS les agents sur ce game
+            (part agence = résultat joueur × action perçue, puis × taux agent). */}
+        {editGame && ([["perceived_action_pct", editGame.perceived_action_pct], ["perceived_rakeback_pct", editGame.perceived_rakeback_pct], ["perceived_insurance_pct", editGame.perceived_insurance_pct]] as const)
+          .some(([k, orig]) => (form[k] === "" ? null : Number(form[k])) !== (orig ?? null)) && (
+          <div style={{ marginTop: 14, padding: "10px 12px", borderRadius: 8, background: "rgba(234,179,8,0.10)", border: "1px solid rgba(234,179,8,0.35)", color: "#EAB308", fontSize: 12, lineHeight: 1.5 }}>
+            ⚠️ <b>Le deal perçu est la base de rémunération des agents.</b> Le modifier change la part agence — donc la commission — de
+            <b> tous les agents</b> dont un filleul joue sur {editGame.name}, <b>sur tout l&apos;historique</b>, périodes déjà payées comprises
+            (il n&apos;est pas versionné). Pour changer la rémunération d&apos;un seul agent, modifie plutôt son taux dans /crm/affiliates.
+          </div>
+        )}
         <div style={{ marginTop: 14, padding: "12px", background: "var(--bg-surface)", borderRadius: 8, border: "1px solid var(--border)" }}>
           <div style={{ fontSize: 11, fontWeight: 700, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.07em", marginBottom: 8 }}>Currency</div>
           <div style={{ display: "flex", gap: 8, alignItems: "center" }}>

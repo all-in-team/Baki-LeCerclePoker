@@ -156,12 +156,12 @@ export async function POST(req: NextRequest) {
       ORDER BY p.name
     `).all() as { affiliate_player_id: number; name: string; telegram_handle: string | null; joined_at: string }[];
 
-    let totalDueAll = 0;
+    let totalDueAll: number | null = 0;   // null dès qu'un agent est bloqué : un total amputé ne se déguise pas en chiffre
     let totalPaidAll = 0;
     const agentSummaries = agents.map(a => {
       // Agent-level commission (cross-makeup) — same function as /crm/affiliates → guaranteed consistency
       const ac = computeAgentCommission(a.affiliate_player_id);
-      totalDueAll += ac.due_now;
+      totalDueAll = totalDueAll === null || ac.due_now === null ? null : totalDueAll + ac.due_now;
       totalPaidAll += ac.paid;
 
       return {
@@ -172,7 +172,8 @@ export async function POST(req: NextRequest) {
         filleuls_count: ac.filleuls.length,
         // `cumul` = solde agence signé, AFFICHAGE OWNER UNIQUEMENT (peut être négatif).
         // Ne jamais confondre avec la commission payable : celle-ci reste `pending`/`lifetime`,
-        // toujours issues de max(0, cumul) × 50% dans computeAgentCommission. Aucun calcul modifié ici.
+        // toujours issues de computeAgentCommission (Σ part × taux par filleul/game/semaine, un
+        // seul plancher). null = agent bloqué (part agence sans taux agent).
         summary: { lifetime: ac.earned, paid: ac.paid, pending: ac.due_now, cumul: ac.cumul_agence_eligible },
       };
     });

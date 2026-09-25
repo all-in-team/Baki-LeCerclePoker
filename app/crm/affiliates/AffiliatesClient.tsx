@@ -18,22 +18,28 @@ const GAME_BADGES: Record<string, { short: string; bg: string; color: string }> 
 
 interface Player { id: number; name: string; telegram_handle: string | null; telegram_id: number | null; }
 interface Game { id: number; name: string; perceived_action_pct: number | null; perceived_rakeback_pct: number | null; perceived_insurance_pct: number | null; }
-interface Agent {
+export interface Agent {
   affiliate_player_id: number; joined_at: string; profile_status: string;
   name: string; telegram_handle: string | null; telegram_id: number | null;
 }
 
-interface GameBreakdown {
+export interface GameBreakdown {
   game_id: number; game_name: string; rate: number; rate_label: string;
-  agency_pnl_lifetime: number; earned_lifetime: number; paid_lifetime: number; due_now: number;
+  agency_pnl_lifetime: number; earned_lifetime: number; paid_lifetime: number; due_now: number | null;
   player_pnl_lifetime: number | null; effective_action_pct: number; currency: string;
   agency_pnl_native: number; cny_rate_missing: boolean; is_composite: boolean;
+  agent_pct_current: number | null; counted_part: number; unrated_part: number; unrated_weeks: (string | null)[];
+  rate_periods: RatePeriodView[];
 }
-interface AffPayment {
+export interface RatePeriodView {
+  id: number | null; agent_pct: number; start_week: string | null; end_week: string | null;
+  kind: string; note: string | null; created_at: string | null;
+}
+export interface AffPayment {
   paid_at: string; amount_usdt: number; game_id: number; game_name: string | null;
   tx_hash: string | null; week_start_date: string; week_end_date: string; notes: string | null;
 }
-interface EnrichedRel {
+export interface EnrichedRel {
   id: number; status: string; start_date: string;
   affiliate: { id: number; name: string; telegram_handle: string | null };
   referred: { id: number; name: string; telegram_handle: string | null };
@@ -41,18 +47,30 @@ interface EnrichedRel {
   disclosed_action_pct: number | null; disclosed_rakeback_pct: number | null; disclosed_insurance_pct: number | null;
   exclude_agency_extras: number; notes: string | null;
   games: GameBreakdown[];
-  total_due_now: number; total_paid_lifetime: number; last_paid_at: string | null;
+  total_due_now: number | null; total_paid_lifetime: number; last_paid_at: string | null;
   payments: AffPayment[];
 }
 
-interface AgentCommission { cumul_agence_eligible: number; earned: number; paid: number; due_now: number; }
-interface AgentSummary {
+export interface BlockReasonView {
+  relationship_id: number; referred_name: string; game_id: number; game_name: string;
+  weeks: (string | null)[]; part: number; reason: "taux_manquant" | "date_illisible";
+}
+// earned / due_now = null quand l'agent est BLOQUÉ (part agence sans taux agent) : jamais payable.
+export interface AgentCommissionView {
+  cumul_agence_eligible: number; commission_signed: number;
+  earned: number | null; paid: number; due_now: number | null;
+  blocked: BlockReasonView[]; frozen_through: string | null;
+}
+export interface AgentSummary {
   agent: Agent;
   filleuls: EnrichedRel[];
   cumulAgence: number;
-  earned: number;
+  commissionSigned: number;
+  earned: number | null;
   paid: number;
-  due: number;
+  due: number | null;
+  blocked: BlockReasonView[];
+  frozenThrough: string | null;
 }
 
 interface BackfillResult {
@@ -80,7 +98,7 @@ interface Props {
   players: Player[];
   activeGames: Game[];
   existingReferredIds: number[];
-  agentCommissions: Record<number, AgentCommission>;
+  agentCommissions: Record<number, AgentCommissionView>;
 }
 
 const emptyForm = () => ({
@@ -119,7 +137,7 @@ export default function AffiliatesClient({ agents, players, activeGames, existin
   const [searchAgent, setSearchAgent] = useState("");
   const [savingAgent, setSavingAgent] = useState(false);
 
-  const [drawerAgent, setDrawerAgent] = useState<AgentSummary | null>(null);
+  const [drawerAgentId, setDrawerAgentId] = useState<number | null>(null);
   const [collapsed, setCollapsed] = useState<Set<number>>(new Set());
   const toggleCollapse = (id: number) => setCollapsed(prev => {
     const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n;
@@ -151,9 +169,17 @@ export default function AffiliatesClient({ agents, players, activeGames, existin
   // Build agent summaries
   const agentSummaries: AgentSummary[] = agents.map(agent => {
     const filleuls = enrichedRels.filter(r => r.affiliate.id === agent.affiliate_player_id);
-    const ac = agentCommissions[agent.affiliate_player_id] ?? { cumul_agence_eligible: 0, earned: 0, paid: 0, due_now: 0 };
-    return { agent, filleuls, cumulAgence: ac.cumul_agence_eligible, earned: ac.earned, paid: ac.paid, due: ac.due_now };
+    const ac = agentCommissions[agent.affiliate_player_id]
+      ?? { cumul_agence_eligible: 0, commission_signed: 0, earned: 0, paid: 0, due_now: 0, blocked: [], frozen_through: null };
+    return {
+      agent, filleuls, cumulAgence: ac.cumul_agence_eligible, commissionSigned: ac.commission_signed,
+      earned: ac.earned, paid: ac.paid, due: ac.due_now, blocked: ac.blocked, frozenThrough: ac.frozen_through,
+    };
   });
+
+  // Dérivé à chaque rendu (pas une copie figée) : après un changement de taux, le
+  // router.refresh() recalcule agentCommissions et le drawer montre le nouveau dû.
+  const drawerAgent = drawerAgentId === null ? null : agentSummaries.find(s => s.agent.affiliate_player_id === drawerAgentId) ?? null;
 
   const brokenTgCount = agents.filter(a => !a.telegram_id).length;
 
@@ -322,7 +348,7 @@ export default function AffiliatesClient({ agents, players, activeGames, existin
         }),
       });
       if (!res.ok) { const d = await res.json(); alert(d.error ?? "Erreur"); return; }
-      setPayTarget(null); setDrawerAgent(null); loadEnriched(); router.refresh();
+      setPayTarget(null); setDrawerAgentId(null); loadEnriched(); router.refresh();
     } catch (e: any) { alert(e.message); } finally { setSaving(false); }
   }
 
@@ -381,7 +407,8 @@ export default function AffiliatesClient({ agents, players, activeGames, existin
         {!isEdit && (
           <div style={{ padding: "8px 11px", borderRadius: 7, background: "rgba(59,130,246,0.08)", border: "1px solid rgba(59,130,246,0.25)", fontSize: 11, color: "var(--text-muted)", lineHeight: 1.5 }}>
             Sens de la relation : le <b style={{ color: "var(--text)" }}>filleul</b> est rattaché <b style={{ color: "var(--text)" }}>sous</b> l&apos;agent.
-            L&apos;agent touche 50 % du cumul agence de ses filleuls, et le groupe Telegram du filleul est tagué <i>[nom de l&apos;agent]</i>.
+            L&apos;agent touche un <b style={{ color: "var(--text)" }}>taux de la part agence</b> réglé filleul par filleul et game par game
+            (fiche de l&apos;agent), et le groupe Telegram du filleul est tagué <i>[nom de l&apos;agent]</i>. Tant qu&apos;un game actif n&apos;a pas de taux, le dû de l&apos;agent est bloqué.
           </div>
         )}
         {renderPlayerPicker("Agent / parrain — touche la commission", form.affiliate_player_id, id => setForm({ ...form, affiliate_player_id: id }), searchAff, setSearchAff, filteredAff, isEdit)}
@@ -530,14 +557,14 @@ export default function AffiliatesClient({ agents, players, activeGames, existin
       )}
       <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
         {agentSummaries.map((summary) => {
-          const { agent, filleuls, cumulAgence, earned, paid, due } = summary;
+          const { agent, filleuls, earned, paid, due } = summary;
           const activeFilleuls = filleuls.filter(r => r.status === "active");
           const isCollapsed = collapsed.has(agent.affiliate_player_id);
           return (
             <div key={agent.affiliate_player_id} style={{ border: "1px solid var(--border)", borderRadius: 10, background: "var(--bg-raised)", overflow: "hidden" }}>
               {/* Agent header (parent) */}
               <div
-                onClick={() => setDrawerAgent(summary)}
+                onClick={() => setDrawerAgentId(summary.agent.affiliate_player_id)}
                 style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 14px", cursor: "pointer", transition: "background 0.1s" }}
                 onMouseEnter={e => (e.currentTarget.style.background = "rgba(255,255,255,0.02)")}
                 onMouseLeave={e => (e.currentTarget.style.background = "transparent")}>
@@ -565,15 +592,15 @@ export default function AffiliatesClient({ agents, players, activeGames, existin
                 </div>
                 <div style={{ textAlign: "right" }}>
                   <div style={{ fontSize: 10, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.04em" }}>Commission</div>
-                  <div style={{ fontWeight: 700, fontSize: 13, color: earned > 0 ? "var(--text)" : cumulAgence < 0 ? "#EF4444" : "var(--text-dim)" }}>
-                    {earned > 0 ? `${fmt(earned)} USDT` : cumulAgence < 0 ? `cumul ${fmt(cumulAgence)}` : "—"}
+                  <div style={{ fontWeight: 700, fontSize: 13, color: earned === null ? "#EF4444" : earned > 0 ? "var(--text)" : summary.commissionSigned < 0 ? "#EF4444" : "var(--text-dim)" }}>
+                    {earned === null ? "⛔ taux manquant" : earned > 0 ? `${fmt(earned)} USDT` : summary.commissionSigned < 0 ? `cumul ${fmt(summary.commissionSigned)}` : "—"}
                   </div>
                 </div>
                 <div style={{ textAlign: "right", minWidth: 86 }}>
                   <div style={{ fontSize: 10, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.04em" }}>Dû now</div>
-                  <div style={{ fontWeight: 700, fontSize: 13, color: due > 0 ? "#22C55E" : "var(--text-dim)" }}>{due > 0 ? `${fmt(due)}` : "—"}</div>
+                  <div style={{ fontWeight: 700, fontSize: 13, color: due === null ? "#EF4444" : due > 0 ? "#22C55E" : "var(--text-dim)" }}>{due === null ? "bloqué" : due > 0 ? `${fmt(due)}` : "—"}</div>
                 </div>
-                {due > 0 && (
+                {due !== null && earned !== null && due > 0 && (
                   <button
                     onClick={(e) => { e.stopPropagation(); openPayAgent(agent.affiliate_player_id, agent.name, due, earned, paid); }}
                     style={{ display: "flex", alignItems: "center", gap: 4, padding: "6px 10px", borderRadius: 7, fontSize: 12, fontWeight: 600, cursor: "pointer", background: "rgba(34,197,94,0.12)", border: "1px solid rgba(34,197,94,0.3)", color: "#22C55E" }}>
@@ -596,7 +623,7 @@ export default function AffiliatesClient({ agents, players, activeGames, existin
                     return (
                       <div
                         key={r.id}
-                        onClick={() => setDrawerAgent(summary)}
+                        onClick={() => setDrawerAgentId(summary.agent.affiliate_player_id)}
                         title="Voir le détail auditable"
                         style={{ display: "flex", alignItems: "center", gap: 10, padding: "9px 14px 9px 8px", borderTop: "1px solid var(--border)", borderLeft: "2px solid var(--border)", cursor: "pointer", opacity: isTerminated ? 0.5 : 1, transition: "background 0.1s" }}
                         onMouseEnter={e => (e.currentTarget.style.background = "rgba(255,255,255,0.02)")}
@@ -621,7 +648,7 @@ export default function AffiliatesClient({ agents, players, activeGames, existin
                         </span>
                         <div style={{ textAlign: "right", minWidth: 70 }}>
                           <div style={{ fontSize: 9, color: "var(--text-muted)", textTransform: "uppercase" }}>Dû</div>
-                          <div style={{ fontSize: 12, fontWeight: 600, color: r.total_due_now > 0 ? "#22C55E" : "var(--text-dim)" }}>{r.total_due_now > 0 ? fmt(r.total_due_now) : "—"}</div>
+                          <div style={{ fontSize: 12, fontWeight: 600, color: r.total_due_now === null ? "#EF4444" : r.total_due_now > 0 ? "#22C55E" : "var(--text-dim)" }}>{r.total_due_now === null ? "taux manquant" : r.total_due_now > 0 ? fmt(r.total_due_now) : "—"}</div>
                         </div>
                         <ChevronRight size={13} style={{ color: "var(--text-dim)" }} />
                       </div>
@@ -638,8 +665,9 @@ export default function AffiliatesClient({ agents, players, activeGames, existin
       {drawerAgent && (
         <AgentDetailDrawer
           agentSummary={drawerAgent}
-          onClose={() => setDrawerAgent(null)}
-          onEditRel={(r) => { openEdit(r); setDrawerAgent(null); }}
+          onClose={() => setDrawerAgentId(null)}
+          onEditRel={(r) => { openEdit(r); setDrawerAgentId(null); }}
+          onRatesChanged={() => { loadEnriched(); router.refresh(); }}
           onTerminateRel={(id) => { terminate(id); }}
           onPayAgent={(agentId, agentName, due, earned, paid) => openPayAgent(agentId, agentName, due, earned, paid)}
           gameBadges={GAME_BADGES}
@@ -656,7 +684,7 @@ export default function AffiliatesClient({ agents, players, activeGames, existin
             </div>
           )}
           <div style={{ fontSize: 11, color: "var(--text-dim)" }}>
-            Commission fixe 50% des profits agency (filleuls onboardés ≤30j). Identique à <code>/startaffi</code>.
+            Commission = taux agent × part agence, réglé filleul par filleul et game par game dans la fiche de l&apos;agent.
           </div>
         </div>
         <div style={{ display: "flex", justifyContent: "flex-end", gap: 10, marginTop: 16 }}>

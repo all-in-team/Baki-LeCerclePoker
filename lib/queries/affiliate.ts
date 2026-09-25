@@ -1,5 +1,5 @@
 import { getDb } from "@/lib/db";
-import { convertCnyToUsdt, getCnyRate } from "@/lib/currency";
+import { relationLinesOn, computeAgentCommissionOn, type BlockReason } from "@/lib/affiliate/agent-rates";
 
 // ── Types ────────────────────────────────────────────────
 
@@ -17,14 +17,6 @@ interface AffRel {
   notes: string | null;
 }
 
-interface Deal {
-  action_pct: number;
-  rakeback_pct: number;
-  insurance_pct: number;
-  start_date: string | null;
-  end_date: string | null;
-}
-
 export interface GameBreakdown {
   game_id: number;
   game_name: string;
@@ -33,7 +25,7 @@ export interface GameBreakdown {
   agency_pnl_lifetime: number;
   earned_lifetime: number;
   paid_lifetime: number;
-  due_now: number;
+  due_now: number | null;             // null = part agence sans taux agent (incalculable, jamais un 0 inventé)
   // ── Additive audit-trail fields (NO math change — intermediate values only) ──
   player_pnl_lifetime: number | null; // raw player net BEFORE ×action (wallet); null for Wepoker composite
   effective_action_pct: number;       // the disclosed action % applied (the "deal agence %")
@@ -41,17 +33,12 @@ export interface GameBreakdown {
   agency_pnl_native: number;          // agency P&L in native currency (= agency_pnl_lifetime for USDT)
   cny_rate_missing: boolean;          // true if Wepoker CNY→USDT rate is unset (=0)
   is_composite: boolean;              // Wepoker uses winnings/rake/insurance formula, not a single net×action
-}
-
-// Structured result of the agency P&L computation — exposes intermediates for audit.
-interface AgencyPnLDetail {
-  agency_pnl: number;       // USDT — IDENTICAL to the legacy scalar return (drives earned/due)
-  player_pnl: number | null;
-  effective_action_pct: number;
-  currency: string;
-  agency_pnl_native: number;
-  cny_rate_missing: boolean;
-  is_composite: boolean;
+  // ── Taux agent versionné (affiliate_agent_rates) ──
+  agent_pct_current: number | null;   // taux agent (POURCENT de la part agence) de la semaine en cours
+  counted_part: number;               // Σ part agence des semaines à taux > 0
+  unrated_part: number;               // Σ part agence des semaines SANS taux (≠ 0 ⇒ agent bloqué)
+  unrated_weeks: (string | null)[];
+  rate_periods: { id: number | null; agent_pct: number; start_week: string | null; end_week: string | null; kind: string; note: string | null; created_at: string | null }[];
 }
 
 export interface WindowStatus {
@@ -65,7 +52,7 @@ export interface CommissionResult {
   affiliate: { id: number; name: string; telegram_handle: string | null };
   referred: { id: number; name: string; telegram_handle: string | null };
   breakdown: GameBreakdown[];
-  total_due_now: number;
+  total_due_now: number | null;       // null dès qu'un game est incalculable
   total_earned_lifetime: number;
   total_paid_lifetime: number;
   last_paid_at: string | null;
@@ -74,31 +61,14 @@ export interface CommissionResult {
 
 export interface AffiliateGroup {
   affiliate: { id: number; name: string; telegram_handle: string | null };
-  total_due: number;
+  total_due: number | null;   // null = agent BLOQUÉ (part agence sans taux) — listé, jamais payable
   relationships: CommissionResult[];
 }
 
-// ── 1. Commission rate ──────────────────────────────────
-
-function getCommissionRate(
-  rel: AffRel,
-  gameId: number,
-): { rate: number; label: "éligible" | "hors_fenetre" } {
-  const db = getDb();
-  const pgd = db.prepare(
-    `SELECT created_at FROM player_game_deals WHERE player_id = ? AND game_id = ?`
-  ).get(rel.referred_player_id, gameId) as { created_at: string | null } | undefined;
-
-  if (!pgd?.created_at) return { rate: 0, label: "hors_fenetre" };
-
-  const relStart = new Date(rel.start_date + "T00:00:00Z");
-  const dealCreated = new Date(pgd.created_at);
-  const diffDays = (dealCreated.getTime() - relStart.getTime()) / (1000 * 86400);
-
-  return diffDays <= 30
-    ? { rate: 0.50, label: "éligible" }
-    : { rate: 0, label: "hors_fenetre" };
-}
+// ── 1. Taux agent ───────────────────────────────────────
+// Plus de 0.50 en dur ni de règle des 30 jours relue ici : le taux agent vit dans
+// affiliate_agent_rates, par (relation, game), versionné par semaine. La règle des
+// 30 jours a été FIGÉE dans cette table à la migration (lib/affiliate/agent-rates-schema.ts).
 
 export function getEligibilityWindowStatus(rel: AffRel): WindowStatus {
   const now = new Date();
@@ -144,110 +114,11 @@ export function getPlayerAffiliation(playerId: number): PlayerAffiliation {
   };
 }
 
-// ── 2. Disclosed agency P&L ─────────────────────────────
-// Mirrors the real agency P&L formula from lib/queries.ts
-// but substitutes disclosed rates when provided.
-
-function getAgencyPnLDisclosed(
-  referredPlayerId: number,
-  gameId: number,
-  rel: AffRel,
-): AgencyPnLDetail {
-  const db = getDb();
-  const zero: AgencyPnLDetail = { agency_pnl: 0, player_pnl: 0, effective_action_pct: 0, currency: "USDT", agency_pnl_native: 0, cny_rate_missing: false, is_composite: false };
-
-  const deal = db.prepare(
-    `SELECT action_pct, rakeback_pct, COALESCE(insurance_pct, 0) AS insurance_pct, start_date, end_date
-     FROM player_game_deals WHERE player_id = ? AND game_id = ?`
-  ).get(referredPlayerId, gameId) as Deal | undefined;
-
-  if (!deal) return zero;
-
-  const perGame = db.prepare(
-    `SELECT disclosed_action_pct, disclosed_rakeback_pct, disclosed_insurance_pct, excluded
-     FROM affiliate_relationship_games WHERE relationship_id = ? AND game_id = ?`
-  ).get(rel.id, gameId) as { disclosed_action_pct: number | null; disclosed_rakeback_pct: number | null; disclosed_insurance_pct: number | null; excluded: number } | undefined;
-
-  if (perGame?.excluded) return zero;
-
-  const game = db.prepare(
-    `SELECT name, perceived_action_pct, perceived_rakeback_pct, perceived_insurance_pct FROM games WHERE id = ?`
-  ).get(gameId) as { name: string; perceived_action_pct: number | null; perceived_rakeback_pct: number | null; perceived_insurance_pct: number | null } | undefined;
-  if (!game) return zero;
-
-  // Cascade: per-relation-game → game perceived → relation-level → deal
-  const effAction = perGame?.disclosed_action_pct ?? game.perceived_action_pct ?? rel.disclosed_action_pct ?? deal.action_pct;
-  const effRb = perGame?.disclosed_rakeback_pct ?? game.perceived_rakeback_pct ?? rel.disclosed_rakeback_pct ?? deal.rakeback_pct;
-  const effIns = perGame?.disclosed_insurance_pct ?? game.perceived_insurance_pct ?? rel.disclosed_insurance_pct ?? deal.insurance_pct;
-
-  if (game.name === "Wepoker") {
-    // Rakeback-based P&L (CNY) — mirrors getWepokerPnL lines 1242-1267
-    const row = db.prepare(`
-      SELECT
-        COALESCE(SUM(re.winnings_amount), 0) AS winnings,
-        COALESCE(SUM(re.amount), 0) AS rake,
-        COALESCE(SUM(re.insurance_amount), 0) AS insurance
-      FROM rakeback_entries re
-      JOIN rakeback_reports rr ON rr.id = re.report_id
-      LEFT JOIN player_game_deals pgd ON pgd.player_id = re.player_id AND pgd.game_id = rr.game_id
-      WHERE re.player_id = ? AND rr.game_id = ?
-        AND (pgd.start_date IS NULL OR COALESCE(rr.report_date, substr(rr.created_at, 1, 10)) >= pgd.start_date)
-    `).get(referredPlayerId, gameId) as { winnings: number; rake: number; insurance: number };
-
-    const agencyCny =
-      row.winnings * effAction / 100 +
-      row.rake * effRb / 100 +
-      row.insurance * effIns / 100;
-
-    const cnyRate = getCnyRate();
-    return {
-      agency_pnl: convertCnyToUsdt(agencyCny, cnyRate), // identical to legacy: convertCnyToUsdt(agencyCny, getCnyRate())
-      player_pnl: null,
-      effective_action_pct: effAction,
-      currency: "CNY",
-      agency_pnl_native: agencyCny,
-      cny_rate_missing: cnyRate === 0,
-      is_composite: true,
-    };
-  }
-
-  // Wallet-based P&L (USDT) — mirrors getWalletSummaryByPlayer lines 377-394
-  const conditions: string[] = [
-    `wt.player_id = ?`,
-    `wt.game_id = ?`,
-    `(wt.source IS NULL OR wt.source != 'unknown')`,
-    `(wt.status IS NULL OR wt.status = 'active')`,
-  ];
-  const params: unknown[] = [referredPlayerId, gameId];
-
-  if (deal.start_date) {
-    conditions.push(`wt.tx_datetime >= ?`);
-    params.push(deal.start_date);
-  }
-  if (deal.end_date) {
-    conditions.push(`wt.tx_datetime <= ?`);
-    params.push(deal.end_date);
-  }
-
-  const row = db.prepare(`
-    SELECT COALESCE(SUM(CASE WHEN wt.type='withdrawal' THEN wt.amount ELSE -wt.amount END), 0) AS net
-    FROM wallet_transactions wt
-    WHERE ${conditions.join(" AND ")}
-  `).get(...params) as { net: number };
-
-  const agency_pnl = row.net * effAction / 100; // identical to legacy return
-  return {
-    agency_pnl,
-    player_pnl: row.net,
-    effective_action_pct: effAction,
-    currency: "USDT",
-    agency_pnl_native: agency_pnl,
-    cny_rate_missing: false,
-    is_composite: false,
-  };
-}
-
-// ── 3. Compute commission for one relationship ──────────
+// ── 2. Commission for one relationship ──────────────────
+// Lecture game par game d'UNE relation, via le moteur (lib/affiliate/agent-rates.ts).
+// `rate` = taux agent de la semaine en cours (fraction, informatif), `rate_label` =
+// « éligible » si le game compte à un taux > 0 sur au moins une période — champs
+// gardés pour les consommateurs existants (portail, drawers).
 
 export function computeAffiliateCommission(relationshipId: number): CommissionResult | null {
   const db = getDb();
@@ -267,48 +138,39 @@ export function computeAffiliateCommission(relationshipId: number): CommissionRe
 
   if (!rel) return null;
 
-  const games = db.prepare(
-    `SELECT DISTINCT pgd.game_id, g.name AS game_name
-     FROM player_game_deals pgd
-     JOIN games g ON g.id = pgd.game_id
-     WHERE pgd.player_id = ?`
-  ).all(rel.referred_player_id) as { game_id: number; game_name: string }[];
+  const paidStmt = db.prepare(
+    `SELECT COALESCE(SUM(amount_usdt), 0) AS paid
+     FROM affiliate_payments WHERE relationship_id = ? AND game_id = ?`
+  );
 
-  const breakdown: GameBreakdown[] = [];
-
-  for (const g of games) {
-    const { rate, label } = getCommissionRate(rel, g.game_id);
-    const detail = getAgencyPnLDisclosed(rel.referred_player_id, g.game_id, rel);
-    const agencyPnl = detail.agency_pnl;
-    // NOTE: per-(rel,game) floor REMOVED — negatives must propagate up to the agent-level
-    // cumul (cross-makeup). The single max(0) now lives in computeAgentCommission.
-    // earned_lifetime here is the SIGNED raw contribution (agencyPnl × rate), informational only.
-    const earnedLifetime = agencyPnl * rate;
-
-    const paidRow = db.prepare(
-      `SELECT COALESCE(SUM(amount_usdt), 0) AS paid
-       FROM affiliate_payments WHERE relationship_id = ? AND game_id = ?`
-    ).get(relationshipId, g.game_id) as { paid: number };
-
-    const dueNow = Math.max(0, earnedLifetime - paidRow.paid);
-
-    breakdown.push({
-      game_id: g.game_id,
-      game_name: g.game_name,
-      rate,
-      rate_label: label,
-      agency_pnl_lifetime: agencyPnl,
-      earned_lifetime: earnedLifetime,
-      paid_lifetime: paidRow.paid,
-      due_now: dueNow,
-      player_pnl_lifetime: detail.player_pnl,
-      effective_action_pct: detail.effective_action_pct,
-      currency: detail.currency,
-      agency_pnl_native: detail.agency_pnl_native,
-      cny_rate_missing: detail.cny_rate_missing,
-      is_composite: detail.is_composite,
-    });
-  }
+  const breakdown: GameBreakdown[] = relationLinesOn(db, relationshipId).map(l => {
+    const paid = (paidStmt.get(relationshipId, l.game_id) as { paid: number }).paid;
+    return {
+      game_id: l.game_id,
+      game_name: l.game_name,
+      rate: l.current_pct === null ? 0 : l.current_pct / 100,
+      rate_label: l.periods.some(p => p.agent_pct > 0) ? "éligible" : "hors_fenetre",
+      agency_pnl_lifetime: l.part_agence,
+      // Contribution SIGNÉE de ce game à la commission agent (Σ part × taux par semaine).
+      earned_lifetime: l.commission,
+      paid_lifetime: paid,
+      due_now: l.unrated_weeks.length ? null : Math.max(0, l.commission - paid),
+      player_pnl_lifetime: l.player_pnl,
+      effective_action_pct: l.effective_action_pct,
+      currency: l.currency,
+      agency_pnl_native: l.agency_native,
+      cny_rate_missing: l.cny_rate_missing,
+      is_composite: l.is_composite,
+      agent_pct_current: l.current_pct,
+      counted_part: l.counted_part,
+      unrated_part: l.unrated_part,
+      unrated_weeks: l.unrated_weeks,
+      rate_periods: l.periods.map(p => ({
+        id: p.id ?? null, agent_pct: p.agent_pct, start_week: p.start_week, end_week: p.end_week,
+        kind: p.kind, note: p.note, created_at: p.created_at ?? null,
+      })),
+    };
+  });
 
   const lastPaidRow = db.prepare(
     `SELECT MAX(paid_at) AS last_paid_at FROM affiliate_payments WHERE relationship_id = ?`
@@ -320,78 +182,71 @@ export function computeAffiliateCommission(relationshipId: number): CommissionRe
     referred: { id: rel.referred_player_id, name: rel.ref_name, telegram_handle: rel.ref_handle },
     breakdown,
     window_status: getEligibilityWindowStatus(rel),
-    total_due_now: breakdown.reduce((s, b) => s + b.due_now, 0),
+    total_due_now: breakdown.some(b => b.due_now === null) ? null : breakdown.reduce((s, b) => s + (b.due_now as number), 0),
     total_earned_lifetime: breakdown.reduce((s, b) => s + b.earned_lifetime, 0),
     total_paid_lifetime: breakdown.reduce((s, b) => s + b.paid_lifetime, 0),
     last_paid_at: lastPaidRow.last_paid_at,
   };
 }
 
-// ── 4. AGENT-LEVEL commission (cross-makeup + carry-forward) ──────────────
-// Validated formula (Baki, money-critical):
-//   cumul_agence = Σ part_agence_lifetime over ALL active filleuls × ELIGIBLE games
-//                  (positives AND negatives mixed — cross-makeup)
-//   earned       = max(0, cumul_agence) × 0.50   (single floor, at agent level)
-//   due_now      = max(0, earned − paid_agent)   (carry-forward is automatic since
-//                  cumul is lifetime: a past loss stays in the sum until future gains fill it)
+// ── 3. AGENT-LEVEL commission (cross-makeup + carry-forward) ──────────────
+// Formule (Baki, money-critical, révisée 2026-09-26) — le détail vit dans le moteur :
+//   commission(f, g, s) = part_agence(f, g, s) × taux_agent(f, g, s)   SIGNÉE, par semaine
+//   earned              = max(0, Σ commission)       (taux AVANT compensation, un seul plancher)
+//   due_now             = max(0, earned − paid_agent)
+// earned / due_now valent null quand l'agent est BLOQUÉ (part agence sans taux) :
+// jamais de zéro inventé, jamais de paiement sur un chiffre amputé.
 
 export interface AgentFilleulLine {
   relationship_id: number;
   referred: { id: number; name: string; telegram_handle: string | null };
-  part_agence_eligible: number; // signed Σ of this filleul's eligible per-game agency P&L
+  part_agence_eligible: number; // signed Σ of this filleul's part agence over weeks counted (rate > 0)
+  commission: number;           // signed Σ of this filleul's commission (part × rate, per week)
 }
 
 export interface AgentCommissionResult {
   affiliate_player_id: number;
-  cumul_agence_eligible: number; // signed — can be negative (carry-forward debt)
-  earned: number;                // max(0, cumul) × 0.50
+  cumul_agence_eligible: number; // signed Σ part agence over weeks counted (rate > 0)
+  commission_signed: number;     // signed Σ commission (before the single floor)
+  earned: number | null;         // max(0, commission_signed) — null when blocked
   paid: number;                  // Σ all payments across the agent's relationships (any status)
-  due_now: number;               // max(0, earned − paid)
+  due_now: number | null;        // max(0, earned − paid) — null when blocked
+  blocked: BlockReason[];
+  frozen_through: string | null; // last Monday frozen by a payment
   filleuls: AgentFilleulLine[];
 }
 
 export function computeAgentCommission(affiliatePlayerId: number): AgentCommissionResult {
   const db = getDb();
-
-  const rels = db.prepare(
-    `SELECT id FROM affiliate_relationships WHERE affiliate_player_id = ? AND status = 'active'`
-  ).all(affiliatePlayerId) as { id: number }[];
-
-  let cumul = 0;
-  const filleuls: AgentFilleulLine[] = [];
-  for (const { id } of rels) {
-    const c = computeAffiliateCommission(id);
-    if (!c) continue;
-    // Eligible games only (deal within the 30-day window → rate_label 'éligible').
-    const partEligible = c.breakdown
-      .filter(b => b.rate_label === "éligible")
-      .reduce((s, b) => s + b.agency_pnl_lifetime, 0);
-    cumul += partEligible;
-    filleuls.push({ relationship_id: id, referred: c.referred, part_agence_eligible: partEligible });
+  const d = computeAgentCommissionOn(db, affiliatePlayerId);
+  const handles = new Map((db.prepare(
+    `SELECT ar.id, p.telegram_handle FROM affiliate_relationships ar JOIN players p ON p.id = ar.referred_player_id WHERE ar.affiliate_player_id = ?`
+  ).all(affiliatePlayerId) as { id: number; telegram_handle: string | null }[]).map(r => [r.id, r.telegram_handle]));
+  const byRel = new Map<number, AgentFilleulLine>();
+  for (const l of d.lines) {
+    const f = byRel.get(l.relationship_id) ?? {
+      relationship_id: l.relationship_id,
+      referred: { id: l.referred.id, name: l.referred.name, telegram_handle: handles.get(l.relationship_id) ?? null },
+      part_agence_eligible: 0, commission: 0,
+    };
+    f.part_agence_eligible += l.counted_part;
+    f.commission += l.commission;
+    byRel.set(l.relationship_id, f);
   }
-
-  // paid = every payment ever made on ANY of the agent's relationships (status-agnostic,
-  // so money paid is never lost from the ledger).
-  const paidRow = db.prepare(
-    `SELECT COALESCE(SUM(amount_usdt), 0) AS paid
-     FROM affiliate_payments
-     WHERE relationship_id IN (SELECT id FROM affiliate_relationships WHERE affiliate_player_id = ?)`
-  ).get(affiliatePlayerId) as { paid: number };
-
-  const earned = Math.max(0, cumul) * 0.50;
-  const due_now = Math.max(0, earned - paidRow.paid);
-
   return {
     affiliate_player_id: affiliatePlayerId,
-    cumul_agence_eligible: cumul,
-    earned,
-    paid: paidRow.paid,
-    due_now,
-    filleuls,
+    cumul_agence_eligible: d.cumul_agence_eligible,
+    commission_signed: d.commission_signed,
+    earned: d.earned,
+    paid: d.paid,
+    due_now: d.due_now,
+    blocked: d.blocked,
+    frozen_through: d.frozen_through,
+    filleuls: [...byRel.values()],
   };
 }
 
-// ── 5. All pending payouts grouped by affiliate (agent-level) ─────────
+// ── 4. All pending payouts grouped by affiliate (agent-level) ─────────
 
 export function getPendingPayoutsForAllAffiliates(): AffiliateGroup[] {
   const db = getDb();
@@ -402,7 +257,7 @@ export function getPendingPayoutsForAllAffiliates(): AffiliateGroup[] {
   const groups: AffiliateGroup[] = [];
   for (const { affiliate_player_id } of agents) {
     const ac = computeAgentCommission(affiliate_player_id);
-    if (ac.due_now <= 0) continue;
+    if (ac.due_now !== null && ac.due_now <= 0) continue;
     const player = db.prepare(
       `SELECT id, name, telegram_handle FROM players WHERE id = ?`
     ).get(affiliate_player_id) as { id: number; name: string; telegram_handle: string | null } | undefined;
@@ -413,5 +268,6 @@ export function getPendingPayoutsForAllAffiliates(): AffiliateGroup[] {
     });
   }
 
-  return groups.sort((a, b) => b.total_due - a.total_due);
+  // Bloqués en fin de liste : un dû incalculable ne se trie pas comme un zéro.
+  return groups.sort((a, b) => (b.total_due ?? -Infinity) - (a.total_due ?? -Infinity));
 }

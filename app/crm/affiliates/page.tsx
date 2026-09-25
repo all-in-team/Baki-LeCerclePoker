@@ -2,7 +2,7 @@ export const dynamic = "force-dynamic";
 import { getDb } from "@/lib/db";
 import { computeAgentCommission } from "@/lib/queries/affiliate";
 import PageHeader from "@/components/PageHeader";
-import AffiliatesClient from "./AffiliatesClient";
+import AffiliatesClient, { type AgentCommissionView } from "./AffiliatesClient";
 
 export default function AffiliatesPage() {
   const db = getDb();
@@ -22,11 +22,13 @@ export default function AffiliatesPage() {
 
   // Agent-level commission (cross-makeup) computed server-side — single source of truth,
   // identical to the Mini App /portal (both call computeAgentCommission).
-  const agentCommissions: Record<number, { cumul_agence_eligible: number; earned: number; paid: number; due_now: number }> = {};
+  const agentCommissions: Record<number, AgentCommissionView> = {};
   for (const a of agents) {
     const ac = computeAgentCommission(a.affiliate_player_id);
     agentCommissions[a.affiliate_player_id] = {
-      cumul_agence_eligible: ac.cumul_agence_eligible, earned: ac.earned, paid: ac.paid, due_now: ac.due_now,
+      cumul_agence_eligible: ac.cumul_agence_eligible, commission_signed: ac.commission_signed,
+      earned: ac.earned, paid: ac.paid, due_now: ac.due_now,
+      blocked: ac.blocked, frozen_through: ac.frozen_through,
     };
   }
 

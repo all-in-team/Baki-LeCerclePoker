@@ -25,6 +25,7 @@ import { POOL_SCHEMA_SQL, POOL_GAME_INSERT_SQL, POOL_MIGRATION_V1 } from "./pool
 // Module pur : le DDL et la migration de la game XPoker Twd, partagés avec
 // scripts/xpoker-schema.test.ts (même SQL en test et en prod).
 import { runXpokerMigrationV1, XPOKER_MIGRATION_V1 } from "./games/xpoker/schema";
+import { runAffiliateAgentRatesMigrationV1, AFFILIATE_AGENT_RATES_MIGRATION_V1 } from "./affiliate/agent-rates-schema";
 import {
   XPOKER_GAME_NAME, XPOKER_DEFAULT_ACTION_PCT, XPOKER_SEED_CHIPS_PER_USD,
   XPOKER_SEED_RATE_EFFECTIVE_FROM, XPOKER_SEED_AGENCY_ACCOUNTS,
@@ -3961,6 +3962,25 @@ function initSchema(db: Database.Database) {
     );
   } catch (err: any) {
     console.error(`[MIGRATION:${XPOKER_MIGRATION_V1}] FAILED, ROLLBACK fait (sera rejouée au prochain boot):`, err.message);
+  }
+
+  // ── Taux AGENT par (filleul, game), versionné par semaine ──────────────────
+  //
+  // Remplace le 0.50 codé en dur du calcul affilié. La migration fige l'état actuel :
+  // chaque relation × game avec deal reçoit un taux « depuis l'origine » — 50 % si le
+  // game était éligible (règle des 30 jours sur player_game_deals.created_at), 0 %
+  // « hors fenêtre » sinon. Le dû de chaque agent est donc identique avant/après
+  // (preuve : GET /api/affiliate-agent-rates/migration-check). Modèle complet en tête
+  // de lib/affiliate/agent-rates-schema.ts et lib/affiliate/agent-rates.ts.
+  try {
+    const r = runAffiliateAgentRatesMigrationV1(db);
+    if (r === "applied") console.log(`[MIGRATION] ${AFFILIATE_AGENT_RATES_MIGRATION_V1} applied`);
+    else if (r === "deferred") console.error(
+      `[MIGRATION:${AFFILIATE_AGENT_RATES_MIGRATION_V1}] transaction déjà ouverte par une migration antérieure — ` +
+      `reportée au prochain boot (aucun marqueur posé).`,
+    );
+  } catch (err: any) {
+    console.error(`[MIGRATION:${AFFILIATE_AGENT_RATES_MIGRATION_V1}] FAILED, ROLLBACK fait (sera rejouée au prochain boot):`, err.message);
   }
 
   // ── Nature d'une wallet mère : opérateur vs hot wallet de room ─────────────

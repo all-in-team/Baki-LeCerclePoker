@@ -47,7 +47,7 @@ export async function GET(req: NextRequest) {
       notes: r.notes,
       created_at: r.created_at,
       games: commission?.breakdown ?? [],
-      total_due_now: commission?.total_due_now ?? 0,
+      total_due_now: commission ? commission.total_due_now : 0,   // null = incalculable (taux manquant), jamais 0
       total_paid_lifetime: commission?.total_paid_lifetime ?? 0,
       last_paid_at: commission?.last_paid_at ?? null,
       payments,
