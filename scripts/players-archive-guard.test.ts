@@ -1,19 +1,20 @@
-// Chantier Joueurs — les deux verrous de l'archive (Baki 2026-09-25).
+// Chantier Joueurs — archive et « à régler » (Baki 2026-09-25, seconde version de la règle).
 // Run: npx tsx scripts/players-archive-guard.test.ts
 //
 // ┌─ POURQUOI CE FICHIER EXISTE ───────────────────────────────────────────────┐
-// │ Règle qui ne se négocie pas : un joueur qui a quelque chose à régler ou un │
-// │ solde non nul ne disparaît JAMAIS de la vue principale de /players.        │
-// │  (a) le moteur refuse d'archiver un joueur ouvert (erreur explicite, le lot│
-// │      entier est refusé) ;                                                  │
-// │  (b) vue principale = non archivé OU ouvert : un archivé qui s'ouvre après │
-// │      coup (dépôt entrant) réapparaît ; si l'état ne se calcule pas, tout le│
-// │      monde est affiché (fail-closed).                                      │
-// │ « Ouvert » = lib/queries/player-open.ts. Un deal ou une wallet ne sont PAS │
-// │ ouverts (réglage, pas argent) : ils remontent en « lien actif ».           │
-// │ A. Base en mémoire, schéma minimal : chaque source, les deux verrous.      │
-// │ B. Copie de la base locale, schéma réel (migrations) : archivePlayers réel,│
-// │    NEXA, liste blanche d'updatePlayer, seul écrivain de archived_at.       │
+// │ Règle (décidée par Baki) :                                                 │
+// │  1. Vue principale = UNIQUEMENT les joueurs actifs non archivés.           │
+// │  2. Archiver est TOUJOURS possible, même un joueur qui a quelque chose à   │
+// │     régler. Les SUPPRESSIONS (reset-player, suppression définitive) restent│
+// │     refusées pour lui : une suppression efface de la donnée.               │
+// │  3. « Archivés » : les joueurs à régler en tête, badge « à régler » + motif│
+// │     compteur « Archivés (N · X à régler) » ; fail-closed si incalculable.  │
+// │  4. Uniquement de l'affichage : aucun calcul d'argent ne change.           │
+// │ « À régler » = lib/queries/player-open.ts. Un deal ou une wallet ne le sont│
+// │ PAS (réglage, pas argent) : ils remontent en « lien actif ».               │
+// │ A. Base en mémoire, schéma minimal : chaque source, règles d'affichage.   │
+// │ B. Copie de la base locale, schéma réel (migrations) : archivage réel,    │
+// │    suppressions refusées, NEXA, liste blanche d'updatePlayer.              │
 // └────────────────────────────────────────────────────────────────────────────┘
 
 import Database from "better-sqlite3";
@@ -32,8 +33,8 @@ fs.mkdirSync(path.join(TMP, "data"));
 if (DB_SRC) fs.copyFileSync(DB_SRC, path.join(TMP, "data", "lecercle.db"));
 process.chdir(TMP);
 
-const { getPlayersOpenStateOn, assertPlayersArchivableOn, PlayerOpenError } = require(path.join(REPO, "lib/queries/player-open.ts")) as typeof import("../lib/queries/player-open");
-const { attachOpenState, isHiddenFromMain } = require(path.join(REPO, "app/players/shared.ts")) as typeof import("../app/players/shared");
+const { getPlayersOpenStateOn, assertPlayersNotOpenOn, PlayerOpenError } = require(path.join(REPO, "lib/queries/player-open.ts")) as typeof import("../lib/queries/player-open");
+const { attachOpenState, isHiddenFromMain, sortArchivedView, archivedCounts } = require(path.join(REPO, "app/players/shared.ts")) as typeof import("../app/players/shared");
 
 let passed = 0;
 const failures: string[] = [];
@@ -169,35 +170,43 @@ db.prepare(`UPDATE players SET tron_address = 'TYYY' WHERE id = ?`).run(pLink);
 eq("deal ouvert + wallet + wallet legacy → PAS ouvert", codes(pLink), []);
 eq("… mais remontent en liens actifs (deal fermé exclu)", linkCodes(pLink), ["deal:KKPOKER", "wallet:KKPOKER", "wallet_legacy:null"]);
 
-// Verrou (a)
+// Garde des SUPPRESSIONS (l'archivage n'en a plus)
 let err: unknown = null;
-try { assertPlayersArchivableOn(db, [pTx], OPTS); } catch (e) { err = e; }
-eq("verrou (a) : archiver un joueur ouvert lève PlayerOpenError", err instanceof PlayerOpenError, true);
+try { assertPlayersNotOpenOn(db, [pTx], OPTS); } catch (e) { err = e; }
+eq("garde des suppressions : un joueur à régler lève PlayerOpenError", err instanceof PlayerOpenError, true);
 eq("… avec le motif explicite", (err as PlayerOpenError)?.blocked?.[0]?.reasons.map(r => r.code), ["tx_unsettled"]);
 err = null;
-try { assertPlayersArchivableOn(db, [pLink, pSettled], OPTS); } catch (e) { err = e; }
-eq("verrou (a) : un lot sans ouvert passe", err, null);
+try { assertPlayersNotOpenOn(db, [pLink, pSettled], OPTS); } catch (e) { err = e; }
+eq("garde des suppressions : un lot sans « à régler » passe", err, null);
 err = null;
-try { assertPlayersArchivableOn(db, [pLink, pTx, pSettled], OPTS); } catch (e) { err = e; }
-eq("verrou (a) : un seul ouvert dans le lot → lot refusé, seul l'ouvert est cité", (err as PlayerOpenError)?.blocked?.map(b => b.player_id), [pTx]);
+try { assertPlayersNotOpenOn(db, [pLink, pTx, pSettled], OPTS); } catch (e) { err = e; }
+eq("garde des suppressions : un seul « à régler » dans le lot → refus, seul lui est cité", (err as PlayerOpenError)?.blocked?.map(b => b.player_id), [pTx]);
 err = null;
 const throwingOpts = { agentDue: () => { throw new Error("moteur d'affiliation indisponible"); } };
-try { assertPlayersArchivableOn(db, [pAgent], throwingOpts); } catch (e) { err = e; }
-eq("verrou (a) : une erreur de calcul bloque l'archivage (fail-closed)", (err as Error)?.message, "moteur d'affiliation indisponible");
+try { assertPlayersNotOpenOn(db, [pAgent], throwingOpts); } catch (e) { err = e; }
+eq("garde des suppressions : une erreur de calcul bloque la suppression (fail-closed)", (err as Error)?.message, "moteur d'affiliation indisponible");
 
-// Verrou (b)
-const rows = (db.prepare(`SELECT id, name, archived_at FROM players`).all() as { id: number; name: string; archived_at: string | null }[]);
-const pArchOpen = P("Archivé mais ouvert", true); tx(pArchOpen, 1);
+// Règles d'affichage (vue principale, « Archivés », compteur)
+type Row = { id: number; name: string; status: string; archived_at: string | null };
+const pActive = P("Actif propre"); db.prepare(`UPDATE players SET status = 'active' WHERE id = ?`).run(pActive);
+const pSigned = P("Signé"); db.prepare(`UPDATE players SET status = 'signed' WHERE id = ?`).run(pSigned);
+const pInactOpen = P("Inactif à régler"); db.prepare(`UPDATE players SET status = 'inactive' WHERE id = ?`).run(pInactOpen); tx(pInactOpen, 1);
+const pArchOpen = P("Archivé à régler", true); tx(pArchOpen, 1);
 const pArchClean = P("Archivé propre", true);
-const view = (st: ReturnType<typeof state> | null) => attachOpenState(db.prepare(`SELECT id, name, archived_at FROM players`).all() as { id: number; name: string; archived_at: string | null }[], st);
-const hidden = (st: ReturnType<typeof state> | null) => view(st).filter(isHiddenFromMain).map(p => p.name);
-eq("verrou (b) : seul l'archivé sans rien d'ouvert est masqué", hidden(state()), ["Archivé propre"]);
-eq("verrou (b) : un non-archivé n'est jamais masqué", rows.every(r => !hidden(state()).includes(r.name)), true);
+const view = (st: ReturnType<typeof state> | null) => attachOpenState(db.prepare(`SELECT id, name, status, archived_at FROM players`).all() as Row[], st);
+const byName = (v: ReturnType<typeof view>, n: string) => v.find(p => p.name === n)!;
+const v1 = view(state());
+eq("vue principale : un actif (active) non archivé est visible", isHiddenFromMain(byName(v1, "Actif propre")), false);
+eq("vue principale : signed compte comme actif", isHiddenFromMain(byName(v1, "Signé")), false);
+eq("vue principale : un inactif est masqué MÊME s'il a quelque chose à régler", isHiddenFromMain(byName(v1, "Inactif à régler")), true);
+eq("vue principale : un archivé est masqué MÊME s'il a quelque chose à régler", isHiddenFromMain(byName(v1, "Archivé à régler")), true);
+const arch = sortArchivedView(v1.filter(p => p.archived_at));
+eq("« Archivés » : les joueurs à régler en tête", arch[0].open.length > 0 && arch[arch.length - 1].name === "Archivé propre", true);
+eq("compteur « Archivés (N · X à régler) »", archivedCounts(v1), { total: 2, toSettle: 1 });
 tx(pArchClean, 1, { at: "2026-09-26T08:00:00Z" });   // dépôt reçu après archivage
-eq("verrou (b) : dépôt entrant sur un archivé → il réapparaît", hidden(state()), []);
-eq("verrou (b) : état incalculable → personne n'est masqué (fail-closed)", hidden(null), []);
+eq("dépôt entrant sur un archivé → il devient « à régler » (compteur à jour)", archivedCounts(view(state())), { total: 2, toSettle: 2 });
+eq("état incalculable → tous les archivés « à régler » (fail-closed)", archivedCounts(view(null)), { total: 2, toSettle: 2 });
 eq("… et chaque ligne porte le motif de repli", view(null).every(p => p.open.length === 1), true);
-void pArchOpen;
 
 let skippedB: string | null = null;
 // ═════════════════════════════════════════════════════════════════════════════
@@ -232,17 +241,14 @@ console.log("\n── B. Schéma réel (copie de la base locale, migrations appl
     const clean2 = ins("ZZ garde propre 2");
 
     let e: any = null;
-    try { archivePlayers([open1], "test"); } catch (x) { e = x; }
-    eq("archivePlayers réel : joueur ouvert refusé (PlayerOpenError)", e?.name, "PlayerOpenError");
-    eq("… et rien n'est écrit", archivedAt(open1), null);
-    e = null;
-    try { archivePlayers([clean2, open1], "test"); } catch (x) { e = x; }
-    eq("archivePlayers réel : lot avec un ouvert refusé en bloc", [e?.name, archivedAt(clean2)], ["PlayerOpenError", null]);
+    eq("archivePlayers réel : un joueur à régler s'archive (toujours permis)", [archivePlayers([open1], "test"), archivedAt(open1) !== null], [1, true]);
+    eq("… et reste « à régler » (rien n'est effacé)", (getPlayersOpenState([open1]).get(open1)?.open ?? []).map((r: any) => r.code), ["tx_unsettled"]);
     eq("archivePlayers réel : joueur avec seulement un deal archivé", [archivePlayers([clean1], "test"), archivedAt(clean1) !== null], [1, true]);
     depot(clean1, "KKPOKER");
-    eq("dépôt après archivage : redevient ouvert (réapparaît dans la vue principale)", (getPlayersOpenState([clean1]).get(clean1)?.open ?? []).map((r: any) => r.code), ["tx_unsettled"]);
+    eq("dépôt après archivage : devient « à régler »", (getPlayersOpenState([clean1]).get(clean1)?.open ?? []).map((r: any) => r.code), ["tx_unsettled"]);
     unarchivePlayer(clean1);
-    eq("désarchiver : toujours permis, même ouvert", archivedAt(clean1), null);
+    eq("désarchiver : toujours permis, même à régler", archivedAt(clean1), null);
+    void clean2;
 
     const nx = ins("ZZ garde nexa"); depot(nx, "NEXAPOKER");
     const nxCodes = (getPlayersOpenState([nx]).get(nx)?.open ?? []).map((r: any) => r.code);
@@ -256,15 +262,15 @@ console.log("\n── B. Schéma réel (copie de la base locale, migrations appl
 
     e = null;
     try { deletePlayerChecked(open1); } catch (x) { e = x; }
-    eq("suppression définitive d'un joueur ouvert refusée (audit I1)", [e?.name, !!d.prepare(`SELECT 1 FROM players WHERE id = ?`).get(open1)], ["PlayerOpenError", true]);
+    eq("suppression définitive d'un joueur à régler (archivé) refusée", [e?.name, !!d.prepare(`SELECT 1 FROM players WHERE id = ?`).get(open1)], ["PlayerOpenError", true]);
     e = null;
     try { resetPlayerChecked({ player_id: open1 }); } catch (x) { e = x; }
-    eq("reset-player d'un joueur ouvert refusé, joueur intact", [e?.name, !!d.prepare(`SELECT 1 FROM players WHERE id = ?`).get(open1)], ["PlayerOpenError", true]);
+    eq("reset-player d'un joueur à régler refusé, joueur intact", [e?.name, !!d.prepare(`SELECT 1 FROM players WHERE id = ?`).get(open1)], ["PlayerOpenError", true]);
     const resettable = ins("ZZ garde reset propre");
     eq("reset-player d'un joueur sans rien d'ouvert : effectué", [resetPlayerChecked({ player_id: resettable }).found, !!d.prepare(`SELECT 1 FROM players WHERE id = ?`).get(resettable)], [true, false]);
     e = null;
     try { updatePlayer(clean2, { archived_at: null } as any); } catch (x) { e = x; }
-    eq("updatePlayer : archived_at refusé (contournement du verrou fermé)", /non modifiable/.test(e?.message ?? ""), true);
+    eq("updatePlayer : archived_at refusé (seul lib/players-archive.ts l'écrit)", /non modifiable/.test(e?.message ?? ""), true);
     e = null;
     try { updatePlayer(clean2, { "name = 'x', status": "y" } as any); } catch (x) { e = x; }
     eq("updatePlayer : nom de colonne injecté refusé", /non modifiable/.test(e?.message ?? ""), true);

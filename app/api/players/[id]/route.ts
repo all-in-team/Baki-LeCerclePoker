@@ -1,15 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
 import { updatePlayer, assertUpdatablePlayerFields } from "@/lib/queries";
 import { archivePlayers, unarchivePlayer, deletePlayerChecked } from "@/lib/players-archive";
-import { PlayerOpenError } from "@/lib/queries/player-open";
 
 export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
   const body = await req.json();
 
   // `archived` est traité à part : c'est l'archive (colonne dédiée), pas un champ libre de
-  // `players` — il ne doit pas transiter par le SET d'updatePlayer. Archiver passe par le
-  // verrou « ouvert » : un joueur qui a quelque chose à régler n'est jamais archivé.
+  // `players` — il ne doit pas transiter par le SET d'updatePlayer. Archiver est toujours
+  // permis (règle Baki) : un joueur à régler passe en tête d'« Archivés », rien ne s'efface.
   const { archived, archive_reason, ...fields } = body ?? {};
   try {
     // Champs vérifiés AVANT toute écriture : un champ refusé ne doit pas laisser un
@@ -19,9 +18,6 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
     else if (archived === false) unarchivePlayer(Number(id));
     if (Object.keys(fields).length > 0) updatePlayer(Number(id), fields);
   } catch (e: any) {
-    if (e instanceof PlayerOpenError) {
-      return NextResponse.json({ error: e.message, blocked: e.blocked }, { status: 409 });
-    }
     if (/non modifiable/.test(e?.message ?? "")) return NextResponse.json({ error: e.message }, { status: 400 });
     throw e;
   }

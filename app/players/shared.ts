@@ -39,8 +39,8 @@ export interface Player {
   archived_at: string | null;
   archive_reason: string | null;
   /**
-   * Ce qui reste ouvert (à régler / solde non nul), libellés de lib/queries/player-open.ts.
-   * Non vide ⇒ le joueur reste dans la vue principale même archivé (badge « archivé mais ouvert »).
+   * Ce qui reste à régler (solde non nul…), libellés de lib/queries/player-open.ts. Non vide ⇒
+   * dans « Archivés », le joueur passe en tête avec le badge « à régler » et ce motif.
    */
   open: string[];
   /** Liens actifs (deal en cours, wallet enregistrée) : pas « ouvert », indicateur dans Archivés. */
@@ -224,12 +224,28 @@ export function resolvePlayersPeriod(raw: string | undefined, today: string): Pl
   return { key: "30d", kind: "30d", from: daysAgo(30), to: today };
 }
 
-// ── Verrou (b) : vue principale = non archivé OU ouvert ──
+// ── Règles d'affichage de /players (Baki 2026-09-25, seconde version) ──
 // Pures et partagées (page serveur + barre client + test) : une seule règle d'affichage.
+// Uniquement de l'affichage : rien ici ne touche un calcul d'argent, un règlement ou un sync.
 
-/** Masqué de la vue principale = archivé ET rien d'ouvert. Un ouvert n'est jamais masqué. */
-export function isHiddenFromMain(p: { archived_at: string | null; open: string[] }): boolean {
-  return !!p.archived_at && p.open.length === 0;
+/**
+ * Vue principale = UNIQUEMENT les joueurs actifs (active / signed) et non archivés. Un inactif
+ * ou un archivé n'y apparaît pas, même s'il a quelque chose à régler — les archivés à régler
+ * sont en tête d'« Archivés » ; tout le reste reste accessible par « Tout afficher ».
+ */
+export function isHiddenFromMain(p: { archived_at: string | null; status: string }): boolean {
+  return !!p.archived_at || !isActiveStatus(p.status);
+}
+
+/** Vue « Archivés » : les joueurs à régler d'abord, puis l'ordre reçu (stable). */
+export function sortArchivedView<T extends { open: string[] }>(players: T[]): T[] {
+  return [...players].sort((a, b) => Number(b.open.length > 0) - Number(a.open.length > 0));
+}
+
+/** Compteur du bouton « Archivés (N · X à régler) ». */
+export function archivedCounts(players: { archived_at: string | null; open: string[] }[]): { total: number; toSettle: number } {
+  const archived = players.filter(p => p.archived_at);
+  return { total: archived.length, toSettle: archived.filter(p => p.open.length > 0).length };
 }
 
 type OpenStateLike = Map<number, { open: { label: string }[]; links: { code: string; game: string | null }[] }>;
@@ -238,9 +254,9 @@ const linkLabel = (l: { code: string; game: string | null }) =>
   l.code === "deal" ? `deal ${l.game}` : l.code === "wallet" ? `wallet ${l.game}` : l.code === "xpoker_deal" ? "deal XPoker" : "wallet legacy";
 
 /**
- * Attache l'état « ouvert » aux lignes joueurs. `state === null` (calcul en échec) ⇒
- * fail-closed : tout le monde est marqué ouvert, donc visible — masquer un joueur à tort,
- * c'est un règlement oublié.
+ * Attache l'état « à régler » aux lignes joueurs. `state === null` (calcul en échec) ⇒
+ * fail-closed : tout le monde est marqué « à régler » (en tête d'« Archivés ») — un « à régler »
+ * manqué, c'est un règlement oublié.
  */
 export function attachOpenState<T extends { id: number }>(rows: T[], state: OpenStateLike | null): (T & { open: string[]; links: string[] })[] {
   return rows.map(p => {

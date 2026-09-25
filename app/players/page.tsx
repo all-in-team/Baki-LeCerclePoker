@@ -36,8 +36,8 @@ export default async function PlayersPage({ searchParams }: {
   // Pas de whitelist de status : l'ancienne page /players affichait TOUS les joueurs alors
   // que le CRM filtrait 4 status. Sans ce SELECT ouvert, un joueur avec un status hors liste
   // deviendrait invisible partout.
-  // `archived_at` remonte ici : la vue principale = non archivé OU ouvert (verrou b), calculée
-  // côté client à partir de `open` ci-dessous ; « Archivés » et « Tout afficher » pour le reste.
+  // `archived_at` et `status` remontent ici : vue principale = actifs non archivés, calculée
+  // côté client (isHiddenFromMain) ; « Archivés » (à régler en tête) et « Tout afficher » pour le reste.
   const rawPlayers = db.prepare(`
     SELECT p.id, p.name, p.telegram_handle, p.telegram_phone, p.status, p.tier, p.notes,
       p.tron_address, p.tron_app_id, p.telegram_id, p.created_at, p.joined_via,
@@ -49,16 +49,16 @@ export default async function PlayersPage({ searchParams }: {
     ORDER BY p.name
   `).all() as Omit<Player, "open" | "links">[];
 
-  // Verrou (b) : un joueur ouvert reste dans la vue principale, archivé ou non. Fail-closed :
-  // si l'état ne se calcule pas, TOUT le monde est traité comme ouvert (donc visible) et un
-  // bandeau le dit — masquer un joueur à tort, c'est un règlement oublié.
+  // État « à régler » (badge et tri d'« Archivés »). Fail-closed : s'il ne se calcule pas, tout
+  // le monde est marqué « à régler » et un bandeau le dit — un « à régler » manqué, c'est un
+  // règlement oublié. Affichage seulement : aucun calcul d'argent ne lit ceci.
   let openError: string | null = null;
   let openState: ReturnType<typeof getPlayersOpenState> | null = null;
   try {
     openState = getPlayersOpenState();
   } catch (e: any) {
     openError = e?.message ?? String(e);
-    console.error("[players] état « ouvert » incalculable, tous les joueurs affichés :", openError);
+    console.error("[players] état « à régler » incalculable, tous les archivés marqués à régler :", openError);
   }
   const allPlayers: Player[] = attachOpenState(rawPlayers, openState);
 
