@@ -56,3 +56,31 @@ export function deletePlayerChecked(id: number): void {
     deletePlayer(id);
   }).immediate();
 }
+
+/**
+ * Remise à zéro d'onboarding (route admin reset-player) : supprime la ligne joueur, ses notes
+ * CRM, sa session bot et son lead pour rejouer /start. Passe par le verrou « ouvert » comme
+ * toute suppression — un joueur qui a quelque chose à régler n'est jamais effacé. Même transaction.
+ */
+export function resetPlayerChecked(by: { telegram_id?: number; player_id?: number }):
+  | { found: false }
+  | { found: true; deleted_player_id: number; deleted_player_name: string; deleted_session: boolean; deleted_lead: boolean } {
+  const db = getDb();
+  return db.transaction(() => {
+    const player = (by.telegram_id
+      ? db.prepare(`SELECT id, name, telegram_chat_id FROM players WHERE telegram_id = ?`).get(by.telegram_id)
+      : db.prepare(`SELECT id, name, telegram_chat_id FROM players WHERE id = ?`).get(by.player_id)) as
+      { id: number; name: string; telegram_chat_id: string | null } | undefined;
+    if (!player) return { found: false as const };
+
+    assertPlayersArchivableOn(db, [player.id]);
+
+    let deletedSession = false;
+    if (player.telegram_chat_id) deletedSession = db.prepare(`DELETE FROM telegram_sessions WHERE chat_id = ?`).run(player.telegram_chat_id).changes > 0;
+    db.prepare(`DELETE FROM crm_notes WHERE player_id = ?`).run(player.id);
+    db.prepare(`DELETE FROM players WHERE id = ?`).run(player.id);
+    // onboarding_leads nettoyé pour que /start reparte de zéro
+    const deletedLead = by.telegram_id ? db.prepare(`DELETE FROM onboarding_leads WHERE telegram_id = ?`).run(by.telegram_id).changes > 0 : false;
+    return { found: true as const, deleted_player_id: player.id, deleted_player_name: player.name, deleted_session: deletedSession, deleted_lead: deletedLead };
+  }).immediate();
+}

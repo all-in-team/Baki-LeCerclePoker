@@ -208,7 +208,7 @@ console.log("\n── B. Schéma réel (copie de la base locale, migrations appl
     console.log(`   source : ${DB_SRC}`);
     const ol = console.log, oe = console.error; console.log = () => {}; console.error = () => {};
     const { getDb } = require(path.join(REPO, "lib/db.ts"));
-    const { archivePlayers, unarchivePlayer, getPlayersOpenState, deletePlayerChecked } = require(path.join(REPO, "lib/players-archive.ts"));
+    const { archivePlayers, unarchivePlayer, getPlayersOpenState, deletePlayerChecked, resetPlayerChecked } = require(path.join(REPO, "lib/players-archive.ts"));
     const { updatePlayer } = require(path.join(REPO, "lib/queries.ts"));
     const d = getDb();
     console.log = ol; console.error = oe;
@@ -258,6 +258,11 @@ console.log("\n── B. Schéma réel (copie de la base locale, migrations appl
     try { deletePlayerChecked(open1); } catch (x) { e = x; }
     eq("suppression définitive d'un joueur ouvert refusée (audit I1)", [e?.name, !!d.prepare(`SELECT 1 FROM players WHERE id = ?`).get(open1)], ["PlayerOpenError", true]);
     e = null;
+    try { resetPlayerChecked({ player_id: open1 }); } catch (x) { e = x; }
+    eq("reset-player d'un joueur ouvert refusé, joueur intact", [e?.name, !!d.prepare(`SELECT 1 FROM players WHERE id = ?`).get(open1)], ["PlayerOpenError", true]);
+    const resettable = ins("ZZ garde reset propre");
+    eq("reset-player d'un joueur sans rien d'ouvert : effectué", [resetPlayerChecked({ player_id: resettable }).found, !!d.prepare(`SELECT 1 FROM players WHERE id = ?`).get(resettable)], [true, false]);
+    e = null;
     try { updatePlayer(clean2, { archived_at: null } as any); } catch (x) { e = x; }
     eq("updatePlayer : archived_at refusé (contournement du verrou fermé)", /non modifiable/.test(e?.message ?? ""), true);
     e = null;
@@ -284,6 +289,8 @@ const walk = (dir: string) => {
 };
 for (const dir of ["app", "lib", "components"]) walk(path.join(REPO, dir));
 eq("un seul écrivain de players.archived_at", writers, ["lib/players-archive.ts"]);
+const resetSrc = fs.readFileSync(path.join(REPO, "app/api/admin/reset-player/route.ts"), "utf8");
+eq("la route reset-player passe par resetPlayerChecked et ne supprime rien elle-même", [/resetPlayerChecked\(/.test(resetSrc), /DELETE\s+FROM/i.test(resetSrc)], [true, false]);
 
 console.log(`\n${passed} ✔, ${failures.length} ✘${skippedB ? " (bloc B sauté, voir ci-dessus)" : ""}`);
 if (failures.length) { console.log("ÉCHECS :", failures); process.exit(1); }

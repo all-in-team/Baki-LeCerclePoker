@@ -58,14 +58,14 @@ Deferred work from /plan-ceo-review (2026-04-28).
 - **Fait (2026-09-25).** `db-diagnostic` (run-sql, reset-player, migrate), hors auth, clé en dur
   dans un dépôt alors public : supprimée. `/api/admin/*` exige une session (merge `ba59fb0`,
   vérifié en prod : 36 routes × GET/POST → 401). `ADMIN_RECONCILE_TOKEN` tourné, nouvelle
-  valeur en variable Railway uniquement. **Dépôt GitHub encore PUBLIC au 2026-09-25 18:47 UTC
-  (`gh api` → `private: false`, page accessible sans connexion) : à passer en privé.** Les 9 clés en dur retirées
+  valeur en variable Railway uniquement. **Dépôt GitHub encore PUBLIC — dernière vérification 2026-09-25 19:39 UTC
+  (`gh api` → `private: false`). À passer en privé par Baki (accès GitHub à récupérer).** Les 9 clés en dur retirées
   (branche `chore/admin-keys-cleanup`). **Lecture prod = dump `railway volume files download`,
   jamais une route.**
 - **Comparaison au 16/08 (sauvegarde locale) : rien d'inexpliqué côté argent.** 2 433 tx
   communes, aucune colonne d'argent modifiée ; les 1 987 tx disparues = purge de l'incident
-  « contrat USDT » du 16/08 (joueur 148, cf. `dd45937`), faite à la main hors code. Non
-  attribuables faute de trace : 9 `action_pct` modifiés (dont 3 passés à 100 %). Reste ouvert :
+  « contrat USDT » du 16/08 (joueur 148, cf. `dd45937`), faite à la main hors code. Les 9
+  `action_pct` modifiés depuis le 16/08 (dont 3 passés à 100 %) : reconnus par Baki le 2026-09-25. Reste ouvert :
   la sauvegarde locale diffère du fichier du volume de même nom (6 336 512 vs 6 320 128 o).
 - **Webhooks Telegram / DZPK fail-open** (`app/api/telegram/webhook/route.ts:50-54`,
   `app/api/telegram/dzpk/webhook/route.ts:20-22`) : secret vérifié seulement s'il est défini.
@@ -103,10 +103,8 @@ Deferred work from /plan-ceo-review (2026-04-28).
   `player_id` / `session_date` d'une session déjà couverte par un règlement payé ; le moteur
   (`lib/queries/player-open.ts`, garde `created_at`) ne voit pas ce cas. Garde-fou à mettre dans
   l'API : refuser de modifier une session couverte par un règlement.
-- **`POST /api/admin/reset-player`** supprime n'importe quel joueur sans passer par
-  `deletePlayerChecked` (verrou « ouvert ») ; protégé par session + jeton admin. L'aligner ou le supprimer.
 - **Buy-ins XPoker** : un buy-in sans cash-out garde le joueur ouvert indéfiniment (source
-  `xpoker_chips`, fail-closed). À trancher par Baki : un buy-in est-il toujours payé d'avance ?
+  `xpoker_chips`) — fail-closed conservé, décision Baki 2026-09-25.
 
 ### Solder l'héritage TELE par un acte explicite (décision Baki 2026-09-25)
 - **Constat.** 417 tx TELE `settled=0` et 72 semaines hebdo non reçues (`weekly_settlements`

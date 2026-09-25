@@ -205,7 +205,7 @@ export function getPlayersOpenStateOn(db: DB, playerIds?: number[], opts: OpenSt
   //    versements de règlement (action_paid / rb_paid, eux-mêmes des règlements) :
   //    « position joueur = ses lignes + ses résultats × son deal » (xpoker/schema.ts). Un
   //    solde de lignes non nul = des chips créditées ou rendues qui ne sont pas soldées.
-  //    Fail-closed (décision à confirmer par Baki si un buy-in est toujours payé d'avance).
+  //    Fail-closed : un buy-in sans cash-out garde le joueur ouvert (décision Baki 2026-09-25).
   for (const r of db.prepare(`
     SELECT player_id AS id, COUNT(*) AS n,
            SUM(CASE WHEN direction = 'out' THEN chips ELSE -chips END) AS net_chips
