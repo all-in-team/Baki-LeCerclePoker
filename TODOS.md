@@ -58,14 +58,14 @@ Deferred work from /plan-ceo-review (2026-04-28).
 - **Fait (2026-09-25).** `db-diagnostic` (run-sql, reset-player, migrate), hors auth, clé en dur
   dans un dépôt alors public : supprimée. `/api/admin/*` exige une session (merge `ba59fb0`,
   vérifié en prod : 36 routes × GET/POST → 401). `ADMIN_RECONCILE_TOKEN` tourné, nouvelle
-  valeur en variable Railway uniquement. **Dépôt GitHub encore PUBLIC au 2026-09-25 18:47 UTC
-  (`gh api` → `private: false`, page accessible sans connexion) : à passer en privé.** Les 9 clés en dur retirées
+  valeur en variable Railway uniquement. **Dépôt GitHub encore PUBLIC — dernière vérification 2026-09-25 19:39 UTC
+  (`gh api` → `private: false`). À passer en privé par Baki (accès GitHub à récupérer).** Les 9 clés en dur retirées
   (branche `chore/admin-keys-cleanup`). **Lecture prod = dump `railway volume files download`,
   jamais une route.**
 - **Comparaison au 16/08 (sauvegarde locale) : rien d'inexpliqué côté argent.** 2 433 tx
   communes, aucune colonne d'argent modifiée ; les 1 987 tx disparues = purge de l'incident
-  « contrat USDT » du 16/08 (joueur 148, cf. `dd45937`), faite à la main hors code. Non
-  attribuables faute de trace : 9 `action_pct` modifiés (dont 3 passés à 100 %). Reste ouvert :
+  « contrat USDT » du 16/08 (joueur 148, cf. `dd45937`), faite à la main hors code. Les 9
+  `action_pct` modifiés depuis le 16/08 (dont 3 passés à 100 %) : reconnus par Baki le 2026-09-25. Reste ouvert :
   la sauvegarde locale diffère du fichier du volume de même nom (6 336 512 vs 6 320 128 o).
 - **Webhooks Telegram / DZPK fail-open** (`app/api/telegram/webhook/route.ts:50-54`,
   `app/api/telegram/dzpk/webhook/route.ts:20-22`) : secret vérifié seulement s'il est défini.
@@ -97,6 +97,24 @@ Deferred work from /plan-ceo-review (2026-04-28).
   prendre une base créée par la suite elle-même.
 
 ## P1 — High value, build next
+
+### Verrou « ouvert » des joueurs — trous hors périmètre du chantier Joueurs (contre-audit 2026-09-25)
+- **Session grindhouse déplacée après paiement** : `PATCH /api/grindhouse-sessions/[id]` peut changer
+  `player_id` / `session_date` d'une session déjà couverte par un règlement payé ; le moteur
+  (`lib/queries/player-open.ts`, garde `created_at`) ne voit pas ce cas. Garde-fou à mettre dans
+  l'API : refuser de modifier une session couverte par un règlement.
+- **Buy-ins XPoker** : un buy-in sans cash-out garde le joueur ouvert indéfiniment (source
+  `xpoker_chips`) — fail-closed conservé, décision Baki 2026-09-25.
+
+### Solder l'héritage TELE par un acte explicite (décision Baki 2026-09-25)
+- **Constat.** 417 tx TELE `settled=0` et 72 semaines hebdo non reçues (`weekly_settlements`
+  `auto_settled`/`pending_manual`, avril–juin 2026) : le moteur hebdo TELE n'a jamais utilisé le
+  flag `settled`, et le code les qualifie de fossiles (`manual-settlement-engine.ts:678`).
+- **Aujourd'hui :** comptées comme OUVERTES par `lib/queries/player-open.ts` (sources 1 et 2),
+  sans exception dans le filtre — 25 joueurs restent donc dans la vue principale de /players.
+- **À faire :** un acte explicite, joueur par joueur, sur le modèle de « acter à 0 » NEXA :
+  constater le solde TELE, le marquer réglé (trace : qui, quand, montant), jamais une purge
+  silencieuse. Ensuite seulement ces joueurs deviennent archivables.
 
 ### Smart alerts (loss threshold)
 - **What:** Telegram alert when a player's net P&L crosses a configurable threshold (e.g. -$2000)

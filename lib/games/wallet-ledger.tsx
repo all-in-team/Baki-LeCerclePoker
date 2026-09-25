@@ -131,7 +131,8 @@ export function loadWalletLedger(
   const gameId = gameIds[0] ?? 0;
   const walletMeres = gameIds.flatMap((id) => getWalletMeresForGame(id));
 
-  const players = getPlayers() as { id: number; name: string }[];
+  // Libellé du filtre seulement : un archivé filtré doit garder son nom, pas « #id ».
+  const players = getPlayers({ includeArchived: true }) as { id: number; name: string }[];
   const filterPlayerName = playerFilter ? (players.find((p) => p.id === playerFilter)?.name ?? `#${playerFilter}`) : null;
 
   // WN a un % INDÉPENDANT (Hugo 2026-07-20) : il ne doit jamais devenir le % "principal"

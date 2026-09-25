@@ -1,10 +1,11 @@
 export const dynamic = "force-dynamic";
 import { getTopContributors, getWalletSummaryByPlayer, getApps, type Period } from "@/lib/queries";
 import { getDb } from "@/lib/db";
+import { getPlayersOpenState } from "@/lib/players-archive";
 import PageHeader from "@/components/PageHeader";
 import PlayersPeriodBar from "./PlayersPeriodBar";
 import PlayersViewToggle from "./PlayersViewToggle";
-import { periodSubtitle, resolvePlayersPeriod, type App, type Deal, type Game, type Player, type PlayersPeriod } from "./shared";
+import { attachOpenState, periodSubtitle, resolvePlayersPeriod, type App, type Deal, type Game, type Player, type PlayersPeriod } from "./shared";
 
 // Page Joueurs unique — fusion de l'ancien /crm (kanban + agency cut + deals) et de
 // l'ancien /players (roster + add/edit). /crm redirige ici.
@@ -35,9 +36,9 @@ export default async function PlayersPage({ searchParams }: {
   // Pas de whitelist de status : l'ancienne page /players affichait TOUS les joueurs alors
   // que le CRM filtrait 4 status. Sans ce SELECT ouvert, un joueur avec un status hors liste
   // deviendrait invisible partout.
-  // `archived_at` remonte ici : la liste masque les archivés par défaut côté client, avec
-  // un toggle « Archivés » pour les récupérer (soft-delete réversible, audit 2026-07-25).
-  const allPlayers = db.prepare(`
+  // `archived_at` remonte ici : la vue principale = non archivé OU ouvert (verrou b), calculée
+  // côté client à partir de `open` ci-dessous ; « Archivés » et « Tout afficher » pour le reste.
+  const rawPlayers = db.prepare(`
     SELECT p.id, p.name, p.telegram_handle, p.telegram_phone, p.status, p.tier, p.notes,
       p.tron_address, p.tron_app_id, p.telegram_id, p.created_at, p.joined_via,
       p.archived_at, p.archive_reason,
@@ -46,7 +47,20 @@ export default async function PlayersPage({ searchParams }: {
       EXISTS(SELECT 1 FROM affiliate_relationships WHERE referred_player_id = p.id AND status='active') AS is_referred
     FROM players p
     ORDER BY p.name
-  `).all() as Player[];
+  `).all() as Omit<Player, "open" | "links">[];
+
+  // Verrou (b) : un joueur ouvert reste dans la vue principale, archivé ou non. Fail-closed :
+  // si l'état ne se calcule pas, TOUT le monde est traité comme ouvert (donc visible) et un
+  // bandeau le dit — masquer un joueur à tort, c'est un règlement oublié.
+  let openError: string | null = null;
+  let openState: ReturnType<typeof getPlayersOpenState> | null = null;
+  try {
+    openState = getPlayersOpenState();
+  } catch (e: any) {
+    openError = e?.message ?? String(e);
+    console.error("[players] état « ouvert » incalculable, tous les joueurs affichés :", openError);
+  }
+  const allPlayers: Player[] = attachOpenState(rawPlayers, openState);
 
   const gameRows = db.prepare(`
     SELECT pgd.player_id, GROUP_CONCAT(g.name, ',') AS game_names
@@ -113,6 +127,7 @@ export default async function PlayersPage({ searchParams }: {
         apps={apps}
         affiliatedByPlayer={affiliatedByPlayer}
         period={period}
+        openError={openError}
       />
     </>
   );

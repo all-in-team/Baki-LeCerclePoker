@@ -99,16 +99,21 @@ export default function PlayerEditModal({ player, dealsByPlayer, activeGames, ap
     }
   }
 
-  // Archive = soft, même sémantique que le bouton de la ligne (inactive / active).
+  // Archive (un seul concept, comme le bouton de la ligne) : sort le joueur de la vue
+  // principale. Refus serveur (409) si quelque chose reste ouvert — motifs affichés.
   async function toggleArchive() {
     setSaving(true);
     try {
-      const newStatus = isActiveStatus(p.status) ? "inactive" : "active";
-      await fetch(`/api/players/${p.id}`, {
+      const res = await fetch(`/api/players/${p.id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ status: newStatus }),
+        body: JSON.stringify({ archived: !p.archived_at, archive_reason: p.archived_at ? null : "retiré à la main" }),
       });
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({}));
+        alert(d.error ?? `Erreur ${res.status}`);
+        return;
+      }
       onClose();
       router.refresh();
     } catch (e: any) {
@@ -138,7 +143,7 @@ export default function PlayerEditModal({ player, dealsByPlayer, activeGames, ap
             </select>
           </div>
           <div style={{ flex: 1 }}>
-            <label style={LBL}>Status</label>
+            <label style={LBL} title="Libellé manuel, sans effet sur l'affichage : seule l'archive masque un joueur">Statut CRM</label>
             <select value={form.status} onChange={e => setForm({ ...form, status: e.target.value })} style={INP}>
               <option value="active">Active</option>
               <option value="signed">Signed</option>
@@ -245,8 +250,13 @@ export default function PlayerEditModal({ player, dealsByPlayer, activeGames, ap
         </div>
 
         <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 8 }}>
-          <button disabled={saving} onClick={toggleArchive} style={{ padding: "8px 12px", borderRadius: 7, fontSize: 12, cursor: "pointer", background: "none", border: "1px solid var(--border)", color: "var(--text-muted)" }}>
-            {isActiveStatus(p.status) ? "Archiver" : "Réactiver"}
+          <button
+            disabled={saving || (!p.archived_at && p.open.length > 0)}
+            onClick={toggleArchive}
+            title={!p.archived_at && p.open.length > 0 ? "Archivage impossible, reste ouvert : " + p.open.join(" ; ") : undefined}
+            style={{ padding: "8px 12px", borderRadius: 7, fontSize: 12, cursor: !p.archived_at && p.open.length > 0 ? "not-allowed" : "pointer", background: "none", border: "1px solid var(--border)", color: "var(--text-muted)", opacity: !p.archived_at && p.open.length > 0 ? 0.4 : 1 }}
+          >
+            {p.archived_at ? "Désarchiver" : "Archiver"}
           </button>
           <div style={{ flex: 1 }} />
           <button onClick={onClose} style={{ padding: "8px 18px", borderRadius: 7, fontSize: 13, cursor: "pointer", background: "none", border: "1px solid var(--border)", color: "var(--text-muted)" }}>

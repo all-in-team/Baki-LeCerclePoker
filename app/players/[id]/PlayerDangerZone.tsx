@@ -4,22 +4,26 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 
 // Suppression définitive : uniquement ici (fiche joueur), avec confirmation.
-// La liste /players n'expose que edit + archive (soft).
-export default function PlayerDangerZone({ playerId, playerName, status }: { playerId: number; playerName: string; status: string }) {
+// Archiver = la même archive que la liste /players (un seul concept) ; refusée par le
+// serveur (409, motifs affichés) tant que quelque chose reste ouvert.
+export default function PlayerDangerZone({ playerId, playerName, archivedAt }: { playerId: number; playerName: string; archivedAt: string | null }) {
   const router = useRouter();
   const [confirm, setConfirm] = useState(false);
   const [busy, setBusy] = useState(false);
 
-  const isActive = status === "active" || status === "signed";
-
   async function archive() {
     setBusy(true);
     try {
-      await fetch(`/api/players/${playerId}`, {
+      const res = await fetch(`/api/players/${playerId}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ status: isActive ? "inactive" : "active" }),
+        body: JSON.stringify({ archived: !archivedAt, archive_reason: archivedAt ? null : "retiré à la main" }),
       });
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({}));
+        alert(d.error ?? `Erreur ${res.status}`);
+        return;
+      }
       router.refresh();
     } catch (e: any) {
       alert("Erreur: " + (e.message ?? e));
@@ -69,7 +73,7 @@ export default function PlayerDangerZone({ playerId, playerName, status }: { pla
       ) : (
         <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
           <button disabled={busy} onClick={archive} style={{ padding: "8px 14px", borderRadius: 7, fontSize: 12, cursor: busy ? "wait" : "pointer", background: "none", border: "1px solid var(--border)", color: "var(--text-muted)" }}>
-            {isActive ? "Archiver (soft)" : "Réactiver"}
+            {archivedAt ? "Désarchiver" : "Archiver"}
           </button>
           <button onClick={() => setConfirm(true)} style={{ padding: "8px 14px", borderRadius: 7, fontSize: 12, cursor: "pointer", background: "rgba(239,68,68,0.08)", border: "1px solid rgba(239,68,68,0.2)", color: "#EF4444" }}>
             Supprimer définitivement
