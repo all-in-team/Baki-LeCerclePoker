@@ -124,6 +124,17 @@ export async function POST(req: NextRequest) {
     }
   }
 
+  // ── Diffusions @LeCercle_Lebot : audience, blocages, réponses ─────────────────────────────────
+  // Lecture seule de l'update, aucun appel Telegram, aucune décision de routage : on note qui a
+  // parlé au bot en privé (lecercle_bot_users) et on rattache un message à la dernière diffusion
+  // reçue dans les 72 h. Un échec ici est loggé et n'interrompt jamais le traitement qui suit.
+  try {
+    const { recordInboundForBroadcast } = await import("@/lib/funnels/lecercle/tracking");
+    recordInboundForBroadcast(update);
+  } catch (e: any) {
+    console.error("[LECERCLE BROADCAST] suivi entrant:", e?.message ?? e);
+  }
+
   // Handle inline keyboard button clicks
   if (update.callback_query) {
     const cb = update.callback_query;
