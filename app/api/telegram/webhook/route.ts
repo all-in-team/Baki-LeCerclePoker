@@ -124,6 +124,26 @@ export async function POST(req: NextRequest) {
     }
   }
 
+  // Premier message du propriétaire dans SON groupe — alimente `runSilentGroupCleanup`
+  // (Hugo 2026-09-25). L'UPDATE ne touche qu'une ligne au plus (chat_id UNIQUE) et est
+  // idempotent (garde `first_msg_at IS NULL`) : rejouer coûte 0 écriture après le
+  // premier mot. On restreint aux vrais messages : un callback est un clic, pas un mot.
+  if (updateType === "message"
+      && typeof logFrom === "number"
+      && !OWNER_IDS.has(logFrom)
+      && String(logChat) !== String(AGENT_CHAT_ID)) {
+    try {
+      const { getDb } = await import("@/lib/db");
+      getDb().prepare(
+        `UPDATE group_creations
+           SET first_msg_at = strftime('%Y-%m-%d %H:%M:%f','now')
+         WHERE chat_id = ? AND owner_key = ? AND first_msg_at IS NULL`
+      ).run(String(logChat), logFrom);
+    } catch (e: any) {
+      console.error(`[GROUPS] first_msg_at update failed chat=${logChat} from=${logFrom}:`, e?.message ?? e);
+    }
+  }
+
   // Handle inline keyboard button clicks
   if (update.callback_query) {
     const cb = update.callback_query;

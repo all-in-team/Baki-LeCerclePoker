@@ -56,6 +56,7 @@ export type GroupCreationRow = {
   joined_by: number | null;
   cleaned_at: string | null;
   cleanup_reason: string | null;
+  first_msg_at: string | null;
 };
 
 // ── Registre ──────────────────────────────────────────────
@@ -734,5 +735,185 @@ export async function reportGhostCleanup(r: GhostCleanupResult): Promise<void> {
     await sendMsg(AGENT_CHAT_ID, lines.join("\n"));
   } catch (e: any) {
     console.error("[GROUPS] reportGhostCleanup failed:", e?.message ?? e);
+  }
+}
+
+// ── Nettoyage des groupes silencieux (7 j) ─────────────────
+//
+// Cible : le lead a bien rejoint son groupe (24 h passées → hors radar du job ghost)
+// mais n'a JAMAIS envoyé le moindre message. C'est la classe « spam /start » que
+// l'opérateur voit s'accumuler par centaines.
+//
+// Signal : `first_msg_at` alimenté par le webhook au premier vrai message du
+// propriétaire dans SON groupe (chat_id + owner_key). Un callback (clic bouton) ne
+// compte pas — la règle demandée est « aucun message ».
+//
+// GARDE-FOUS DURS (aucun ne peut être contourné par le cron automatique) :
+//   • deal actif dans player_game_deals (end_date IS NULL) → skip
+//   • ≥1 wallet_transactions sur le joueur → skip
+//   • lead Nexa au-delà de `account_created` (dépôt constaté) → skip
+//   • humain hors équipe encore présent (relit les membres) → `has_human`, join réparé
+//   • membres illisibles → skip (jamais de purge à l'aveugle) — hérité de purgeGroupById
+//   • cap par run (throttle Telegram)
+//
+// Kick équipe + sortie userbot = suppression Telegram effective (côté API il n'y a
+// pas d'autre chemin — voir purgeOrTag). Après purge : le joueur associé passe en
+// `status = 'churned'`, JAMAIS d'écriture dans les tables financières.
+
+const SILENT_DEFAULT_MAX_AGE_DAYS = 7;
+const SILENT_DEFAULT_CAP = 20;
+
+export interface SilentGroupCleanupResult {
+  ok: boolean;
+  dry_run: boolean;
+  candidates: number;
+  scanned: number;
+  purged: { chat_id: string; label: string }[];
+  tagged: { chat_id: string; label: string; reason: string }[];
+  self_healed: { chat_id: string; label: string; human: string }[];
+  skipped: { chat_id: string; label: string; reason: string }[];
+  churned: { player_id: number; name: string }[];
+  remaining: number;
+  error: string | null;
+}
+
+/**
+ * Extension du `businessGuard` pour le job silencieux : le deal actif
+ * (`player_game_deals.end_date IS NULL`) devient BLOQUANT, en plus des mouvements
+ * wallet. Un joueur qui a un deal actif est un joueur qui a été onboardé — on ne le
+ * churn pas, même si son groupe est muet.
+ */
+function silentBusinessGuard(row: GroupCreationRow): string | null {
+  const db = getDb();
+  if (row.owner_kind === "player") {
+    const p = db.prepare(
+      `SELECT id,
+         (SELECT COUNT(*) FROM wallet_transactions w WHERE w.player_id = players.id) AS txs,
+         (SELECT COUNT(*) FROM player_game_deals d WHERE d.player_id = players.id AND d.end_date IS NULL) AS deals_active
+       FROM players WHERE telegram_id = ?`
+    ).get(row.owner_key) as { id: number; txs: number; deals_active: number } | undefined;
+    if (!p) return null;
+    if (p.txs > 0) return `joueur #${p.id} avec ${p.txs} mouvement(s) wallet`;
+    if (p.deals_active > 0) return `joueur #${p.id} avec ${p.deals_active} deal(s) actif(s)`;
+    return null;
+  }
+  try {
+    const lead = db.prepare(`SELECT id, stage FROM nexa_leads WHERE tg_user_id = ?`)
+      .get(row.owner_key) as { id: number; stage: string } | undefined;
+    if (lead && !["started", "app_installed", "account_created"].includes(lead.stage)) {
+      return `lead Nexa #${lead.id} au stade ${lead.stage} (dépôt constaté)`;
+    }
+  } catch { /* table absente */ }
+  return null;
+}
+
+/** Passe en `churned` les joueurs liés au chat purgé. Idempotent, no-op si déjà `churned`. */
+function markPlayersChurnedByChatId(chatId: string): { player_id: number; name: string }[] {
+  const db = getDb();
+  const players = db.prepare(
+    `SELECT id, name, status FROM players WHERE telegram_group_id = ?`
+  ).all(String(chatId)) as { id: number; name: string; status: string }[];
+  const out: { player_id: number; name: string }[] = [];
+  for (const p of players) {
+    if (p.status !== "churned") {
+      try { db.prepare(`UPDATE players SET status = 'churned' WHERE id = ?`).run(p.id); }
+      catch (e: any) { console.error(`[GROUPS] churn player #${p.id} failed:`, e?.message ?? e); continue; }
+    }
+    out.push({ player_id: p.id, name: p.name });
+  }
+  return out;
+}
+
+/**
+ * Job 7 j. Un groupe rejoint mais SANS aucun message du lead pendant `maxAgeDays`
+ * est purgé (kick équipe + sortie du userbot ⇒ groupe supprimé côté Telegram) et le
+ * joueur associé passe en `churned`. `dryRun` ne touche NI Telegram NI la base.
+ */
+export async function runSilentGroupCleanup(opts?: {
+  maxAgeDays?: number; cap?: number; dryRun?: boolean;
+}): Promise<SilentGroupCleanupResult> {
+  const maxAgeDays = opts?.maxAgeDays ?? SILENT_DEFAULT_MAX_AGE_DAYS;
+  const cap = Math.min(opts?.cap ?? SILENT_DEFAULT_CAP, SILENT_DEFAULT_CAP);
+  const dryRun = !!opts?.dryRun;
+  const res: SilentGroupCleanupResult = {
+    ok: false, dry_run: dryRun, candidates: 0, scanned: 0,
+    purged: [], tagged: [], self_healed: [], skipped: [], churned: [],
+    remaining: 0, error: null,
+  };
+
+  // Fenêtre : groupe créé il y a ≥ maxAgeDays, rejoint (sinon = ghost 24 h),
+  // aucun message du propriétaire (`first_msg_at IS NULL`), pas déjà nettoyé.
+  const rows = getDb().prepare(`
+    SELECT * FROM group_creations
+    WHERE cleaned_at IS NULL
+      AND first_msg_at IS NULL
+      AND joined_at IS NOT NULL
+      AND (julianday('now') - julianday(created_at)) >= ?
+    ORDER BY created_at
+  `).all(maxAgeDays) as GroupCreationRow[];
+
+  res.candidates = rows.length;
+  const batch = rows.slice(0, cap);
+  res.remaining = rows.length - batch.length;
+  if (batch.length === 0) { res.ok = true; return res; }
+
+  const me = await getUserbotMe();
+  if (!me) { res.error = "userbot non connecté"; return res; }
+
+  for (const row of batch) {
+    res.scanned++;
+    const label = labelOf(row);
+
+    const guard = silentBusinessGuard(row);
+    if (guard) { res.skipped.push({ chat_id: row.chat_id, label, reason: guard }); continue; }
+
+    const out = await purgeGroupById(row.chat_id, { reason: "silent_7d", label, dryRun });
+    if (out.outcome === "purged") res.purged.push({ chat_id: row.chat_id, label });
+    else if (out.outcome === "tagged") res.tagged.push({ chat_id: row.chat_id, label, reason: out.detail });
+    else if (out.outcome === "has_human") res.self_healed.push({ chat_id: row.chat_id, label, human: out.detail });
+    else res.skipped.push({ chat_id: row.chat_id, label, reason: out.detail });
+
+    // Churn le(s) joueur(s) lié(s) UNIQUEMENT si le groupe a réellement été
+    // supprimé côté Telegram (purge/tag). Un has_human ⇒ le lead est là, on ne
+    // touche pas. Un skip (membres illisibles, etc.) ⇒ décision reportée.
+    if (!dryRun && (out.outcome === "purged" || out.outcome === "tagged")) {
+      const churned = markPlayersChurnedByChatId(row.chat_id);
+      for (const c of churned) res.churned.push(c);
+    }
+  }
+
+  res.ok = true;
+  return res;
+}
+
+/** Rapport dans le chat agent. Silencieux si rien n'a bougé (même règle que ghost cleanup). */
+export async function reportSilentGroupCleanup(r: SilentGroupCleanupResult): Promise<void> {
+  try {
+    if (r.ok && r.purged.length === 0 && r.tagged.length === 0 && r.self_healed.length === 0 && r.churned.length === 0) {
+      return;
+    }
+    const lines: string[] = [`🕸 <b>Groupes silencieux (7 j)</b>${r.dry_run ? " — <i>dry-run</i>" : ""}`];
+    if (!r.ok) {
+      lines.push(`❌ Échec : ${r.error}`);
+    } else {
+      lines.push(
+        `${r.purged.length} supprimé(s) · ${r.tagged.length} tagué(s) abandonné · ` +
+        `${r.self_healed.length} réparé(s) (join manqué) · ${r.skipped.length} ignoré(s)` +
+        (r.remaining > 0 ? ` · ${r.remaining} pour le prochain run` : "")
+      );
+      for (const p of r.purged) lines.push(`  🗑 ${p.label}`);
+      for (const t of r.tagged) lines.push(`  ⚰️ ${t.label} — ${t.reason}`);
+      for (const h of r.self_healed) lines.push(`  ✅ ${h.label} — ${h.human}`);
+      for (const s of r.skipped) lines.push(`  ⏭ ${s.label} — ${s.reason}`);
+      if (r.churned.length) {
+        lines.push(
+          `👉 ${r.churned.length} joueur(s) passé(s) en <code>churned</code> : ` +
+          r.churned.map((c) => `${c.name} (#${c.player_id})`).join(", ")
+        );
+      }
+    }
+    await sendMsg(AGENT_CHAT_ID, lines.join("\n"));
+  } catch (e: any) {
+    console.error("[GROUPS] reportSilentGroupCleanup failed:", e?.message ?? e);
   }
 }
