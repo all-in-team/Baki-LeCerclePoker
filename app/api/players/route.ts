@@ -1,8 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getPlayers, insertPlayer } from "@/lib/queries";
 
-export async function GET() {
-  return NextResponse.json(getPlayers());
+// ?include_archived=1 : pour AFFICHER ou configurer (modale des wallets TELE) ; sans, la liste
+// sert aux sélecteurs d'ajout et exclut les archivés (cf. getPlayers).
+export async function GET(req: NextRequest) {
+  return NextResponse.json(getPlayers({ includeArchived: req.nextUrl.searchParams.get("include_archived") === "1" }));
 }
 
 export async function POST(req: NextRequest) {

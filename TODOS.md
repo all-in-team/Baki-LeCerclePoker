@@ -98,6 +98,16 @@ Deferred work from /plan-ceo-review (2026-04-28).
 
 ## P1 — High value, build next
 
+### Solder l'héritage TELE par un acte explicite (décision Baki 2026-09-25)
+- **Constat.** 417 tx TELE `settled=0` et 72 semaines hebdo non reçues (`weekly_settlements`
+  `auto_settled`/`pending_manual`, avril–juin 2026) : le moteur hebdo TELE n'a jamais utilisé le
+  flag `settled`, et le code les qualifie de fossiles (`manual-settlement-engine.ts:678`).
+- **Aujourd'hui :** comptées comme OUVERTES par `lib/queries/player-open.ts` (sources 1 et 2),
+  sans exception dans le filtre — 25 joueurs restent donc dans la vue principale de /players.
+- **À faire :** un acte explicite, joueur par joueur, sur le modèle de « acter à 0 » NEXA :
+  constater le solde TELE, le marquer réglé (trace : qui, quand, montant), jamais une purge
+  silencieuse. Ensuite seulement ces joueurs deviennent archivables.
+
 ### Smart alerts (loss threshold)
 - **What:** Telegram alert when a player's net P&L crosses a configurable threshold (e.g. -$2000)
 - **Why:** Catch underwater players before losses compound

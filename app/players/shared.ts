@@ -35,9 +35,16 @@ export interface Player {
   joined_via: string | null;
   is_affiliate: number;
   is_referred: number;
-  /** Soft-delete : non-null ⇒ masqué de la liste par défaut, restaurable via le toggle. */
+  /** Archive : non-null ⇒ hors de la vue principale (sauf si ouvert), restaurable d'un clic. */
   archived_at: string | null;
   archive_reason: string | null;
+  /**
+   * Ce qui reste ouvert (à régler / solde non nul), libellés de lib/queries/player-open.ts.
+   * Non vide ⇒ le joueur reste dans la vue principale même archivé (badge « archivé mais ouvert »).
+   */
+  open: string[];
+  /** Liens actifs (deal en cours, wallet enregistrée) : pas « ouvert », indicateur dans Archivés. */
+  links: string[];
 }
 
 export interface Deal {
@@ -158,6 +165,8 @@ export interface PlayersViewProps {
   apps: App[];
   affiliatedByPlayer: Record<number, { name: string; handle: string | null }>;
   period: PlayersPeriod;
+  /** Non-null si l'état « ouvert » n'a pas pu être calculé (tout le monde est alors affiché). */
+  openError?: string | null;
 }
 
 // Un joueur "actif" au sens du roster : les deux status que le bot écrit.
@@ -213,4 +222,33 @@ export function resolvePlayersPeriod(raw: string | undefined, today: string): Pl
   }
 
   return { key: "30d", kind: "30d", from: daysAgo(30), to: today };
+}
+
+// ── Verrou (b) : vue principale = non archivé OU ouvert ──
+// Pures et partagées (page serveur + barre client + test) : une seule règle d'affichage.
+
+/** Masqué de la vue principale = archivé ET rien d'ouvert. Un ouvert n'est jamais masqué. */
+export function isHiddenFromMain(p: { archived_at: string | null; open: string[] }): boolean {
+  return !!p.archived_at && p.open.length === 0;
+}
+
+type OpenStateLike = Map<number, { open: { label: string }[]; links: { code: string; game: string | null }[] }>;
+
+const linkLabel = (l: { code: string; game: string | null }) =>
+  l.code === "deal" ? `deal ${l.game}` : l.code === "wallet" ? `wallet ${l.game}` : l.code === "xpoker_deal" ? "deal XPoker" : "wallet legacy";
+
+/**
+ * Attache l'état « ouvert » aux lignes joueurs. `state === null` (calcul en échec) ⇒
+ * fail-closed : tout le monde est marqué ouvert, donc visible — masquer un joueur à tort,
+ * c'est un règlement oublié.
+ */
+export function attachOpenState<T extends { id: number }>(rows: T[], state: OpenStateLike | null): (T & { open: string[]; links: string[] })[] {
+  return rows.map(p => {
+    const st = state?.get(p.id);
+    return {
+      ...p,
+      open: state ? (st?.open.map(r => r.label) ?? []) : ["état « ouvert » incalculable — affiché par sécurité"],
+      links: [...new Set(st?.links.map(linkLabel) ?? [])],
+    };
+  });
 }
