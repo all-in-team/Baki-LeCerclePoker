@@ -18,6 +18,10 @@
 // │     l'appelle ni ne porte `run-sql`.                                       │
 // │  5. Les webhooks Telegram / DZPK restent HORS middleware : Telegram les    │
 // │     appelle sans session, ils se protègent par leur secret de webhook.     │
+// │  6. Plus aucune clé en dur (champ `key` du corps, clé datée) ; les routes  │
+// │     qui en avaient une appellent adminTokenGuard avant toute autre chose.  │
+// │  7. adminTokenGuard : fail-closed (503 sans variable, 401 sans ou avec un  │
+// │     mauvais en-tête), passe avec le bon jeton.                             │
 // └────────────────────────────────────────────────────────────────────────────┘
 
 import fs from "fs";
@@ -25,6 +29,7 @@ import path from "path";
 import { NextRequest } from "next/server";
 import { SignJWT } from "jose";
 import { middleware, config } from "../middleware";
+import { adminTokenGuard } from "../lib/admin-token";
 
 let passed = 0;
 const failures: string[] = [];
@@ -109,6 +114,39 @@ async function main() {
   };
   for (const d of ["app", "lib", "components", "scripts"]) walk(path.join(ROOT, d));
   eq("aucun code (app, lib, components, scripts) n'appelle db-diagnostic ni run-sql", offenders, []);
+
+  console.log("\n6. Plus aucune clé en dur ; garde x-admin-token en tête des anciennes routes à clé");
+  const keyed: string[] = [];
+  const walkKeys = (dir: string) => {
+    for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+      if (["node_modules", ".next"].includes(e.name)) continue;
+      const f = path.join(dir, e.name);
+      if (e.isDirectory()) walkKeys(f);
+      else if (/\.(ts|tsx|js|mjs|sh)$/.test(e.name) && !f.endsWith("admin-auth.test.ts")
+        && /body\.key\s*!==|key:\s*["'][a-z0-9-]+-20\d{6}["']|=\s*["'][a-z0-9-]+-20\d{6}["']/.test(fs.readFileSync(f, "utf8"))) keyed.push(path.relative(ROOT, f));
+    }
+  };
+  for (const d of ["app", "lib", "components", "scripts"]) walkKeys(path.join(ROOT, d));
+  eq("aucune clé en dur dans app, lib, components, scripts", keyed, []);
+  const formerlyKeyed = ["archive-never-players", "cleanup-shells", "drain-queue", "purge-ghost-groups", "test-onboarding", "treasury-backfill", "userbot-leave-groups"];
+  const notGuardedFirst = formerlyKeyed.filter((r) => {
+    const src = fs.readFileSync(path.join(ADMIN_DIR, r, "route.ts"), "utf8");
+    const post = src.slice(src.indexOf("export async function POST"));
+    const lines = post.slice(post.indexOf("{") + 1).split("\n").map((l) => l.trim()).filter(Boolean);
+    // Seule instruction tolérée avant le garde : la lecture du corps (sans effet).
+    const i = lines.findIndex((l) => l.startsWith("const denied = adminTokenGuard(req)"));
+    return i < 0 || lines.slice(0, i).some((l) => !l.startsWith("const body = await req.json()"));
+  });
+  eq("les 7 anciennes routes à clé appellent adminTokenGuard en premier", notGuardedFirst, []);
+
+  console.log("\n7. adminTokenGuard");
+  const hreq = (tok?: string) => new NextRequest("https://example.test/api/admin/x", { method: "POST", headers: tok ? { "x-admin-token": tok } : {} });
+  delete process.env.ADMIN_RECONCILE_TOKEN;
+  eq("sans ADMIN_RECONCILE_TOKEN : 503", adminTokenGuard(hreq("x"))?.status, 503);
+  process.env.ADMIN_RECONCILE_TOKEN = "jeton-test";
+  eq("sans en-tête : 401", adminTokenGuard(hreq())?.status, 401);
+  eq("mauvais en-tête : 401", adminTokenGuard(hreq("faux"))?.status, 401);
+  eq("bon en-tête : passe", adminTokenGuard(hreq("jeton-test")), null);
 
   console.log(`\n${passed} ✔, ${failures.length} ✘`);
   if (failures.length) { console.log("ÉCHECS :", failures); process.exit(1); }

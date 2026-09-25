@@ -1,11 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
+import { adminTokenGuard } from "@/lib/admin-token";
 import { getDb } from "@/lib/db";
 
 export async function POST(req: NextRequest) {
-  const body = await req.json().catch(() => ({}));
-  if (body.key !== "test-onboard-20260517") {
-    return NextResponse.json({ error: "bad key" }, { status: 403 });
-  }
+  const denied = adminTokenGuard(req);
+  if (denied) return denied;
 
   const db = getDb();
   const log: string[] = [];

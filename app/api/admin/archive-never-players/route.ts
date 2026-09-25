@@ -1,5 +1,6 @@
 export const dynamic = "force-dynamic";
 import { NextRequest, NextResponse } from "next/server";
+import { adminTokenGuard } from "@/lib/admin-token";
 import { getDb } from "@/lib/db";
 import { getNeverPlayerBucket, archivePlayers } from "@/lib/queries";
 import { sendMsg, AGENT_CHAT_ID } from "@/lib/telegram-commands/helpers";
@@ -10,21 +11,21 @@ import { sendMsg, AGENT_CHAT_ID } from "@/lib/telegram-commands/helpers";
 // communautaire `𓂃🌿 نَفَحَاتٌ إِيمَانِيَّةٌ 🌿𓂃` (chat -1004358906632, aucun rapport avec le
 // poker) et `handleNewMembers` créait une ligne à chaque personne qui rejoignait.
 //
-//   POST { key, mode: "dry-run" }        → le bucket recalculé, aucune écriture
-//   POST { key, mode: "archive" }        → soft-delete du bucket (archived_at), réversible
-//   POST { key, mode: "leave-chat", chat_id } → fait sortir le bot du groupe fourni
+//   POST (x-admin-token) { mode: "dry-run" }        → le bucket recalculé, aucune écriture
+//   POST (x-admin-token) { mode: "archive" }        → soft-delete du bucket (archived_at), réversible
+//   POST (x-admin-token) { mode: "leave-chat", chat_id } → fait sortir le bot du groupe fourni
 //
 // Le bucket est TOUJOURS recalculé par getNeverPlayerBucket() (mêmes garde-fous que
 // l'audit : game, member_id, argent, wallet, groupe, note LeCercle, tag Aff/Ref, funnel,
 // statut travaillé à la main, création manuelle). Aucun id n'est figé dans le code, et
 // l'archivage passe par une liste d'ids explicite — jamais un UPDATE avec WHERE ouvert.
 
-const KEY = "archive-never-players-20260725";
 const REASON = "jamais joueur — audit 2026-07-25 (groupe communautaire, aucune activité)";
 
 export async function POST(req: NextRequest) {
   const body = await req.json().catch(() => ({}));
-  if (body.key !== KEY) return NextResponse.json({ error: "bad key" }, { status: 403 });
+  const denied = adminTokenGuard(req);
+  if (denied) return denied;
   const mode: string = body.mode ?? "dry-run";
   const db = getDb();
 

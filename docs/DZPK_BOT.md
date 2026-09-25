@@ -4,6 +4,16 @@ Bot Telegram **dédié**, en chinois, destination de toutes les pubs dzpk. Il
 capture l'identité du lead au `/start`, pousse le lien du club @dzpk, et sert de
 base au suivi du funnel `start → join → rattaché`.
 
+> **Appeler une route `/api/admin/*` (depuis le 2026-09-25).** Session obligatoire EN PLUS
+> de `x-admin-token` (`middleware.ts`) : sans cookie, 401. Les exemples ci-dessous passent
+> `-b "$JAR"`, un cookie obtenu une fois par :
+>
+> ```bash
+> JAR=$(mktemp); BASE=https://lecerclepoker-production.up.railway.app
+> curl -s -c "$JAR" -X POST $BASE/api/login -H 'content-type: application/json' \
+>      -d "{\"password\":\"$APP_PASSWORD\"}"
+> ```
+
 **Il est entièrement séparé du bot principal et du funnel NEXA** : token
 distinct, webhook distinct, tables distinctes. Aucun code NEXA ne le lit, il ne
 lit aucune table NEXA. Cette séparation est structurelle, pas conventionnelle —
@@ -64,7 +74,7 @@ compte en croyant lire le bon, ce qui est exactement le bug ci-dessous.
 > désormais le compte réellement lu.
 
 ```bash
-curl .../api/admin/dzpk-ingest -H "x-admin-token: $ADMIN_RECONCILE_TOKEN"
+curl .../api/admin/dzpk-ingest -b "$JAR" -H "x-admin-token: $ADMIN_RECONCILE_TOKEN"
 # → "reading_as": {"username":"strawberry5421","user_id":…,"connected":true}
 ```
 
@@ -310,18 +320,18 @@ stocké, il se calcule à la lecture.
 ```bash
 # État : curseur, fraîcheur, compteurs, unparsed, file de réconciliation,
 # et le taux d'auto-appariement qu'on OBTIENDRAIT (dry run, aucune écriture)
-curl .../api/admin/dzpk-ingest -H "x-admin-token: $ADMIN_RECONCILE_TOKEN"
+curl .../api/admin/dzpk-ingest -b "$JAR" -H "x-admin-token: $ADMIN_RECONCILE_TOKEN"
 
 # Passe d'ingestion immédiate
-curl -X POST .../api/admin/dzpk-ingest -H "x-admin-token: $T" \
+curl -X POST .../api/admin/dzpk-ingest -b "$JAR" -H "x-admin-token: $T" \
   -H 'Content-Type: application/json' -d '{"action":"ingest"}'
 
 # Appliquer les appariements (ajouter "dry_run":true pour seulement mesurer)
-curl -X POST .../api/admin/dzpk-ingest -H "x-admin-token: $T" \
+curl -X POST .../api/admin/dzpk-ingest -b "$JAR" -H "x-admin-token: $T" \
   -H 'Content-Type: application/json' -d '{"action":"match"}'
 
 # Rattacher à la main — le lien est mémorisé pour les fois suivantes
-curl -X POST .../api/admin/dzpk-ingest -H "x-admin-token: $T" \
+curl -X POST .../api/admin/dzpk-ingest -b "$JAR" -H "x-admin-token: $T" \
   -H 'Content-Type: application/json' \
   -d '{"action":"resolve","club_message_id":42,"lead_id":7,"operator":"baki"}'
 ```
@@ -487,20 +497,20 @@ BASE=https://lecerclepoker-production.up.railway.app
 TOK=$ADMIN_RECONCILE_TOKEN
 
 # 1. Ce que le serveur voit : URL configurées, {CB} présent, état des leads
-curl -s $BASE/api/admin/dzpk-postback -H "x-admin-token: $TOK" | jq
+curl -s $BASE/api/admin/dzpk-postback -b "$JAR" -H "x-admin-token: $TOK" | jq
 
 # 2. Envoi de test avec un cb factice
-curl -s -X POST $BASE/api/admin/dzpk-postback -H "x-admin-token: $TOK" \
+curl -s -X POST $BASE/api/admin/dzpk-postback -b "$JAR" -H "x-admin-token: $TOK" \
      -H 'content-type: application/json' \
      -d '{"network":"propeller","cb":"TEST-CONV-1"}' | jq
 
 # 3. Rejeu explicite pour un lead réel (lève le verrou — à faire en connaissance)
-curl -s -X POST $BASE/api/admin/dzpk-postback -H "x-admin-token: $TOK" \
+curl -s -X POST $BASE/api/admin/dzpk-postback -b "$JAR" -H "x-admin-token: $TOK" \
      -H 'content-type: application/json' \
      -d '{"leadId":42,"retry":true}' | jq
 
 # 4. Goal secondaire (join) : ajouter "goal":"join" au test ou au rejeu
-curl -s -X POST $BASE/api/admin/dzpk-postback -H "x-admin-token: $TOK" \
+curl -s -X POST $BASE/api/admin/dzpk-postback -b "$JAR" -H "x-admin-token: $TOK" \
      -H 'content-type: application/json' \
      -d '{"network":"propeller","cb":"TEST-JOIN-1","goal":"join"}' | jq
 ```

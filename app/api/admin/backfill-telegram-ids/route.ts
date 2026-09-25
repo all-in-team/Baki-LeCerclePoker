@@ -13,12 +13,10 @@ interface BackfillResult {
   reason?: string;
 }
 
+// Appelée depuis le navigateur (/crm/affiliates) : aucun secret ne peut vivre côté client,
+// l'accès repose sur la session exigée par middleware.ts pour tout /api/admin. L'ancienne
+// clé en dur (partagée avec db-diagnostic) était livrée dans le bundle JS public.
 export async function POST(req: NextRequest) {
-  const body = await req.json().catch(() => ({}));
-  if (body.key !== "db-diag-20260518") {
-    return NextResponse.json({ error: "bad key" }, { status: 403 });
-  }
-
   const apply = req.nextUrl.searchParams.get("apply") === "1";
   const db = getDb();
 
