@@ -14,11 +14,13 @@ interface Props {
   agencyByPlayer: Record<number, number>;
   period: PlayersPeriod;
   onEdit: (p: Player) => void;
+  /** Vue « Archivés » : les joueurs à régler restent en tête, quel que soit le tri choisi. */
+  toSettleFirst?: boolean;
 }
 
 const TH: React.CSSProperties = { padding: "8px", cursor: "pointer", userSelect: "none", whiteSpace: "nowrap" };
 
-export default function PlayersTableView({ players, gamesByPlayer, agencyByPlayer, period, onEdit }: Props) {
+export default function PlayersTableView({ players, gamesByPlayer, agencyByPlayer, period, onEdit, toSettleFirst = false }: Props) {
   const router = useRouter();
   // Défaut : agency cut décroissant — les plus rentables en haut. Le tri porte sur
   // agencyByPlayer, déjà résolu pour la période active côté serveur : changer de
@@ -34,6 +36,10 @@ export default function PlayersTableView({ players, gamesByPlayer, agencyByPlaye
   }
 
   const sorted = [...players].sort((a, b) => {
+    if (toSettleFirst) {
+      const pin = Number(b.open.length > 0) - Number(a.open.length > 0);
+      if (pin !== 0) return pin;
+    }
     const dir = sort.dir === "asc" ? 1 : -1;
     switch (sort.key) {
       case "name": return a.name.localeCompare(b.name, "fr") * dir;
@@ -48,7 +54,7 @@ export default function PlayersTableView({ players, gamesByPlayer, agencyByPlaye
   });
 
   // Archive (un seul concept) : sort le joueur de la vue principale, jamais de suppression.
-  // Le serveur refuse (409) d'archiver un joueur ouvert et renvoie les motifs.
+  // Toujours permise ; un joueur à régler passe en tête d'« Archivés ».
   async function setArchived(p: Player, archived: boolean) {
     setArchiving(p.id);
     try {
@@ -111,6 +117,9 @@ export default function PlayersTableView({ players, gamesByPlayer, agencyByPlaye
                   <div style={{ fontSize: 11, color: "var(--text-dim)", marginTop: 2 }}>
                     {p.telegram_handle ? `@${p.telegram_handle.replace(/^@/, "")}` : p.telegram_phone ? p.telegram_phone : "—"}
                   </div>
+                  {p.archived_at && p.open.length > 0 && (
+                    <div style={{ fontSize: 11, color: "#EF4444", marginTop: 3, maxWidth: 420 }}>À régler : {p.open.join(" ; ")}</div>
+                  )}
                 </td>
                 <td style={{ textAlign: "center", padding: "10px 8px" }}>
                   {playerGames.length === 0 && <span style={{ color: "var(--text-dim)" }}>—</span>}
@@ -125,7 +134,7 @@ export default function PlayersTableView({ players, gamesByPlayer, agencyByPlaye
                 <td style={{ textAlign: "center", padding: "10px 8px" }}>
                   <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 3 }}>
                     {p.archived_at && p.open.length > 0 && (
-                      <span title={"Reste ouvert : " + p.open.join(" ; ")} style={{ padding: "2px 8px", borderRadius: 4, fontSize: 10, fontWeight: 700, background: "rgba(239,68,68,0.15)", color: "#EF4444", whiteSpace: "nowrap" }}>archivé mais ouvert</span>
+                      <span title={"À régler : " + p.open.join(" ; ")} style={{ padding: "2px 8px", borderRadius: 4, fontSize: 10, fontWeight: 700, background: "rgba(239,68,68,0.15)", color: "#EF4444", whiteSpace: "nowrap" }}>à régler</span>
                     )}
                     {p.archived_at && p.open.length === 0 && (
                       <span title={p.archive_reason ?? "archivé"} style={{ padding: "2px 8px", borderRadius: 4, fontSize: 10, fontWeight: 600, background: "rgba(240,185,11,0.15)", color: "#F0B90B" }}>archivé</span>
@@ -158,9 +167,9 @@ export default function PlayersTableView({ players, gamesByPlayer, agencyByPlaye
                     ) : (
                       <button
                         onClick={() => setArchived(p, true)}
-                        disabled={archiving === p.id || p.open.length > 0}
-                        title={p.open.length > 0 ? "Archivage impossible, reste ouvert : " + p.open.join(" ; ") : "Archiver (sort de la vue principale, réversible)"}
-                        style={{ background: "none", border: "1px solid var(--border)", borderRadius: 6, cursor: p.open.length > 0 ? "not-allowed" : "pointer", padding: "4px 6px", color: "var(--text-muted)", display: "flex", alignItems: "center", opacity: archiving === p.id || p.open.length > 0 ? 0.35 : 1 }}
+                        disabled={archiving === p.id}
+                        title={p.open.length > 0 ? "Archiver — il restera en tête d'« Archivés » (à régler : " + p.open.join(" ; ") + ")" : "Archiver (sort de la vue principale, réversible)"}
+                        style={{ background: "none", border: "1px solid var(--border)", borderRadius: 6, cursor: "pointer", padding: "4px 6px", color: "var(--text-muted)", display: "flex", alignItems: "center", opacity: archiving === p.id ? 0.4 : 1 }}
                       >
                         <Archive size={13} />
                       </button>

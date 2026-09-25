@@ -4,8 +4,9 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 
 // Suppression définitive : uniquement ici (fiche joueur), avec confirmation.
-// Archiver = la même archive que la liste /players (un seul concept) ; refusée par le
-// serveur (409, motifs affichés) tant que quelque chose reste ouvert.
+// Archiver = la même archive que la liste /players (un seul concept), toujours permise.
+// La suppression définitive, elle, est refusée par le serveur (409, motifs) si quelque
+// chose reste à régler.
 export default function PlayerDangerZone({ playerId, playerName, archivedAt }: { playerId: number; playerName: string; archivedAt: string | null }) {
   const router = useRouter();
   const [confirm, setConfirm] = useState(false);

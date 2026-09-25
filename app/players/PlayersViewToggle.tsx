@@ -6,7 +6,7 @@ import PlayersTableView from "./PlayersTableView";
 import PlayersKanbanView from "./PlayersKanbanView";
 import PlayerEditModal from "./PlayerEditModal";
 import AddPlayerModal from "./AddPlayerModal";
-import { isHiddenFromMain, type Player, type PlayersViewProps } from "./shared";
+import { archivedCounts, isHiddenFromMain, sortArchivedView, type Player, type PlayersViewProps } from "./shared";
 
 // Barre commune (toggle + recherche + Add Player) + modale d'édition unique, partagées
 // par les deux vues. Avant la fusion : la recherche n'existait qu'en Kanban et le bouton
@@ -31,13 +31,13 @@ export default function PlayersViewToggle(props: PlayersViewProps) {
     localStorage.setItem("players_view", v);
   }
 
-  // Verrou (b) : la vue principale montre tout joueur non archivé OU ouvert — un archivé qui
-  // a encore quelque chose à régler (ou qui reçoit un dépôt après archivage) y revient avec
-  // le badge « archivé mais ouvert ». Seuls les archivés NON ouverts sont masqués.
+  // Vue principale = actifs non archivés (règle Baki, seconde version). « Archivés » met en
+  // tête ceux qui ont quelque chose à régler (badge « à régler » + motif) ; « Tout afficher »
+  // montre tout le monde, inactifs non archivés compris.
   const hiddenCount = players.filter(isHiddenFromMain).length;
-  const archivedCount = players.filter(p => p.archived_at).length;
+  const { total: archivedCount, toSettle } = archivedCounts(players);
   const visible = scope === "all" ? players
-    : scope === "archived" ? players.filter(p => p.archived_at)
+    : scope === "archived" ? sortArchivedView(players.filter(p => p.archived_at))
     : players.filter(p => !isHiddenFromMain(p));
 
   const q = search.trim().toLowerCase();
@@ -75,7 +75,7 @@ export default function PlayersViewToggle(props: PlayersViewProps) {
           {hiddenCount > 0 && scope === "main" && (
             <button
               onClick={() => setScope("all")}
-              title="Archivés sans rien d'ouvert : masqués de la vue principale, jamais supprimés"
+              title="Inactifs et archivés : hors de la vue principale, jamais supprimés"
               style={{ padding: "6px 12px", borderRadius: 7, fontSize: 12, fontWeight: 600, cursor: "pointer", border: "1px solid var(--border)", background: "var(--bg-surface)", color: "var(--text-muted)" }}
             >
               {hiddenCount} masqué{hiddenCount > 1 ? "s" : ""} · Tout afficher
@@ -92,7 +92,7 @@ export default function PlayersViewToggle(props: PlayersViewProps) {
                 color: scope === "archived" ? "#F0B90B" : "var(--text-muted)",
               }}
             >
-              {scope === "archived" ? "← Retour à la liste" : `Archivés (${archivedCount})`}
+              {scope === "archived" ? "← Retour à la liste" : `Archivés (${archivedCount} · ${toSettle} à régler)`}
             </button>
           )}
           {scope === "all" && (
@@ -118,7 +118,7 @@ export default function PlayersViewToggle(props: PlayersViewProps) {
 
       {props.openError && (
         <div role="alert" style={{ marginBottom: 12, padding: "8px 12px", borderRadius: 8, fontSize: 12, border: "1px solid rgba(239,68,68,0.4)", background: "rgba(239,68,68,0.08)", color: "#EF4444" }}>
-          L&apos;état « ouvert » des joueurs n&apos;a pas pu être calculé : tous les joueurs sont affichés, archivés compris. ({props.openError})
+          L&apos;état « à régler » des joueurs n&apos;a pas pu être calculé : par sécurité, tous les archivés sont marqués « à régler ». ({props.openError})
         </div>
       )}
 
@@ -130,6 +130,7 @@ export default function PlayersViewToggle(props: PlayersViewProps) {
             agencyByPlayer={props.agencyByPlayer}
             period={period}
             onEdit={setEditPlayer}
+            toSettleFirst={scope === "archived"}
           />
         : <PlayersKanbanView
             players={filtered}

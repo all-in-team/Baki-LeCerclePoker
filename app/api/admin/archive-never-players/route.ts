@@ -4,7 +4,6 @@ import { adminTokenGuard } from "@/lib/admin-token";
 import { getDb } from "@/lib/db";
 import { getNeverPlayerBucket } from "@/lib/queries";
 import { archivePlayers } from "@/lib/players-archive";
-import { PlayerOpenError } from "@/lib/queries/player-open";
 import { sendMsg, AGENT_CHAT_ID } from "@/lib/telegram-commands/helpers";
 
 // Nettoyage de la liste Joueurs — audit Hugo 2026-07-25, validé.
@@ -68,14 +67,7 @@ export async function POST(req: NextRequest) {
   }
 
   if (mode === "archive") {
-    let archived: number;
-    try {
-      archived = archivePlayers(bucket.map((b) => b.id), REASON);
-    } catch (e: any) {
-      // Verrou « ouvert » : un seul joueur du lot ouvert → rien n'est archivé.
-      if (e instanceof PlayerOpenError) return NextResponse.json({ error: e.message, blocked: e.blocked }, { status: 409 });
-      throw e;
-    }
+    const archived = archivePlayers(bucket.map((b) => b.id), REASON);
     const remaining = (db.prepare(`SELECT COUNT(*) AS n FROM players WHERE archived_at IS NULL`).get() as { n: number }).n;
     await sendMsg(AGENT_CHAT_ID,
       `🧹 <b>Liste Joueurs nettoyée</b>\n` +

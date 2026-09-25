@@ -302,16 +302,16 @@ export default function PlayersKanbanView({ players, gamesByPlayer, dealsByPlaye
   );
 }
 
-// Même règle que la vue Table : un archivé visible l'est parce qu'il reste ouvert — le dire.
+// Même règle que la vue Table : un archivé à régler porte « à régler » et son motif.
 function ArchiveBadge({ p }: { p: Player }) {
   if (!p.archived_at) return null;
   const open = p.open.length > 0;
   return (
     <span
-      title={open ? "Reste ouvert : " + p.open.join(" ; ") : (p.archive_reason ?? "archivé")}
+      title={open ? "À régler : " + p.open.join(" ; ") : (p.archive_reason ?? "archivé")}
       style={{ display: "inline-block", marginBottom: 4, padding: "1px 6px", borderRadius: 4, fontSize: 9, fontWeight: 700, background: open ? "rgba(239,68,68,0.15)" : "rgba(240,185,11,0.15)", color: open ? "#EF4444" : "#F0B90B" }}
     >
-      {open ? "archivé mais ouvert" : "archivé"}
+      {open ? "à régler" : "archivé"}
     </span>
   );
 }

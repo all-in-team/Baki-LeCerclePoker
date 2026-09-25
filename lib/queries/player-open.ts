@@ -7,16 +7,20 @@ type DB = Database.Database;
 
 // ── « Ouvert » : un joueur qui a quelque chose à régler ou un solde non nul ──
 //
-// UNE seule définition, lue par les deux verrous du chantier Joueurs (Baki 2026-09-25) :
-//   (a) le moteur refuse d'archiver un joueur ouvert (assertPlayersArchivableOn) ;
-//   (b) la vue principale = non archivé OU ouvert (badge « archivé mais ouvert »).
-// Règle : un joueur ouvert ne disparaît JAMAIS de la vue principale.
+// UNE seule définition, lue par (règle Baki du 2026-09-25, seconde version) :
+//   - l'affichage : dans « Archivés », les joueurs ouverts passent en tête avec le badge
+//     « à régler » et leur motif ; le bouton compte « Archivés (N · X à régler) » ;
+//   - les SUPPRESSIONS (reset-player, suppression définitive) : refusées pour un joueur
+//     ouvert (assertPlayersNotOpenOn) — une suppression efface de la donnée.
+// L'archivage, lui, est toujours permis : il ne masque qu'une vue, rien ne s'efface.
+// Rien de ce module ne touche un calcul d'argent, un règlement, le P&L ou un sync.
 //
 // Fail-closed partout : une source inconnue, incalculable ou en erreur rend ouvert.
 // Ce qui N'EST PAS « ouvert » (décision Baki) : un deal en cours, une wallet enregistrée —
 // c'est du réglage, pas de l'argent. Ils remontent en `links` (indicateur « lien actif »).
 // Un dépôt reçu sur une wallet d'archivé crée une tx non réglée → le joueur redevient
-// ouvert et réapparaît (verrou b) : le sync ne regarde ni le statut ni l'archive.
+// ouvert et passe en tête d'« Archivés » avec « à régler » : le sync ne regarde ni le
+// statut ni l'archive.
 //
 // Le « solde » n'est PAS le Lifetime (indicatif, retarifé aux deals actuels) ni le net P&L
 // des cartes : c'est ce qui reste à régler, source par source (sections ci-dessous).
@@ -61,7 +65,7 @@ function link(acc: Acc, id: number, l: PlayerLink) {
  * n'a rien d'ouvert ni de lien actif.
  *
  * LÈVE en cas d'erreur (table manquante…) : c'est à l'appelant de décider du fail-closed
- * (le verrou (a) refuse l'archivage, la vue principale affiche tout le monde).
+ * (une suppression est refusée ; l'écran /players le signale par un bandeau).
  */
 export function getPlayersOpenStateOn(db: DB, playerIds?: number[], opts: OpenStateOptions = {}): Map<number, PlayerOpenState> {
   const acc: Acc = new Map();
@@ -288,7 +292,7 @@ export function getPlayersOpenStateOn(db: DB, playerIds?: number[], opts: OpenSt
 export class PlayerOpenError extends Error {
   constructor(public readonly blocked: { player_id: number; name: string; reasons: OpenReason[] }[]) {
     super(
-      "Archivage refusé — quelque chose reste ouvert : " +
+      "Suppression refusée — quelque chose reste à régler : " +
       blocked.map(b => `${b.name} (#${b.player_id}) : ${b.reasons.map(r => r.label).join(" ; ")}`).join(" | "),
     );
     this.name = "PlayerOpenError";
@@ -296,10 +300,10 @@ export class PlayerOpenError extends Error {
 }
 
 /**
- * Verrou (a) : lève PlayerOpenError si UN des joueurs est ouvert — le lot entier est refusé.
- * Toute erreur de calcul est propagée telle quelle : l'archivage n'a pas lieu (fail-closed).
+ * Garde des SUPPRESSIONS : lève PlayerOpenError si UN des joueurs est ouvert. Toute erreur de
+ * calcul est propagée telle quelle : la suppression n'a pas lieu (fail-closed).
  */
-export function assertPlayersArchivableOn(db: DB, playerIds: number[], opts: OpenStateOptions = {}): void {
+export function assertPlayersNotOpenOn(db: DB, playerIds: number[], opts: OpenStateOptions = {}): void {
   const state = getPlayersOpenStateOn(db, playerIds, opts);
   const names = new Map((db.prepare(`SELECT id, name FROM players WHERE id IN (${playerIds.map(() => "?").join(",") || "NULL"})`).all(...playerIds) as { id: number; name: string }[]).map(p => [p.id, p.name]));
   const blocked = playerIds

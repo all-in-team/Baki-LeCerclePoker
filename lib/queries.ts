@@ -6,9 +6,9 @@ import { assertWalletAddress } from "./wallet-address";
 import type { HistoryTx } from "./wallet-history";
 
 // ── Players ──────────────────────────────────────────────
-// Un joueur archivé PEUT avoir un historique d'argent, et même quelque chose d'ouvert
-// (archivé à la main avant le verrou du 2026-09-25, ou dépôt reçu après archivage) :
-// l'archive ne sort un joueur que de la vue principale de /players (lib/players-archive.ts).
+// Un joueur archivé PEUT avoir un historique d'argent, et même quelque chose à régler
+// (archiver est toujours permis, et un dépôt peut arriver après archivage) : l'archive ne
+// sort un joueur que de la vue principale de /players (lib/players-archive.ts).
 // Par défaut getPlayers() l'exclut des seuls SÉLECTEURS qui ajoutent quelque chose (ajouter
 // un joueur à une room, assigner une wallet). Tout ce qui AFFICHE ou NOMME un joueur
 // (libellés de ledger, maps de wallets, modale de config) passe `includeArchived: true`.
@@ -107,8 +107,8 @@ export function getNeverPlayerBucket(): NeverPlayerRow[] {
   `).all() as NeverPlayerRow[];
 }
 
-// L'archivage (archivePlayers / unarchivePlayer) vit dans lib/players-archive.ts : il doit
-// passer par le verrou « ouvert », et ce module-là ne peut pas être importé d'ici (cycle).
+// L'archivage (archivePlayers / unarchivePlayer) et les suppressions gardées vivent dans
+// lib/players-archive.ts, seul écrivain de archived_at (non importable d'ici : cycle).
 
 export function getPlayerAssignments(playerId: number) {
   const db = getDb();
@@ -135,8 +135,8 @@ export function insertPlayer(data: { name: string; telegram_handle?: string; tel
 }
 
 // Colonnes modifiables par PATCH /api/players/[id]. Liste FERMÉE : le SET était construit
-// à partir des clés reçues, donc n'importe quelle colonne (archived_at compris, qui aurait
-// contourné le verrou d'archivage) — et un nom de clé allait tel quel dans le SQL.
+// à partir des clés reçues, donc n'importe quelle colonne (archived_at compris, hors du seul
+// écrivain lib/players-archive.ts) — et un nom de clé allait tel quel dans le SQL.
 const UPDATABLE_PLAYER_FIELDS = new Set([
   "name", "telegram_handle", "telegram_phone", "status", "notes", "action_pct",
   "tron_address", "tron_app_id", "tier", "tele_wallet_cashout",

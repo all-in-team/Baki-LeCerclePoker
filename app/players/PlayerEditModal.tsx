@@ -100,7 +100,7 @@ export default function PlayerEditModal({ player, dealsByPlayer, activeGames, ap
   }
 
   // Archive (un seul concept, comme le bouton de la ligne) : sort le joueur de la vue
-  // principale. Refus serveur (409) si quelque chose reste ouvert — motifs affichés.
+  // principale. Toujours permis ; un joueur à régler passe en tête d'« Archivés ».
   async function toggleArchive() {
     setSaving(true);
     try {
@@ -251,10 +251,10 @@ export default function PlayerEditModal({ player, dealsByPlayer, activeGames, ap
 
         <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 8 }}>
           <button
-            disabled={saving || (!p.archived_at && p.open.length > 0)}
+            disabled={saving}
             onClick={toggleArchive}
-            title={!p.archived_at && p.open.length > 0 ? "Archivage impossible, reste ouvert : " + p.open.join(" ; ") : undefined}
-            style={{ padding: "8px 12px", borderRadius: 7, fontSize: 12, cursor: !p.archived_at && p.open.length > 0 ? "not-allowed" : "pointer", background: "none", border: "1px solid var(--border)", color: "var(--text-muted)", opacity: !p.archived_at && p.open.length > 0 ? 0.4 : 1 }}
+            title={!p.archived_at && p.open.length > 0 ? "Il restera en tête d'« Archivés » — à régler : " + p.open.join(" ; ") : undefined}
+            style={{ padding: "8px 12px", borderRadius: 7, fontSize: 12, cursor: "pointer", background: "none", border: "1px solid var(--border)", color: "var(--text-muted)" }}
           >
             {p.archived_at ? "Désarchiver" : "Archiver"}
           </button>
