@@ -511,6 +511,18 @@ console.log("\n══ I2. Gel du perçu sur une relation EN PAUSE (audit R1) ═
   cents("…réactivé : dû Samyaza toujours 314,37", due(db, 421), 314.3693);
 }
 
+console.log("\n══ I3. Semaine payée à 0 % : le perçu peut changer (aucun argent ne bouge) ══");
+{
+  const db = loadFixture(); runAffiliateAgentRatesMigrationV1(db);
+  // Antoine (Xabi) : AKS hors fenêtre à 0 %, activité semaine du 15/06 ; on paie Xabi le 20/08 (gel).
+  db.prepare(`INSERT INTO affiliate_payments (relationship_id, game_id, week_start_date, week_end_date, amount_usdt, paid_at) VALUES (8, 5, '2026-08-01', '2026-08-16', 1, '2026-08-20 12:00:00')`).run();
+  db.prepare(`DELETE FROM affiliate_relationship_games WHERE relationship_id = 8 AND game_id = 255`).run();   // AKS au perçu game
+  db.prepare(`INSERT INTO game_perceived_deals (game_id, action_pct, start_week, end_week, note) VALUES (255, 20, NULL, NULL, 'test')`).run();
+  const r = setPerceivedDealOn(db, { game_id: 255, action_pct: 30, rakeback_pct: null, insurance_pct: null, start_week: null, confirm_retroactive: true, today: TODAY });
+  const xabi = ((r as any).frozen ?? []).filter((h: any) => h.agent_name === "Xabi Carricart");
+  eq("AKS 20 → 30 % depuis l'origine : aucune semaine payée de Xabi signalée (Antoine y est à 0 %)", xabi.length, 0);
+}
+
 console.log("\n══ J. Taux par défaut d'une NOUVELLE relation ══");
 {
   const db = loadFixture(); runAffiliateAgentRatesMigrationV1(db);
@@ -562,9 +574,19 @@ console.log("\n══ K. Vue PORTAIL (Samyaza après Grobel A5 à 25 % dès le 0
   const dbS = loadFixture(); runAffiliateAgentRatesMigrationV1(dbS);
   setPerceivedDealOn(dbS, { game_id: 6, action_pct: 40, rakeback_pct: null, insurance_pct: null, start_week: "2026-09-21", confirm_retroactive: true, today: TODAY });
   const vs = agentPortalViewOn(dbS, 421, { today: TODAY });
-  eq("perçu A5 20 → 40 % dès le 21/09 dans la période à 50 % : segments 10 % puis 20 % du résultat",
+  eq("perçu A5 20 → 40 % dès le 21/09 dans la période à 50 % : 10 % jusqu'au 14/09, puis 20 % EN COURS (ouvert)",
      vs.filleuls.find(f => f.name === "Grobel")!.games.find(g => g.game_name === "A5POKER")!.periods.map(p => [p.player_pct, p.start_week, p.end_week]),
-     [[10, "2026-08-10", "2026-08-17"], [20, "2026-09-21", "2026-09-21"]]);
+     [[10, null, "2026-09-14"], [20, "2026-09-21", null]]);
+  // Audit : taux en vigueur même sans activité après le changement ; pas de chevauchement si le perçu revient.
+  const dbT = loadFixture(); runAffiliateAgentRatesMigrationV1(dbT);
+  setPerceivedDealOn(dbT, { game_id: 5, action_pct: 40, rakeback_pct: null, insurance_pct: null, start_week: "2026-09-28", today: TODAY });
+  eq("KK perçu 40 % dès le 28/09 sans activité depuis : portail Grobel KK = 10 % jusqu'au 21/09 puis 20 % en cours",
+     agentPortalViewOn(dbT, 421, { today: TODAY }).filleuls.find(f => f.name === "Grobel")!.games.find(g => g.game_name === "KKPOKER")!.periods.map(p => [p.player_pct, p.start_week, p.end_week]),
+     [[10, null, "2026-09-21"], [20, "2026-09-28", null]]);
+  setPerceivedDealOn(dbT, { game_id: 5, action_pct: 20, rakeback_pct: null, insurance_pct: null, start_week: "2026-10-05", today: TODAY });
+  eq("perçu qui revient à 20 % : segments sans chevauchement (le 20 % du 28/09, sans activité et révolu, n'est pas affiché)",
+     agentPortalViewOn(dbT, 421, { today: TODAY }).filleuls.find(f => f.name === "Grobel")!.games.find(g => g.game_name === "KKPOKER")!.periods.map(p => [p.player_pct, p.start_week, p.end_week]),
+     [[10, null, "2026-09-21"], [10, "2026-10-05", null]]);
   // Bloqué : null, jamais 0.
   db.prepare(`INSERT INTO games (id, name) VALUES (888, 'NEWGAME')`).run();
   db.prepare(`INSERT INTO player_game_deals (player_id, game_id, created_at) VALUES (428, 888, '2026-09-25 10:00:00')`).run();

@@ -831,7 +831,9 @@ export function setPerceivedDealOn(db: DB, a: SetPerceivedArgs): SetPerceivedRes
       frozenHits.push({ agent_name: ag.name, frozen_through: before.frozen_through!, earliest_week: addDays(before.frozen_through!, 7),
         last_payment: pays[pays.length - 1]?.paid_at ?? null, weeks: hits });
     }
-    if (weeks.length || before.due_now !== after.due_now)
+    const dueMoved = (before.due_now === null) !== (after.due_now === null)
+      || (before.due_now !== null && after.due_now !== null && Math.abs(before.due_now - after.due_now) > 1e-9);
+    if (weeks.length || dueMoved)
       impacts.push({ affiliate_player_id: ag.id, agent_name: ag.name, frozen_through: before.frozen_through, paid: before.paid, weeks,
         earned_before: before.earned, earned_after: after.earned, due_before: before.due_now, due_after: after.due_now });
   }
@@ -911,8 +913,10 @@ function frozenDiffs(b: Map<string, FrozenEntry>, a: Map<string, FrozenEntry>): 
   for (const k of new Set([...b.keys(), ...a.keys()])) {
     const x = b.get(k), y = a.get(k);
     const nullMoved = (x?.c === null) !== (y?.c === null);
-    const partMoved = Math.abs((y?.part ?? 0) - (x?.part ?? 0)) > 1e-9;
     const commMoved = Math.abs((y?.c ?? 0) - (x?.c ?? 0)) > 1e-9;
+    // La part ne compte que sur une semaine SANS taux (commission null) : elle y décide du
+    // blocage. À taux défini (0 % hors fenêtre compris), seule la commission est de l'argent.
+    const partMoved = (x?.c === null || y?.c === null) && Math.abs((y?.part ?? 0) - (x?.part ?? 0)) > 1e-9;
     if (nullMoved || partMoved || commMoved) out.push({ x, y });
   }
   return out;
@@ -985,32 +989,31 @@ export function agentPortalViewOn(db: DB, affiliatePlayerId: number, opts: CalcO
   const byRel = new Map<number, PortalFilleul>();
   for (const l of d.lines) {
     const f = byRel.get(l.relationship_id) ?? { name: l.referred.name, handle: handles.get(l.relationship_id) ?? null, commission: 0, games: [] };
-    // Un segment = une période de taux ET un perçu constant : si le perçu change à l'intérieur
-    // d'une période, le % du résultat joueur change aussi — on le montre en segments distincts.
+    // Un segment = une période de taux découpée aux changements de PERÇU (bornes exactes des
+    // périodes du perçu versionné) : le % du résultat joueur y est constant. Segments adjacents
+    // au même % fusionnés ; le dernier segment d'une période ouverte reste ouvert (end null)
+    // et porte donc le taux EN VIGUEUR.
     const round4 = (x: number) => Math.round(x * 1e4) / 1e4;
+    const pStarts = (opts.perceived && opts.perceived.game_id === l.game_id ? opts.perceived.periods : perceivedPeriodsOn(db, l.game_id))
+      .map(q => q.start_week).filter((w): w is string => w !== null).sort();
     const periods: (PortalRatePeriod & { agent_pct: number })[] = [];
-    l.periods.forEach((p, i) => {
-      const ws = l.weeks.filter(w => w.week !== null && periodAt([p], w.week) !== null);
-      const segs = new Map<string, { player_pct: number | null; weeks: string[]; commission: number }>();
-      for (const w of ws) {
-        const pp = l.is_composite ? null : round4(p.agent_pct * w.eff_action / 100);
-        const k = String(pp);
-        const seg = segs.get(k) ?? { player_pct: pp, weeks: [], commission: 0 };
-        seg.weeks.push(w.week!); seg.commission += w.commission ?? 0;
-        segs.set(k, seg);
-      }
-      if (segs.size <= 1) {
-        const only = [...segs.values()][0];
-        const base = l.period_eff[i];
-        periods.push({ agent_pct: p.agent_pct, start_week: p.start_week, end_week: p.end_week, commission: only?.commission ?? 0,
-          player_pct: only ? only.player_pct : (l.is_composite || base === null ? null : round4(p.agent_pct * base / 100)) });
-      } else {
-        for (const seg of segs.values()) {
-          const sorted = seg.weeks.sort();
-          periods.push({ agent_pct: p.agent_pct, player_pct: seg.player_pct, start_week: sorted[0], end_week: sorted[sorted.length - 1], commission: seg.commission });
-        }
-      }
-    });
+    for (const p of l.periods) {
+      const cuts = pStarts.filter(b => (p.start_week === null || b > p.start_week) && (p.end_week === null || b <= p.end_week));
+      const starts: (string | null)[] = [p.start_week, ...cuts];
+      const segs: (PortalRatePeriod & { agent_pct: number })[] = [];
+      starts.forEach((st, k) => {
+        const en = k + 1 < starts.length ? addDays(starts[k + 1]!, -7) : p.end_week;
+        const base = l.is_composite ? null : perceivedActionAtOn(db, l.relationship_id, l.game_id, st, opts.perceived);
+        const pp = base && !base.composite ? round4(p.agent_pct * base.eff / 100) : null;
+        const commission = l.weeks
+          .filter(w => w.week !== null && (st === null || w.week >= st) && (en === null || w.week <= en))
+          .reduce((acc, w) => acc + (w.commission ?? 0), 0);
+        const prev = segs[segs.length - 1];
+        if (prev && prev.player_pct === pp) { prev.end_week = en; prev.commission += commission; }
+        else segs.push({ agent_pct: p.agent_pct, player_pct: pp, start_week: st, end_week: en, commission });
+      });
+      periods.push(...segs);
+    }
     // On montre les périodes qui ont rapporté (ou coûté) et la période en cours ; un 0 % sans activité n'apprend rien à l'agent.
     const shown: PortalRatePeriod[] = periods
       .filter(p => Math.abs(p.commission) > 0.005 || (p.end_week === null && p.agent_pct > 0))
