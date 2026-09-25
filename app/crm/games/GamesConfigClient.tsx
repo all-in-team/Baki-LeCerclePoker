@@ -4,6 +4,7 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { Pencil, Lock, Eye, Archive, RotateCcw } from "lucide-react";
 import Modal from "@/components/Modal";
+import PerceivedEditor, { type PerceivedPeriodView } from "./PerceivedEditor";
 
 const GAME_COLORS: Record<string, { bg: string; color: string }> = {
   KKPOKER: { bg: "rgba(59,130,246,0.15)", color: "#3B82F6" },
@@ -17,12 +18,13 @@ const GAME_COLORS: Record<string, { bg: string; color: string }> = {
 interface GameRow {
   id: number; name: string; status: string; currency: string;
   exact_action_pct: number | null; exact_rakeback_pct: number | null; exact_insurance_pct: number | null;
+  // Perçu EN VIGUEUR cette semaine (game_perceived_deals) + son historique.
   perceived_action_pct: number | null; perceived_rakeback_pct: number | null; perceived_insurance_pct: number | null;
+  perceived_periods: PerceivedPeriodView[];
 }
 
 interface EditForm {
   exact_action_pct: string; exact_rakeback_pct: string; exact_insurance_pct: string;
-  perceived_action_pct: string; perceived_rakeback_pct: string; perceived_insurance_pct: string;
   currency: string;        // one of COMMON_CURRENCIES or OTHER_CURRENCY
   customCurrency: string;  // free input when "Autre…"
 }
@@ -39,24 +41,25 @@ const inputStyle: React.CSSProperties = { width: "100%", padding: "7px 10px", bo
 export default function GamesConfigClient({ games }: Props) {
   const router = useRouter();
   const [editGame, setEditGame] = useState<GameRow | null>(null);
-  const [form, setForm] = useState<EditForm>({ exact_action_pct: "", exact_rakeback_pct: "", exact_insurance_pct: "", perceived_action_pct: "", perceived_rakeback_pct: "", perceived_insurance_pct: "", currency: "USDT", customCurrency: "" });
+  const [form, setForm] = useState<EditForm>({ exact_action_pct: "", exact_rakeback_pct: "", exact_insurance_pct: "", currency: "USDT", customCurrency: "" });
+  const [perceivedOpen, setPerceivedOpen] = useState(false);
   const [saving, setSaving] = useState(false);
   const [showArchived, setShowArchived] = useState(false);
 
+  // Re-dérivé des props : après un changement de perçu, router.refresh() met à jour l'historique affiché.
+  const liveEdit = editGame ? games.find(g => g.id === editGame.id) ?? editGame : null;
   const activeGames = games.filter(g => g.status === "active");
   const archivedGames = games.filter(g => g.status === "archived");
 
   function openEdit(g: GameRow) {
     setEditGame(g);
+    setPerceivedOpen(false);
     const cur = (g.currency ?? "USDT").toUpperCase();
     const isCommon = COMMON_CURRENCIES.includes(cur);
     setForm({
       exact_action_pct: g.exact_action_pct != null ? String(g.exact_action_pct) : "",
       exact_rakeback_pct: g.exact_rakeback_pct != null ? String(g.exact_rakeback_pct) : "",
       exact_insurance_pct: g.exact_insurance_pct != null ? String(g.exact_insurance_pct) : "",
-      perceived_action_pct: g.perceived_action_pct != null ? String(g.perceived_action_pct) : "",
-      perceived_rakeback_pct: g.perceived_rakeback_pct != null ? String(g.perceived_rakeback_pct) : "",
-      perceived_insurance_pct: g.perceived_insurance_pct != null ? String(g.perceived_insurance_pct) : "",
       currency: isCommon ? cur : OTHER_CURRENCY,
       customCurrency: isCommon ? "" : cur,
     });
@@ -74,9 +77,6 @@ export default function GamesConfigClient({ games }: Props) {
           exact_action_pct: form.exact_action_pct ? Number(form.exact_action_pct) : null,
           exact_rakeback_pct: form.exact_rakeback_pct ? Number(form.exact_rakeback_pct) : null,
           exact_insurance_pct: form.exact_insurance_pct ? Number(form.exact_insurance_pct) : null,
-          perceived_action_pct: form.perceived_action_pct ? Number(form.perceived_action_pct) : null,
-          perceived_rakeback_pct: form.perceived_rakeback_pct ? Number(form.perceived_rakeback_pct) : null,
-          perceived_insurance_pct: form.perceived_insurance_pct ? Number(form.perceived_insurance_pct) : null,
           currency,
         }),
       });
@@ -193,25 +193,23 @@ export default function GamesConfigClient({ games }: Props) {
             <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 10, fontSize: 11, fontWeight: 700, color: "#22C55E", textTransform: "uppercase", letterSpacing: "0.07em" }}>
               <Eye size={11} /> Perceived Deal
             </div>
-            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-              {([["perceived_action_pct", "Action %"], ["perceived_rakeback_pct", "Rakeback %"], ["perceived_insurance_pct", "Insurance %"]] as const).map(([k, label]) => (
-                <div key={k}>
-                  <label style={labelStyle}>{label}</label>
-                  <input type="number" step="0.01" min={0} max={100} value={(form as any)[k]}
-                    onChange={e => setForm({ ...form, [k]: e.target.value })} placeholder="—" style={inputStyle} />
-                </div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 6, fontSize: 13 }}>
+              {liveEdit && ([["Action", liveEdit.perceived_action_pct], ["Rakeback", liveEdit.perceived_rakeback_pct], ["Insurance", liveEdit.perceived_insurance_pct]] as const).map(([l, v]) => (
+                <div key={l} style={{ display: "flex", justifyContent: "space-between" }}><span style={labelStyle}>{l} %</span><b>{fmtPct(v)}</b></div>
               ))}
+              <button onClick={() => setPerceivedOpen(!perceivedOpen)}
+                style={{ marginTop: 4, padding: "5px 10px", borderRadius: 6, fontSize: 11, fontWeight: 600, cursor: "pointer", background: "rgba(34,197,94,0.10)", border: "1px solid rgba(34,197,94,0.3)", color: "#22C55E" }}>
+                {perceivedOpen ? "Fermer" : "Modifier le perçu…"}
+              </button>
             </div>
           </div>
         </div>
-        {/* Le « perçu » est la BASE de la commission de TOUS les agents sur ce game
-            (part agence = résultat joueur × action perçue, puis × taux agent). */}
-        {editGame && ([["perceived_action_pct", editGame.perceived_action_pct], ["perceived_rakeback_pct", editGame.perceived_rakeback_pct], ["perceived_insurance_pct", editGame.perceived_insurance_pct]] as const)
-          .some(([k, orig]) => (form[k] === "" ? null : Number(form[k])) !== (orig ?? null)) && (
-          <div style={{ marginTop: 14, padding: "10px 12px", borderRadius: 8, background: "rgba(234,179,8,0.10)", border: "1px solid rgba(234,179,8,0.35)", color: "#EAB308", fontSize: 12, lineHeight: 1.5 }}>
-            ⚠️ <b>Le deal perçu est la base de rémunération des agents.</b> Le modifier change la part agence — donc la commission — de
-            <b> tous les agents</b> dont un filleul joue sur {editGame.name}, <b>sur tout l&apos;historique</b>, périodes déjà payées comprises
-            (il n&apos;est pas versionné). Pour changer la rémunération d&apos;un seul agent, modifie plutôt son taux dans /crm/affiliates.
+        {editGame && perceivedOpen && (
+          <div style={{ marginTop: 14, padding: 12, borderRadius: 8, border: "1px solid rgba(34,197,94,0.25)", background: "rgba(34,197,94,0.03)" }}>
+            <PerceivedEditor key={liveEdit!.perceived_periods?.length} gameId={editGame.id} gameName={editGame.name}
+              current={{ action_pct: liveEdit!.perceived_action_pct, rakeback_pct: liveEdit!.perceived_rakeback_pct, insurance_pct: liveEdit!.perceived_insurance_pct }}
+              periods={liveEdit!.perceived_periods ?? []}
+              onSaved={() => router.refresh()} />
           </div>
         )}
         <div style={{ marginTop: 14, padding: "12px", background: "var(--bg-surface)", borderRadius: 8, border: "1px solid var(--border)" }}>

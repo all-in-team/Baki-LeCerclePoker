@@ -1,6 +1,7 @@
 export const dynamic = "force-dynamic";
 import { getDb } from "@/lib/db";
 import { computeAgentCommission } from "@/lib/queries/affiliate";
+import { currentPerceivedOn } from "@/lib/affiliate/agent-rates";
 import PageHeader from "@/components/PageHeader";
 import AffiliatesClient, { type AgentCommissionView } from "./AffiliatesClient";
 
@@ -17,7 +18,11 @@ export default function AffiliatesPage() {
   `).all() as any[];
 
   const players = db.prepare(`SELECT id, name, telegram_handle, telegram_id FROM players WHERE status IN ('active', 'signed') ORDER BY name`).all() as any[];
-  const activeGames = db.prepare(`SELECT id, name, perceived_action_pct, perceived_rakeback_pct, perceived_insurance_pct FROM games WHERE status = 'active' ORDER BY id`).all() as any[];
+  // Perçu en vigueur cette semaine (game_perceived_deals) — pas les colonnes figées de games.
+  const activeGames = (db.prepare(`SELECT id, name FROM games WHERE status = 'active' ORDER BY id`).all() as any[]).map(g => {
+    const cur = currentPerceivedOn(db, g.id);
+    return { ...g, perceived_action_pct: cur?.action_pct ?? null, perceived_rakeback_pct: cur?.rakeback_pct ?? null, perceived_insurance_pct: cur?.insurance_pct ?? null };
+  });
   const existingReferredIds = db.prepare(`SELECT referred_player_id FROM affiliate_relationships WHERE status != 'terminated'`).all().map((r: any) => r.referred_player_id) as number[];
 
   // Agent-level commission (cross-makeup) computed server-side — single source of truth,

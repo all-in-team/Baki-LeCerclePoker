@@ -58,7 +58,7 @@ function todayIso(): string { return new Date().toISOString().slice(0, 10); }
 
 // ── Taux ─────────────────────────────────────────────────────────────────────
 
-export type RateKind = "migration" | "hors_fenetre" | "manual";
+export type RateKind = "migration" | "hors_fenetre" | "manual" | "default";
 export interface RatePeriod {
   id?: number;
   relationship_id: number;
@@ -98,41 +98,46 @@ export function ratePeriodsOn(db: DB, relationshipId: number, gameId: number): R
 
 const pctLabel = (p: number | null) => p === null ? "∅" : `${p} %`;
 
+/** Tout ce qui se versionne par lundis : bornes, note, identité en base. */
+export interface WeekPeriod { id?: number; start_week: string | null; end_week: string | null; note: string | null; created_at?: string }
+const byStartP = <T extends WeekPeriod>(a: T, b: T) =>
+  a.start_week === b.start_week ? 0 : a.start_week === null ? -1 : b.start_week === null ? 1 : a.start_week < b.start_week ? -1 : 1;
+export function periodAtP<T extends WeekPeriod>(periods: T[], week: string): T | null {
+  return periods.find(p => (p.start_week === null || p.start_week <= week) && (p.end_week === null || p.end_week >= week)) ?? null;
+}
+
 /**
  * Le changement, calculé À PART de l'écriture — la même fonction sert l'aperçu et
  * l'écriture, ils ne peuvent pas diverger. PLAGE ÉCRITE : [S, fin] où la fin est
  * celle de la période qui contient S, sinon la veille de la période suivante,
- * sinon ouverte. Une période plus récente n'est jamais réécrite par un taux posé
- * avant elle. Les périodes adjacentes de même taux ET même nature sont fusionnées.
+ * sinon ouverte. Une période plus récente n'est jamais réécrite par une valeur posée
+ * avant elle. Les périodes adjacentes de même valeur (`same`) sont fusionnées.
+ * Même début : la période change en place, l'ancienne note est GARDÉE, suivie de
+ * `label(ancienne)` et du nouveau motif (l'historique n'est jamais écrasé).
  */
-export function applyRateChange(
-  rows: RatePeriod[],
-  c: { relationship_id: number; game_id: number; agent_pct: number; start_week: string | null; kind: RateKind; note: string | null },
-): { rows: RatePeriod[]; containing: RatePeriod | null; next: RatePeriod | null; end_week: string | null } {
-  const S = c.start_week;
-  const sorted = rows.map(r => ({ ...r })).sort(byStart);
+export function applyPeriodChange<T extends WeekPeriod>(
+  rows: T[], fresh: T, same: (a: T, b: T) => boolean, label: (r: T) => string,
+): { rows: T[]; containing: T | null; next: T | null; end_week: string | null } {
+  const S = fresh.start_week;
+  const sorted = rows.map(r => ({ ...r })).sort(byStartP);
   const containing = sorted.find(r => startLE(r.start_week, S) && endGE(r.end_week, S)) ?? null;
   const next = sorted.find(r => r !== containing && r.start_week !== null && (S === null || r.start_week > S)) ?? null;
   const end_week = containing ? containing.end_week : next ? addDays(next.start_week!, -7) : null;
 
-  let out: RatePeriod[];
+  let out: T[];
   if (containing && containing.start_week === S) {
-    // Même début : la période change de taux en place. L'historique n'est jamais écrasé :
-    // l'ancienne note (motif, traces) est gardée, suivie de l'ancien taux et du nouveau motif.
-    const before = `avant : ${pctLabel(containing.agent_pct)} (${containing.kind})`;
     out = sorted.map(r => r === containing
-      ? { ...r, agent_pct: c.agent_pct, kind: c.kind, note: [containing.note, before, c.note].filter(Boolean).join(" · ") }
+      ? { ...fresh, id: containing.id, created_at: containing.created_at, start_week: S, end_week: containing.end_week,
+          note: [containing.note, `avant : ${label(containing)}`, fresh.note].filter(Boolean).join(" · ") }
       : r);
   } else {
     out = sorted.map(r => r === containing ? { ...r, end_week: addDays(S!, -7) } : r);
-    out.push({ relationship_id: c.relationship_id, game_id: c.game_id, agent_pct: c.agent_pct, start_week: S, end_week, kind: c.kind, note: c.note });
+    out.push({ ...fresh, id: undefined, end_week });
   }
-  out.sort(byStart);
-  // Fusion des périodes adjacentes identiques (taux ET nature) : la plus ancienne absorbe la suivante.
+  out.sort(byStartP);
   for (let i = 0; i + 1 < out.length; i++) {
     const a = out[i], b = out[i + 1];
-    if (a.end_week !== null && b.start_week !== null && addDays(a.end_week, 7) === b.start_week
-        && Math.abs(a.agent_pct - b.agent_pct) < 1e-9 && a.kind === b.kind) {
+    if (a.end_week !== null && b.start_week !== null && addDays(a.end_week, 7) === b.start_week && same(a, b)) {
       out[i] = { ...a, end_week: b.end_week, note: [a.note, b.note].filter(Boolean).join(" · ") || null };
       out.splice(i + 1, 1); i--;
     }
@@ -140,23 +145,66 @@ export function applyRateChange(
   return { rows: out, containing, next, end_week };
 }
 
+/** Taux agent : même taux ET même nature pour fusionner. */
+export function applyRateChange(
+  rows: RatePeriod[],
+  c: { relationship_id: number; game_id: number; agent_pct: number; start_week: string | null; kind: RateKind; note: string | null },
+): { rows: RatePeriod[]; containing: RatePeriod | null; next: RatePeriod | null; end_week: string | null } {
+  return applyPeriodChange<RatePeriod>(rows,
+    { relationship_id: c.relationship_id, game_id: c.game_id, agent_pct: c.agent_pct, start_week: c.start_week, end_week: null, kind: c.kind, note: c.note },
+    (a, b) => Math.abs(a.agent_pct - b.agent_pct) < 1e-9 && a.kind === b.kind,
+    r => `${pctLabel(r.agent_pct)} (${r.kind})`);
+}
+
+// ── Deal perçu versionné (game_perceived_deals) ──────────────────────────────
+
+export interface PerceivedPeriod extends WeekPeriod {
+  game_id: number;
+  action_pct: number | null;       // POURCENTS ; null = non défini à ce niveau (la cascade descend)
+  rakeback_pct: number | null;
+  insurance_pct: number | null;
+}
+export function perceivedPeriodsOn(db: DB, gameId: number): PerceivedPeriod[] {
+  return (db.prepare(`
+    SELECT id, game_id, action_pct, rakeback_pct, insurance_pct, start_week, end_week, note, created_at
+    FROM game_perceived_deals WHERE game_id = ?
+  `).all(gameId) as PerceivedPeriod[]).sort(byStartP);
+}
+export type PerceivedOverride = { game_id: number; periods: PerceivedPeriod[] };
+export const samePerceived = (a: { action_pct: number | null; rakeback_pct: number | null; insurance_pct: number | null }, b: typeof a) =>
+  a.action_pct === b.action_pct && a.rakeback_pct === b.rakeback_pct && a.insurance_pct === b.insurance_pct;
+export const perceivedLabel = (p: { action_pct: number | null; rakeback_pct: number | null; insurance_pct: number | null }) =>
+  `action ${pctLabel(p.action_pct)} / RB ${pctLabel(p.rakeback_pct)} / ass. ${pctLabel(p.insurance_pct)}`;
+
 // ── Part agence (base perçue — cascade INCHANGÉE) ────────────────────────────
 
 interface RelRow {
   id: number; affiliate_player_id: number; referred_player_id: number; start_date: string; status: string;
   disclosed_action_pct: number | null; disclosed_rakeback_pct: number | null; disclosed_insurance_pct: number | null;
 }
+type Trio = { a: number | null; r: number | null; i: number | null };
 interface ResolvedDeal {
   game_name: string; start_date: string | null; end_date: string | null;
-  effAction: number; effRb: number; effIns: number;
+  perGame: Trio; rel: Trio; deal: { a: number; r: number; i: number };
+  perceived: PerceivedPeriod[];
+}
+/** Taux perçus effectifs d'une semaine : relation×game → perçu DE CETTE SEMAINE → relation → deal réel. */
+function effAt(d: ResolvedDeal, week: string | null, curWeek: string): { effAction: number; effRb: number; effIns: number } {
+  const p = periodAtP(d.perceived, week ?? curWeek);
+  return {
+    effAction: d.perGame.a ?? p?.action_pct ?? d.rel.a ?? d.deal.a,
+    effRb: d.perGame.r ?? p?.rakeback_pct ?? d.rel.r ?? d.deal.r,
+    effIns: d.perGame.i ?? p?.insurance_pct ?? d.rel.i ?? d.deal.i,
+  };
 }
 
 /**
  * Deal et taux PERÇUS d'un (filleul, game) — même cascade qu'avant ce chantier :
- * relation×game → game (perçu) → relation → deal réel. null = pas de deal, game
- * exclu, ou game inconnue : la part agence vaut alors 0, comme avant.
+ * relation×game → game (perçu, désormais VERSIONNÉ par semaine) → relation → deal
+ * réel. null = pas de deal, game exclu, ou game inconnue : la part agence vaut
+ * alors 0, comme avant.
  */
-function resolveDealOn(db: DB, rel: RelRow, gameId: number): ResolvedDeal | null {
+function resolveDealOn(db: DB, rel: RelRow, gameId: number, perceivedOverride?: PerceivedOverride): ResolvedDeal | null {
   const deal = db.prepare(
     `SELECT action_pct, rakeback_pct, COALESCE(insurance_pct, 0) AS insurance_pct, start_date, end_date
      FROM player_game_deals WHERE player_id = ? AND game_id = ?`
@@ -167,15 +215,14 @@ function resolveDealOn(db: DB, rel: RelRow, gameId: number): ResolvedDeal | null
      FROM affiliate_relationship_games WHERE relationship_id = ? AND game_id = ?`
   ).get(rel.id, gameId) as { disclosed_action_pct: number | null; disclosed_rakeback_pct: number | null; disclosed_insurance_pct: number | null; excluded: number } | undefined;
   if (perGame?.excluded) return null;
-  const game = db.prepare(
-    `SELECT name, perceived_action_pct, perceived_rakeback_pct, perceived_insurance_pct FROM games WHERE id = ?`
-  ).get(gameId) as { name: string; perceived_action_pct: number | null; perceived_rakeback_pct: number | null; perceived_insurance_pct: number | null } | undefined;
+  const game = db.prepare(`SELECT name FROM games WHERE id = ?`).get(gameId) as { name: string } | undefined;
   if (!game) return null;
   return {
     game_name: game.name, start_date: deal.start_date, end_date: deal.end_date,
-    effAction: perGame?.disclosed_action_pct ?? game.perceived_action_pct ?? rel.disclosed_action_pct ?? deal.action_pct,
-    effRb: perGame?.disclosed_rakeback_pct ?? game.perceived_rakeback_pct ?? rel.disclosed_rakeback_pct ?? deal.rakeback_pct,
-    effIns: perGame?.disclosed_insurance_pct ?? game.perceived_insurance_pct ?? rel.disclosed_insurance_pct ?? deal.insurance_pct,
+    perGame: { a: perGame?.disclosed_action_pct ?? null, r: perGame?.disclosed_rakeback_pct ?? null, i: perGame?.disclosed_insurance_pct ?? null },
+    rel: { a: rel.disclosed_action_pct, r: rel.disclosed_rakeback_pct, i: rel.disclosed_insurance_pct },
+    deal: { a: deal.action_pct, r: deal.rakeback_pct, i: deal.insurance_pct },
+    perceived: perceivedOverride && perceivedOverride.game_id === gameId ? [...perceivedOverride.periods].sort(byStartP) : perceivedPeriodsOn(db, gameId),
   };
 }
 
@@ -188,6 +235,7 @@ const cnyToUsdt = (cny: number, rate: number) => rate === 0 ? 0 : cny * rate;
 
 export interface AgencyWeek {
   week: string | null;        // null = date illisible (anomalie, bloque l'agent)
+  eff_action: number;         // action perçue appliquée CETTE semaine
   agency_usdt: number;
   agency_native: number;
   player_net: number | null;  // null pour Wepoker (formule composite)
@@ -206,9 +254,11 @@ export interface AgencyDetail {
 const WALLET_WEEK = `date(substr(COALESCE(wt.tx_datetime, wt.tx_date), 1, 10), '-6 days', 'weekday 1')`;
 const WEPOKER_WEEK = `date(COALESCE(rr.report_date, substr(rr.created_at, 1, 10)), '-6 days', 'weekday 1')`;
 
-export function agencyWeeksOn(db: DB, rel: RelRow, gameId: number, cnyRate = cnyRateOn(db)): AgencyDetail | null {
-  const d = resolveDealOn(db, rel, gameId);
+export function agencyWeeksOn(db: DB, rel: RelRow, gameId: number, ctx: { cnyRate: number; curWeek: string; perceived?: PerceivedOverride }): AgencyDetail | null {
+  const d = resolveDealOn(db, rel, gameId, ctx.perceived);
   if (!d) return null;
+  const cnyRate = ctx.cnyRate;
+  const cur = effAt(d, ctx.curWeek, ctx.curWeek);
 
   if (d.game_name === "Wepoker") {
     const rows = db.prepare(`
@@ -224,11 +274,12 @@ export function agencyWeeksOn(db: DB, rel: RelRow, gameId: number, cnyRate = cny
       GROUP BY week ORDER BY week
     `).all(rel.referred_player_id, gameId) as { week: string | null; winnings: number; rake: number; insurance: number }[];
     return {
-      game_name: d.game_name, effective_action_pct: d.effAction, currency: "CNY", is_composite: true,
+      game_name: d.game_name, effective_action_pct: cur.effAction, currency: "CNY", is_composite: true,
       cny_rate_missing: cnyRate === 0,
       weeks: rows.map(r => {
-        const cny = r.winnings * d.effAction / 100 + r.rake * d.effRb / 100 + r.insurance * d.effIns / 100;
-        return { week: r.week, agency_usdt: cnyToUsdt(cny, cnyRate), agency_native: cny, player_net: null };
+        const e = effAt(d, r.week, ctx.curWeek);
+        const cny = r.winnings * e.effAction / 100 + r.rake * e.effRb / 100 + r.insurance * e.effIns / 100;
+        return { week: r.week, eff_action: e.effAction, agency_usdt: cnyToUsdt(cny, cnyRate), agency_native: cny, player_net: null };
       }),
     };
   }
@@ -245,10 +296,11 @@ export function agencyWeeksOn(db: DB, rel: RelRow, gameId: number, cnyRate = cny
     GROUP BY week ORDER BY week
   `).all(...params) as { week: string | null; net: number }[];
   return {
-    game_name: d.game_name, effective_action_pct: d.effAction, currency: "USDT", is_composite: false, cny_rate_missing: false,
+    game_name: d.game_name, effective_action_pct: cur.effAction, currency: "USDT", is_composite: false, cny_rate_missing: false,
     weeks: rows.map(r => {
-      const a = r.net * d.effAction / 100;
-      return { week: r.week, agency_usdt: a, agency_native: a, player_net: r.net };
+      const e = effAt(d, r.week, ctx.curWeek);
+      const a = r.net * e.effAction / 100;
+      return { week: r.week, eff_action: e.effAction, agency_usdt: a, agency_native: a, player_net: r.net };
     }),
   };
 }
@@ -258,6 +310,7 @@ export function agencyWeeksOn(db: DB, rel: RelRow, gameId: number, cnyRate = cny
 export interface WeekLine {
   week: string | null;
   part: number;               // part agence USDT (signée)
+  eff_action: number;         // action perçue de la semaine (base)
   pct: number | null;         // taux agent de la semaine (null = aucun taux)
   commission: number | null;  // part × pct / 100 (null = incalculable)
 }
@@ -297,6 +350,7 @@ export interface AgentCommissionDetail {
   frozen_through: string | null;     // dernier lundi gelé par un paiement (null = aucun paiement)
 }
 export type RateOverride = { relationship_id: number; game_id: number; periods: RatePeriod[] };
+export type CalcOpts = { today?: string; override?: RateOverride; perceived?: PerceivedOverride };
 
 function relRowOn(db: DB, relationshipId: number): (RelRow & { referred_name: string }) | undefined {
   return db.prepare(`
@@ -307,7 +361,7 @@ function relRowOn(db: DB, relationshipId: number): (RelRow & { referred_name: st
 }
 
 /** Lignes (game par game) d'UNE relation. `override` remplace les périodes d'un couple (aperçu). */
-export function relationLinesOn(db: DB, relationshipId: number, opts: { today?: string; override?: RateOverride } = {}): GameLine[] {
+export function relationLinesOn(db: DB, relationshipId: number, opts: CalcOpts = {}): GameLine[] {
   const rel = relRowOn(db, relationshipId);
   if (!rel) return [];
   const curWeek = mondayOf(opts.today ?? todayIso());
@@ -321,11 +375,11 @@ export function relationLinesOn(db: DB, relationshipId: number, opts: { today?: 
     const periods = opts.override && opts.override.relationship_id === rel.id && opts.override.game_id === g.game_id
       ? [...opts.override.periods].sort(byStart)
       : ratePeriodsOn(db, rel.id, g.game_id);
-    const ag = agencyWeeksOn(db, rel, g.game_id, cnyRate);
+    const ag = agencyWeeksOn(db, rel, g.game_id, { cnyRate, curWeek, perceived: opts.perceived });
     const weeks: WeekLine[] = (ag?.weeks ?? []).map(w => {
       const p = w.week === null ? null : periodAt(periods, w.week);
       const pct = p ? p.agent_pct : null;
-      return { week: w.week, part: w.agency_usdt, pct, commission: pct === null ? null : w.agency_usdt * pct / 100 };
+      return { week: w.week, part: w.agency_usdt, eff_action: w.eff_action, pct, commission: pct === null ? null : w.agency_usdt * pct / 100 };
     });
     const unrated = weeks.filter(w => w.commission === null);
     const cur = periodAt(periods, curWeek);
@@ -369,7 +423,7 @@ export function agentPaymentsOn(db: DB, affiliatePlayerId: number): { id: number
   `).all(affiliatePlayerId) as { id: number; paid_at: string; amount_usdt: number }[];
 }
 
-export function computeAgentCommissionOn(db: DB, affiliatePlayerId: number, opts: { today?: string; override?: RateOverride } = {}): AgentCommissionDetail {
+export function computeAgentCommissionOn(db: DB, affiliatePlayerId: number, opts: CalcOpts = {}): AgentCommissionDetail {
   const rels = db.prepare(
     `SELECT id FROM affiliate_relationships WHERE affiliate_player_id = ? AND status = 'active' ORDER BY id`
   ).all(affiliatePlayerId) as { id: number }[];
@@ -606,6 +660,206 @@ export function setAgentRateOn(db: DB, a: SetAgentRateArgs): SetAgentRateResult 
   return retroactive ? { ok: true, written: true, retroactive: true, preview } : { ok: true, written: true, preview };
 }
 
+// ── Changement du DEAL PERÇU d'un game ───────────────────────────────────────
+//
+// Le perçu est la base de TOUS les agents dont un filleul joue ce game : l'aperçu
+// est donc par agent, et le gel se juge sur l'ARGENT — pour chaque agent payé,
+// aucune commission d'une semaine ≤ son lundi gelé ne doit bouger (une semaine sans
+// activité, ou à taux agent 0, ne change rien : elle n'est pas un refus).
+
+export interface PerceivedWeekChange {
+  relationship_id: number; referred_name: string; week: string;
+  eff_before: number; eff_after: number;
+  part_before: number; part_after: number;
+  commission_before: number | null; commission_after: number | null;
+}
+export interface PerceivedAgentImpact {
+  affiliate_player_id: number; agent_name: string;
+  frozen_through: string | null; paid: number;
+  weeks: PerceivedWeekChange[];                 // semaines à activité dont la part agence change
+  earned_before: number | null; earned_after: number | null;
+  due_before: number | null; due_after: number | null;
+}
+export interface PerceivedChangePreview {
+  game_id: number; game_name: string;
+  start_week: string | null; end_week: string | null;
+  before_at_start: { action_pct: number | null; rakeback_pct: number | null; insurance_pct: number | null } | null;
+  after: { action_pct: number | null; rakeback_pct: number | null; insurance_pct: number | null };
+  agents: PerceivedAgentImpact[];
+  rows_after: PerceivedPeriod[];
+}
+export type SetPerceivedArgs = {
+  game_id: number; action_pct: number; rakeback_pct: number | null; insurance_pct: number | null;
+  start_week: string | null; note?: string | null;
+  confirm_retroactive?: boolean; dry_run?: boolean; today?: string;
+};
+export type SetPerceivedResult =
+  | { ok: true; written: boolean; unchanged?: true; retroactive?: true; preview?: PerceivedChangePreview }
+  | {
+      ok: false; error: string; needs_confirmation?: true; preview?: PerceivedChangePreview;
+      frozen?: { agent_name: string; frozen_through: string; earliest_week: string; last_payment: string | null; weeks: PerceivedWeekChange[] }[];
+    };
+
+function assertPerceivedPct(v: unknown, what: string, nullable: boolean) {
+  if (v === null && nullable) return;
+  if (typeof v !== "number" || !Number.isFinite(v) || v < 0 || v > 100) throw new Error(`${what} : pourcent attendu dans [0, 100], reçu ${String(v)}`);
+  if (v > 0 && v < 1) throw new Error(`${what} : ${v} ressemble à une fraction — les deals sont en POURCENT (20 = 20 %)`);
+}
+
+export function setPerceivedDealOn(db: DB, a: SetPerceivedArgs): SetPerceivedResult {
+  if (a.start_week !== null && (!isIsoDate(a.start_week) || !isMonday(a.start_week)))
+    return { ok: false, error: `date d'effet : un lundi est attendu (pas de prorata), reçu « ${a.start_week} »` };
+  try {
+    assertPerceivedPct(a.action_pct, "action perçue", false);
+    assertPerceivedPct(a.rakeback_pct, "rakeback perçu", true);
+    assertPerceivedPct(a.insurance_pct, "assurance perçue", true);
+  } catch (e: any) { return { ok: false, error: e.message }; }
+  const game = db.prepare(`SELECT name FROM games WHERE id = ?`).get(a.game_id) as { name: string } | undefined;
+  if (!game) return { ok: false, error: `game #${a.game_id} introuvable` };
+  const note = a.note?.trim() || null;
+
+  const rows = perceivedPeriodsOn(db, a.game_id);
+  const fresh: PerceivedPeriod = { game_id: a.game_id, action_pct: a.action_pct, rakeback_pct: a.rakeback_pct, insurance_pct: a.insurance_pct, start_week: a.start_week, end_week: null, note };
+  const change = applyPeriodChange<PerceivedPeriod>(rows, fresh, samePerceived, perceivedLabel);
+  const { containing, next, end_week } = change;
+  if (containing && samePerceived(containing, fresh)) return { ok: true, written: false, unchanged: true };
+
+  // Agents touchés : ceux dont un filleul ACTIF a un deal sur ce game (seules les relations actives comptent).
+  const agents = db.prepare(`
+    SELECT DISTINCT ar.affiliate_player_id AS id, p.name FROM affiliate_relationships ar
+    JOIN player_game_deals d ON d.player_id = ar.referred_player_id AND d.game_id = ?
+    JOIN players p ON p.id = ar.affiliate_player_id
+    WHERE ar.status = 'active' ORDER BY p.name
+  `).all(a.game_id) as { id: number; name: string }[];
+  const perceived: PerceivedOverride = { game_id: a.game_id, periods: change.rows };
+  const impacts: PerceivedAgentImpact[] = [];
+  const frozenHits: NonNullable<Extract<SetPerceivedResult, { ok: false }>["frozen"]> = [];
+  for (const ag of agents) {
+    const before = computeAgentCommissionOn(db, ag.id, { today: a.today });
+    const after = computeAgentCommissionOn(db, ag.id, { today: a.today, perceived });
+    const weeks: PerceivedWeekChange[] = [];
+    const hits: PerceivedWeekChange[] = [];
+    for (const lb of before.lines.filter(l => l.game_id === a.game_id)) {
+      const la = after.lines.find(l => l.relationship_id === lb.relationship_id && l.game_id === a.game_id);
+      for (const wb of lb.weeks) {
+        if (wb.week === null) continue;
+        const wa = la?.weeks.find(w => w.week === wb.week);
+        if (!wa) continue;
+        const partMoved = Math.abs(wa.part - wb.part) > 1e-9;
+        const commMoved = (wa.commission === null) !== (wb.commission === null)
+          || (wa.commission !== null && wb.commission !== null && Math.abs(wa.commission - wb.commission) > 1e-9);
+        if (!partMoved && !commMoved) continue;
+        const c: PerceivedWeekChange = {
+          relationship_id: lb.relationship_id, referred_name: lb.referred.name, week: wb.week,
+          eff_before: wb.eff_action, eff_after: wa.eff_action, part_before: wb.part, part_after: wa.part,
+          commission_before: wb.commission, commission_after: wa.commission,
+        };
+        if (Math.abs(wb.part) > EPS || Math.abs(wa.part) > EPS) weeks.push(c);
+        if (commMoved && before.frozen_through && wb.week <= before.frozen_through) hits.push(c);
+      }
+    }
+    if (hits.length) {
+      const pays = agentPaymentsOn(db, ag.id);
+      frozenHits.push({ agent_name: ag.name, frozen_through: before.frozen_through!, earliest_week: addDays(before.frozen_through!, 7),
+        last_payment: pays[pays.length - 1]?.paid_at ?? null, weeks: hits });
+    }
+    if (weeks.length || before.due_now !== after.due_now)
+      impacts.push({ affiliate_player_id: ag.id, agent_name: ag.name, frozen_through: before.frozen_through, paid: before.paid, weeks,
+        earned_before: before.earned, earned_after: after.earned, due_before: before.due_now, due_after: after.due_now });
+  }
+  const preview: PerceivedChangePreview = {
+    game_id: a.game_id, game_name: game.name, start_week: a.start_week, end_week,
+    before_at_start: containing ? { action_pct: containing.action_pct, rakeback_pct: containing.rakeback_pct, insurance_pct: containing.insurance_pct } : null,
+    after: { action_pct: a.action_pct, rakeback_pct: a.rakeback_pct, insurance_pct: a.insurance_pct },
+    agents: impacts, rows_after: change.rows,
+  };
+  if (frozenHits.length) {
+    return {
+      ok: false, preview, frozen: frozenHits,
+      error: `refusé : changer le perçu ${game.name} modifierait des commissions déjà payées — `
+        + frozenHits.map(h => `${h.agent_name} (semaines ${[...new Set(h.weeks.map(w => w.week))].join(", ")} ; gelées jusqu'à celle du ${h.frozen_through} par le paiement du ${h.last_payment?.slice(0, 10)} ; date d'effet au plus tôt ${h.earliest_week})`).join(" ; ")
+        + ".",
+    };
+  }
+
+  const touched = impacts.reduce((n, i) => n + i.weeks.length, 0);
+  const retroactive = touched > 0 || next !== null || (containing !== null && containing.end_week !== null);
+  if (a.dry_run) return { ok: false, error: "aperçu seul (dry_run) — rien n'a été écrit", preview, needs_confirmation: true };
+  if (retroactive && !a.confirm_retroactive)
+    return { ok: false, needs_confirmation: true, preview,
+      error: touched > 0
+        ? `changement rétroactif : ${touched} semaine(s) à activité recalculée(s) chez ${impacts.filter(i => i.weeks.length).length} agent(s) — confirmation explicite requise`
+        : `changement rétroactif : période insérée ${a.start_week ?? "origine"} → ${end_week ?? "…"} avant une période existante — confirmation explicite requise` };
+
+  const money = (n: number | null) => n === null ? "bloqué" : n.toFixed(2).replace(".", ",");
+  const trace = retroactive
+    ? `[rétroactif ${todayIso()}] ` + (impacts.map(i => `${i.agent_name} dû ${money(i.due_before)} → ${money(i.due_after)}`).join(", ") || "aucun agent touché")
+    : null;
+  const coverS = a.start_week === null ? change.rows.find(r => r.start_week === null) : periodAtP(change.rows, a.start_week);
+  const finalRows = trace && coverS ? change.rows.map(r => r === coverS ? { ...r, note: [r.note, trace].filter(Boolean).join(" · ") } : r) : change.rows;
+
+  db.transaction(() => {
+    const keep = new Set(finalRows.filter(r => r.id !== undefined).map(r => r.id));
+    for (const r of rows) if (!keep.has(r.id)) db.prepare(`DELETE FROM game_perceived_deals WHERE id = ?`).run(r.id);
+    const upd = db.prepare(`UPDATE game_perceived_deals SET action_pct = ?, rakeback_pct = ?, insurance_pct = ?, start_week = ?, end_week = ?, note = ? WHERE id = ?`);
+    for (const r of finalRows) if (r.id !== undefined) upd.run(r.action_pct, r.rakeback_pct, r.insurance_pct, r.start_week, r.end_week, r.note, r.id);
+    const ins = db.prepare(`INSERT INTO game_perceived_deals (game_id, action_pct, rakeback_pct, insurance_pct, start_week, end_week, note) VALUES (?, ?, ?, ?, ?, ?, ?)`);
+    for (const r of finalRows) if (r.id === undefined) ins.run(a.game_id, r.action_pct, r.rakeback_pct, r.insurance_pct, r.start_week, r.end_week, r.note);
+  })();
+  return retroactive ? { ok: true, written: true, retroactive: true, preview } : { ok: true, written: true, preview };
+}
+
+/** Perçu en vigueur cette semaine (affichage : config games, formulaire affiliés). */
+export function currentPerceivedOn(db: DB, gameId: number, today?: string): PerceivedPeriod | null {
+  return periodAtP(perceivedPeriodsOn(db, gameId), mondayOf(today ?? todayIso()));
+}
+
+// ── 5. Vue PORTAIL d'un agent (Mini App) ─────────────────────────────────
+// Ce que l'agent a le droit de voir : SES taux par filleul × game et SES montants.
+// Jamais le deal réel du joueur, jamais la base perçue, ni la part agence ni le
+// cumul agence (décision Baki 2026-09-26). Montants null = « en cours de calcul »
+// (taux manquant) : le client ne doit jamais les afficher comme 0.
+
+export interface PortalRatePeriod {
+  agent_pct: number; start_week: string | null; end_week: string | null;
+  commission: number;        // Σ commission signée des semaines de cette période
+}
+export interface PortalGame { game_name: string; periods: PortalRatePeriod[]; commission: number | null }
+export interface PortalFilleul { name: string; handle: string | null; commission: number | null; games: PortalGame[] }
+export interface PortalAgentView {
+  earned: number | null; paid: number; due_now: number | null;
+  commission_signed: number | null;     // total signé (peut être négatif : à combler) — null si bloqué
+  filleuls: PortalFilleul[];
+}
+
+export function agentPortalViewOn(db: DB, affiliatePlayerId: number, opts: CalcOpts = {}): PortalAgentView {
+  const d = computeAgentCommissionOn(db, affiliatePlayerId, opts);
+  const blocked = d.blocked.length > 0;
+  const handles = new Map((db.prepare(
+    `SELECT ar.id, p.telegram_handle FROM affiliate_relationships ar JOIN players p ON p.id = ar.referred_player_id WHERE ar.affiliate_player_id = ?`
+  ).all(affiliatePlayerId) as { id: number; telegram_handle: string | null }[]).map(r => [r.id, r.telegram_handle]));
+  const byRel = new Map<number, PortalFilleul>();
+  for (const l of d.lines) {
+    const f = byRel.get(l.relationship_id) ?? { name: l.referred.name, handle: handles.get(l.relationship_id) ?? null, commission: 0, games: [] };
+    const periods: PortalRatePeriod[] = l.periods.map(p => ({
+      agent_pct: p.agent_pct, start_week: p.start_week, end_week: p.end_week,
+      commission: l.weeks.filter(w => w.week !== null && periodAt([p], w.week) !== null).reduce((s, w) => s + (w.commission ?? 0), 0),
+    }));
+    // On montre les périodes qui ont rapporté (ou coûté) et la période en cours ; un 0 % sans activité n'apprend rien à l'agent.
+    const shown = periods.filter(p => Math.abs(p.commission) > 0.005 || (p.end_week === null && p.agent_pct > 0));
+    const incalculable = l.unrated_weeks.length > 0;
+    if (shown.length || incalculable)
+      f.games.push({ game_name: l.game_name, periods: shown, commission: incalculable ? null : l.commission });
+    f.commission = f.commission === null || incalculable ? null : f.commission + l.commission;
+    byRel.set(l.relationship_id, f);
+  }
+  return {
+    earned: d.earned, paid: d.paid, due_now: d.due_now,
+    commission_signed: blocked ? null : d.commission_signed,
+    filleuls: [...byRel.values()],
+  };
+}
+
 /** Historique des taux d'une relation, game par game (ordre chronologique). */
 export function rateHistoryOn(db: DB, relationshipId: number): { game_id: number; game_name: string; periods: RatePeriod[] }[] {
   const rows = db.prepare(`
@@ -631,8 +885,22 @@ export function rateHistoryOn(db: DB, relationshipId: number): { game_id: number
 // faite et archivée.
 
 function legacyAgencyPnlOn(db: DB, rel: RelRow, gameId: number, cnyRate: number): number {
-  const d = resolveDealOn(db, rel, gameId);
-  if (!d) return 0;
+  // Ancienne cascade, perçu lu dans les colonnes games.perceived_* (photo de la migration).
+  const deal = db.prepare(`SELECT action_pct, rakeback_pct, COALESCE(insurance_pct, 0) AS insurance_pct, start_date, end_date FROM player_game_deals WHERE player_id = ? AND game_id = ?`)
+    .get(rel.referred_player_id, gameId) as { action_pct: number; rakeback_pct: number; insurance_pct: number; start_date: string | null; end_date: string | null } | undefined;
+  if (!deal) return 0;
+  const perGame = db.prepare(`SELECT disclosed_action_pct, disclosed_rakeback_pct, disclosed_insurance_pct, excluded FROM affiliate_relationship_games WHERE relationship_id = ? AND game_id = ?`)
+    .get(rel.id, gameId) as { disclosed_action_pct: number | null; disclosed_rakeback_pct: number | null; disclosed_insurance_pct: number | null; excluded: number } | undefined;
+  if (perGame?.excluded) return 0;
+  const game = db.prepare(`SELECT name, perceived_action_pct, perceived_rakeback_pct, perceived_insurance_pct FROM games WHERE id = ?`)
+    .get(gameId) as { name: string; perceived_action_pct: number | null; perceived_rakeback_pct: number | null; perceived_insurance_pct: number | null } | undefined;
+  if (!game) return 0;
+  const d = {
+    game_name: game.name, start_date: deal.start_date, end_date: deal.end_date,
+    effAction: perGame?.disclosed_action_pct ?? game.perceived_action_pct ?? rel.disclosed_action_pct ?? deal.action_pct,
+    effRb: perGame?.disclosed_rakeback_pct ?? game.perceived_rakeback_pct ?? rel.disclosed_rakeback_pct ?? deal.rakeback_pct,
+    effIns: perGame?.disclosed_insurance_pct ?? game.perceived_insurance_pct ?? rel.disclosed_insurance_pct ?? deal.insurance_pct,
+  };
   if (d.game_name === "Wepoker") {
     const row = db.prepare(`
       SELECT COALESCE(SUM(re.winnings_amount), 0) AS winnings, COALESCE(SUM(re.amount), 0) AS rake, COALESCE(SUM(re.insurance_amount), 0) AS insurance

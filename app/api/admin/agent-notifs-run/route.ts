@@ -15,9 +15,11 @@ const dashboardButton = { inline_keyboard: [[{ text: "🎰 Ouvre ton dashboard",
 const round2 = (n: number) => Math.round(n * 100) / 100;
 
 // La part de l'agent n'est plus cumul × 50 % : c'est la commission calculée par
-// filleul × game × semaine à son taux (computeAgentCommission.earned).
-function tierMessage(cumul: number, share: number) {
-  return `🔥 L'agence est à <b>+${cumul.toFixed(0)} USDT</b> sur tes filleuls → ta part : <b>${share.toFixed(0)} USDT</b> 💪`;
+// filleul × game × semaine à son taux (computeAgentCommission.earned). Le palier se
+// déclenche toujours sur le cumul agence, mais ce montant n'est PLUS montré à l'agent
+// (il ne voit ni la part ni le cumul agence — décision Baki 2026-09-26).
+function tierMessage(_cumul: number, share: number) {
+  return `🔥 Tes filleuls ont franchi un nouveau palier → ta part : <b>${share.toFixed(0)} USDT</b> 💪`;
 }
 function notOnboardedMessage(name: string) {
   return `👋 Ton filleul <b>${name}</b> n'est pas encore setup. Vois avec lui pour qu'on l'avance 👇`;

@@ -14,9 +14,14 @@ export async function PATCH(req: NextRequest, { params }: Ctx) {
     body.currency = cur;
   }
 
+  // Le deal PERÇU n'est plus modifiable ici : c'est la base de la commission de tous
+  // les agents, versionnée par semaine (game_perceived_deals). Il passe OBLIGATOIREMENT
+  // par POST /api/games/[id]/perceived (aperçu avant/après, refus si une semaine payée change).
+  if (["perceived_action_pct", "perceived_rakeback_pct", "perceived_insurance_pct"].some(k => body[k] !== undefined))
+    return NextResponse.json({ error: "Le deal perçu se modifie par son propre parcours (aperçu avant/après, date d'effet) — POST /api/games/[id]/perceived." }, { status: 409 });
+
   const allowed = [
     "exact_action_pct", "exact_rakeback_pct", "exact_insurance_pct",
-    "perceived_action_pct", "perceived_rakeback_pct", "perceived_insurance_pct",
     "status", "currency",
   ];
   const sets: string[] = [];

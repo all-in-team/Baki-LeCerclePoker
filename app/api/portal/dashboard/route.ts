@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createHmac, timingSafeEqual } from "crypto";
 import { getDb } from "@/lib/db";
-import { computeAffiliateCommission, computeAgentCommission } from "@/lib/queries/affiliate";
+import { computeAgentCommission, agentPortalView } from "@/lib/queries/affiliate";
 
 const OWNER_TG_IDS = new Set(
   (process.env.TELEGRAM_OWNER_IDS ?? "1298290355,1486389037")
@@ -36,32 +36,9 @@ function buildAgentDashboard(agentPlayerId: number, db: any) {
   ).get(agentPlayerId) as { id: number; name: string; telegram_handle: string | null; created_at: string | null } | undefined;
   if (!player) return null;
 
-  const rels = db.prepare(
-    `SELECT id FROM affiliate_relationships WHERE affiliate_player_id = ? AND status = 'active'`
-  ).all(player.id) as { id: number }[];
-
-  // Agent-level commission (cross-makeup) — single source of truth, shared with /crm/affiliates
-  const ac = computeAgentCommission(player.id);
-  const filleuls: any[] = [];
-
-  for (const r of rels) {
-    const commission = computeAffiliateCommission(r.id);
-    if (!commission) continue;
-    // per-filleul ELIGIBLE agency P&L (signed) — what this filleul contributes to the agent cumul
-    const partEligible = commission.breakdown
-      .filter(b => b.rate_label === "éligible")
-      .reduce((s, b) => s + b.agency_pnl_lifetime, 0);
-    filleuls.push({
-      name: commission.referred.name,
-      handle: commission.referred.telegram_handle,
-      window_status: commission.window_status,
-      games: commission.breakdown.map(b => ({
-        game_name: b.game_name, rate_label: b.rate_label,
-        rate_pct: Math.round(b.rate * 100), agency_pnl: b.agency_pnl_lifetime, currency: b.currency,
-      })),
-      part_agence_eligible: partEligible, // signed (can be negative)
-    });
-  }
+  // Vue agent : SES taux par filleul × game et SES montants — jamais le deal réel du
+  // joueur, la base perçue, la part agence ni le cumul agence (décision Baki 2026-09-26).
+  const view = agentPortalView(player.id);
 
   const payments = db.prepare(`
     SELECT ap.paid_at, g.name AS game_name, ap.amount_usdt, ap.tx_hash, ap.notes
@@ -114,9 +91,10 @@ function buildAgentDashboard(agentPlayerId: number, db: any) {
   return {
     mode: "agent" as const,
     affiliate: { name: player.name, handle: player.telegram_handle, joined_at: player.created_at?.slice(0, 10) ?? null },
-    summary: { lifetime_usdt: ac.earned, paid_usdt: ac.paid, pending_usdt: ac.due_now, cumul_agence: ac.cumul_agence_eligible },
+    // null = « en cours de calcul » (taux manquant) — jamais un 0.
+    summary: { lifetime_usdt: view.earned, paid_usdt: view.paid, pending_usdt: view.due_now, commission_signed: view.commission_signed },
     share_link: `https://t.me/${botUsername}?start=ref_${player.id}`,
-    filleuls,
+    filleuls: view.filleuls,
     payments,
     activity,
     momentum,

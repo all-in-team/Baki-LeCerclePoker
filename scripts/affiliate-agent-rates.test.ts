@@ -40,11 +40,20 @@ import fs from "fs";
 const REPO = path.resolve(__dirname, "..");
 const Database = require(path.join(REPO, "node_modules/better-sqlite3"));
 
-import { runAffiliateAgentRatesMigrationV1, AFFILIATE_AGENT_RATES_MIGRATION_V1 } from "../lib/affiliate/agent-rates-schema";
+import {
+  runAffiliateAgentRatesMigrationV1 as runRatesOnly, AFFILIATE_AGENT_RATES_MIGRATION_V1, runGamePerceivedMigrationV1,
+} from "../lib/affiliate/agent-rates-schema";
+
+/** Les deux migrations du chantier, dans l'ordre de lib/db.ts (perçu versionné, puis taux agents). */
+function runAffiliateAgentRatesMigrationV1(db: any) {
+  runGamePerceivedMigrationV1(db);
+  return runRatesOnly(db);
+}
 import {
   computeAgentCommissionOn, legacyAgentCommissionOn, setAgentRateOn, ratePeriodsOn, rateHistoryOn,
-  paymentBlockOn, mondayOf,
+  paymentBlockOn, mondayOf, setPerceivedDealOn, perceivedPeriodsOn, agentPortalViewOn,
 } from "../lib/affiliate/agent-rates";
+import { seedDefaultRatesOn } from "../lib/affiliate/agent-rates-schema";
 
 let passed = 0;
 const failures: string[] = [];
@@ -75,7 +84,7 @@ function freshDb() {
     CREATE TABLE _applied_fixes (name TEXT PRIMARY KEY, applied_at TEXT DEFAULT (datetime('now')));
     CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
     CREATE TABLE players (id INTEGER PRIMARY KEY, name TEXT NOT NULL, telegram_handle TEXT);
-    CREATE TABLE games (id INTEGER PRIMARY KEY, name TEXT NOT NULL UNIQUE,
+    CREATE TABLE games (id INTEGER PRIMARY KEY, name TEXT NOT NULL UNIQUE, status TEXT NOT NULL DEFAULT 'active',
       perceived_action_pct REAL, perceived_rakeback_pct REAL, perceived_insurance_pct REAL);
     CREATE TABLE player_game_deals (id INTEGER PRIMARY KEY AUTOINCREMENT, player_id INTEGER NOT NULL, game_id INTEGER NOT NULL,
       action_pct REAL NOT NULL DEFAULT 50, rakeback_pct REAL NOT NULL DEFAULT 0, insurance_pct REAL,
@@ -128,9 +137,12 @@ function loadFixture() {
     db.prepare(`INSERT INTO affiliate_relationships (id, affiliate_player_id, referred_player_id, start_date, status) VALUES (?, ?, ?, ?, ?)`)
       .run(r.id, r.agent, r.refId, r.start, r.status);
     for (const g of r.games) {
-      db.prepare(`INSERT OR IGNORE INTO games (id, name) VALUES (?, ?)`).run(g.gid, g.name);
-      // Le taux perçu effectif vu en prod, posé au niveau relation × game (1er niveau de la cascade).
-      db.prepare(`INSERT INTO affiliate_relationship_games (relationship_id, game_id, disclosed_action_pct) VALUES (?, ?, ?)`).run(r.id, g.gid, g.eff);
+      // KK et A5 : perçu 20 % AU NIVEAU GAME, comme en prod (lu le 25/09) — c'est ce niveau que
+      // le perçu versionné modifie. Les autres games : le perçu effectif vu en prod, posé au
+      // niveau relation × game (1er niveau de la cascade).
+      const gameLevel = (g.gid === 5 || g.gid === 6) && g.eff === 20;
+      db.prepare(`INSERT OR IGNORE INTO games (id, name, perceived_action_pct) VALUES (?, ?, ?)`).run(g.gid, g.name, gameLevel ? 20 : null);
+      if (!gameLevel) db.prepare(`INSERT INTO affiliate_relationship_games (relationship_id, game_id, disclosed_action_pct) VALUES (?, ?, ?)`).run(r.id, g.gid, g.eff);
       const k = `${r.refId}:${g.gid}`;
       if (!seenDeal.has(k)) {
         seenDeal.add(k);
@@ -227,7 +239,12 @@ console.log("\n══ C. Grobel A5 à 25 % dès le 2026-09-07 (fixture prod) ═
   cents("dû Samyaza après écriture = 157,19", due(db, 421), 157.1863);
   eq("Chroma KK/A5 et Grobel KK restent à 50 %",
      [ratePeriodsOn(db, 23, 5)[0].agent_pct, ratePeriodsOn(db, 23, 6)[0].agent_pct, ratePeriodsOn(db, 21, 5)[0].agent_pct], [50, 50, 50]);
-  eq("rateHistoryOn(Grobel) : KK et A5", rateHistoryOn(db, 21).map(h => [h.game_name, h.periods.length]), [["KKPOKER", 1], ["A5POKER", 2]]);
+  eq("rateHistoryOn(Grobel) : KK et A5 (deals) + les games actifs sans deal",
+     rateHistoryOn(db, 21).map(h => [h.game_name, h.periods.length]),
+     [["TELE", 1], ["KKPOKER", 1], ["A5POKER", 2], ["AKS", 1], ["QQPK", 1], ["NUTSPK", 1], ["XPOKER_TWD", 1]]);
+  eq("games sans deal de Grobel (fenêtre fermée le 03/09) : 0 % hors fenêtre, comme l'ancienne règle pour un deal créé aujourd'hui",
+     rateHistoryOn(db, 21).filter(h => !["KKPOKER", "A5POKER"].includes(h.game_name)).map(h => [h.periods[0].agent_pct, h.periods[0].kind]),
+     [[0, "hors_fenetre"], [0, "hors_fenetre"], [0, "hors_fenetre"], [0, "hors_fenetre"], [0, "hors_fenetre"]]);
 
   // Refus : toute date d'effet ≤ semaine du paiement du 02/09 (lundi 31/08).
   for (const S of [null, "2026-08-03", "2026-08-31"]) {
@@ -369,7 +386,7 @@ console.log("\n══ F. Le 0 % — Antoine / Xabi (fixture prod) ══");
   cents("Xabi après (0 % depuis l'origine sur TELE, KK, A5) : 0", due(db, 175), 0);
   const kinds = db.prepare(`SELECT game_id, agent_pct, kind, note IS NOT NULL AS has_note FROM affiliate_agent_rates WHERE relationship_id = 8 ORDER BY game_id`).all();
   eq("0 % manuel (avec note) distinct du 0 % hors fenêtre", kinds.map((k: any) => [k.game_id, k.agent_pct, k.kind, k.has_note]),
-     [[1, 0, "manual", 1], [5, 0, "manual", 1], [6, 0, "manual", 1], [255, 0, "hors_fenetre", 1], [448, 0, "hors_fenetre", 1], [2539, 0, "hors_fenetre", 1]]);
+     [[1, 0, "manual", 1], [5, 0, "manual", 1], [6, 0, "manual", 1], [255, 0, "hors_fenetre", 1], [448, 0, "hors_fenetre", 1], [654, 0, "hors_fenetre", 1], [2539, 0, "hors_fenetre", 1]]);
   check("la note du 0 % garde l'ancien taux (« avant : 50 % (migration) »)", /avant : 50 % \(migration\)/.test(ratePeriodsOn(db, 8, 5)[0].note ?? ""));
   check("…et la note de migration n'est pas écrasée (audit R2)", /taux unique d'avant le .*deal créé le 2026-05-17/.test(ratePeriodsOn(db, 8, 5)[0].note ?? ""), ratePeriodsOn(db, 8, 5)[0].note ?? "");
 
@@ -445,6 +462,97 @@ console.log("\n══ H. Garde-fous ══");
   eq("migration dans une transaction étrangère : reportée", runAffiliateAgentRatesMigrationV1(db2), "deferred");
   db2.exec("ROLLBACK");
   eq("…sans marqueur", db2.prepare(`SELECT 1 FROM _applied_fixes WHERE name = ?`).get(AFFILIATE_AGENT_RATES_MIGRATION_V1), undefined);
+}
+
+console.log("\n══ I. Deal PERÇU versionné ══");
+{
+  const db = loadFixture(); runAffiliateAgentRatesMigrationV1(db);
+  eq("migration : perçu A5 et KK repris depuis l'origine (20 %)",
+     [perceivedPeriodsOn(db, 5), perceivedPeriodsOn(db, 6)].map(ps => ps.map(p => [p.start_week, p.end_week, p.action_pct])), [[[null, null, 20]], [[null, null, 20]]]);
+  cents("dû Samyaza inchangé avec le perçu lu dans la table", due(db, 421), 314.3693);
+  // L'erreur du 25/09 rejouée : A5 20 → 50 % depuis l'origine.
+  const n0 = (db.prepare(`SELECT COUNT(*) n FROM game_perceived_deals`).get() as any).n;
+  const err = setPerceivedDealOn(db, { game_id: 6, action_pct: 50, rakeback_pct: null, insurance_pct: null, start_week: null, confirm_retroactive: true, today: TODAY });
+  check("A5 20 → 50 % depuis l'origine : REFUSÉ", !err.ok && !!(err as any).frozen, JSON.stringify(err).slice(0, 200));
+  const names = ((err as any).frozen ?? []).map((h: any) => h.agent_name);
+  check("…nommément à cause du paiement de Samyaza du 02/09", names.includes("Samyaza") && /Samyaza .*paiement du 2026-09-02/.test((err as any).error), (err as any).error);
+  check("…et de celui de Leo (31/08, filleuls A5)", names.includes("Leo La Truite"), JSON.stringify(names));
+  eq("…rien écrit", (db.prepare(`SELECT COUNT(*) n FROM game_perceived_deals`).get() as any).n, n0);
+  cents("…dû Samyaza inchangé", due(db, 421), 314.3693);
+  const dry = setPerceivedDealOn(db, { game_id: 6, action_pct: 50, rakeback_pct: null, insurance_pct: null, start_week: null, dry_run: true, today: TODAY });
+  check("…même en dry_run : refus (pas d'aperçu trompeur)", !dry.ok && !!(dry as any).frozen);
+  // Après les semaines payées : autorisé, rétroactif (Grobel a joué la semaine du 21/09), avec aperçu par agent.
+  const p = setPerceivedDealOn(db, { game_id: 6, action_pct: 50, rakeback_pct: null, insurance_pct: null, start_week: "2026-09-07", today: TODAY });
+  check("A5 à 50 % dès le 07/09 : confirmation exigée (semaine à activité touchée)", !p.ok && (p as any).needs_confirmation === true && !(p as any).frozen, JSON.stringify(p).slice(0, 200));
+  const sam = (p as any).preview.agents.find((a: any) => a.agent_name === "Samyaza");
+  eq("aperçu Samyaza : Grobel sem. du 21/09, perçu 20 → 50", sam.weeks.map((w: any) => [w.referred_name, w.week, w.eff_before, w.eff_after]), [["Grobel", "2026-09-21", 20, 50]]);
+  cents("aperçu Samyaza : dû 314,37 → 785,92", sam.due_after, 314.3693 + 3143.66 * 0.3 * 0.5);
+  // Futur sans activité : direct.
+  const db2 = loadFixture(); runAffiliateAgentRatesMigrationV1(db2);
+  const f = setPerceivedDealOn(db2, { game_id: 6, action_pct: 25, rakeback_pct: null, insurance_pct: null, start_week: "2026-09-28", note: "test", today: TODAY });
+  check("A5 à 25 % dès le 28/09 (aucune activité) : appliqué direct", f.ok && !(f as any).retroactive, JSON.stringify(f).slice(0, 200));
+  eq("historique perçu A5", perceivedPeriodsOn(db2, 6).map(q => [q.start_week, q.end_week, q.action_pct]), [[null, "2026-09-21", 20], ["2026-09-28", null, 25]]);
+  cents("…dûs inchangés (Samyaza)", due(db2, 421), 314.3693);
+  const frac = setPerceivedDealOn(db2, { game_id: 6, action_pct: 0.2, rakeback_pct: null, insurance_pct: null, start_week: "2026-10-05", today: TODAY });
+  check("perçu 0.2 refusé (fraction déguisée)", !frac.ok && /fraction/.test((frac as any).error));
+  // Gel = argent : un agent payé dont le filleul n'a PAS joué ce game dans la zone gelée n'est pas un refus.
+  const db3 = loadFixture(); runAffiliateAgentRatesMigrationV1(db3);
+  const kk = setPerceivedDealOn(db3, { game_id: 5, action_pct: 30, rakeback_pct: null, insurance_pct: null, start_week: "2026-09-07", confirm_retroactive: true, today: TODAY });
+  check("KK à 30 % dès le 07/09 : accepté (aucune semaine payée ne bouge)", kk.ok, JSON.stringify(kk).slice(0, 200));
+}
+
+console.log("\n══ J. Taux par défaut d'une NOUVELLE relation ══");
+{
+  const db = loadFixture(); runAffiliateAgentRatesMigrationV1(db);
+  db.prepare(`INSERT INTO games (id, name, status) VALUES (777, 'ARCHIVED', 'archived')`).run();
+  db.prepare(`INSERT INTO players (id, name) VALUES (9001, 'Nouveau')`).run();
+  db.prepare(`INSERT INTO affiliate_relationships (id, affiliate_player_id, referred_player_id, start_date) VALUES (900, 421, 9001, '2026-09-25')`).run();
+  const seeded = seedDefaultRatesOn(db, 900);
+  eq("50 % par défaut sur chaque game ACTIF (pas l'archivé)", seeded.map(g => g.game_id).sort((a, b) => a - b), [1, 5, 6, 255, 448, 654, 2539]);
+  eq("…nature 'default', note « par défaut — à confirmer »",
+     [...new Set((db.prepare(`SELECT kind, agent_pct, note FROM affiliate_agent_rates WHERE relationship_id = 900`).all() as any[]).map(r => `${r.kind}|${r.agent_pct}|${r.note}`))],
+     ["default|50|par défaut — à confirmer"]);
+  eq("seed rejoué : rien de plus", seedDefaultRatesOn(db, 900).length, 0);
+  db.prepare(`INSERT INTO player_game_deals (player_id, game_id, created_at) VALUES (9001, 5, '2026-09-25 10:00:00')`).run();
+  tx(db, 9001, 5, 1000, "2026-09-22T10:00:00Z");
+  cents("son activité KK compte à 50 % (base 20 %) : dû Samyaza 314,37 + 100", due(db, 421), 414.3693);
+  // Confirmer = reposer à l'identique en « manuel » : aucun montant ne bouge.
+  const c = setAgentRateOn(db, { relationship_id: 900, game_id: 5, agent_pct: 50, start_week: null, note: "taux par défaut confirmé", confirm_retroactive: true, today: TODAY });
+  check("confirmer le défaut : écrit", c.ok && (c as any).written, JSON.stringify(c).slice(0, 200));
+  eq("…devient manuel à 50 %, trace « avant : 50 % (default) »", ratePeriodsOn(db, 900, 5).map(r => [r.kind, r.agent_pct, /avant : 50 % \(default\)/.test(r.note ?? "")]), [["manual", 50, true]]);
+  cents("…dû inchangé", due(db, 421), 414.3693);
+  // Un game créé APRÈS la relation n'a aucune ligne : blocage (seul cas restant).
+  db.prepare(`INSERT INTO games (id, name) VALUES (888, 'NEWGAME')`).run();
+  db.prepare(`INSERT INTO player_game_deals (player_id, game_id, created_at) VALUES (9001, 888, '2026-09-25 10:00:00')`).run();
+  db.prepare(`INSERT INTO affiliate_relationship_games (relationship_id, game_id, disclosed_action_pct) VALUES (900, 888, 20)`).run();
+  tx(db, 9001, 888, 100, "2026-09-22T11:00:00Z");
+  eq("game sans aucune ligne de taux + activité : dû null (bloqué)", due(db, 421), null);
+}
+
+console.log("\n══ K. Vue PORTAIL (Samyaza après Grobel A5 à 25 % dès le 07/09) ══");
+{
+  const db = loadFixture(); runAffiliateAgentRatesMigrationV1(db);
+  setAgentRateOn(db, { relationship_id: 21, game_id: 6, agent_pct: 25, start_week: "2026-09-07", confirm_retroactive: true, note: "Deal Grobel A5 50/45/5", today: TODAY });
+  const v = agentPortalViewOn(db, 421, { today: TODAY });
+  cents("commission lifetime 1 344,65", v.earned, 1344.6463);
+  cents("payé 1 187,46", v.paid, 1187.46);
+  cents("dû 157,19", v.due_now, 157.1863);
+  const grobel = v.filleuls.find(f => f.name === "Grobel")!, chroma = v.filleuls.find(f => f.name === "Chroma")!;
+  cents("Grobel +1 347,70", grobel.commission, 1347.6963);
+  cents("Chroma −3,05", chroma.commission, -3.05);
+  eq("Grobel A5 : 50 % jusqu'à la semaine du 31/08 (+886,72), puis 25 % dès le 07/09 (+157,18)",
+     grobel.games.find(g => g.game_name === "A5POKER")!.periods.map(p => [p.agent_pct, p.start_week, p.end_week, Math.round(p.commission * 100) / 100]),
+     [[50, null, "2026-08-31", 886.72], [25, "2026-09-07", null, 157.18]]);
+  eq("Grobel KK : 50 % (+303,79)", grobel.games.find(g => g.game_name === "KKPOKER")!.periods.map(p => [p.agent_pct, Math.round(p.commission * 100) / 100]), [[50, 303.79]]);
+  const json = JSON.stringify(v);
+  check("la vue portail ne contient ni part agence, ni base perçue, ni deal joueur", !/part_agence|agency|eff_action|effective_action|perceived|action_pct|player_pnl|cumul/.test(json), json.slice(0, 300));
+  // Bloqué : null, jamais 0.
+  db.prepare(`INSERT INTO games (id, name) VALUES (888, 'NEWGAME')`).run();
+  db.prepare(`INSERT INTO player_game_deals (player_id, game_id, created_at) VALUES (428, 888, '2026-09-25 10:00:00')`).run();
+  db.prepare(`INSERT INTO affiliate_relationship_games (relationship_id, game_id, disclosed_action_pct) VALUES (21, 888, 20)`).run();
+  tx(db, 428, 888, 100, "2026-09-22T11:00:00Z");
+  const b = agentPortalViewOn(db, 421, { today: TODAY });
+  eq("agent bloqué : lifetime / dû / total = null (« en cours de calcul »), jamais 0", [b.earned, b.due_now, b.commission_signed, b.filleuls.find(f => f.name === "Grobel")!.commission], [null, null, null, null]);
 }
 
 console.log(`\n${passed} ✔  ${failures.length} ✘`);

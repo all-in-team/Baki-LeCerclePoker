@@ -102,6 +102,9 @@ export async function POST(req: NextRequest) {
       exclude_agency_extras: body.exclude_agency_extras ?? 1,
       notes: body.notes ?? null,
     });
+    // Taux agent 50 % « par défaut — à confirmer » sur chaque game actif + notif Telegram à Baki.
+    const { afterRelationCreated } = await import("@/lib/affiliate/new-relation");
+    await afterRelationCreated(Number(r.lastInsertRowid));
     // Going-forward: tag the referred player's Telegram group "{nom} x LeCercle [{agent}]".
     // Single rename, never blocks relationship creation (already committed above).
     let group_rename: unknown = undefined;

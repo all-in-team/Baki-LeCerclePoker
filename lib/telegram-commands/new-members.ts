@@ -38,9 +38,11 @@ export async function handleNewMembers(members: any[], chatTitle: string, chatId
 
       const existingRel = db.prepare(`SELECT 1 FROM affiliate_relationships WHERE referred_player_id = ?`).get(newPlayerId);
       if (!existingRel) {
-        db.prepare(
+        const relIns = db.prepare(
           `INSERT INTO affiliate_relationships (affiliate_player_id, referred_player_id, origin_game_id, start_date) VALUES (?, ?, NULL, date('now'))`
         ).run(affiliateLead.affiliate_player_id, newPlayerId);
+        // Taux agent 50 % « par défaut — à confirmer » + notif Telegram à Baki (non bloquant).
+        await (await import("@/lib/affiliate/new-relation")).afterRelationCreated(Number(relIns.lastInsertRowid));
         console.log(`[AFFILIATE] Relationship created: affiliate=${affiliateLead.affiliate_player_id} referred=${newPlayerId} origin=NULL`);
         // Tag the player's group "{nom} x LeCercle [{agent}]" (single rename, non-blocking).
         try {
@@ -145,9 +147,11 @@ export async function handleNewMembers(members: any[], chatTitle: string, chatId
         ).run(playerId, lead.id);
         const existingRel = db.prepare(`SELECT 1 FROM affiliate_relationships WHERE referred_player_id = ?`).get(playerId);
         if (!existingRel) {
-          db.prepare(
+          const relIns = db.prepare(
             `INSERT INTO affiliate_relationships (affiliate_player_id, referred_player_id, origin_game_id, start_date) VALUES (?, ?, NULL, date('now'))`
           ).run(lead.affiliate_player_id, playerId);
+          // Taux agent 50 % « par défaut — à confirmer » + notif Telegram à Baki (non bloquant).
+          await (await import("@/lib/affiliate/new-relation")).afterRelationCreated(Number(relIns.lastInsertRowid));
           console.log(`[AFFILIATE] Lead ${lead.id} converted + relationship created: affiliate=${lead.affiliate_player_id} → player ${playerId}`);
           // Tag the player's group "{nom} x LeCercle [{agent}]" (single rename, non-blocking).
           try {

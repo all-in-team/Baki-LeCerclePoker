@@ -1,5 +1,5 @@
 import { getDb } from "@/lib/db";
-import { relationLinesOn, computeAgentCommissionOn, type BlockReason } from "@/lib/affiliate/agent-rates";
+import { relationLinesOn, computeAgentCommissionOn, agentPortalViewOn, type BlockReason, type PortalAgentView } from "@/lib/affiliate/agent-rates";
 
 // ── Types ────────────────────────────────────────────────
 
@@ -270,4 +270,9 @@ export function getPendingPayoutsForAllAffiliates(): AffiliateGroup[] {
 
   // Bloqués en fin de liste : un dû incalculable ne se trie pas comme un zéro.
   return groups.sort((a, b) => (b.total_due ?? -Infinity) - (a.total_due ?? -Infinity));
+}
+
+// ── 5. Vue PORTAIL d'un agent (Mini App) — le calcul vit dans le moteur ────
+export function agentPortalView(affiliatePlayerId: number): PortalAgentView {
+  return agentPortalViewOn(getDb(), affiliatePlayerId);
 }

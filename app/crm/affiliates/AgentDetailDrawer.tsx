@@ -47,6 +47,7 @@ const KIND_LABEL: Record<string, { label: string; color: string }> = {
   migration: { label: "migré", color: "var(--text-dim)" },
   hors_fenetre: { label: "hors fenêtre", color: "#9CA3AF" },
   manual: { label: "manuel", color: "#3B82F6" },
+  default: { label: "par défaut — à confirmer", color: "#EAB308" },
 };
 const periodRange = (p: RatePeriodView) => `${p.start_week ?? "origine"} → ${p.end_week ? `sem. du ${p.end_week}` : "en cours"}`;
 
@@ -273,6 +274,19 @@ function GameBlock({ rel, g, editing, onEdit, historyOpen, onToggleHistory, froz
   const kind = current ? KIND_LABEL[current.kind] ?? KIND_LABEL.manual : null;
   const unrated = g.unrated_weeks.length > 0;
   const counts = g.rate_periods.some(p => p.agent_pct > 0);
+  const [confirming, setConfirming] = useState(false);
+  const [confirmErr, setConfirmErr] = useState<string | null>(null);
+  // Confirmer un taux par défaut = le reposer à l'identique en « manuel » (aucun montant ne bouge).
+  async function confirmDefault() {
+    if (!current || current.kind !== "default") return;
+    setConfirming(true); setConfirmErr(null);
+    try {
+      const r = await fetch("/api/affiliate-agent-rates", { method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ relationship_id: rel.id, game_id: g.game_id, agent_pct: current.agent_pct, start_week: current.start_week, note: "taux par défaut confirmé", confirm_retroactive: true }) });
+      const j = await r.json();
+      if (j.ok) onSaved(); else setConfirmErr(j.error ?? "Erreur");
+    } catch (e: any) { setConfirmErr(e.message); } finally { setConfirming(false); }
+  }
   return (
     <div style={{ border: `1px solid ${unrated ? "rgba(239,68,68,0.4)" : "var(--border)"}`, borderRadius: 8, padding: "10px 12px", background: "var(--bg-raised)", opacity: counts || unrated || editing ? 1 : 0.6 }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8, gap: 8 }}>
@@ -283,6 +297,11 @@ function GameBlock({ rel, g, editing, onEdit, historyOpen, onToggleHistory, froz
             : <span style={{ fontWeight: 700, color: g.agent_pct_current > 0 ? GREEN : "var(--text-dim)" }}>agent {g.agent_pct_current} %</span>}
           {kind && <span style={{ color: kind.color, border: "1px solid var(--border)", borderRadius: 4, padding: "0 5px", fontSize: 10 }}>{kind.label}</span>}
           {current && <span style={{ color: "var(--text-dim)", fontSize: 10 }}>depuis {current.start_week ?? "l'origine"}</span>}
+          {current?.kind === "default" && (
+            <button disabled={confirming} onClick={confirmDefault} style={{ background: "rgba(234,179,8,0.12)", border: "1px solid rgba(234,179,8,0.4)", borderRadius: 5, cursor: "pointer", padding: "2px 7px", color: "#EAB308", fontSize: 10, fontWeight: 700 }}>
+              Confirmer
+            </button>
+          )}
           <button onClick={onEdit} style={{ display: "flex", alignItems: "center", gap: 3, background: "none", border: "1px solid var(--border)", borderRadius: 5, cursor: "pointer", padding: "2px 7px", color: "var(--text-muted)", fontSize: 10 }}>
             <Pencil size={10} /> taux
           </button>
@@ -309,6 +328,7 @@ function GameBlock({ rel, g, editing, onEdit, historyOpen, onToggleHistory, froz
       <div style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 12, marginTop: 4 }}>
         <Row label="Commission agent (Σ part × taux de chaque semaine)" value={<Amt n={g.earned_lifetime} bold />} />
       </div>
+      {confirmErr && <div style={{ marginTop: 6, color: RED, fontSize: 11 }}>{confirmErr}</div>}
       {unrated && (
         <div style={{ marginTop: 6, color: RED, fontSize: 11, fontWeight: 600 }}>
           ⚠️ Part agence {f2(g.unrated_part)} sans taux agent (semaine{g.unrated_weeks.length > 1 ? "s" : ""} {g.unrated_weeks.join(", ")}) — l&apos;agent est bloqué tant qu&apos;aucun taux ne couvre ces semaines.
