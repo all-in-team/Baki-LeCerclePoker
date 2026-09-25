@@ -1,5 +1,6 @@
 export const dynamic = "force-dynamic";
 import { NextRequest, NextResponse } from "next/server";
+import { adminTokenGuard } from "@/lib/admin-token";
 import { getDb } from "@/lib/db";
 import { listUserbotChannels, leaveUserbotChannels, getChatMembers, getUserbotMe } from "@/lib/telegram-userbot";
 import { AGENT_CHAT_ID } from "@/lib/telegram-commands/helpers";
@@ -7,14 +8,13 @@ import { AGENT_CHAT_ID } from "@/lib/telegram-commands/helpers";
 // Libère de la capacité canaux sur le compte userbot (cap Telegram ~500 →
 // CHANNELS_TOO_MUCH casse toute création de groupe d'onboarding).
 //
-//   POST { key, mode?: "dry-run" }            → inventaire complet, marqué KEEP / CANDIDAT
-//   POST { key, mode: "leave", chat_ids: [] } → quitte les ids validés par l'owner
+//   POST (x-admin-token) { mode?: "dry-run" }            → inventaire complet, marqué KEEP / CANDIDAT
+//   POST (x-admin-token) { mode: "leave", chat_ids: [] } → quitte les ids validés par l'owner
 //
 // GARDE-FOU SERVEUR : un groupe lié à un joueur (players.telegram_group_id) ou le
 // chat agent n'est JAMAIS quitté, même si son id est passé dans chat_ids.
 // Max 30 leaves par appel (throttle 1,1 s/leave côté userbot).
 
-const KEY = "userbot-leave-20260719";
 const MAX_LEAVES_PER_CALL = 30;
 
 function keepSet(): Map<string, string> {
@@ -46,7 +46,8 @@ function toMs(raw: string | null): number {
 
 export async function POST(req: NextRequest) {
   const body = await req.json().catch(() => ({}));
-  if (body.key !== KEY) return NextResponse.json({ error: "bad key" }, { status: 403 });
+  const denied = adminTokenGuard(req);
+  if (denied) return denied;
 
   const mode: string = body.mode ?? "dry-run";
   const keep = keepSet();

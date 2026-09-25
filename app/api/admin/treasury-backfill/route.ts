@@ -1,18 +1,19 @@
 export const dynamic = "force-dynamic";
 import { NextRequest, NextResponse } from "next/server";
+import { adminTokenGuard } from "@/lib/admin-token";
 import { backfillWalletHistory, snapshotTreasuryToday, TREASURY_WALLETS } from "@/lib/treasury";
 
 // Backfill de l'historique de trésorerie (one-shot, un wallet par appel — les
 // wallets gas fee peuvent avoir des milliers de tx) + snapshot manuel du jour.
-//   POST { key, address }              → reconstruit les snapshots du wallet depuis le 10/01
-//   POST { key, action: "snapshot" }   → fige le solde du jour pour les 5 wallets (test du cron)
-//   POST { key, action: "list" }       → rappelle les adresses de la config
+//   POST (x-admin-token) { address }              → reconstruit les snapshots du wallet depuis le 10/01
+//   POST (x-admin-token) { action: "snapshot" }   → fige le solde du jour pour les 5 wallets (test du cron)
+//   POST (x-admin-token) { action: "list" }       → rappelle les adresses de la config
 
-const KEY = "treasury-backfill-20260719";
 
 export async function POST(req: NextRequest) {
   const body = await req.json().catch(() => ({}));
-  if (body.key !== KEY) return NextResponse.json({ error: "bad key" }, { status: 403 });
+  const denied = adminTokenGuard(req);
+  if (denied) return denied;
 
   if (body.action === "list") {
     return NextResponse.json({ ok: true, wallets: TREASURY_WALLETS });

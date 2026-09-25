@@ -1,10 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
+import { adminTokenGuard } from "@/lib/admin-token";
 
 export async function POST(req: NextRequest) {
-  const body = await req.json().catch(() => ({}));
-  if (body.key !== "drain-queue-20260517") {
-    return NextResponse.json({ error: "bad key" }, { status: 403 });
-  }
+  const denied = adminTokenGuard(req);
+  if (denied) return denied;
 
   const token = process.env.TELEGRAM_BOT_TOKEN;
   const secret = process.env.TELEGRAM_WEBHOOK_SECRET;
