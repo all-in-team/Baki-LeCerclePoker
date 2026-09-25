@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getDb } from "@/lib/db";
 import { computeAgentCommission } from "@/lib/queries/affiliate";
+import { paymentBlockOn } from "@/lib/affiliate/agent-rates";
 
 export async function GET(req: NextRequest) {
   const relId = req.nextUrl.searchParams.get("relationship_id");
@@ -47,6 +48,9 @@ export async function POST(req: NextRequest) {
 
   // Agent-level audit snapshot (state at payment time)
   const ac = computeAgentCommission(affiliate_player_id);
+  // Commission incalculable (part agence sans taux agent) : on ne paie pas un chiffre amputé.
+  const block = paymentBlockOn(ac);
+  if (block) return NextResponse.json({ error: block, blocked: ac.blocked }, { status: 409 });
 
   const r = db.prepare(`
     INSERT INTO affiliate_payments
@@ -56,7 +60,10 @@ export async function POST(req: NextRequest) {
   `).run(
     repRel.id, gameId, week_start_date, week_end_date, amount_usdt,
     tx_hash ?? null, notes ?? null,
-    ac.cumul_agence_eligible, 0.50, ac.earned, ac.paid,
+    // snapshot_commission_rate NULL : il n'y a plus UN taux, mais un taux par filleul ×
+    // game × semaine (affiliate_agent_rates). Le paiement GÈLE les semaines ≤ lundi de
+    // paid_at : aucun changement de taux ne pourra plus les toucher.
+    ac.cumul_agence_eligible, null, ac.earned, ac.paid,
   );
 
   return NextResponse.json({ ok: true, id: Number(r.lastInsertRowid) }, { status: 201 });

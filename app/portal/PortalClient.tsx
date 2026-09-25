@@ -19,30 +19,31 @@ declare global {
 interface AgentSummary {
   player_id: number; name: string; handle: string | null; joined_at: string | null;
   filleuls_count: number;
-  // pending = commission payable (jamais négative). cumul = solde agence signé, affichage owner only.
-  summary: { lifetime: number; paid: number; pending: number; cumul?: number };
+  // pending = commission payable (jamais négative) ; null = en cours de calcul (taux manquant).
+  // cumul = solde agence signé, affichage owner only.
+  summary: { lifetime: number | null; paid: number; pending: number | null; cumul?: number };
 }
 
 interface OwnerData {
   mode: "owner";
-  total_due_all_agents: number;
+  total_due_all_agents: number | null;   // null dès qu'un agent est en cours de calcul
   total_paid_all_agents: number;
   agents: AgentSummary[];
 }
 
-interface FilleulGame { game_name: string; rate_label: string; rate_pct: number; agency_pnl: number; currency: string; }
-interface Filleul {
-  name: string; handle: string | null;
-  window_status: { is_open: boolean; days_remaining?: number; days_elapsed?: number };
-  games: FilleulGame[];
-  part_agence_eligible: number;
-}
-interface ActivityItem { ts: string; type: string; amount: number; currency: string; player_name: string; }
+// L'agent voit SES taux et SES montants — jamais le deal joueur, la base perçue, la part ni le cumul agence.
+// player_pct = % du résultat du filleul (null = formule composite : pas de % affiché).
+interface RatePeriod { player_pct: number | null; start_week: string | null; end_week: string | null; commission: number }
+interface FilleulGame { game_name: string; periods: RatePeriod[]; commission: number | null }
+interface Filleul { name: string; handle: string | null; commission: number | null; games: FilleulGame[] }
+// Pas de montant : l'agent voit qu'un filleul a joué, jamais combien (décision Baki 2026-09-26).
+interface ActivityItem { ts: string; type: string; player_name: string; }
 interface Momentum { filleuls_total: number; filleuls_active_30d: number; actions_30d: number; actions_prev_30d: number; }
 interface DashboardData {
   mode?: "agent";
   affiliate: { name: string; handle: string | null; joined_at: string | null };
-  summary: { lifetime_usdt: number; paid_usdt: number; pending_usdt: number; cumul_agence: number };
+  // null = « en cours de calcul » (taux manquant) — JAMAIS affiché comme 0.
+  summary: { lifetime_usdt: number | null; paid_usdt: number; pending_usdt: number | null; commission_signed: number | null };
   share_link: string;
   filleuls: Filleul[];
   payments: { paid_at: string; game_name: string; amount_usdt: number; tx_hash: string | null; notes: string | null }[];
@@ -58,6 +59,11 @@ const fmt = (n: unknown) => num(n).toFixed(2);
 const GREEN = "#22C55E", RED = "#EF4444", GREY = "#9CA3AF";
 const signedColor = (n: number) => (n > 0.005 ? GREEN : n < -0.005 ? RED : GREY);
 const signedText = (n: number, cur = "USDT") => `${num(n) > 0.005 ? "+" : ""}${fmt(n)} ${cur}`;
+// Un montant absent (null / non transmis) n'est PAS zéro : il est en cours de calcul.
+const CALC = "en cours de calcul";
+const isAmount = (n: unknown): n is number => typeof n === "number" && isFinite(n);
+const fmtFr = (iso: string) => `${iso.slice(8, 10)}/${iso.slice(5, 7)}`;
+const addDaysIso = (iso: string, d: number) => { const x = new Date(iso + "T00:00:00Z"); x.setUTCDate(x.getUTCDate() + d); return x.toISOString().slice(0, 10); };
 
 const GAME_COLORS: Record<string, string> = {
   KKPOKER: "#3B82F6", A5POKER: "#F59E0B", Wepoker: "#8B5CF6", TELE: "#D4AF37",
@@ -181,7 +187,7 @@ export default function PortalClient() {
       <div style={s}>
         <div style={{ marginBottom: 24 }}>
           <div style={{ fontSize: 20, fontWeight: 700 }}>👑 Vue Owner</div>
-          <div style={hintStyle}>{ow.agents.length} agents · {fmt(ow.total_due_all_agents)} USDT en attente · {fmt(ow.total_paid_all_agents)} USDT payé</div>
+          <div style={hintStyle}>{ow.agents.length} agents · {isAmount(ow.total_due_all_agents) ? `${fmt(ow.total_due_all_agents)} USDT` : CALC} en attente · {fmt(ow.total_paid_all_agents)} USDT payé</div>
         </div>
         <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
           {ow.agents.length === 0 && <div style={{ ...cardStyle, textAlign: "center" }}><div style={hintStyle}>Aucun agent activé.</div></div>}
@@ -195,10 +201,10 @@ export default function PortalClient() {
                 <div style={{ ...hintStyle, fontSize: 11 }}>Filleuls: {a.filleuls_count} · Depuis {a.joined_at ?? "—"}</div>
               </div>
               <div style={{ textAlign: "right", flexShrink: 0 }}>
-                <div style={{ fontWeight: 700, fontSize: 14, color: num(a.summary?.pending) > 0 ? accent : "var(--tg-theme-text-color, #fff)" }}>{fmt(a.summary?.pending)}</div>
+                <div style={{ fontWeight: 700, fontSize: isAmount(a.summary?.pending) ? 14 : 11, color: num(a.summary?.pending) > 0 ? accent : "var(--tg-theme-text-color, #fff)" }}>{isAmount(a.summary?.pending) ? fmt(a.summary.pending) : CALC}</div>
                 <div style={{ ...hintStyle, fontSize: 10 }}>USDT dû</div>
                 {/* Solde agence réel (signé) — AFFICHAGE SEUL, vue owner. Le montant payable
-                    au-dessus reste max(0, cumul) × 50% − payé : jamais négatif. */}
+                    au-dessus reste max(0, Σ parts agent) − payé : jamais négatif. */}
                 <div style={{ fontSize: 10, fontWeight: 600, marginTop: 2, color: signedColor(num(a.summary?.cumul)) }}>
                   solde {signedText(num(a.summary?.cumul))}
                 </div>
@@ -264,7 +270,7 @@ function ShareSection({ shareLink, compact }: { shareLink: string; compact?: boo
 
 function AgentDashboard({ data, selectedAgentId, onBack, containerStyle }: { data: DashboardData; selectedAgentId: number | null; onBack: () => void; containerStyle: React.CSSProperties }) {
   const { affiliate, summary, filleuls, payments, share_link } = data;
-  const cumul = num(summary?.cumul_agence);
+  const total = summary?.commission_signed;   // Σ des parts de l'agent (signé) ; null = en cours de calcul
   const accent = "var(--tg-theme-button-color, #2ea043)";
   const link = "var(--tg-theme-link-color, #2ea043)";
   const list = filleuls ?? [];
@@ -291,20 +297,20 @@ function AgentDashboard({ data, selectedAgentId, onBack, containerStyle }: { dat
       <div style={{ ...cardStyle, marginBottom: 12, textAlign: "center", background: "linear-gradient(160deg, rgba(212,175,55,0.10), rgba(34,197,94,0.06))", border: "1px solid rgba(212,175,55,0.25)" }}>
         <div style={{ ...hintStyle, marginBottom: 6, letterSpacing: "0.05em", textTransform: "uppercase", fontSize: 11 }}>💰 Commission lifetime</div>
         <div style={{ fontSize: 40, fontWeight: 800, lineHeight: 1.1, fontVariantNumeric: "tabular-nums", background: "linear-gradient(90deg, #D4AF37, #22C55E)", WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent", backgroundClip: "text" as const }}>
-          {fmt(animatedEarned)}
+          {isAmount(summary?.lifetime_usdt) ? fmt(animatedEarned) : <span style={{ fontSize: 20 }}>{CALC}</span>}
         </div>
         <div style={{ ...hintStyle, marginTop: 2, fontSize: 12 }}>USDT générés pour toi</div>
       </div>
 
-      {/* Payé / Dû */}
+      {/* Payé / Dû — un dû incalculable s'affiche « en cours de calcul », jamais 0 */}
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 16 }}>
         {[
-          { label: "✅ Payé", value: num(summary?.paid_usdt) },
-          { label: "⏳ Dû maintenant", value: num(summary?.pending_usdt) },
+          { label: "✅ Payé", value: summary?.paid_usdt as number | null | undefined },
+          { label: "⏳ Dû maintenant", value: summary?.pending_usdt },
         ].map(st => (
           <div key={st.label} style={cardStyle}>
             <div style={{ ...hintStyle, marginBottom: 4 }}>{st.label}</div>
-            <div style={{ fontSize: 18, fontWeight: 700, color: st.value > 0 ? accent : "var(--tg-theme-text-color, #fff)" }}>{fmt(st.value)} USDT</div>
+            <div style={{ fontSize: isAmount(st.value) ? 18 : 13, fontWeight: 700, color: num(st.value) > 0 ? accent : "var(--tg-theme-text-color, #fff)" }}>{isAmount(st.value) ? `${fmt(st.value)} USDT` : CALC}</div>
           </div>
         ))}
       </div>
@@ -329,19 +335,17 @@ function AgentDashboard({ data, selectedAgentId, onBack, containerStyle }: { dat
         </div>
       )}
 
-      {/* Cumul croisé (mirrors CRM drawer) */}
-      <div style={{ ...cardStyle, marginBottom: cumul < 0 ? 10 : 24 }}>
+      {/* Total des parts (makeup croisé) — en montants de l'agent uniquement */}
+      <div style={{ ...cardStyle, marginBottom: isAmount(total) && total < 0 ? 10 : 24 }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 6 }}>
-          <span style={hintStyle}>Cumul agence global (tous tes filleuls)</span>
-          <span style={{ fontWeight: 700, fontSize: 15, color: signedColor(cumul) }}>{signedText(cumul)}</span>
+          <span style={hintStyle}>Total de tes parts (tous filleuls, gains et pertes)</span>
+          <span style={{ fontWeight: 700, fontSize: 15, color: isAmount(total) ? signedColor(total) : GREY }}>{isAmount(total) ? signedText(total) : CALC}</span>
         </div>
-        <div style={{ ...hintStyle, fontSize: 11 }}>
-          Ta commission = max(0, cumul) × 50% = <b style={{ color: "var(--tg-theme-text-color,#fff)" }}>{fmt(summary?.lifetime_usdt)} USDT</b>
-        </div>
+        <div style={{ ...hintStyle, fontSize: 11 }}>Tu es payé quand ce total est positif.</div>
       </div>
-      {cumul < 0 && (
+      {isAmount(total) && total < 0 && (
         <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "10px 12px", borderRadius: 10, background: "rgba(239,68,68,0.1)", border: "1px solid rgba(239,68,68,0.3)", color: RED, fontSize: 12, fontWeight: 600, marginBottom: 24 }}>
-          ⚠️ Ton portefeuille filleuls est en négatif. Comble {fmt(-cumul)} USDT (gains futurs) avant de toucher une commission.
+          ⚠️ Ton total est négatif ({fmt(total)} USDT) : les gains futurs de tes filleuls le combleront avant que tu touches une commission.
         </div>
       )}
 
@@ -355,38 +359,40 @@ function AgentDashboard({ data, selectedAgentId, onBack, containerStyle }: { dat
           <div style={{ ...cardStyle, textAlign: "center" }}>
             <div style={hintStyle}>Aucun filleul pour l'instant — partage ton lien pour démarrer !</div>
           </div>
-        ) : list.map((f, i) => {
-          const part = num(f.part_agence_eligible);
-          return (
+        ) : list.map((f, i) => (
             <div key={i} style={{ ...cardStyle, marginBottom: 8 }}>
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
                 <div>
                   <span style={{ fontWeight: 600, fontSize: 14 }}>{f.name}</span>
                   {f.handle && <span style={{ ...hintStyle, marginLeft: 6 }}>@{f.handle}</span>}
                 </div>
-                <span style={{ fontSize: 13, fontWeight: 700, color: signedColor(part) }}>{signedText(part)}</span>
-              </div>
-              <div style={{ marginBottom: 8 }}>
-                {f.window_status?.is_open
-                  ? <span style={{ fontSize: 10, padding: "2px 6px", borderRadius: 4, background: "rgba(34,197,94,0.12)", color: GREEN, fontWeight: 600 }}>🟢 Fenêtre ouverte — J+{30 - num(f.window_status.days_remaining)}/30</span>
-                  : <span style={{ fontSize: 10, padding: "2px 6px", borderRadius: 4, background: "rgba(156,163,175,0.12)", color: GREY, fontWeight: 600 }}>🔒 Fenêtre fermée depuis {f.window_status?.days_elapsed ?? "?"}j</span>
-                }
+                <span style={{ fontSize: 13, fontWeight: 700, color: isAmount(f.commission) ? signedColor(f.commission) : GREY }}>{isAmount(f.commission) ? signedText(f.commission) : CALC}</span>
               </div>
               {(f.games ?? []).map(g => (
-                <div key={g.game_name} style={{ display: "flex", alignItems: "center", gap: 8, padding: "4px 0", fontSize: 12 }}>
-                  <span style={{ background: `${GAME_COLORS[g.game_name] ?? "#666"}22`, color: GAME_COLORS[g.game_name] ?? "#999", padding: "1px 6px", borderRadius: 4, fontSize: 10, fontWeight: 700 }}>
-                    {g.game_name.slice(0, 2).toUpperCase()}
-                  </span>
-                  {g.rate_label === "éligible"
-                    ? <span style={{ fontSize: 10, color: GREEN, fontWeight: 600 }}>✅ compte (50%)</span>
-                    : <span style={{ fontSize: 10, color: GREY }}>⏰ hors fenêtre — non compté</span>
-                  }
-                  <span style={{ marginLeft: "auto", fontWeight: 600, color: signedColor(num(g.agency_pnl)) }}>{signedText(num(g.agency_pnl), g.currency || "USDT")}</span>
+                <div key={g.game_name} style={{ padding: "3px 0" }}>
+                  {(g.periods.length ? g.periods : [null]).map((p, k) => (
+                    <div key={k} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12, padding: "2px 0" }}>
+                      <span style={{ visibility: k === 0 ? "visible" : "hidden", background: `${GAME_COLORS[g.game_name] ?? "#666"}22`, color: GAME_COLORS[g.game_name] ?? "#999", padding: "1px 6px", borderRadius: 4, fontSize: 10, fontWeight: 700 }}>
+                        {g.game_name.slice(0, 2).toUpperCase()}
+                      </span>
+                      {p ? (
+                        <>
+                          <span style={{ fontSize: 11 }}>
+                            ta part{p.player_pct !== null && <> <b>{p.player_pct.toLocaleString("fr-FR", { maximumFractionDigits: 2 })} %</b> <span style={hintStyle}>de ses résultats</span></>}
+                            {p.end_week ? <span style={hintStyle}> jusqu&apos;au {fmtFr(addDaysIso(p.end_week, 6))}</span>
+                              : p.start_week ? <span style={hintStyle}> depuis le {fmtFr(p.start_week)}</span> : null}
+                          </span>
+                          <span style={{ marginLeft: "auto", fontWeight: 600, color: signedColor(p.commission) }}>{signedText(p.commission)}</span>
+                        </>
+                      ) : (
+                        <span style={{ ...hintStyle, fontSize: 11 }}>{CALC}</span>
+                      )}
+                    </div>
+                  ))}
                 </div>
               ))}
             </div>
-          );
-        })}
+        ))}
       </div>
 
       {/* Activity feed — filleul moves (last 14d) */}
@@ -407,13 +413,10 @@ function AgentDashboard({ data, selectedAgentId, onBack, containerStyle }: { dat
                     </div>
                     <div style={{ ...hintStyle, fontSize: 10 }}>{(a.ts ?? "").slice(0, 10)}</div>
                   </div>
-                  <span style={{ fontWeight: 700, fontSize: 13, color: isDep ? GREEN : GREY, fontVariantNumeric: "tabular-nums" }}>
-                    {isDep ? "+" : "−"}{fmt(a.amount)} {a.currency || "USDT"}
-                  </span>
                 </div>
               );
             })}
-            <div style={{ ...hintStyle, fontSize: 10, textAlign: "center", marginTop: 2 }}>Plus tes filleuls jouent, plus ton cumul monte 🔥</div>
+            <div style={{ ...hintStyle, fontSize: 10, textAlign: "center", marginTop: 2 }}>Plus tes filleuls jouent, plus tes parts montent 🔥</div>
           </div>
         )}
       </div>
@@ -457,12 +460,11 @@ function AgentDashboard({ data, selectedAgentId, onBack, containerStyle }: { dat
       <div style={{ ...cardStyle, marginBottom: 24 }}>
         <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 10 }}>🎯 Comment ça marche</div>
         <div style={{ fontSize: 12, display: "flex", flexDirection: "column", gap: 6, marginBottom: 12 }}>
-          <div><span style={{ color: GREEN, fontWeight: 600 }}>50% lifetime</span> <span style={hintStyle}>— sur les games où ton filleul est onboardé dans les 30 premiers jours</span></div>
-          <div><span style={{ color: GREY, fontWeight: 600 }}>Après 30j</span> <span style={hintStyle}>— les nouveaux games ne comptent plus</span></div>
+          <div><span style={{ color: GREEN, fontWeight: 600 }}>Ta part</span> <span style={hintStyle}>— un pourcentage fixé pour chaque filleul et chaque game, affiché ci-dessus avec ses dates.</span></div>
         </div>
         <div style={{ fontSize: 12, marginBottom: 8 }}>
           <div style={{ fontWeight: 600, marginBottom: 4 }}>💡 Makeup croisé</div>
-          <div style={hintStyle}>On additionne le résultat agence de <b>tous tes filleuls</b> (gains ET pertes). Tu touches 50% du <b>cumul total</b> seulement s'il est positif. Un filleul en perte réduit ton cumul ; tes filleuls gagnants le comblent. Tant que le cumul global est négatif, tu touches 0 — et ça se reporte automatiquement.</div>
+          <div style={hintStyle}>On additionne tes parts sur <b>tous tes filleuls et toutes les games</b>, gains ET pertes. Tu es payé quand ce total est positif ; tant qu&apos;il est négatif, les gains futurs le comblent d&apos;abord.</div>
         </div>
         <div style={{ fontSize: 12 }}>
           <div style={{ fontWeight: 600, marginBottom: 4 }}>⚠️ Responsabilité</div>

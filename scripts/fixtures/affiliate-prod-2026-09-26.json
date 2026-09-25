@@ -1,0 +1,58 @@
+{
+  "_source": "Lecture prod GET-only du 2026-09-26 (/api/affiliate-relationships, /api/games/deals, flux RSC /players/[id]). Nets hebdo = Σ(withdrawal − deposit) par lundi UTC, APRÈS les filtres du calcul affilié (source≠unknown, status actif, bornes start/end du deal). 'pnl' = player_pnl_lifetime de l'API, pour contrôle.",
+  "expected_due": { "4": 290.9128491, "9": 0.0026873, "13": 0, "37": 0, "42": 0, "45": 0, "53": 0, "90": 173.9996, "155": 0, "175": 129.7862, "181": 0, "421": 314.3693 },
+  "agents": [[13,"Alex D Mexique"],[53,"Hakim AMIRUL"],[9,"Leo La Truite"],[42,"Li"],[181,"Maxime"],[4,"Nathan B"],[45,"Paul"],[155,"Phua"],[421,"Samyaza"],[90,"Theo"],[37,"Vya"],[175,"Xabi Carricart"]],
+  "rels": [
+    {"id":24,"agent":181,"ref":"Chiiiiips Chiiiips","refId":470,"status":"active","start":"2026-09-06","games":[],"pays":[]},
+    {"id":23,"agent":421,"ref":"Chroma","refId":441,"status":"active","start":"2026-08-09","games":[
+      {"gid":5,"name":"KKPOKER","eff":20,"label":"éligible","pnl":14.5,"created":"2026-08-09 11:23:18","weeks":{"2026-08-10":214.5,"2026-08-03":-200}},
+      {"gid":6,"name":"A5POKER","eff":20,"label":"éligible","pnl":-45,"created":"2026-08-14 18:09:27","weeks":{"2026-08-17":-121.5,"2026-08-10":76.5}}],"pays":[]},
+    {"id":22,"agent":9,"ref":"Rom","refId":430,"status":"active","start":"2026-08-04","games":[
+      {"gid":6,"name":"A5POKER","eff":20,"label":"éligible","pnl":-573.823032,"created":"2026-08-06 11:14:20","weeks":{"2026-08-17":-121.87303200000002,"2026-08-10":-451.95}}],"pays":[]},
+    {"id":21,"agent":421,"ref":"Grobel","refId":428,"status":"active","start":"2026-08-04","games":[
+      {"gid":5,"name":"KKPOKER","eff":20,"label":"éligible","pnl":3037.933,"created":"2026-08-04 10:14:06","weeks":{"2026-08-03":3037.933}},
+      {"gid":6,"name":"A5POKER","eff":20,"label":"éligible","pnl":12010.86,"created":"2026-08-10 12:39:01","weeks":{"2026-09-21":3143.66,"2026-08-17":9166.7,"2026-08-10":-299.5}}],
+      "pays":[{"amount":1187.46,"paid_at":"2026-09-02 19:23:58","game_id":5,"ws":"2026-08-01","we":"2026-09-01"}]},
+    {"id":20,"agent":9,"ref":"Fabien Gün","refId":148,"status":"active","start":"2026-07-25","games":[
+      {"gid":5,"name":"KKPOKER","eff":20,"label":"éligible","pnl":0,"created":"2026-05-26 19:51:43","weeks":{}},
+      {"gid":6,"name":"A5POKER","eff":20,"label":"éligible","pnl":1453.6499880000001,"created":"2026-07-29 07:15:26","weeks":{"2026-08-10":1453.6499880000001}}],"pays":[]},
+    {"id":18,"agent":9,"ref":"Nicolas","refId":36,"status":"active","start":"2026-07-15","games":[
+      {"gid":5,"name":"KKPOKER","eff":20,"label":"éligible","pnl":0,"created":"2026-05-18 12:10:33","weeks":{}},
+      {"gid":6,"name":"A5POKER","eff":20,"label":"éligible","pnl":2323.699917,"created":"2026-07-23 14:47:15","weeks":{"2026-08-31":0,"2026-08-17":1811.3999999999996,"2026-07-27":2935.3,"2026-07-20":-2423.0000830000004}}],
+      "pays":[{"amount":168.95,"paid_at":"2026-08-31 18:07:39","game_id":5,"ws":"2026-08-01","we":"2026-09-01"},{"amount":151.4,"paid_at":"2026-08-16 18:32:44","game_id":5,"ws":"2026-07-01","we":"2026-08-22"}]},
+    {"id":17,"agent":181,"ref":"ppkd","refId":400,"status":"active","start":"2026-07-21","games":[
+      {"gid":255,"name":"AKS","eff":0,"label":"éligible","pnl":0,"created":"2026-07-21 12:13:54","weeks":{}}],"pays":[]},
+    {"id":16,"agent":181,"ref":"Gaetan","refId":183,"status":"active","start":"2026-06-30","games":[
+      {"gid":255,"name":"AKS","eff":40,"label":"éligible","pnl":-131,"created":"2026-06-18 06:23:30","weeks":{"2026-06-22":369,"2026-06-15":-500}},
+      {"gid":654,"name":"NUTSPK","eff":50,"label":"éligible","pnl":-190,"created":"2026-07-03 14:27:10","weeks":{"2026-06-29":-190}}],"pays":[]},
+    {"id":15,"agent":181,"ref":"VS","refId":185,"status":"active","start":"2026-06-18","games":[
+      {"gid":6,"name":"A5POKER","eff":20,"label":"éligible","pnl":0,"created":"2026-06-22 18:03:17","weeks":{}}],"pays":[]},
+    {"id":14,"agent":90,"ref":"Gaetan","refId":183,"status":"terminated","start":"2026-06-17","games":[
+      {"gid":255,"name":"AKS","eff":40,"label":"éligible","pnl":-131,"created":"2026-06-18 06:23:30","weeks":{"2026-06-22":369,"2026-06-15":-500}},
+      {"gid":654,"name":"NUTSPK","eff":50,"label":"éligible","pnl":-190,"created":"2026-07-03 14:27:10","weeks":{"2026-06-29":-190}}],"pays":[]},
+    {"id":13,"agent":90,"ref":"Loïc","refId":179,"status":"active","start":"2026-06-07","games":[
+      {"gid":5,"name":"KKPOKER","eff":20,"label":"éligible","pnl":-286.6,"created":"2026-06-15 12:47:15","weeks":{"2026-07-06":-135.2,"2026-06-29":122.89999999999998,"2026-06-22":-99.19999999999999,"2026-06-15":-175.1}},
+      {"gid":255,"name":"AKS","eff":50,"label":"hors_fenetre","pnl":-16.345113999999967,"created":"2026-08-23 09:37:52","weeks":{"2026-08-31":-550.065114,"2026-08-24":533.72}},
+      {"gid":448,"name":"QQPK","eff":0,"label":"éligible","pnl":-500,"created":"2026-06-22 16:04:50","weeks":{"2026-06-22":-500}}],"pays":[]},
+    {"id":12,"agent":90,"ref":"Maxime","refId":181,"status":"active","start":"2026-06-17","games":[
+      {"gid":255,"name":"AKS","eff":20,"label":"éligible","pnl":2026.596,"created":"2026-06-16 19:23:02","weeks":{"2026-08-24":622,"2026-08-17":625.4300000000001,"2026-08-10":406.22,"2026-08-03":157.65000000000003,"2026-07-27":518.9300000000001,"2026-07-13":327.0579,"2026-07-06":44,"2026-06-29":437.01,"2026-06-22":-711.7019,"2026-06-15":-400}}],"pays":[]},
+    {"id":8,"agent":175,"ref":"Antoine","refId":17,"status":"active","start":"2026-05-01","games":[
+      {"gid":1,"name":"TELE","eff":40,"label":"éligible","pnl":495.481,"created":"2026-04-30 13:59:44","weeks":{"2026-05-11":823.981,"2026-05-04":-763.931,"2026-04-27":435.43100000000004}},
+      {"gid":5,"name":"KKPOKER","eff":20,"label":"éligible","pnl":707.5,"created":"2026-05-17 10:47:13","weeks":{"2026-08-31":-18.5,"2026-08-24":-600,"2026-08-17":328.5,"2026-08-10":-891.5,"2026-08-03":1032.5,"2026-07-27":-480.5,"2026-07-20":704.5,"2026-06-08":-300,"2026-06-01":303.5,"2026-05-25":256.5,"2026-05-18":372.5}},
+      {"gid":6,"name":"A5POKER","eff":20,"label":"éligible","pnl":-400.6,"created":"2026-05-25 10:08:57","weeks":{"2026-07-20":-397.0999999999999,"2026-05-25":-3.5}},
+      {"gid":255,"name":"AKS","eff":20,"label":"hors_fenetre","pnl":-351,"created":"2026-06-16 11:40:05","weeks":{"2026-06-15":-351}},
+      {"gid":448,"name":"QQPK","eff":0,"label":"hors_fenetre","pnl":1474.71,"created":"2026-06-22 10:21:29","weeks":{"2026-07-20":1886.71,"2026-07-13":-1592,"2026-07-06":1000,"2026-06-29":0,"2026-06-22":180}},
+      {"gid":2539,"name":"XPOKER_TWD","eff":10,"label":"hors_fenetre","pnl":0,"created":"2026-09-18 07:43:02","weeks":{}}],"pays":[]},
+    {"id":7,"agent":4,"ref":"Daniel Trengler","refId":144,"status":"active","start":"2026-05-22","games":[
+      {"gid":1,"name":"TELE","eff":60,"label":"éligible","pnl":0,"created":"2026-06-08 14:18:15","weeks":{}},
+      {"gid":5,"name":"KKPOKER","eff":20,"label":"éligible","pnl":2565.464863,"created":"2026-06-08 14:19:49","weeks":{"2026-06-22":-783,"2026-06-15":2517,"2026-06-08":466.86975699999994,"2026-06-01":1041.5,"2026-05-25":-676.9048940000002}},
+      {"gid":6,"name":"A5POKER","eff":20,"label":"hors_fenetre","pnl":0,"created":"2026-06-22 11:13:03","weeks":{}}],"pays":[]},
+    {"id":6,"agent":4,"ref":"Duarte","refId":114,"status":"active","start":"2026-05-15","games":[
+      {"gid":5,"name":"KKPOKER","eff":20,"label":"éligible","pnl":343.6636279999999,"created":"2026-05-25 20:26:56","weeks":{"2026-06-22":567.4,"2026-06-15":421.9,"2026-06-08":-800,"2026-06-01":559.565127,"2026-05-25":-405.201499}}],"pays":[]},
+    {"id":5,"agent":13,"ref":"Vya","refId":37,"status":"active","start":"2026-06-01","games":[],"pays":[]},
+    {"id":4,"agent":53,"ref":"serpentdesairs","refId":159,"status":"terminated","start":"2026-05-28","games":[],"pays":[]},
+    {"id":2,"agent":155,"ref":"Audrey","refId":156,"status":"active","start":"2026-05-27","games":[],"pays":[]},
+    {"id":1,"agent":37,"ref":"🃏","refId":154,"status":"active","start":"2026-05-27","games":[
+      {"gid":654,"name":"NUTSPK","eff":25,"label":"hors_fenetre","pnl":0,"created":"2026-07-03 02:59:32","weeks":{}}],"pays":[]}
+  ]
+}

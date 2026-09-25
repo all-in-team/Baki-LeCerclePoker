@@ -3,40 +3,8 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { X, Pencil, XCircle, DollarSign, Users, ChevronDown, ChevronRight, AlertTriangle } from "lucide-react";
 import { windowInfo } from "./eligibility";
-
-interface GameBreakdown {
-  game_id: number; game_name: string; rate: number; rate_label: string;
-  agency_pnl_lifetime: number; earned_lifetime: number; paid_lifetime: number; due_now: number;
-  player_pnl_lifetime: number | null; effective_action_pct: number; currency: string;
-  agency_pnl_native: number; cny_rate_missing: boolean; is_composite: boolean;
-}
-interface AffPayment {
-  paid_at: string; amount_usdt: number; game_id: number; game_name: string | null;
-  tx_hash: string | null; week_start_date: string; week_end_date: string; notes: string | null;
-}
-interface EnrichedRel {
-  id: number; status: string; start_date: string;
-  affiliate: { id: number; name: string; telegram_handle: string | null };
-  referred: { id: number; name: string; telegram_handle: string | null };
-  origin_game: { id: number | null; name: string | null };
-  disclosed_action_pct: number | null; disclosed_rakeback_pct: number | null; disclosed_insurance_pct: number | null;
-  exclude_agency_extras: number; notes: string | null;
-  games: GameBreakdown[];
-  total_due_now: number; total_paid_lifetime: number; last_paid_at: string | null;
-  payments: AffPayment[];
-}
-interface Agent {
-  affiliate_player_id: number; joined_at: string; profile_status: string;
-  name: string; telegram_handle: string | null; telegram_id: number | null;
-}
-interface AgentSummary {
-  agent: Agent;
-  filleuls: EnrichedRel[];
-  cumulAgence: number; // signed Σ eligible part_agence across all filleuls
-  earned: number;      // max(0, cumul) × 0.50
-  paid: number;
-  due: number;         // max(0, earned − paid)
-}
+import RateEditor from "./RateEditor";
+import type { AgentSummary, EnrichedRel, GameBreakdown, RatePeriodView } from "./AffiliatesClient";
 
 interface Props {
   agentSummary: AgentSummary;
@@ -44,6 +12,7 @@ interface Props {
   onEditRel: (r: EnrichedRel) => void;
   onTerminateRel: (id: number) => void;
   onPayAgent: (agentId: number, agentName: string, due: number, earned: number, paid: number) => void;
+  onRatesChanged: () => void;
   gameBadges: Record<string, { short: string; bg: string; color: string }>;
 }
 
@@ -65,13 +34,38 @@ function Amt({ n, cur = "USDT", bold }: { n: number; cur?: string; bold?: boolea
   return <span style={{ color: m.color, fontWeight: bold ? 700 : 600, fontVariantNumeric: "tabular-nums" }}>{m.text}</span>;
 }
 
-// Eligible part_agence for one filleul = Σ agency P&L over its eligible games (signed)
-function partAgenceEligible(r: EnrichedRel): number {
-  return (r.games ?? []).filter(g => g.rate_label === "éligible").reduce((s, g) => s + g.agency_pnl_lifetime, 0);
+// Contribution SIGNÉE d'un filleul à la commission de l'agent : Σ (part agence × taux) par
+// game et par semaine, calculée côté serveur (earned_lifetime de chaque game).
+function commissionOf(r: EnrichedRel): number {
+  return (r.games ?? []).reduce((s, g) => s + g.earned_lifetime, 0);
+}
+function countedPartOf(r: EnrichedRel): number {
+  return (r.games ?? []).reduce((s, g) => s + g.counted_part, 0);
 }
 
-export default function AgentDetailDrawer({ agentSummary, onClose, onEditRel, onTerminateRel, onPayAgent, gameBadges }: Props) {
-  const { agent, filleuls, cumulAgence, earned, paid, due } = agentSummary;
+const KIND_LABEL: Record<string, { label: string; color: string }> = {
+  migration: { label: "migré", color: "var(--text-dim)" },
+  hors_fenetre: { label: "hors fenêtre", color: "#9CA3AF" },
+  manual: { label: "manuel", color: "#3B82F6" },
+  default: { label: "par défaut — à confirmer", color: "#EAB308" },
+};
+// Taux affiché en « % du résultat joueur » (principal) et « % de la part agence » (petit) — unité seule, aucun calcul.
+const r4 = (x: number) => Math.round(x * 10000) / 10000;
+function RateLabel({ p, strong }: { p: { agent_pct: number; base_at_start: number | null }; strong?: boolean }) {
+  if (p.base_at_start === null) return <span><b style={{ color: strong ? undefined : "var(--text)" }}>{r4(p.agent_pct)} %</b> de la part agence</span>;
+  return (
+    <span>
+      <b style={{ color: strong ? undefined : "var(--text)" }}>{r4(p.agent_pct * p.base_at_start / 100)} %</b> du résultat joueur
+      <span style={{ display: "block", fontSize: 9, color: "var(--text-dim)", fontWeight: 400 }}>{r4(p.agent_pct)} % de la part agence (perçu {p.base_at_start} %)</span>
+    </span>
+  );
+}
+const periodRange = (p: RatePeriodView) => `${p.start_week ?? "origine"} → ${p.end_week ? `sem. du ${p.end_week}` : "en cours"}`;
+
+export default function AgentDetailDrawer({ agentSummary, onClose, onEditRel, onTerminateRel, onPayAgent, onRatesChanged, gameBadges }: Props) {
+  const { agent, filleuls, commissionSigned, earned, paid, due, blocked, frozenThrough } = agentSummary;
+  const [editing, setEditing] = useState<string | null>(null);        // `${relId}:${gameId}`
+  const [historyOpen, setHistoryOpen] = useState<Set<string>>(new Set());
   const [expanded, setExpanded] = useState<Set<number>>(new Set());
   const [showPayments, setShowPayments] = useState<Set<number>>(new Set());
 
@@ -90,9 +84,9 @@ export default function AgentDetailDrawer({ agentSummary, onClose, onEditRel, on
   const activeFilleuls = filleuls.filter(r => r.status === "active");
   const ordered = [...activeFilleuls, ...filleuls.filter(r => r.status !== "active")];
 
-  // Coherence guard: Σ eligible part_agence of active filleuls must equal the agent cumul
-  const sumPart = activeFilleuls.reduce((s, r) => s + partAgenceEligible(r), 0);
-  const coherent = Math.abs(sumPart - cumulAgence) < 0.01;
+  // Garde de cohérence : Σ commissions des filleuls actifs (lues game par game) = commission agent (serveur).
+  const sumCommission = activeFilleuls.reduce((s, r) => s + commissionOf(r), 0);
+  const coherent = Math.abs(sumCommission - commissionSigned) < 0.01;
 
   return (
     <>
@@ -118,13 +112,22 @@ export default function AgentDetailDrawer({ agentSummary, onClose, onEditRel, on
         {/* Stats */}
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10 }}>
           <Stat label="Filleuls actifs" value={<span style={{ display: "flex", alignItems: "center", gap: 6 }}><Users size={16} style={{ color: "var(--text-dim)" }} /> {activeFilleuls.length}</span>} />
-          <Stat label="Commission (earned)" value={earned > 0 ? f2(earned) : "—"} color={earned > 0 ? "var(--text)" : "var(--text-dim)"} />
-          <Stat label="Due now" value={due > 0 ? f2(due) : "—"} color={due > 0 ? GREEN : "var(--text-dim)"} highlight={due > 0} />
+          <Stat label="Commission (earned)" value={earned === null ? "bloqué" : earned > 0 ? f2(earned) : "—"} color={earned === null ? RED : earned > 0 ? "var(--text)" : "var(--text-dim)"} />
+          <Stat label="Due now" value={due === null ? "bloqué" : due > 0 ? f2(due) : "—"} color={due === null ? RED : due > 0 ? GREEN : "var(--text-dim)"} highlight={due !== null && due > 0} />
         </div>
 
         {!coherent && (
           <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "9px 12px", borderRadius: 8, background: "rgba(239,68,68,0.1)", border: "1px solid rgba(239,68,68,0.3)", color: RED, fontSize: 12, fontWeight: 600 }}>
-            <AlertTriangle size={14} /> Incohérence : Σ part_agence filleuls = {f2(sumPart)} ≠ cumul agent {f2(cumulAgence)}
+            <AlertTriangle size={14} /> Incohérence : Σ commissions filleuls = {f2(sumCommission)} ≠ commission agent {f2(commissionSigned)}
+          </div>
+        )}
+
+        {blocked.length > 0 && (
+          <div style={{ padding: "9px 12px", borderRadius: 8, background: "rgba(239,68,68,0.1)", border: "1px solid rgba(239,68,68,0.3)", color: RED, fontSize: 12, display: "flex", flexDirection: "column", gap: 4 }}>
+            <div style={{ fontWeight: 700, display: "flex", alignItems: "center", gap: 6 }}><AlertTriangle size={14} /> Dû bloqué — taux agent manquant, aucun paiement possible</div>
+            {blocked.map((b, i) => (
+              <div key={i}>• {b.referred_name} / {b.game_name} : {b.reason === "taux_manquant" ? `part agence ${f2(b.part)} sans taux (semaine${b.weeks.length > 1 ? "s" : ""} ${b.weeks.join(", ")})` : `transaction à date illisible (${f2(b.part)})`}</div>
+            ))}
           </div>
         )}
 
@@ -138,7 +141,8 @@ export default function AgentDetailDrawer({ agentSummary, onClose, onEditRel, on
           )}
           {ordered.map(r => {
             const games = r.games ?? [];
-            const part = partAgenceEligible(r);
+            const part = countedPartOf(r);
+            const commission = commissionOf(r);
             const win = windowInfo(r.start_date);
             const st = STATUS_STYLE[r.status] ?? STATUS_STYLE.terminated;
             const isOpen = expanded.has(r.id);
@@ -159,7 +163,7 @@ export default function AgentDetailDrawer({ agentSummary, onClose, onEditRel, on
                       <span style={{ padding: "2px 6px", borderRadius: 4, fontSize: 9, fontWeight: 600, background: st.bg, color: st.color }}>{r.status}</span>
                     </div>
                     <div style={{ fontSize: 12, color: "var(--text-dim)", marginTop: 3 }}>
-                      Part agence (éligible) <Amt n={part} />
+                      Part agence (comptée) <Amt n={part} /> · commission <Amt n={commission} />
                     </div>
                     {/* Relation-level eligibility window (relStart + 30j) — same source as /crm/[id] */}
                     <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", fontSize: 11, color: "var(--text-dim)", marginTop: 4 }}>
@@ -178,40 +182,16 @@ export default function AgentDetailDrawer({ agentSummary, onClose, onEditRel, on
                 {isOpen && (
                   <div style={{ padding: "0 14px 14px", display: "flex", flexDirection: "column", gap: 10 }}>
                     {games.length === 0 && <div style={{ fontSize: 12, color: "var(--text-dim)" }}>Aucun game avec deal pour ce filleul.</div>}
-                    {games.map(g => {
-                      const eligible = g.rate_label === "éligible";
-                      return (
-                        <div key={g.game_id} style={{ border: "1px solid var(--border)", borderRadius: 8, padding: "10px 12px", background: "var(--bg-raised)", opacity: eligible ? 1 : 0.55 }}>
-                          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
-                            <span style={{ fontSize: 12, fontWeight: 700, color: "var(--text)" }}>{g.game_name}</span>
-                            <span style={{ fontSize: 10, fontWeight: 600, color: eligible ? GREEN : "#EAB308" }}>
-                              {eligible ? "✅ comptée (deal dans la fenêtre)" : "❌ non comptée (deal hors fenêtre)"}
-                            </span>
-                          </div>
-                          {g.is_composite ? (
-                            <div style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 12 }}>
-                              <div style={{ color: "var(--text-dim)", fontStyle: "italic" }}>Formule composite (winnings/rake/insurance)</div>
-                              <Row label="Part agence (natif)" value={<Amt n={g.agency_pnl_native} cur={g.currency} />} />
-                              {g.cny_rate_missing ? (
-                                <div style={{ display: "flex", alignItems: "center", gap: 6, color: "#EAB308", fontSize: 11, fontWeight: 600 }}>
-                                  <AlertTriangle size={12} /> taux {g.currency} manquant → conversion USDT impossible
-                                </div>
-                              ) : (
-                                <Row label="≈ Part agence (USDT)" value={<Amt n={g.agency_pnl_lifetime} bold />} />
-                              )}
-                            </div>
-                          ) : (
-                            <div style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 12 }}>
-                              <Row label="P&L joueur" value={<Amt n={g.player_pnl_lifetime ?? 0} cur={g.currency} />} />
-                              <Row label={`× Deal agence (${g.effective_action_pct}%)`} value={<Amt n={g.agency_pnl_lifetime} cur={g.currency} bold />} sub="part agence" />
-                            </div>
-                          )}
-                        </div>
-                      );
-                    })}
+                    {games.map(g => <GameBlock key={g.game_id} rel={r} g={g}
+                      editing={editing === `${r.id}:${g.game_id}`}
+                      onEdit={() => setEditing(editing === `${r.id}:${g.game_id}` ? null : `${r.id}:${g.game_id}`)}
+                      historyOpen={historyOpen.has(`${r.id}:${g.game_id}`)}
+                      onToggleHistory={() => { const k = `${r.id}:${g.game_id}`; const n = new Set(historyOpen); n.has(k) ? n.delete(k) : n.add(k); setHistoryOpen(n); }}
+                      frozenThrough={frozenThrough}
+                      onSaved={onRatesChanged} />)}
 
                     <div style={{ borderTop: "1px solid var(--border)", paddingTop: 8, display: "flex", flexDirection: "column", gap: 6 }}>
-                      <Row label="Σ part agence éligible (ce filleul)" value={<Amt n={part} bold />} />
+                      <Row label="Σ commission signée (ce filleul)" value={<Amt n={commission} bold />} />
                       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 12 }}>
                         <button onClick={() => toggle(showPayments, setShowPayments, r.id)} style={{ background: "none", border: "none", cursor: "pointer", color: "var(--text-muted)", padding: 0, fontSize: 12, display: "flex", alignItems: "center", gap: 4 }}>
                           {payOpen ? <ChevronDown size={12} /> : <ChevronRight size={12} />} Paiements ({r.payments?.length ?? 0})
@@ -248,21 +228,24 @@ export default function AgentDetailDrawer({ agentSummary, onClose, onEditRel, on
         </div>
 
         {/* TOTAL AGENT — cross-makeup */}
-        <div style={{ borderRadius: 10, border: `1px solid ${cumulAgence < 0 ? "rgba(239,68,68,0.3)" : "var(--border)"}`, background: "var(--bg-surface)", padding: "14px 16px", display: "flex", flexDirection: "column", gap: 8 }}>
+        <div style={{ borderRadius: 10, border: `1px solid ${commissionSigned < 0 || earned === null ? "rgba(239,68,68,0.3)" : "var(--border)"}`, background: "var(--bg-surface)", padding: "14px 16px", display: "flex", flexDirection: "column", gap: 8 }}>
           <div style={{ fontSize: 11, fontWeight: 700, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.07em" }}>Total agent (makeup croisé)</div>
-          <Row label="Cumul agence global (Σ filleuls éligibles)" value={<Amt n={cumulAgence} bold />} />
-          <Row label="× Part agent (50%)" value={<Amt n={earned} bold />} />
+          <Row label="Σ commissions signées (part agence × taux, par filleul × game × semaine)" value={<Amt n={commissionSigned} bold />} />
+          <Row label="Commission (plancher 0)" value={earned === null ? <span style={{ color: RED, fontWeight: 700 }}>bloqué</span> : <Amt n={earned} bold />} />
           <Row label="− Déjà payé" value={<span style={{ color: paid > 0.005 ? RED : GREY, fontWeight: 600, fontVariantNumeric: "tabular-nums" }}>−{f2(paid)} USDT</span>} />
-          {cumulAgence < 0 && (
+          {commissionSigned < 0 && (
             <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 10px", borderRadius: 7, background: "rgba(239,68,68,0.1)", border: "1px solid rgba(239,68,68,0.3)", color: RED, fontSize: 11, fontWeight: 600 }}>
-              <AlertTriangle size={13} /> Cumul négatif — l'agent doit combler {f2(-cumulAgence)} USDT avant de toucher une commission.
+              <AlertTriangle size={13} /> Commission cumulée négative — {f2(-commissionSigned)} USDT de commission à combler avant de toucher quoi que ce soit.
             </div>
+          )}
+          {frozenThrough && (
+            <div style={{ fontSize: 11, color: "var(--text-dim)" }}>Semaines payées (gelées, aucun taux ne peut y changer) jusqu&apos;à celle du {frozenThrough}.</div>
           )}
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 4, paddingTop: 10, borderTop: "1px dashed var(--border)" }}>
             <span style={{ fontSize: 13, fontWeight: 700, color: "var(--text)", textTransform: "uppercase", letterSpacing: "0.04em" }}>Dû maintenant</span>
             <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-              <span style={{ fontSize: 22, fontWeight: 800, color: due > 0.005 ? GREEN : GREY, fontVariantNumeric: "tabular-nums" }}>{due > 0.005 ? `+${f2(due)}` : f2(due)} USDT</span>
-              {due > 0.005 && (
+              <span style={{ fontSize: 22, fontWeight: 800, color: due === null ? RED : due > 0.005 ? GREEN : GREY, fontVariantNumeric: "tabular-nums" }}>{due === null ? "bloqué" : `${due > 0.005 ? `+${f2(due)}` : f2(due)} USDT`}</span>
+              {due !== null && earned !== null && due > 0.005 && (
                 <button onClick={() => onPayAgent(agent.affiliate_player_id, agent.name, due, earned, paid)}
                   style={{ display: "flex", alignItems: "center", gap: 6, background: "rgba(34,197,94,0.15)", border: "1px solid rgba(34,197,94,0.3)", borderRadius: 7, cursor: "pointer", padding: "7px 14px", color: GREEN, fontSize: 13, fontWeight: 700 }}>
                   <DollarSign size={14} /> Payer l'agent
@@ -290,6 +273,100 @@ function Row({ label, value, sub }: { label: string; value: ReactNode; sub?: str
     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
       <span style={{ color: "var(--text-dim)", fontSize: 12 }}>{label}{sub && <span style={{ fontSize: 10, marginLeft: 5, opacity: 0.7 }}>({sub})</span>}</span>
       <span style={{ fontVariantNumeric: "tabular-nums" }}>{value}</span>
+    </div>
+  );
+}
+
+function GameBlock({ rel, g, editing, onEdit, historyOpen, onToggleHistory, frozenThrough, onSaved }: {
+  rel: EnrichedRel; g: GameBreakdown; editing: boolean; onEdit: () => void;
+  historyOpen: boolean; onToggleHistory: () => void; frozenThrough: string | null; onSaved: () => void;
+}) {
+  const current = g.rate_periods.find(p => p.end_week === null) ?? g.rate_periods[g.rate_periods.length - 1] ?? null;
+  const kind = current ? KIND_LABEL[current.kind] ?? KIND_LABEL.manual : null;
+  const unrated = g.unrated_weeks.length > 0;
+  const counts = g.rate_periods.some(p => p.agent_pct > 0);
+  const [confirming, setConfirming] = useState(false);
+  const [confirmErr, setConfirmErr] = useState<string | null>(null);
+  // Confirmer un taux par défaut = le reposer à l'identique en « manuel » (aucun montant ne bouge).
+  async function confirmDefault() {
+    if (!current || current.kind !== "default") return;
+    setConfirming(true); setConfirmErr(null);
+    try {
+      const r = await fetch("/api/affiliate-agent-rates", { method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ relationship_id: rel.id, game_id: g.game_id, agent_pct: current.agent_pct, start_week: current.start_week, note: "taux par défaut confirmé", confirm_retroactive: true }) });
+      const j = await r.json();
+      if (j.ok) onSaved(); else setConfirmErr(j.error ?? "Erreur");
+    } catch (e: any) { setConfirmErr(e.message); } finally { setConfirming(false); }
+  }
+  return (
+    <div style={{ border: `1px solid ${unrated ? "rgba(239,68,68,0.4)" : "var(--border)"}`, borderRadius: 8, padding: "10px 12px", background: "var(--bg-raised)", opacity: counts || unrated || editing ? 1 : 0.6 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8, gap: 8 }}>
+        <span style={{ fontSize: 12, fontWeight: 700, color: "var(--text)" }}>{g.game_name}</span>
+        <span style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11 }}>
+          {g.agent_pct_current === null
+            ? <span style={{ color: RED, fontWeight: 700 }}>⛔ aucun taux agent</span>
+            : <span style={{ fontWeight: 700, color: g.agent_pct_current > 0 ? GREEN : "var(--text-dim)", textAlign: "right" }}>agent {current ? <RateLabel p={current} strong /> : `${r4(g.agent_pct_current)} %`}</span>}
+          {kind && <span style={{ color: kind.color, border: "1px solid var(--border)", borderRadius: 4, padding: "0 5px", fontSize: 10 }}>{kind.label}</span>}
+          {current && <span style={{ color: "var(--text-dim)", fontSize: 10 }}>depuis {current.start_week ?? "l'origine"}</span>}
+          {current?.kind === "default" && (
+            <button disabled={confirming} onClick={confirmDefault} style={{ background: "rgba(234,179,8,0.12)", border: "1px solid rgba(234,179,8,0.4)", borderRadius: 5, cursor: "pointer", padding: "2px 7px", color: "#EAB308", fontSize: 10, fontWeight: 700 }}>
+              Confirmer
+            </button>
+          )}
+          <button onClick={onEdit} style={{ display: "flex", alignItems: "center", gap: 3, background: "none", border: "1px solid var(--border)", borderRadius: 5, cursor: "pointer", padding: "2px 7px", color: "var(--text-muted)", fontSize: 10 }}>
+            <Pencil size={10} /> taux
+          </button>
+        </span>
+      </div>
+      {g.is_composite ? (
+        <div style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 12 }}>
+          <div style={{ color: "var(--text-dim)", fontStyle: "italic" }}>Formule composite (winnings/rake/insurance)</div>
+          <Row label="Part agence (natif)" value={<Amt n={g.agency_pnl_native} cur={g.currency} />} />
+          {g.cny_rate_missing ? (
+            <div style={{ display: "flex", alignItems: "center", gap: 6, color: "#EAB308", fontSize: 11, fontWeight: 600 }}>
+              <AlertTriangle size={12} /> taux {g.currency} manquant → conversion USDT impossible
+            </div>
+          ) : (
+            <Row label="≈ Part agence (USDT)" value={<Amt n={g.agency_pnl_lifetime} bold />} />
+          )}
+        </div>
+      ) : (
+        <div style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 12 }}>
+          <Row label="P&L joueur" value={<Amt n={g.player_pnl_lifetime ?? 0} cur={g.currency} />} />
+          <Row label={`× Deal agence perçu (${g.effective_action_pct}%)`} value={<Amt n={g.agency_pnl_lifetime} cur={g.currency} />} sub="part agence" />
+        </div>
+      )}
+      <div style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 12, marginTop: 4 }}>
+        <Row label="Commission agent (Σ part × taux de chaque semaine)" value={<Amt n={g.earned_lifetime} bold />} />
+      </div>
+      {confirmErr && <div style={{ marginTop: 6, color: RED, fontSize: 11 }}>{confirmErr}</div>}
+      {unrated && (
+        <div style={{ marginTop: 6, color: RED, fontSize: 11, fontWeight: 600 }}>
+          ⚠️ Part agence {f2(g.unrated_part)} sans taux agent (semaine{g.unrated_weeks.length > 1 ? "s" : ""} {g.unrated_weeks.join(", ")}) — l&apos;agent est bloqué tant qu&apos;aucun taux ne couvre ces semaines.
+        </div>
+      )}
+      {g.rate_periods.length > 0 && (
+        <button onClick={onToggleHistory} style={{ marginTop: 6, background: "none", border: "none", cursor: "pointer", color: "var(--text-muted)", padding: 0, fontSize: 11, display: "flex", alignItems: "center", gap: 4 }}>
+          {historyOpen ? <ChevronDown size={11} /> : <ChevronRight size={11} />} Historique des taux ({g.rate_periods.length})
+        </button>
+      )}
+      {historyOpen && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 3, paddingLeft: 14, marginTop: 4 }}>
+          {g.rate_periods.map((p, i) => {
+            const k = KIND_LABEL[p.kind] ?? KIND_LABEL.manual;
+            return (
+              <div key={p.id ?? i} style={{ fontSize: 11, color: "var(--text-dim)" }}>
+                <span style={{ fontVariantNumeric: "tabular-nums" }}>{periodRange(p)}</span> · <RateLabel p={p} /> · <span style={{ color: k.color }}>{k.label}</span>
+                {p.note && <div style={{ paddingLeft: 10, fontStyle: "italic" }}>{p.note}</div>}
+              </div>
+            );
+          })}
+        </div>
+      )}
+      {editing && (
+        <RateEditor relationshipId={rel.id} referredName={rel.referred.name} game={g} frozenThrough={frozenThrough}
+          onClose={onEdit} onSaved={onSaved} />
+      )}
     </div>
   );
 }
