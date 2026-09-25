@@ -110,7 +110,7 @@ export function getPlayersOpenStateOn(db: DB, playerIds?: number[], opts: OpenSt
   //    qu'un écran traite comme « à payer » (SettlementsClient) + conflict, fail-closed.
   for (const r of db.prepare(`
     SELECT player_id AS id, COUNT(*) AS n FROM weekly_settlements
-    WHERE status IN ('auto_settled', 'pending_manual', 'settled', 'carry_over', 'conflict') AND payment_received = 0
+    WHERE status IN ('auto_settled', 'pending_manual', 'settled', 'carry_over', 'conflict') AND COALESCE(payment_received, 0) = 0
     GROUP BY player_id
   `).all() as { id: number; n: number }[]) {
     if (!want(r.id)) continue;
@@ -181,7 +181,7 @@ export function getPlayersOpenStateOn(db: DB, playerIds?: number[], opts: OpenSt
     SELECT wt.player_id AS id, COUNT(*) AS n,
            SUM(CASE WHEN wt.type = 'deposit' THEN wt.amount ELSE -wt.amount END) AS dep
     FROM wallet_transactions wt JOIN games g ON g.id = wt.game_id
-    WHERE g.name = 'QQPK' AND wt.source IN ('sync', 'manual') AND COALESCE(wt.status, 'active') <> 'rejected'
+    WHERE g.name = 'QQPK' AND (wt.source IS NULL OR wt.source IN ('sync', 'manual')) AND COALESCE(wt.status, 'active') <> 'rejected'
       AND NOT EXISTS (SELECT 1 FROM qqpk_staking_blocks b WHERE b.player_id = wt.player_id
                       AND COALESCE(wt.tx_datetime, wt.tx_date) BETWEEN b.block_start AND b.block_end)
     GROUP BY wt.player_id
@@ -229,7 +229,10 @@ export function getPlayersOpenStateOn(db: DB, playerIds?: number[], opts: OpenSt
     SELECT s.player_id AS id, COUNT(*) AS n FROM grindhouse_sessions s
     WHERE NOT EXISTS (SELECT 1 FROM grindhouse_settlements gs
                       WHERE gs.player_id = s.player_id AND gs.status = 'paid'
-                        AND s.session_date BETWEEN gs.period_start AND gs.period_end)
+                        AND s.session_date BETWEEN gs.period_start AND gs.period_end
+                        -- saisie AVANT le règlement : sessions_pnl est figé à sa création, une
+                        -- session antidatée saisie après n'a jamais été payée.
+                        AND s.created_at <= gs.created_at)
     GROUP BY s.player_id
   `).all() as { id: number; n: number }[]) {
     if (!want(r.id)) continue;

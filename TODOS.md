@@ -98,6 +98,16 @@ Deferred work from /plan-ceo-review (2026-04-28).
 
 ## P1 — High value, build next
 
+### Verrou « ouvert » des joueurs — trous hors périmètre du chantier Joueurs (contre-audit 2026-09-25)
+- **Session grindhouse déplacée après paiement** : `PATCH /api/grindhouse-sessions/[id]` peut changer
+  `player_id` / `session_date` d'une session déjà couverte par un règlement payé ; le moteur
+  (`lib/queries/player-open.ts`, garde `created_at`) ne voit pas ce cas. Garde-fou à mettre dans
+  l'API : refuser de modifier une session couverte par un règlement.
+- **`POST /api/admin/reset-player`** supprime n'importe quel joueur sans passer par
+  `deletePlayerChecked` (verrou « ouvert ») ; protégé par session + jeton admin. L'aligner ou le supprimer.
+- **Buy-ins XPoker** : un buy-in sans cash-out garde le joueur ouvert indéfiniment (source
+  `xpoker_chips`, fail-closed). À trancher par Baki : un buy-in est-il toujours payé d'avance ?
+
 ### Solder l'héritage TELE par un acte explicite (décision Baki 2026-09-25)
 - **Constat.** 417 tx TELE `settled=0` et 72 semaines hebdo non reçues (`weekly_settlements`
   `auto_settled`/`pending_manual`, avril–juin 2026) : le moteur hebdo TELE n'a jamais utilisé le
