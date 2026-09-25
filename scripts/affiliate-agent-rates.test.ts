@@ -599,5 +599,46 @@ console.log("\n══ L. Garde d'argent sur l'override relation × game (audit F
   cents("…réactivée : dû Samyaza toujours 314,37", due(db2, 421), 314.3693);
 }
 
+console.log("\n══ M. Saisie en « % du résultat joueur » (unité seule, aucun changement de calcul) ══");
+{
+  const strip = (rows: any[]) => rows.map(r => [r.start_week, r.end_week, r.agent_pct, r.kind]);
+  const dbA = loadFixture(); runAffiliateAgentRatesMigrationV1(dbA);
+  const dbB = loadFixture(); runAffiliateAgentRatesMigrationV1(dbB);
+  const a = setAgentRateOn(dbA, { relationship_id: 21, game_id: 6, player_pct: 5, start_week: "2026-09-07", confirm_retroactive: true, note: "n", today: TODAY });
+  const b = setAgentRateOn(dbB, { relationship_id: 21, game_id: 6, agent_pct: 25, start_week: "2026-09-07", confirm_retroactive: true, note: "n", today: TODAY });
+  check("5 % du résultat joueur (A5, perçu 20 %) : écrit", a.ok, JSON.stringify(a).slice(0, 160));
+  check("stocké EXACTEMENT 25 (=== 25, pas 25,000…01)", ratePeriodsOn(dbA, 21, 6)[1]?.agent_pct === 25, String(ratePeriodsOn(dbA, 21, 6)[1]?.agent_pct));
+  eq("périodes identiques à une saisie directe de 25 % de la part agence", strip(ratePeriodsOn(dbA, 21, 6)), strip(ratePeriodsOn(dbB, 21, 6)));
+  check("dû Samyaza identique au bit près (157,19)", due(dbA, 421) === due(dbB, 421), `${due(dbA, 421)} vs ${due(dbB, 421)}`);
+  eq("aperçu : base à la date d'effet = 20 (affichage 25 % × 20 / 100 = 5 %)", (a as any).preview?.base_at_start, 20);
+  // La conversion utilise le perçu DE LA DATE D'EFFET, pas celui du jour.
+  const dbC = loadFixture(); runAffiliateAgentRatesMigrationV1(dbC);
+  setPerceivedDealOn(dbC, { game_id: 6, action_pct: 25, rakeback_pct: null, insurance_pct: null, start_week: "2026-10-05", today: TODAY });
+  const c = setAgentRateOn(dbC, { relationship_id: 21, game_id: 6, player_pct: 5, start_week: "2026-10-05", today: TODAY });
+  check("perçu 25 % dès le 05/10 : 5 % du résultat joueur dès le 05/10 → 20 % de la part agence", c.ok && ratePeriodsOn(dbC, 21, 6).find(r => r.start_week === "2026-10-05")?.agent_pct === 20, JSON.stringify(ratePeriodsOn(dbC, 21, 6).map(r => [r.start_week, r.agent_pct])));
+  // Bornes, exprimées dans l'unité stockée.
+  const db = loadFixture(); runAffiliateAgentRatesMigrationV1(db);
+  const over = setAgentRateOn(db, { relationship_id: 21, game_id: 6, player_pct: 25, start_week: "2026-10-05", today: TODAY });
+  check("25 % du résultat joueur sur perçu 20 % (= 125 % de la part) : refusé", !over.ok && /125/.test((over as any).error), (over as any).error);
+  const tiny = setAgentRateOn(db, { relationship_id: 21, game_id: 6, player_pct: 0.1, start_week: "2026-10-05", today: TODAY });
+  check("0,1 % du résultat joueur (= 0,5 % de la part) : refusé", !tiny.ok && /sous 1 %/.test((tiny as any).error), (tiny as any).error);
+  const both = setAgentRateOn(db, { relationship_id: 21, game_id: 6, player_pct: 5, agent_pct: 25, start_week: "2026-10-05", today: TODAY });
+  check("deux unités à la fois : refusé", !both.ok && /UNE unité/.test((both as any).error));
+  const none = setAgentRateOn(db, { relationship_id: 21, game_id: 6, start_week: "2026-10-05", today: TODAY } as any);
+  check("aucune unité : refusé", !none.ok && /UNE unité/.test((none as any).error));
+  const zero = setAgentRateOn(db, { relationship_id: 8, game_id: 5, player_pct: 0, start_week: null, confirm_retroactive: true, today: TODAY });
+  check("0 % du résultat joueur sans note : refusé (note obligatoire)", !zero.ok && /note/.test((zero as any).error));
+  const zeroOk = setAgentRateOn(db, { relationship_id: 8, game_id: 5, player_pct: 0, start_week: null, confirm_retroactive: true, note: "Deal Antoine 50 % — Xabi ne touche rien sur ce filleul", today: TODAY });
+  check("0 % avec note : stocké 0", zeroOk.ok && ratePeriodsOn(db, 8, 5)[0].agent_pct === 0);
+  // Formule composite : pas de % du résultat joueur.
+  db.prepare(`INSERT INTO games (id, name) VALUES (2, 'Wepoker')`).run();
+  db.prepare(`INSERT INTO player_game_deals (player_id, game_id, created_at) VALUES (428, 2, '2026-08-05 00:00:00')`).run();
+  const wp = setAgentRateOn(db, { relationship_id: 21, game_id: 2, player_pct: 5, start_week: "2026-10-05", today: TODAY });
+  check("Wepoker (composite) en % du résultat joueur : refusé, saisir en % de la part agence", !wp.ok && /composite/.test((wp as any).error), (wp as any).error);
+  // Affichage : base par période exposée pour l'historique.
+  const lines = computeAgentCommissionOn(dbA, 421, { today: TODAY }).lines.find(l => l.relationship_id === 21 && l.game_id === 6)!;
+  eq("historique : base 20 % au début de chaque période (→ 10 % puis 5 % du résultat joueur)", lines.period_eff, [20, 20]);
+}
+
 console.log(`\n${passed} ✔  ${failures.length} ✘`);
 if (failures.length) { console.log(failures.map(f => "  ✘ " + f).join("\n")); process.exit(1); }

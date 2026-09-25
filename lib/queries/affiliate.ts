@@ -38,7 +38,7 @@ export interface GameBreakdown {
   counted_part: number;               // Σ part agence des semaines à taux > 0
   unrated_part: number;               // Σ part agence des semaines SANS taux (≠ 0 ⇒ agent bloqué)
   unrated_weeks: (string | null)[];
-  rate_periods: { id: number | null; agent_pct: number; start_week: string | null; end_week: string | null; kind: string; note: string | null; created_at: string | null }[];
+  rate_periods: { id: number | null; agent_pct: number; start_week: string | null; end_week: string | null; kind: string; note: string | null; created_at: string | null; base_at_start: number | null }[];
 }
 
 export interface WindowStatus {
@@ -165,9 +165,10 @@ export function computeAffiliateCommission(relationshipId: number): CommissionRe
       counted_part: l.counted_part,
       unrated_part: l.unrated_part,
       unrated_weeks: l.unrated_weeks,
-      rate_periods: l.periods.map(p => ({
+      rate_periods: l.periods.map((p, i) => ({
         id: p.id ?? null, agent_pct: p.agent_pct, start_week: p.start_week, end_week: p.end_week,
         kind: p.kind, note: p.note, created_at: p.created_at ?? null,
+        base_at_start: l.period_eff[i],   // perçu au début de la période (null = composite) — affichage en % du résultat joueur
       })),
     };
   });

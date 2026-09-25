@@ -226,6 +226,34 @@ function resolveDealOn(db: DB, rel: RelRow, gameId: number, perceivedOverride?: 
   };
 }
 
+/** Borne « avant tout » : couverte par les seules périodes origine (start_week NULL). */
+const ORIGIN_PROBE = "0000-00-00";
+
+/**
+ * Action perçue effective d'un (filleul, game) une semaine donnée (null = depuis l'origine) —
+ * la base qui sert à convertir un taux saisi en « % du résultat joueur » en % de la part agence.
+ * null = pas de deal / game exclu / inconnu.
+ */
+export function perceivedActionAtOn(db: DB, relationshipId: number, gameId: number, week: string | null, perceived?: PerceivedOverride): { eff: number; composite: boolean } | null {
+  const rel = relRowOn(db, relationshipId);
+  if (!rel) return null;
+  const d = resolveDealOn(db, rel, gameId, perceived);
+  if (!d) return null;
+  return { eff: effAt(d, week ?? ORIGIN_PROBE, ORIGIN_PROBE).effAction, composite: d.game_name === "Wepoker" };
+}
+
+/**
+ * Conversion d'unité SEULE (décision Baki 2026-09-26) : Baki saisit « 5 % du résultat joueur »,
+ * on stocke « 25 % de la part agence » (base perçue 20 %). Aucun changement de calcul.
+ * Formule : part × 100 / perçu — 5 × 100 / 20 = 25 exactement.
+ */
+export function playerPctToAgentPct(playerPct: number, eff: number): number {
+  return playerPct * 100 / eff;
+}
+export function agentPctToPlayerPct(agentPct: number, eff: number): number {
+  return agentPct * eff / 100;
+}
+
 /** Taux CNY→USDT — même lecture que getExchangeRate('CNY') (0 = non saisi). */
 function cnyRateOn(db: DB): number {
   const row = db.prepare(`SELECT value FROM settings WHERE key = 'exchange_rate_cny_usdt'`).get() as { value: string } | undefined;
@@ -332,6 +360,9 @@ export interface GameLine {
   unrated_weeks: (string | null)[];
   current_pct: number | null;    // taux de la semaine en cours
   periods: RatePeriod[];
+  // Action perçue au DÉBUT de chaque période (même ordre que periods) — pour afficher le taux
+  // en « % du résultat joueur » (= agent_pct × perçu / 100). null = formule composite / pas de deal.
+  period_eff: (number | null)[];
   weeks: WeekLine[];
 }
 export interface BlockReason {
@@ -401,6 +432,7 @@ export function relationLinesOn(db: DB, relationshipId: number, opts: CalcOpts =
       unrated_weeks: unrated.filter(w => Math.abs(w.part) > EPS).map(w => w.week),
       current_pct: cur ? cur.agent_pct : null,
       periods,
+      period_eff: periods.map(p => ag && !ag.is_composite ? perceivedActionAtOn(db, rel.id, g.game_id, p.start_week, opts.perceived)?.eff ?? null : null),
       weeks,
     };
   });
@@ -482,7 +514,8 @@ export interface RateChangePreview {
   relationship_id: number; referred_name: string; game_id: number; game_name: string;
   effective_action_pct: number;
   start_week: string | null; end_week: string | null;
-  old_pct_at_start: number | null; new_pct: number;
+  old_pct_at_start: number | null; new_pct: number;   // POURCENTS de la part agence (unité stockée)
+  base_at_start: number | null;                        // perçu à la date d'effet : % résultat joueur = pct × base / 100
   weeks: RateChangeWeek[];                        // semaines À ACTIVITÉ dont le taux change
   line_commission_before: number; line_commission_after: number;
   agent: {
@@ -495,7 +528,10 @@ export interface RateChangePreview {
   rows_after: RatePeriod[];
 }
 export type SetAgentRateArgs = {
-  relationship_id: number; game_id: number; agent_pct: number;
+  relationship_id: number; game_id: number;
+  // UNE des deux unités : agent_pct = % de la part agence (stocké) ; player_pct = % du résultat
+  // joueur, converti ici avec le perçu de la semaine d'effet (saisie par défaut de l'éditeur).
+  agent_pct?: number; player_pct?: number;
   start_week: string | null;         // lundi, ou null = depuis l'origine
   note?: string | null;
   confirm_retroactive?: boolean;     // confirmation explicite (un clic sur l'aperçu)
@@ -553,19 +589,38 @@ export function frozenRateChanges(before: RatePeriod[], after: RatePeriod[], fro
 export function setAgentRateOn(db: DB, a: SetAgentRateArgs): SetAgentRateResult {
   if (a.start_week !== null && (!isIsoDate(a.start_week) || !isMonday(a.start_week)))
     return { ok: false, error: `date d'effet : un lundi est attendu (pas de prorata), reçu « ${a.start_week} »` };
-  try { assertAgentPct(a.agent_pct); } catch (e: any) { return { ok: false, error: e.message }; }
-  const note = a.note?.trim() || null;
-  if (a.agent_pct === 0 && !note) return { ok: false, error: "un taux de 0 % saisi à la main exige une note (pourquoi ce filleul ne rapporte rien à l'agent)" };
+  if ((a.agent_pct === undefined) === (a.player_pct === undefined))
+    return { ok: false, error: "saisir le taux dans UNE unité : % du résultat joueur (player_pct) ou % de la part agence (agent_pct)" };
 
   const rel = relRowOn(db, a.relationship_id);
   if (!rel) return { ok: false, error: `relation #${a.relationship_id} introuvable` };
   const game = db.prepare(`SELECT name FROM games WHERE id = ?`).get(a.game_id) as { name: string } | undefined;
   if (!game) return { ok: false, error: `game #${a.game_id} introuvable` };
 
+  // Conversion d'unité, côté serveur (jamais dans le navigateur) : une seule source de vérité.
+  let agentPct: number;
+  if (a.player_pct !== undefined) {
+    const pp = a.player_pct;
+    if (typeof pp !== "number" || !Number.isFinite(pp) || pp < 0 || pp > 100)
+      return { ok: false, error: `taux : pourcent du résultat joueur attendu dans [0, 100], reçu ${String(pp)}` };
+    const base = perceivedActionAtOn(db, a.relationship_id, a.game_id, a.start_week);
+    if (!base) return { ok: false, error: `${rel.referred_name} n'a pas de deal sur ${game.name} : pas de base pour convertir un % du résultat joueur — saisir en % de la part agence` };
+    if (base.composite) return { ok: false, error: `${game.name} a une formule composite (winnings/rake/insurance) : saisir en % de la part agence` };
+    if (base.eff === 0) return { ok: false, error: `action perçue à 0 % sur ${game.name} à cette date : un % du résultat joueur ne se convertit pas — saisir en % de la part agence` };
+    agentPct = playerPctToAgentPct(pp, base.eff);
+    if (agentPct > 100) return { ok: false, error: `${pp} % du résultat joueur = ${agentPct} % de la part agence (perçu ${base.eff} %) : impossible, l'agent toucherait plus que l'agence` };
+    if (agentPct > 0 && agentPct < 1) return { ok: false, error: `${pp} % du résultat joueur = ${agentPct} % de la part agence (perçu ${base.eff} %) : sous 1 % de la part agence, refusé (risque de fraction mal saisie)` };
+  } else {
+    agentPct = a.agent_pct!;
+  }
+  try { assertAgentPct(agentPct); } catch (e: any) { return { ok: false, error: e.message }; }
+  const note = a.note?.trim() || null;
+  if (agentPct === 0 && !note) return { ok: false, error: "un taux de 0 % saisi à la main exige une note (pourquoi ce filleul ne rapporte rien à l'agent)" };
+
   const rows = ratePeriodsOn(db, a.relationship_id, a.game_id);
-  const change = applyRateChange(rows, { relationship_id: a.relationship_id, game_id: a.game_id, agent_pct: a.agent_pct, start_week: a.start_week, kind: "manual", note });
+  const change = applyRateChange(rows, { relationship_id: a.relationship_id, game_id: a.game_id, agent_pct: agentPct, start_week: a.start_week, kind: "manual", note });
   const { containing, next, end_week } = change;
-  if (containing && Math.abs(containing.agent_pct - a.agent_pct) < 1e-9 && containing.kind === "manual")
+  if (containing && Math.abs(containing.agent_pct - agentPct) < 1e-9 && containing.kind === "manual")
     return { ok: true, written: false, unchanged: true };   // déjà en vigueur : rien à écrire
 
   // Semaines gelées : un taux DÉFINI qui changerait sur une semaine ≤ frozen ⇒ refus.
@@ -588,6 +643,7 @@ export function setAgentRateOn(db: DB, a: SetAgentRateArgs): SetAgentRateResult 
     }
   }
 
+  const baseAtS = perceivedActionAtOn(db, a.relationship_id, a.game_id, a.start_week);
   // Aperçu : le MÊME calcul que la prod, avec les périodes simulées.
   const override: RateOverride = { relationship_id: a.relationship_id, game_id: a.game_id, periods: change.rows };
   const before = computeAgentCommissionOn(db, rel.affiliate_player_id, { today: a.today });
@@ -610,7 +666,8 @@ export function setAgentRateOn(db: DB, a: SetAgentRateArgs): SetAgentRateResult 
     relationship_id: a.relationship_id, referred_name: rel.referred_name, game_id: a.game_id, game_name: game.name,
     effective_action_pct: lineBefore?.effective_action_pct ?? 0,
     start_week: a.start_week, end_week,
-    old_pct_at_start: containing ? containing.agent_pct : null, new_pct: a.agent_pct,
+    old_pct_at_start: containing ? containing.agent_pct : null, new_pct: agentPct,
+    base_at_start: baseAtS && !baseAtS.composite ? baseAtS.eff : null,
     weeks,
     line_commission_before: lineBefore?.commission ?? 0, line_commission_after: lineAfter?.commission ?? 0,
     agent: {

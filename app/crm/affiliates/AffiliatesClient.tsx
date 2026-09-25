@@ -34,6 +34,7 @@ export interface GameBreakdown {
 export interface RatePeriodView {
   id: number | null; agent_pct: number; start_week: string | null; end_week: string | null;
   kind: string; note: string | null; created_at: string | null;
+  base_at_start: number | null;   // perçu au début de la période (null = composite) → % résultat joueur = agent_pct × base / 100
 }
 export interface AffPayment {
   paid_at: string; amount_usdt: number; game_id: number; game_name: string | null;

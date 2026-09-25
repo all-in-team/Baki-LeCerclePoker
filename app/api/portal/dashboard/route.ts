@@ -56,7 +56,10 @@ function buildAgentDashboard(agentPlayerId: number, db: any) {
   ).all(player.id) as { referred_player_id: number }[];
   const refIds = refRows.map(r => r.referred_player_id);
 
-  let activity: { ts: string; type: string; amount: number; currency: string; player_name: string }[] = [];
+  // L'agent voit QU'un filleul a déposé / retiré, jamais COMBIEN (décision Baki 2026-09-26) :
+  // avec sa part affichée, un montant lui permettrait de recalculer la base perçue.
+  // Le montant n'est donc même pas sélectionné — il ne quitte jamais le serveur.
+  let activity: { ts: string; type: string; player_name: string }[] = [];
   let momentum = { filleuls_total: refIds.length, filleuls_active_30d: 0, actions_30d: 0, actions_prev_30d: 0 };
 
   if (refIds.length > 0) {
@@ -65,7 +68,7 @@ function buildAgentDashboard(agentPlayerId: number, db: any) {
     const guard = `(wt.source IS NULL OR wt.source != 'unknown') AND (wt.status IS NULL OR wt.status = 'active')`;
 
     activity = db.prepare(`
-      SELECT ${ts} AS ts, wt.type, wt.amount, wt.currency, p.name AS player_name
+      SELECT ${ts} AS ts, wt.type, p.name AS player_name
       FROM wallet_transactions wt JOIN players p ON p.id = wt.player_id
       WHERE wt.player_id IN (${ph}) AND ${guard} AND ${ts} >= datetime('now','-14 days')
       ORDER BY ts DESC LIMIT 12

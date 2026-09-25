@@ -35,7 +35,8 @@ interface OwnerData {
 interface RatePeriod { agent_pct: number; start_week: string | null; end_week: string | null; commission: number }
 interface FilleulGame { game_name: string; periods: RatePeriod[]; commission: number | null }
 interface Filleul { name: string; handle: string | null; commission: number | null; games: FilleulGame[] }
-interface ActivityItem { ts: string; type: string; amount: number; currency: string; player_name: string; }
+// Pas de montant : l'agent voit qu'un filleul a joué, jamais combien (décision Baki 2026-09-26).
+interface ActivityItem { ts: string; type: string; player_name: string; }
 interface Momentum { filleuls_total: number; filleuls_active_30d: number; actions_30d: number; actions_prev_30d: number; }
 interface DashboardData {
   mode?: "agent";
@@ -411,9 +412,6 @@ function AgentDashboard({ data, selectedAgentId, onBack, containerStyle }: { dat
                     </div>
                     <div style={{ ...hintStyle, fontSize: 10 }}>{(a.ts ?? "").slice(0, 10)}</div>
                   </div>
-                  <span style={{ fontWeight: 700, fontSize: 13, color: isDep ? GREEN : GREY, fontVariantNumeric: "tabular-nums" }}>
-                    {isDep ? "+" : "−"}{fmt(a.amount)} {a.currency || "USDT"}
-                  </span>
                 </div>
               );
             })}

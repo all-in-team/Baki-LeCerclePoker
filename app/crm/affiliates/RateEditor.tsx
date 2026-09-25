@@ -8,11 +8,16 @@ import type { GameBreakdown } from "./AffiliatesClient";
 // chiffré est une aide à la saisie (arithmétique d'affichage), le vrai calcul — et
 // l'aperçu avant/après — viennent du moteur via POST /api/affiliate-agent-rates.
 // Parcours imposé : saisir → Aperçu (dry_run, rien n'est écrit) → Confirmer.
+//
+// UNITÉ DE SAISIE (Baki 2026-09-26) : « % du résultat joueur » (5 pour Samyaza sur A5).
+// Le SERVEUR convertit en % de la part agence avec le perçu de la semaine d'effet
+// (5 × 100 / 20 = 25) et stocke ce dernier. Formule composite (Wepoker) : saisie
+// directe en % de la part agence, un % du résultat joueur n'y a pas de sens.
 
 interface PreviewWeek { week: string; part: number; old_pct: number | null; new_pct: number; commission_before: number | null; commission_after: number }
 interface Preview {
   referred_name: string; game_name: string; start_week: string | null; end_week: string | null;
-  old_pct_at_start: number | null; new_pct: number; weeks: PreviewWeek[];
+  old_pct_at_start: number | null; new_pct: number; base_at_start: number | null; weeks: PreviewWeek[];
   line_commission_before: number; line_commission_after: number;
   agent: { earned_before: number | null; earned_after: number | null; paid: number; due_before: number | null; due_after: number | null; blocked_before: number; blocked_after: number };
 }
@@ -44,7 +49,12 @@ export default function RateEditor({ relationshipId, referredName, game, frozenT
     const afterFreeze = frozenThrough ? nextMondayAfter(frozenThrough) : null;
     return afterFreeze && afterFreeze > next ? afterFreeze : next;
   }, [frozenThrough]);
-  const [pctStr, setPctStr] = useState(game.agent_pct_current !== null ? String(game.agent_pct_current) : "");
+  const P = game.effective_action_pct;         // base perçue (%) de la semaine en cours
+  const composite = game.is_composite;
+  const byPlayer = !composite && P > 0;        // saisie en % du résultat joueur
+  const r4 = (x: number) => Math.round(x * 10000) / 10000;
+  const initial = game.agent_pct_current === null ? "" : String(byPlayer ? r4(game.agent_pct_current * P / 100) : game.agent_pct_current);
+  const [pctStr, setPctStr] = useState(initial);
   const [fromOrigin, setFromOrigin] = useState(false);
   const [week, setWeek] = useState(proposed);
   const [note, setNote] = useState("");
@@ -53,24 +63,25 @@ export default function RateEditor({ relationshipId, referredName, game, frozenT
   const [busy, setBusy] = useState(false);
   const [res, setRes] = useState<Result | null>(null);
 
-  const P = game.effective_action_pct;         // base perçue (%)
-  const composite = game.is_composite;
   const n = Number(pctStr.replace(",", "."));
-  const valid = pctStr.trim() !== "" && Number.isFinite(n) && (n === 0 || (n >= 1 && n <= 100));
-  const fractionTrap = Number.isFinite(n) && n > 0 && n < 1;
+  // Équivalent en % de la part agence — AFFICHAGE (le serveur refait la conversion avec le perçu de la date d'effet).
+  const partPct = byPlayer ? n * 100 / P : n;
+  const valid = pctStr.trim() !== "" && Number.isFinite(n) && n >= 0 && n <= 100
+    && (partPct === 0 || (partPct >= 1 && partPct <= 100));
+  const fractionTrap = !byPlayer && Number.isFinite(n) && n > 0 && n < 1;
   const weekOk = fromOrigin || isMonday(week);
   const noteOk = n !== 0 || note.trim().length > 0;
 
   // Exemple en direct : sur 10 000 de résultat joueur → part agence (base perçue) → part agent.
   const EX = 10000;
   const exBase = composite ? EX : EX * P / 100;
-  const exAgent = valid ? exBase * n / 100 : null;
-  const exOfPlayer = valid && !composite ? P * n / 100 : null;
-  // Saisie inverse : « je veux A sur B de résultat joueur » → taux à saisir.
+  const exAgent = valid ? (byPlayer ? EX * n / 100 : exBase * n / 100) : null;
+  // Saisie inverse : « je veux A sur B » → taux à saisir, dans l'unité de saisie.
   const A = Number(wantAmount.replace(",", ".")), B = Number(wantBase.replace(",", "."));
-  const invBase = composite ? B : B * P / 100;
+  const invBase = byPlayer ? B : (composite ? B : B * P / 100);
   const invPct = Number.isFinite(A) && Number.isFinite(B) && invBase !== 0 ? A / invBase * 100 : null;
-  const invOk = invPct !== null && (invPct === 0 || (invPct >= 1 && invPct <= 100));
+  const invPart = invPct === null ? null : byPlayer ? invPct * 100 / P : invPct;
+  const invOk = invPart !== null && (invPart === 0 || (invPart >= 1 && invPart <= 100));
 
   async function send(mode: "dry_run" | "confirm") {
     setBusy(true);
@@ -78,7 +89,7 @@ export default function RateEditor({ relationshipId, referredName, game, frozenT
       const r = await fetch("/api/affiliate-agent-rates", {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          relationship_id: relationshipId, game_id: game.game_id, agent_pct: n,
+          relationship_id: relationshipId, game_id: game.game_id, ...(byPlayer ? { player_pct: n } : { agent_pct: n }),
           start_week: fromOrigin ? null : week, note: note.trim() || null,
           dry_run: mode === "dry_run", confirm_retroactive: mode === "confirm",
         }),
@@ -101,7 +112,7 @@ export default function RateEditor({ relationshipId, referredName, game, frozenT
       </div>
 
       <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-        <label>Taux (% de la part agence)</label>
+        <label>{byPlayer ? "Taux (% du résultat joueur)" : "Taux (% de la part agence)"}</label>
         <input value={pctStr} onChange={e => { setPctStr(e.target.value); setRes(null); }} style={{ ...input, width: 70 }} inputMode="decimal" />
         <span style={{ color: "var(--text-dim)" }}>à partir du</span>
         <input type="date" value={week} disabled={fromOrigin} onChange={e => { setWeek(e.target.value); setRes(null); }} style={{ ...input, opacity: fromOrigin ? 0.4 : 1 }} />
@@ -109,6 +120,14 @@ export default function RateEditor({ relationshipId, referredName, game, frozenT
           <input type="checkbox" checked={fromOrigin} onChange={e => { setFromOrigin(e.target.checked); setRes(null); }} /> depuis l&apos;origine
         </label>
       </div>
+      {byPlayer && pctStr.trim() !== "" && Number.isFinite(n) && (
+        <div style={{ fontSize: 11, color: "var(--text-dim)", marginTop: -4 }}>
+          = {pct(r4(partPct))} de la part agence (perçu {P} % aujourd&apos;hui — converti par le serveur avec le perçu de la date d&apos;effet)
+        </div>
+      )}
+      {byPlayer && valid === false && pctStr.trim() !== "" && Number.isFinite(n) && (
+        <div style={{ color: RED }}>{pct(r4(partPct))} de la part agence : hors bornes (0, ou 1 à 100 %).</div>
+      )}
       {!weekOk && <div style={{ color: RED }}>La date d&apos;effet doit être un lundi (pas de prorata).</div>}
       {frozenThrough && <div style={{ color: "var(--text-dim)" }}>Semaines payées (gelées) jusqu&apos;à celle du {frozenThrough} — date d&apos;effet au plus tôt : {nextMondayAfter(frozenThrough)}.</div>}
       {fractionTrap && <div style={{ color: RED }}>{pctStr} ressemble à une fraction : le taux est en POURCENT ({n * 100} % ? alors saisir {n * 100}).</div>}
@@ -118,8 +137,8 @@ export default function RateEditor({ relationshipId, referredName, game, frozenT
         {composite ? (
           <>Sur <b>10 000</b> de part agence (formule composite {game.currency}) → agent <b>{exAgent === null ? "—" : f2(exAgent)}</b></>
         ) : (
-          <>Sur <b>10 000</b> de résultat joueur → part agence ({P} % perçu) <b>{f2(exBase)}</b> → agent {valid ? `${pct(n)}` : "—"} = <b style={{ color: GREEN }}>{exAgent === null ? "—" : f2(exAgent)}</b>
-            {exOfPlayer !== null && <span style={{ color: "var(--text-dim)" }}> · soit <b>{pct(exOfPlayer)}</b> du résultat joueur</span>}</>
+          <>Sur <b>10 000</b> de résultat joueur → agent {valid ? pct(n) : "—"} = <b style={{ color: GREEN }}>{exAgent === null ? "—" : f2(exAgent)}</b>
+            <div style={{ fontSize: 11, color: "var(--text-dim)" }}>part agence ({P} % perçu) {f2(exBase)} × {valid ? pct(r4(partPct)) : "—"} de la part agence</div></>
         )}
       </div>
       <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap", color: "var(--text-muted)" }}>
@@ -127,10 +146,10 @@ export default function RateEditor({ relationshipId, referredName, game, frozenT
         sur <input value={wantBase} onChange={e => setWantBase(e.target.value)} style={{ ...input, width: 80 }} inputMode="decimal" />
         de {composite ? "part agence" : "résultat joueur"} → taux à saisir <b style={{ color: invOk ? "var(--text)" : RED }}>{invPct === null ? "—" : pct(invPct)}</b>
         {invOk && invPct !== null && (
-          <button onClick={() => { setPctStr(String(Math.round(invPct * 10000) / 10000)); setRes(null); }}
+          <button onClick={() => { setPctStr(String(r4(invPct))); setRes(null); }}
             style={{ ...input, cursor: "pointer", padding: "3px 8px" }}>utiliser</button>
         )}
-        {invPct !== null && !invOk && <span style={{ color: RED }}>hors bornes (0 ou 1–100 %)</span>}
+        {invPct !== null && !invOk && <span style={{ color: RED }}>hors bornes (0, ou 1 à 100 % de la part agence)</span>}
       </div>
 
       <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
@@ -146,13 +165,21 @@ export default function RateEditor({ relationshipId, referredName, game, frozenT
 
       {previewShown && p && (
         <div style={{ border: "1px solid var(--border)", borderRadius: 6, padding: 8, display: "flex", flexDirection: "column", gap: 6 }}>
-          <div style={{ fontWeight: 700 }}>Aperçu — {p.referred_name} / {p.game_name} · {p.start_week ?? "origine"} → {p.end_week ?? "…"} · {pct(p.old_pct_at_start)} → {pct(p.new_pct)}</div>
+          <div style={{ fontWeight: 700 }}>
+            Aperçu — {p.referred_name} / {p.game_name} · {p.start_week ?? "origine"} → {p.end_week ?? "…"} ·{" "}
+            {p.base_at_start !== null
+              ? <>{pct(p.old_pct_at_start === null ? null : r4(p.old_pct_at_start * p.base_at_start / 100))} → {pct(r4(p.new_pct * p.base_at_start / 100))} du résultat joueur</>
+              : <>{pct(p.old_pct_at_start)} → {pct(p.new_pct)}</>}
+          </div>
+          <div style={{ fontSize: 11, color: "var(--text-dim)", marginTop: -4 }}>
+            stocké : {pct(p.old_pct_at_start)} → <b>{pct(r4(p.new_pct))}</b> de la part agence{p.base_at_start !== null && <> (perçu {p.base_at_start} % à la date d&apos;effet)</>}
+          </div>
           {p.weeks.length === 0
             ? <div style={{ color: "var(--text-dim)" }}>Aucune semaine à activité recalculée.</div>
             : (
               <table style={{ width: "100%", borderCollapse: "collapse", fontVariantNumeric: "tabular-nums" }}>
                 <thead><tr style={{ color: "var(--text-dim)", textAlign: "right" }}>
-                  <th style={{ textAlign: "left" }}>Semaine</th><th>Part agence</th><th>Taux</th><th>Commission</th>
+                  <th style={{ textAlign: "left" }}>Semaine</th><th>Part agence</th><th>Taux (part agence)</th><th>Commission</th>
                 </tr></thead>
                 <tbody>{p.weeks.map(w => (
                   <tr key={w.week} style={{ textAlign: "right" }}>

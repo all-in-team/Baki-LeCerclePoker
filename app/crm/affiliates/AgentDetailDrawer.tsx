@@ -49,6 +49,17 @@ const KIND_LABEL: Record<string, { label: string; color: string }> = {
   manual: { label: "manuel", color: "#3B82F6" },
   default: { label: "par défaut — à confirmer", color: "#EAB308" },
 };
+// Taux affiché en « % du résultat joueur » (principal) et « % de la part agence » (petit) — unité seule, aucun calcul.
+const r4 = (x: number) => Math.round(x * 10000) / 10000;
+function RateLabel({ p, strong }: { p: { agent_pct: number; base_at_start: number | null }; strong?: boolean }) {
+  if (p.base_at_start === null) return <span><b style={{ color: strong ? undefined : "var(--text)" }}>{p.agent_pct} %</b> de la part agence</span>;
+  return (
+    <span>
+      <b style={{ color: strong ? undefined : "var(--text)" }}>{r4(p.agent_pct * p.base_at_start / 100)} %</b> du résultat joueur
+      <span style={{ display: "block", fontSize: 9, color: "var(--text-dim)", fontWeight: 400 }}>{p.agent_pct} % de la part agence (perçu {p.base_at_start} %)</span>
+    </span>
+  );
+}
 const periodRange = (p: RatePeriodView) => `${p.start_week ?? "origine"} → ${p.end_week ? `sem. du ${p.end_week}` : "en cours"}`;
 
 export default function AgentDetailDrawer({ agentSummary, onClose, onEditRel, onTerminateRel, onPayAgent, onRatesChanged, gameBadges }: Props) {
@@ -294,7 +305,7 @@ function GameBlock({ rel, g, editing, onEdit, historyOpen, onToggleHistory, froz
         <span style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11 }}>
           {g.agent_pct_current === null
             ? <span style={{ color: RED, fontWeight: 700 }}>⛔ aucun taux agent</span>
-            : <span style={{ fontWeight: 700, color: g.agent_pct_current > 0 ? GREEN : "var(--text-dim)" }}>agent {g.agent_pct_current} %</span>}
+            : <span style={{ fontWeight: 700, color: g.agent_pct_current > 0 ? GREEN : "var(--text-dim)", textAlign: "right" }}>agent {current ? <RateLabel p={current} strong /> : `${g.agent_pct_current} %`}</span>}
           {kind && <span style={{ color: kind.color, border: "1px solid var(--border)", borderRadius: 4, padding: "0 5px", fontSize: 10 }}>{kind.label}</span>}
           {current && <span style={{ color: "var(--text-dim)", fontSize: 10 }}>depuis {current.start_week ?? "l'origine"}</span>}
           {current?.kind === "default" && (
@@ -345,7 +356,7 @@ function GameBlock({ rel, g, editing, onEdit, historyOpen, onToggleHistory, froz
             const k = KIND_LABEL[p.kind] ?? KIND_LABEL.manual;
             return (
               <div key={p.id ?? i} style={{ fontSize: 11, color: "var(--text-dim)" }}>
-                <span style={{ fontVariantNumeric: "tabular-nums" }}>{periodRange(p)}</span> · <b style={{ color: "var(--text)" }}>{p.agent_pct} %</b> · <span style={{ color: k.color }}>{k.label}</span>
+                <span style={{ fontVariantNumeric: "tabular-nums" }}>{periodRange(p)}</span> · <RateLabel p={p} /> · <span style={{ color: k.color }}>{k.label}</span>
                 {p.note && <div style={{ paddingLeft: 10, fontStyle: "italic" }}>{p.note}</div>}
               </div>
             );
