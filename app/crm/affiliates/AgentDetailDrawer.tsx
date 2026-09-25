@@ -52,11 +52,11 @@ const KIND_LABEL: Record<string, { label: string; color: string }> = {
 // Taux affiché en « % du résultat joueur » (principal) et « % de la part agence » (petit) — unité seule, aucun calcul.
 const r4 = (x: number) => Math.round(x * 10000) / 10000;
 function RateLabel({ p, strong }: { p: { agent_pct: number; base_at_start: number | null }; strong?: boolean }) {
-  if (p.base_at_start === null) return <span><b style={{ color: strong ? undefined : "var(--text)" }}>{p.agent_pct} %</b> de la part agence</span>;
+  if (p.base_at_start === null) return <span><b style={{ color: strong ? undefined : "var(--text)" }}>{r4(p.agent_pct)} %</b> de la part agence</span>;
   return (
     <span>
       <b style={{ color: strong ? undefined : "var(--text)" }}>{r4(p.agent_pct * p.base_at_start / 100)} %</b> du résultat joueur
-      <span style={{ display: "block", fontSize: 9, color: "var(--text-dim)", fontWeight: 400 }}>{p.agent_pct} % de la part agence (perçu {p.base_at_start} %)</span>
+      <span style={{ display: "block", fontSize: 9, color: "var(--text-dim)", fontWeight: 400 }}>{r4(p.agent_pct)} % de la part agence (perçu {p.base_at_start} %)</span>
     </span>
   );
 }
@@ -305,7 +305,7 @@ function GameBlock({ rel, g, editing, onEdit, historyOpen, onToggleHistory, froz
         <span style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11 }}>
           {g.agent_pct_current === null
             ? <span style={{ color: RED, fontWeight: 700 }}>⛔ aucun taux agent</span>
-            : <span style={{ fontWeight: 700, color: g.agent_pct_current > 0 ? GREEN : "var(--text-dim)", textAlign: "right" }}>agent {current ? <RateLabel p={current} strong /> : `${g.agent_pct_current} %`}</span>}
+            : <span style={{ fontWeight: 700, color: g.agent_pct_current > 0 ? GREEN : "var(--text-dim)", textAlign: "right" }}>agent {current ? <RateLabel p={current} strong /> : `${r4(g.agent_pct_current)} %`}</span>}
           {kind && <span style={{ color: kind.color, border: "1px solid var(--border)", borderRadius: 4, padding: "0 5px", fontSize: 10 }}>{kind.label}</span>}
           {current && <span style={{ color: "var(--text-dim)", fontSize: 10 }}>depuis {current.start_week ?? "l'origine"}</span>}
           {current?.kind === "default" && (

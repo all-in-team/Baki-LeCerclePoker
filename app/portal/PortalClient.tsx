@@ -32,7 +32,8 @@ interface OwnerData {
 }
 
 // L'agent voit SES taux et SES montants — jamais le deal joueur, la base perçue, la part ni le cumul agence.
-interface RatePeriod { agent_pct: number; start_week: string | null; end_week: string | null; commission: number }
+// player_pct = % du résultat du filleul (null = formule composite : pas de % affiché).
+interface RatePeriod { player_pct: number | null; start_week: string | null; end_week: string | null; commission: number }
 interface FilleulGame { game_name: string; periods: RatePeriod[]; commission: number | null }
 interface Filleul { name: string; handle: string | null; commission: number | null; games: FilleulGame[] }
 // Pas de montant : l'agent voit qu'un filleul a joué, jamais combien (décision Baki 2026-09-26).
@@ -377,7 +378,7 @@ function AgentDashboard({ data, selectedAgentId, onBack, containerStyle }: { dat
                       {p ? (
                         <>
                           <span style={{ fontSize: 11 }}>
-                            ta part <b>{p.agent_pct} %</b>
+                            ta part{p.player_pct !== null && <> <b>{p.player_pct.toLocaleString("fr-FR", { maximumFractionDigits: 2 })} %</b> <span style={hintStyle}>de ses résultats</span></>}
                             {p.end_week ? <span style={hintStyle}> jusqu&apos;au {fmtFr(addDaysIso(p.end_week, 6))}</span>
                               : p.start_week ? <span style={hintStyle}> depuis le {fmtFr(p.start_week)}</span> : null}
                           </span>

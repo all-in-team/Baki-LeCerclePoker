@@ -248,7 +248,9 @@ export function perceivedActionAtOn(db: DB, relationshipId: number, gameId: numb
  * Formule : part × 100 / perçu — 5 × 100 / 20 = 25 exactement.
  */
 export function playerPctToAgentPct(playerPct: number, eff: number): number {
-  return playerPct * 100 / eff;
+  // Arrondi à 1e-8 : 4,6 × 100 / 20 donne 22.999999999999996 en flottant — on stocke 23,
+  // comme une saisie directe (audit F2). Aucun effet au centime.
+  return Math.round(playerPct * 100 / eff * 1e8) / 1e8;
 }
 export function agentPctToPlayerPct(agentPct: number, eff: number): number {
   return agentPct * eff / 100;
@@ -781,12 +783,14 @@ export function setPerceivedDealOn(db: DB, a: SetPerceivedArgs): SetPerceivedRes
   const { containing, next, end_week } = change;
   if (containing && samePerceived(containing, fresh)) return { ok: true, written: false, unchanged: true };
 
-  // Agents touchés : ceux dont un filleul ACTIF a un deal sur ce game (seules les relations actives comptent).
+  // Agents touchés : ceux dont un filleul a un deal sur ce game — TOUT statut de relation
+  // pour le gel (une relation en pause réactivée plus tard ne doit rien rouvrir, audit R1),
+  // relations actives pour l'aperçu du dû (seules elles comptent dans le dû aujourd'hui).
   const agents = db.prepare(`
     SELECT DISTINCT ar.affiliate_player_id AS id, p.name FROM affiliate_relationships ar
     JOIN player_game_deals d ON d.player_id = ar.referred_player_id AND d.game_id = ?
     JOIN players p ON p.id = ar.affiliate_player_id
-    WHERE ar.status = 'active' ORDER BY p.name
+    ORDER BY p.name
   `).all(a.game_id) as { id: number; name: string }[];
   const perceived: PerceivedOverride = { game_id: a.game_id, periods: change.rows };
   const impacts: PerceivedAgentImpact[] = [];
@@ -812,8 +816,15 @@ export function setPerceivedDealOn(db: DB, a: SetPerceivedArgs): SetPerceivedRes
           commission_before: wb.commission, commission_after: wa.commission,
         };
         if (Math.abs(wb.part) > EPS || Math.abs(wa.part) > EPS) weeks.push(c);
-        if (commMoved && before.frozen_through && wb.week <= before.frozen_through) hits.push(c);
       }
+    }
+    // Gel : photos des semaines gelées sur TOUTES les relations de l'agent, commission ET part (audit R1/R3).
+    const fb = frozenSnapshotOn(db, ag.id, a.today), fa = frozenSnapshotOn(db, ag.id, a.today, perceived);
+    for (const { x, y } of frozenDiffs(fb.m, fa.m)) {
+      const r = (y ?? x)!;
+      hits.push({ relationship_id: r.relationship_id, referred_name: r.referred_name, week: r.week,
+        eff_before: x?.eff ?? 0, eff_after: y?.eff ?? 0, part_before: x?.part ?? 0, part_after: y?.part ?? 0,
+        commission_before: x ? x.c : null, commission_after: y ? y.c : null });
     }
     if (hits.length) {
       const pays = agentPaymentsOn(db, ag.id);
@@ -883,15 +894,28 @@ export type FrozenGuardResult =
  * un garde limité aux relations actives). La part est comparée aussi : une semaine gelée
  * sans taux dont la part changerait ferait basculer l'agent en « bloqué ».
  */
-function frozenSnapshotOn(db: DB, affiliatePlayerId: number, today?: string): { frozen: string | null; m: Map<string, { referred_name: string; game_name: string; week: string; c: number | null; part: number }> } {
+type FrozenEntry = { relationship_id: number; game_id: number; referred_name: string; game_name: string; week: string; c: number | null; part: number; eff: number };
+function frozenSnapshotOn(db: DB, affiliatePlayerId: number, today?: string, perceived?: PerceivedOverride): { frozen: string | null; m: Map<string, FrozenEntry> } {
   const frozen = frozenThroughOn(db, affiliatePlayerId);
-  const m = new Map<string, { referred_name: string; game_name: string; week: string; c: number | null; part: number }>();
+  const m = new Map<string, FrozenEntry>();
   if (!frozen) return { frozen, m };
   const rels = db.prepare(`SELECT id FROM affiliate_relationships WHERE affiliate_player_id = ?`).all(affiliatePlayerId) as { id: number }[];
-  for (const { id } of rels) for (const l of relationLinesOn(db, id, { today })) for (const w of l.weeks)
+  for (const { id } of rels) for (const l of relationLinesOn(db, id, { today, perceived })) for (const w of l.weeks)
     if (w.week !== null && w.week <= frozen)
-      m.set(`${l.relationship_id}:${l.game_id}:${w.week}`, { referred_name: l.referred.name, game_name: l.game_name, week: w.week, c: w.commission, part: w.part });
+      m.set(`${l.relationship_id}:${l.game_id}:${w.week}`, { relationship_id: l.relationship_id, game_id: l.game_id, referred_name: l.referred.name, game_name: l.game_name, week: w.week, c: w.commission, part: w.part, eff: w.eff_action });
   return { frozen, m };
+}
+/** Écarts entre deux photos gelées : commission (null ↔ nombre compris) OU part agence. */
+function frozenDiffs(b: Map<string, FrozenEntry>, a: Map<string, FrozenEntry>): { x: FrozenEntry | undefined; y: FrozenEntry | undefined }[] {
+  const out: { x: FrozenEntry | undefined; y: FrozenEntry | undefined }[] = [];
+  for (const k of new Set([...b.keys(), ...a.keys()])) {
+    const x = b.get(k), y = a.get(k);
+    const nullMoved = (x?.c === null) !== (y?.c === null);
+    const partMoved = Math.abs((y?.part ?? 0) - (x?.part ?? 0)) > 1e-9;
+    const commMoved = Math.abs((y?.c ?? 0) - (x?.c ?? 0)) > 1e-9;
+    if (nullMoved || partMoved || commMoved) out.push({ x, y });
+  }
+  return out;
 }
 
 export function withFrozenGuardOn(db: DB, affiliatePlayerId: number, write: () => void, today?: string): FrozenGuardResult {
@@ -902,17 +926,10 @@ export function withFrozenGuardOn(db: DB, affiliatePlayerId: number, write: () =
       const before = frozenSnapshotOn(db, affiliatePlayerId, today);
       write();
       const b = before.m, a = frozenSnapshotOn(db, affiliatePlayerId, today).m;
-      const moved: { referred_name: string; game_name: string; week: string; before: number | null; after: number | null }[] = [];
-      for (const k of new Set([...b.keys(), ...a.keys()])) {
-        const x = b.get(k), y = a.get(k);
-        const cb = x?.c ?? 0, ca = y?.c ?? 0;
-        const nullMoved = (x?.c === null) !== (y?.c === null);
-        const partMoved = Math.abs((y?.part ?? 0) - (x?.part ?? 0)) > 1e-9;
-        if (nullMoved || partMoved || Math.abs(ca - cb) > 1e-9) {
-          const r = (y ?? x)!;
-          moved.push({ referred_name: r.referred_name, game_name: r.game_name, week: r.week, before: x ? x.c : null, after: y ? y.c : null });
-        }
-      }
+      const moved = frozenDiffs(b, a).map(({ x, y }) => {
+        const r = (y ?? x)!;
+        return { referred_name: r.referred_name, game_name: r.game_name, week: r.week, before: x ? x.c : null, after: y ? y.c : null };
+      });
       if (moved.length) {
         const pays = agentPaymentsOn(db, affiliatePlayerId);
         refusal = {
@@ -944,8 +961,12 @@ export function currentPerceivedOn(db: DB, gameId: number, today?: string): Perc
 // (taux manquant) : le client ne doit jamais les afficher comme 0.
 
 export interface PortalRatePeriod {
-  agent_pct: number; start_week: string | null; end_week: string | null;
-  commission: number;        // Σ commission signée des semaines de cette période
+  // Taux en % DU RÉSULTAT JOUEUR (= taux stocké × perçu / 100), jamais le % de la part agence :
+  // avec la commission affichée, ce dernier donnerait la part agence et le perçu (audit F1).
+  // null = formule composite (aucun % présentable sans révéler la base).
+  player_pct: number | null;
+  start_week: string | null; end_week: string | null;
+  commission: number;        // Σ commission signée des semaines de ce segment
 }
 export interface PortalGame { game_name: string; periods: PortalRatePeriod[]; commission: number | null }
 export interface PortalFilleul { name: string; handle: string | null; commission: number | null; games: PortalGame[] }
@@ -964,12 +985,36 @@ export function agentPortalViewOn(db: DB, affiliatePlayerId: number, opts: CalcO
   const byRel = new Map<number, PortalFilleul>();
   for (const l of d.lines) {
     const f = byRel.get(l.relationship_id) ?? { name: l.referred.name, handle: handles.get(l.relationship_id) ?? null, commission: 0, games: [] };
-    const periods: PortalRatePeriod[] = l.periods.map(p => ({
-      agent_pct: p.agent_pct, start_week: p.start_week, end_week: p.end_week,
-      commission: l.weeks.filter(w => w.week !== null && periodAt([p], w.week) !== null).reduce((s, w) => s + (w.commission ?? 0), 0),
-    }));
+    // Un segment = une période de taux ET un perçu constant : si le perçu change à l'intérieur
+    // d'une période, le % du résultat joueur change aussi — on le montre en segments distincts.
+    const round4 = (x: number) => Math.round(x * 1e4) / 1e4;
+    const periods: (PortalRatePeriod & { agent_pct: number })[] = [];
+    l.periods.forEach((p, i) => {
+      const ws = l.weeks.filter(w => w.week !== null && periodAt([p], w.week) !== null);
+      const segs = new Map<string, { player_pct: number | null; weeks: string[]; commission: number }>();
+      for (const w of ws) {
+        const pp = l.is_composite ? null : round4(p.agent_pct * w.eff_action / 100);
+        const k = String(pp);
+        const seg = segs.get(k) ?? { player_pct: pp, weeks: [], commission: 0 };
+        seg.weeks.push(w.week!); seg.commission += w.commission ?? 0;
+        segs.set(k, seg);
+      }
+      if (segs.size <= 1) {
+        const only = [...segs.values()][0];
+        const base = l.period_eff[i];
+        periods.push({ agent_pct: p.agent_pct, start_week: p.start_week, end_week: p.end_week, commission: only?.commission ?? 0,
+          player_pct: only ? only.player_pct : (l.is_composite || base === null ? null : round4(p.agent_pct * base / 100)) });
+      } else {
+        for (const seg of segs.values()) {
+          const sorted = seg.weeks.sort();
+          periods.push({ agent_pct: p.agent_pct, player_pct: seg.player_pct, start_week: sorted[0], end_week: sorted[sorted.length - 1], commission: seg.commission });
+        }
+      }
+    });
     // On montre les périodes qui ont rapporté (ou coûté) et la période en cours ; un 0 % sans activité n'apprend rien à l'agent.
-    const shown = periods.filter(p => Math.abs(p.commission) > 0.005 || (p.end_week === null && p.agent_pct > 0));
+    const shown: PortalRatePeriod[] = periods
+      .filter(p => Math.abs(p.commission) > 0.005 || (p.end_week === null && p.agent_pct > 0))
+      .map(({ agent_pct: _hidden, ...rest }) => rest);
     const incalculable = l.unrated_weeks.length > 0;
     if (shown.length || incalculable)
       f.games.push({ game_name: l.game_name, periods: shown, commission: incalculable ? null : l.commission });

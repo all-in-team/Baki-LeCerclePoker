@@ -305,7 +305,7 @@ export default function AffiliatesClient({ agents, players, activeGames, existin
     if (!editRel) return;
     setSaving(true);
     try {
-      await fetch(`/api/affiliate-relationships/${editRel.id}`, {
+      const res = await fetch(`/api/affiliate-relationships/${editRel.id}`, {
         method: "PATCH", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           origin_game_id: form.origin_game_id, start_date: form.start_date, status: form.status,
@@ -320,6 +320,8 @@ export default function AffiliatesClient({ agents, players, activeGames, existin
           })),
         }),
       });
+      // Refus nommé du garde d'argent (409 « déjà payées ») : rien n'a été écrit, on le DIT (audit F3).
+      if (!res.ok) { const d = await res.json().catch(() => ({})); alert(d.error ?? `Erreur ${res.status}`); return; }
       setEditRel(null); loadEnriched(); router.refresh();
     } catch (e: any) { alert(e.message); } finally { setSaving(false); }
   }

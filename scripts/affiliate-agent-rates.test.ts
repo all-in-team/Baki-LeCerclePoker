@@ -501,6 +501,16 @@ console.log("\n══ I. Deal PERÇU versionné ══");
   check("KK à 30 % dès le 07/09 : accepté (aucune semaine payée ne bouge)", kk.ok, JSON.stringify(kk).slice(0, 200));
 }
 
+console.log("\n══ I2. Gel du perçu sur une relation EN PAUSE (audit R1) ══");
+{
+  const db = loadFixture(); runAffiliateAgentRatesMigrationV1(db);
+  db.prepare(`UPDATE affiliate_relationships SET status = 'paused' WHERE id = 21`).run();   // Grobel en pause (Samyaza payé le 02/09)
+  const r = setPerceivedDealOn(db, { game_id: 6, action_pct: 50, rakeback_pct: null, insurance_pct: null, start_week: null, confirm_retroactive: true, today: TODAY });
+  check("A5 20 → 50 % depuis l'origine avec Grobel en pause : REFUSÉ quand même", !r.ok && ((r as any).frozen ?? []).some((h: any) => h.agent_name === "Samyaza"), JSON.stringify(r).slice(0, 200));
+  db.prepare(`UPDATE affiliate_relationships SET status = 'active' WHERE id = 21`).run();
+  cents("…réactivé : dû Samyaza toujours 314,37", due(db, 421), 314.3693);
+}
+
 console.log("\n══ J. Taux par défaut d'une NOUVELLE relation ══");
 {
   const db = loadFixture(); runAffiliateAgentRatesMigrationV1(db);
@@ -540,12 +550,21 @@ console.log("\n══ K. Vue PORTAIL (Samyaza après Grobel A5 à 25 % dès le 0
   const grobel = v.filleuls.find(f => f.name === "Grobel")!, chroma = v.filleuls.find(f => f.name === "Chroma")!;
   cents("Grobel +1 347,70", grobel.commission, 1347.6963);
   cents("Chroma −3,05", chroma.commission, -3.05);
-  eq("Grobel A5 : 50 % jusqu'à la semaine du 31/08 (+886,72), puis 25 % dès le 07/09 (+157,18)",
-     grobel.games.find(g => g.game_name === "A5POKER")!.periods.map(p => [p.agent_pct, p.start_week, p.end_week, Math.round(p.commission * 100) / 100]),
-     [[50, null, "2026-08-31", 886.72], [25, "2026-09-07", null, 157.18]]);
-  eq("Grobel KK : 50 % (+303,79)", grobel.games.find(g => g.game_name === "KKPOKER")!.periods.map(p => [p.agent_pct, Math.round(p.commission * 100) / 100]), [[50, 303.79]]);
+  eq("Grobel A5 : 10 % de ses résultats jusqu'à la semaine du 31/08 (+886,72), puis 5 % dès le 07/09 (+157,18)",
+     grobel.games.find(g => g.game_name === "A5POKER")!.periods.map(p => [p.player_pct, p.start_week, p.end_week, Math.round(p.commission * 100) / 100]),
+     [[10, null, "2026-08-31", 886.72], [5, "2026-09-07", null, 157.18]]);
+  eq("Grobel KK : 10 % de ses résultats (+303,79)", grobel.games.find(g => g.game_name === "KKPOKER")!.periods.map(p => [p.player_pct, Math.round(p.commission * 100) / 100]), [[10, 303.79]]);
   const json = JSON.stringify(v);
-  check("la vue portail ne contient ni part agence, ni base perçue, ni deal joueur", !/part_agence|agency|eff_action|effective_action|perceived|action_pct|player_pnl|cumul/.test(json), json.slice(0, 300));
+  check("la vue portail ne contient ni part agence, ni base perçue, ni deal joueur, ni % de la part agence", !/part_agence|agency|eff_action|effective_action|perceived|action_pct|agent_pct|player_pnl|cumul/.test(json), json.slice(0, 300));
+  // Audit F1 : la part agence ne se déduit plus (commission ÷ % de la part agence). Ce qui se déduit
+  // désormais (commission ÷ % du résultat) est le résultat du filleul, pas la base perçue.
+  // Perçu qui change DANS une période : segments distincts, % du résultat juste pour chacun.
+  const dbS = loadFixture(); runAffiliateAgentRatesMigrationV1(dbS);
+  setPerceivedDealOn(dbS, { game_id: 6, action_pct: 40, rakeback_pct: null, insurance_pct: null, start_week: "2026-09-21", confirm_retroactive: true, today: TODAY });
+  const vs = agentPortalViewOn(dbS, 421, { today: TODAY });
+  eq("perçu A5 20 → 40 % dès le 21/09 dans la période à 50 % : segments 10 % puis 20 % du résultat",
+     vs.filleuls.find(f => f.name === "Grobel")!.games.find(g => g.game_name === "A5POKER")!.periods.map(p => [p.player_pct, p.start_week, p.end_week]),
+     [[10, "2026-08-10", "2026-08-17"], [20, "2026-09-21", "2026-09-21"]]);
   // Bloqué : null, jamais 0.
   db.prepare(`INSERT INTO games (id, name) VALUES (888, 'NEWGAME')`).run();
   db.prepare(`INSERT INTO player_game_deals (player_id, game_id, created_at) VALUES (428, 888, '2026-09-25 10:00:00')`).run();
@@ -608,6 +627,10 @@ console.log("\n══ M. Saisie en « % du résultat joueur » (unité seule, au
   const b = setAgentRateOn(dbB, { relationship_id: 21, game_id: 6, agent_pct: 25, start_week: "2026-09-07", confirm_retroactive: true, note: "n", today: TODAY });
   check("5 % du résultat joueur (A5, perçu 20 %) : écrit", a.ok, JSON.stringify(a).slice(0, 160));
   check("stocké EXACTEMENT 25 (=== 25, pas 25,000…01)", ratePeriodsOn(dbA, 21, 6)[1]?.agent_pct === 25, String(ratePeriodsOn(dbA, 21, 6)[1]?.agent_pct));
+  // Audit F2 : 4,6 × 100 / 20 = 22.999999999999996 en flottant brut → arrondi à 1e-8 : 23 exactement.
+  const dbF = loadFixture(); runAffiliateAgentRatesMigrationV1(dbF);
+  setAgentRateOn(dbF, { relationship_id: 21, game_id: 6, player_pct: 4.6, start_week: "2026-10-05", today: TODAY });
+  check("4,6 % du résultat joueur (perçu 20) : stocké EXACTEMENT 23", ratePeriodsOn(dbF, 21, 6).find(r => r.start_week === "2026-10-05")?.agent_pct === 23, String(ratePeriodsOn(dbF, 21, 6).find(r => r.start_week === "2026-10-05")?.agent_pct));
   eq("périodes identiques à une saisie directe de 25 % de la part agence", strip(ratePeriodsOn(dbA, 21, 6)), strip(ratePeriodsOn(dbB, 21, 6)));
   check("dû Samyaza identique au bit près (157,19)", due(dbA, 421) === due(dbB, 421), `${due(dbA, 421)} vs ${due(dbB, 421)}`);
   eq("aperçu : base à la date d'effet = 20 (affichage 25 % × 20 / 100 = 5 %)", (a as any).preview?.base_at_start, 20);
