@@ -8,6 +8,7 @@ import {
 import { notifyOps } from "./ops-notifications";
 import { getDb } from "./db";
 import { initDzpkCrons } from "./funnels/dzpk/crons";
+import { initLecercleBroadcastCrons } from "./funnels/lecercle/crons";
 
 const TZ = "Europe/Paris";
 const opts = { timezone: TZ };
@@ -320,5 +321,13 @@ export function initCronJobs() {
     console.log("[CRON] dzpk jobs registered (ingestion 3 min, alarme horaire)");
   } catch (e: any) {
     console.error("[CRON] dzpk jobs KO:", e?.message ?? e);
+  }
+
+  // Diffusions @LeCercle_Lebot : file d'envoi + démarrage des programmées.
+  try {
+    initLecercleBroadcastCrons();
+    console.log("[CRON] lecercle broadcast registered (file d'envoi, 1 min)");
+  } catch (e: any) {
+    console.error("[CRON] lecercle broadcast KO:", e?.message ?? e);
   }
 }

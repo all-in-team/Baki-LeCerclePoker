@@ -32,6 +32,11 @@ import {
   XPOKER_GAME_NAME, XPOKER_DEFAULT_ACTION_PCT, XPOKER_SEED_CHIPS_PER_USD,
   XPOKER_SEED_RATE_EFFECTIVE_FROM, XPOKER_SEED_AGENCY_ACCOUNTS,
 } from "./games/xpoker/config";
+// Module pur (aucun import) : DDL + initialisation de l'audience des diffusions
+// @LeCercle_Lebot, partagés avec scripts/lecercle-broadcast.test.ts.
+import {
+  LECERCLE_BROADCAST_SCHEMA_SQL, LECERCLE_MIGRATION_BROADCAST_V1, backfillBotUsers as lecercleBackfillBotUsers,
+} from "./funnels/lecercle/schema";
 
 // Quarantaine des mouvements wallet — cf. la migration en bas de ce fichier.
 export const WALLET_TX_QUARANTINE_V1 = "add_wallet_tx_quarantine_v1";
@@ -4053,5 +4058,28 @@ function initSchema(db: Database.Database) {
     }
   } catch (err: any) {
     console.error(`[MIGRATION:${WALLET_MERE_KIND_V1}] FAILED (sera rejouée au prochain boot):`, err.message);
+  }
+
+  // ── Diffusions @LeCercle_Lebot ─────────────────────────────────────────────
+  //
+  // Quatre tables NOUVELLES, aucune colonne ajoutée ailleurs. L'initialisation
+  // de l'audience LIT onboarding_leads, nexa_leads, qqpk_funnel_leads,
+  // affiliate_leads et players ; elle n'y écrit rien. Tables et
+  // initialisation dans UNE transaction : pas d'audience à moitié remplie
+  // marquée comme faite. L'initialisation est idempotente (rejouable sans
+  // doublon ni écrasement), cf. backfillBotUsers.
+  try {
+    const already = db.prepare(`SELECT 1 FROM _applied_fixes WHERE name = ?`).get(LECERCLE_MIGRATION_BROADCAST_V1);
+    if (!already) {
+      let added = 0;
+      db.transaction(() => {
+        db.exec(LECERCLE_BROADCAST_SCHEMA_SQL);
+        added = lecercleBackfillBotUsers(db);
+        db.prepare(`INSERT OR IGNORE INTO _applied_fixes (name) VALUES (?)`).run(LECERCLE_MIGRATION_BROADCAST_V1);
+      })();
+      console.log(`[MIGRATION] ${LECERCLE_MIGRATION_BROADCAST_V1} applied — ${added} compte(s) dans l'audience du bot`);
+    }
+  } catch (err: any) {
+    console.error(`[MIGRATION:${LECERCLE_MIGRATION_BROADCAST_V1}] FAILED (sera rejouée au prochain boot):`, err.message);
   }
 }

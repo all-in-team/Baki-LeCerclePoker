@@ -63,6 +63,8 @@ const GROUPS: NavGroup[] = [
     // porte le revenu est le rattachement au club (已绑定为代理), constaté par les
     // notifs DM du club et apparié par nom d'affichage — pas par un report hebdo.
     { href: "/dzpk-funnel", label: "DZPK", icon: Rocket },
+    // Diffusions push du bot principal @LeCercle_Lebot (tous ceux qui lui ont parlé).
+    { href: "/lecercle-diffusion", label: "Diffusion bot", icon: Rocket },
     // File de rattachement manuel des notifications du club. Séparée du funnel
     // parce que ce sont deux files distinctes : le funnel liste les LEADS, la
     // réconciliation liste les NOTIFICATIONS sans lead. Les fondre ferait croire
