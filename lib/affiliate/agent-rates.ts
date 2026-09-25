@@ -1026,6 +1026,9 @@ export function agentPortalViewOn(db: DB, affiliatePlayerId: number, opts: CalcO
     // On montre les périodes qui ont rapporté (ou coûté) et la période en cours ; un 0 % sans activité n'apprend rien à l'agent.
     const shown: PortalRatePeriod[] = periods
       .filter(p => Math.abs(p.commission) > 0.005 || (p.end_week === null && p.agent_pct > 0))
+      // Une ligne à 0 % du résultat (taux agent 0 OU perçu 0) n'apprend rien à l'agent : masquée
+      // (décision Baki 2026-09-26). Affichage seul — sa commission est nulle par construction.
+      .filter(p => p.player_pct !== 0)
       .map(({ agent_pct: _hidden, ...rest }) => rest);
     const incalculable = l.unrated_weeks.length > 0;
     if (shown.length || incalculable)
@@ -1036,7 +1039,7 @@ export function agentPortalViewOn(db: DB, affiliatePlayerId: number, opts: CalcO
   return {
     earned: d.earned, paid: d.paid, due_now: d.due_now,
     commission_signed: blocked ? null : d.commission_signed,
-    filleuls: [...byRel.values()],
+    filleuls: [...byRel.values()].filter(f => f.games.length > 0),   // plus aucune ligne → filleul non affiché
   };
 }
 

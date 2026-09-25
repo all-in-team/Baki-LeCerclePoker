@@ -599,6 +599,16 @@ console.log("\n══ K. Vue PORTAIL (Samyaza après Grobel A5 à 25 % dès le 0
   eq("…le 12/10 venu : 10 % jusqu'au 11/10, puis 3 % en cours",
      agentPortalViewOn(dbU, 421, { today: "2026-10-13" }).filleuls.find(f => f.name === "Grobel")!.games.find(g => g.game_name === "KKPOKER")!.periods.map(p => [p.player_pct, p.start_week, p.end_week]),
      [[10, null, "2026-10-05"], [3, "2026-10-12", null]]);
+  // Lignes à 0 % masquées ; filleul sans ligne masqué (affichage seul).
+  const dbZ = loadFixture(); runAffiliateAgentRatesMigrationV1(dbZ);
+  const theo = agentPortalViewOn(dbZ, 90, { today: TODAY });
+  eq("Theo : Loïc QQPK (perçu 0 %) masqué, Loïc KK visible", theo.filleuls.find(f => f.name === "Loïc")!.games.map(g => g.game_name), ["KKPOKER"]);
+  const maxime = agentPortalViewOn(dbZ, 181, { today: TODAY });
+  check("Maxime : ppkd (AKS perçu 0 %, seule ligne) n'apparaît plus", !maxime.filleuls.some(f => f.name === "ppkd"), JSON.stringify(maxime.filleuls.map(f => f.name)));
+  for (const g of [1, 5, 6]) setAgentRateOn(dbZ, { relationship_id: 8, game_id: g, agent_pct: 0, start_week: null, confirm_retroactive: true, note: "Deal Antoine 50 % — Xabi ne touche rien sur ce filleul", today: TODAY });
+  const xabi = agentPortalViewOn(dbZ, 175, { today: TODAY });
+  eq("Xabi après Antoine à 0 % : Antoine n'apparaît plus, dû 0", [xabi.filleuls.length, xabi.due_now], [0, 0]);
+  cents("…montants inchangés par le masquage (Theo 174,00)", theo.due_now, 173.9996);
   // Bloqué : null, jamais 0.
   db.prepare(`INSERT INTO games (id, name) VALUES (888, 'NEWGAME')`).run();
   db.prepare(`INSERT INTO player_game_deals (player_id, game_id, created_at) VALUES (428, 888, '2026-09-25 10:00:00')`).run();
