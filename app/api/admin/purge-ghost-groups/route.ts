@@ -1,5 +1,6 @@
 export const dynamic = "force-dynamic";
 import { NextRequest, NextResponse } from "next/server";
+import { adminTokenGuard } from "@/lib/admin-token";
 import { getDb } from "@/lib/db";
 import { getChatMembers, getUserbotMe } from "@/lib/telegram-userbot";
 import { purgeGroupById, runGhostGroupCleanup, reportGhostCleanup } from "@/lib/group-lifecycle";
@@ -12,15 +13,14 @@ import { sendMsg, AGENT_CHAT_ID } from "@/lib/telegram-commands/helpers";
 // (`players.telegram_group_id` renseigné). D'où cette liste FIGÉE, seule autorisée à
 // passer outre le keep-guard.
 //
-//   POST { key, mode: "dry-run" }      → état des membres des 16, aucune écriture
-//   POST { key, mode: "purge" }        → purge (kick équipe + sortie userbot) + délie
-//   POST { key, mode: "cleanup-run", dry_run?: bool } → run manuel du job 24 h
+//   POST (x-admin-token) { mode: "dry-run" }      → état des membres des 16, aucune écriture
+//   POST (x-admin-token) { mode: "purge" }        → purge (kick équipe + sortie userbot) + délie
+//   POST (x-admin-token) { mode: "cleanup-run", dry_run?: bool } → run manuel du job 24 h
 //
 // GARDE-FOU conservé même en mode purge : on relit les membres juste avant, et si un
 // humain hors équipe est présent (le joueur a rejoint depuis l'audit) on ne touche à
 // rien — on répare `joined_at` à la place.
 
-const KEY = "purge-ghosts-20260725";
 
 const AUDITED_GHOSTS: { chat_id: string; label: string }[] = [
   { chat_id: "-1003726995589", label: "Sal7 Aldin x LeCercle" },
@@ -53,7 +53,8 @@ function ownerOf(chatId: string) {
 
 export async function POST(req: NextRequest) {
   const body = await req.json().catch(() => ({}));
-  if (body.key !== KEY) return NextResponse.json({ error: "bad key" }, { status: 403 });
+  const denied = adminTokenGuard(req);
+  if (denied) return denied;
   const mode: string = body.mode ?? "dry-run";
 
   // Run manuel du job 24 h (sert au test sans attendre le cron de :40).

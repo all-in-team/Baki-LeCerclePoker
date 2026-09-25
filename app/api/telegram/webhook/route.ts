@@ -85,7 +85,7 @@ export async function POST(req: NextRequest) {
   const logText = update.message?.text?.slice(0, 60) ?? "";
   console.log(`[WEBHOOK_RAW] type=${updateType} chat=${logChat} from=${logFrom} text="${logText}"`);
 
-  // DB-based webhook trace (queryable via db-diagnostic)
+  // DB-based webhook trace (lisible sur un dump de la base, cf. TODOS.md)
   try {
     const { getDb } = await import("@/lib/db");
     getDb().prepare(`INSERT INTO settings (key, value) VALUES ('_webhook_last', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`)

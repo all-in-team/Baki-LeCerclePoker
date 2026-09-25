@@ -4,9 +4,9 @@ import { jwtVerify } from "jose";
 // Routes d'administration : session obligatoire, sans exception (hotfix 2026-09-25).
 // Elles étaient exclues du matcher et ne tenaient qu'à une clé — en dur dans un dépôt
 // public pour neuf d'entre elles, dont `db-diagnostic` qui exécutait du SQL arbitraire.
-// La session est désormais le verrou de ces routes. Le jeton `x-admin-token` que
-// la plupart vérifient en plus ne compte pas pour les neuf routes à clé en dur,
-// devenues publiques (retrait des clés : branche chore/admin-keys-cleanup).
+// La session est le premier verrou. Le second est l'en-tête `x-admin-token`
+// (ADMIN_RECONCILE_TOKEN, cf. lib/admin-token.ts), sauf pour backfill-telegram-ids,
+// appelée depuis le navigateur, qui ne repose que sur la session.
 const ADMIN_PREFIX = "/api/admin";
 
 function isAdminPath(pathname: string): boolean {

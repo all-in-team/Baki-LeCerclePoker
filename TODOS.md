@@ -54,19 +54,47 @@ Deferred work from /plan-ceo-review (2026-04-28).
   (seul `lib/pool/okpay-parse.ts`, non branché). Seul effet visible : la nouvelle ligne `games`
   apparaît dans les sélecteurs génériques (fiche joueur, /crm/games, broadcast bot).
 
-### SQL libre sur les tables d'argent — `db-diagnostic` (P0) et `query_db` (à cadrer)
-- **`app/api/admin/db-diagnostic/route.ts`** : hors auth, clé en dur dans le repo
-  (`db-diag-20260518`), action `run-sql` qui exécute du SQL arbitraire — un `run()` en
-  écriture si la requête ne commence pas par SELECT. Trou connu, acté par Baki le
-  2026-09-13 après une lecture prod SELECT-only (chantier XPoker). **Plus jamais un
-  chemin de travail par défaut** : toute lecture prod se demande à Baki.
-- **`query_db` de l'agent IA** (`lib/agent-tools.ts` → `runReadonlyQuery`) : même
-  famille — SQL libre sur `manual_settlements`, `wallet_transactions`, etc. — mais avec
-  de vraies gardes : connexion `getReadonlyDb()` (SQLite refuse l'écriture), SELECT/WITH
-  seuls, une instruction, denylist de mots-clés et de tables credentials, 200 lignes.
-  Risque résiduel = lecture/mésinterprétation de chiffres d'argent par l'agent, pas
-  d'écriture. À cadrer avec db-diagnostic (auth, journalisation des requêtes), hors
-  périmètre du chantier XPoker.
+### Accès admin — suite du hotfix `db-diagnostic` (P0)
+- **Fait (2026-09-25).** `db-diagnostic` (run-sql, reset-player, migrate), hors auth, clé en dur
+  dans un dépôt alors public : supprimée. `/api/admin/*` exige une session (merge `ba59fb0`,
+  vérifié en prod : 36 routes × GET/POST → 401). `ADMIN_RECONCILE_TOKEN` tourné, nouvelle
+  valeur en variable Railway uniquement. **Dépôt GitHub encore PUBLIC au 2026-09-25 18:47 UTC
+  (`gh api` → `private: false`, page accessible sans connexion) : à passer en privé.** Les 9 clés en dur retirées
+  (branche `chore/admin-keys-cleanup`). **Lecture prod = dump `railway volume files download`,
+  jamais une route.**
+- **Comparaison au 16/08 (sauvegarde locale) : rien d'inexpliqué côté argent.** 2 433 tx
+  communes, aucune colonne d'argent modifiée ; les 1 987 tx disparues = purge de l'incident
+  « contrat USDT » du 16/08 (joueur 148, cf. `dd45937`), faite à la main hors code. Non
+  attribuables faute de trace : 9 `action_pct` modifiés (dont 3 passés à 100 %). Reste ouvert :
+  la sauvegarde locale diffère du fichier du volume de même nom (6 336 512 vs 6 320 128 o).
+- **Webhooks Telegram / DZPK fail-open** (`app/api/telegram/webhook/route.ts:50-54`,
+  `app/api/telegram/dzpk/webhook/route.ts:20-22`) : secret vérifié seulement s'il est défini.
+  Les deux secrets sont posés en prod ; passer le code en fail-closed. Même schéma sur
+  `app/api/cron/*` (`AGENT_REPORT_SECRET`).
+- **Aucune trace de qui fait quoi** : pas d'`archived_by`, pas d'historique des deals, pas de
+  log des PATCH. Les 54 archivages du 13/09 et les 9 changements d'`action_pct` depuis le 16/08
+  ne sont pas attribuables.
+- **`/api/login`** : aucune limite de tentatives ; mot de passe unique ; JWT 30 j sans
+  révocation ; rôle du JWT non vérifié par le middleware.
+- **Matcher du middleware** : la négation n'a pas d'ancre de fin (`/goals`, `/loginx`,
+  `/api/cronjobs` échappent à l'auth). Aucune route concernée aujourd'hui.
+- **Routes one-shot dangereuses à supprimer** : `cleanup-shells` (ids 46-49 en dur),
+  `test-onboarding` (crée et efface un joueur), `drain-queue`.
+- **`/crm/affiliates`** : un 401 (session expirée) laisse une modale vide, sans message.
+- **Deux chemins d'archivage de room** : `/crm/games` (`PATCH /api/games/[id]`) ne pose que
+  `status`, sans fermer les deals ni retirer les wallets mères, contrairement à
+  `PATCH /api/games` (`app/api/games/route.ts:37-45`). India, NUTSPK, JVIP, TTPOKER, WN ont
+  été archivées par le premier : leurs deals sont restés ouverts.
+- **`query_db` de l'agent IA** (`lib/agent-tools.ts` → `runReadonlyQuery`) : SQL libre en
+  lecture seule (`getReadonlyDb()`, SELECT/WITH, denylist, 200 lignes). Risque résiduel =
+  lecture/mésinterprétation de chiffres d'argent, pas d'écriture. À cadrer (journalisation).
+
+### Tests `xpoker-schema` / `xpoker-settlement` dépendants de l'ordre d'exécution
+- Leur bloc B copie `data/lecercle.db` du dossier courant s'il existe, sinon celui du dépôt
+  principal. Un test précédent de la suite crée un `data/lecercle.db` neuf dans un worktree ;
+  lancés ensuite, les deux tests échouent (`FOREIGN KEY constraint failed`). Isolés, ils
+  passent (84 ✔ / 68 ✔). Rendre la source explicite (`LECERCLE_DB_SRC`) et ne jamais
+  prendre une base créée par la suite elle-même.
 
 ## P1 — High value, build next
 

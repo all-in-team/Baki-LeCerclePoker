@@ -161,7 +161,6 @@ export default function AffiliatesClient({ agents, players, activeGames, existin
   useEffect(() => {
     fetch("/api/admin/backfill-telegram-ids", {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ key: "db-diag-20260518" }),
     }).then(r => r.ok ? r.json() : null).then((data: BackfillResponse | null) => {
       if (data) setBackfillCount(data.summary.total_broken);
     }).catch(() => { setBackfillCount(brokenTgCount > 0 ? brokenTgCount : 0); });
@@ -175,7 +174,6 @@ export default function AffiliatesClient({ agents, players, activeGames, existin
     try {
       const res = await fetch("/api/admin/backfill-telegram-ids", {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ key: "db-diag-20260518" }),
       });
       if (res.ok) setBackfillData(await res.json());
     } finally { setBackfillLoading(false); }
@@ -186,7 +184,6 @@ export default function AffiliatesClient({ agents, players, activeGames, existin
     try {
       const res = await fetch("/api/admin/backfill-telegram-ids?apply=1", {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ key: "db-diag-20260518" }),
       });
       if (res.ok) {
         setBackfillData(await res.json());
