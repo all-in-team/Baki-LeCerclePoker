@@ -809,6 +809,72 @@ export function setPerceivedDealOn(db: DB, a: SetPerceivedArgs): SetPerceivedRes
   return retroactive ? { ok: true, written: true, retroactive: true, preview } : { ok: true, written: true, preview };
 }
 
+// ── Garde générique : une écriture ne doit bouger AUCUNE commission payée ────
+//
+// Pour les écritures qui changent la BASE d'un filleul hors des deux parcours versionnés
+// (override relation × game, disclosed de la relation — audit F1 du 25/09) : l'écriture
+// s'exécute dans une transaction, les commissions des semaines ≤ gel de l'agent sont
+// comparées avant/après, et tout écart annule l'écriture avec un refus nommé.
+
+export type FrozenGuardResult =
+  | { ok: true }
+  | { ok: false; error: string; weeks: { referred_name: string; game_name: string; week: string; before: number | null; after: number | null }[] };
+
+/**
+ * Commissions ET parts des semaines ≤ gel, sur TOUTES les relations de l'agent, quel que
+ * soit leur statut (audit F-A : une relation en pause, modifiée puis réactivée, contournait
+ * un garde limité aux relations actives). La part est comparée aussi : une semaine gelée
+ * sans taux dont la part changerait ferait basculer l'agent en « bloqué ».
+ */
+function frozenSnapshotOn(db: DB, affiliatePlayerId: number, today?: string): { frozen: string | null; m: Map<string, { referred_name: string; game_name: string; week: string; c: number | null; part: number }> } {
+  const frozen = frozenThroughOn(db, affiliatePlayerId);
+  const m = new Map<string, { referred_name: string; game_name: string; week: string; c: number | null; part: number }>();
+  if (!frozen) return { frozen, m };
+  const rels = db.prepare(`SELECT id FROM affiliate_relationships WHERE affiliate_player_id = ?`).all(affiliatePlayerId) as { id: number }[];
+  for (const { id } of rels) for (const l of relationLinesOn(db, id, { today })) for (const w of l.weeks)
+    if (w.week !== null && w.week <= frozen)
+      m.set(`${l.relationship_id}:${l.game_id}:${w.week}`, { referred_name: l.referred.name, game_name: l.game_name, week: w.week, c: w.commission, part: w.part });
+  return { frozen, m };
+}
+
+export function withFrozenGuardOn(db: DB, affiliatePlayerId: number, write: () => void, today?: string): FrozenGuardResult {
+  let refusal: FrozenGuardResult | null = null;
+  const REFUSED = new Error("frozen-guard-refused");
+  try {
+    db.transaction(() => {
+      const before = frozenSnapshotOn(db, affiliatePlayerId, today);
+      write();
+      const b = before.m, a = frozenSnapshotOn(db, affiliatePlayerId, today).m;
+      const moved: { referred_name: string; game_name: string; week: string; before: number | null; after: number | null }[] = [];
+      for (const k of new Set([...b.keys(), ...a.keys()])) {
+        const x = b.get(k), y = a.get(k);
+        const cb = x?.c ?? 0, ca = y?.c ?? 0;
+        const nullMoved = (x?.c === null) !== (y?.c === null);
+        const partMoved = Math.abs((y?.part ?? 0) - (x?.part ?? 0)) > 1e-9;
+        if (nullMoved || partMoved || Math.abs(ca - cb) > 1e-9) {
+          const r = (y ?? x)!;
+          moved.push({ referred_name: r.referred_name, game_name: r.game_name, week: r.week, before: x ? x.c : null, after: y ? y.c : null });
+        }
+      }
+      if (moved.length) {
+        const pays = agentPaymentsOn(db, affiliatePlayerId);
+        refusal = {
+          ok: false, weeks: moved,
+          error: `refusé : cette modification changerait des commissions déjà payées (gelées jusqu'à la semaine du ${before.frozen}, `
+            + `paiement du ${pays[pays.length - 1]?.paid_at.slice(0, 10)}) — `
+            + moved.slice(0, 6).map(w => `${w.referred_name} / ${w.game_name} sem. du ${w.week}`).join(", ")
+            + (moved.length > 6 ? ` … (+${moved.length - 6})` : "")
+            + `. Pour changer la base à partir d'une date, passe par le perçu versionné ou le taux agent.`,
+        };
+        throw REFUSED;   // annule l'écriture
+      }
+    })();
+  } catch (e) {
+    if (e !== REFUSED) throw e;
+  }
+  return refusal ?? { ok: true };
+}
+
 /** Perçu en vigueur cette semaine (affichage : config games, formulaire affiliés). */
 export function currentPerceivedOn(db: DB, gameId: number, today?: string): PerceivedPeriod | null {
   return periodAtP(perceivedPeriodsOn(db, gameId), mondayOf(today ?? todayIso()));

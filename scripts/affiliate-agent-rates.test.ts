@@ -51,7 +51,7 @@ function runAffiliateAgentRatesMigrationV1(db: any) {
 }
 import {
   computeAgentCommissionOn, legacyAgentCommissionOn, setAgentRateOn, ratePeriodsOn, rateHistoryOn,
-  paymentBlockOn, mondayOf, setPerceivedDealOn, perceivedPeriodsOn, agentPortalViewOn,
+  paymentBlockOn, mondayOf, setPerceivedDealOn, perceivedPeriodsOn, agentPortalViewOn, withFrozenGuardOn,
 } from "../lib/affiliate/agent-rates";
 import { seedDefaultRatesOn } from "../lib/affiliate/agent-rates-schema";
 
@@ -553,6 +553,50 @@ console.log("\n══ K. Vue PORTAIL (Samyaza après Grobel A5 à 25 % dès le 0
   tx(db, 428, 888, 100, "2026-09-22T11:00:00Z");
   const b = agentPortalViewOn(db, 421, { today: TODAY });
   eq("agent bloqué : lifetime / dû / total = null (« en cours de calcul »), jamais 0", [b.earned, b.due_now, b.commission_signed, b.filleuls.find(f => f.name === "Grobel")!.commission], [null, null, null, null]);
+}
+
+console.log("\n══ L. Garde d'argent sur l'override relation × game (audit F1 du 25/09) ══");
+{
+  const db = loadFixture(); runAffiliateAgentRatesMigrationV1(db);
+  const ok = setPerceivedDealOn(db, { game_id: 6, action_pct: 50, rakeback_pct: null, insurance_pct: null, start_week: "2026-09-28", today: TODAY });
+  check("perçu A5 à 50 % dès le 28/09 : accepté", ok.ok);
+  // « Override » pré-rempli avec le perçu EN VIGUEUR (50) : override valable pour tout l'historique de Grobel/A5.
+  const n0 = (db.prepare(`SELECT COUNT(*) n FROM affiliate_relationship_games WHERE relationship_id = 21`).get() as any).n;
+  const r = withFrozenGuardOn(db, 421, () => {
+    db.prepare(`INSERT INTO affiliate_relationship_games (relationship_id, game_id, disclosed_action_pct) VALUES (21, 6, 50)`).run();
+  }, TODAY);
+  check("override Grobel A5 à 50 % sur tout l'historique : REFUSÉ", !r.ok && /déjà payées/.test((r as any).error), JSON.stringify(r).slice(0, 200));
+  check("…semaines gelées nommées (17/08)", !r.ok && (r as any).weeks.some((w: any) => w.week === "2026-08-17" && w.game_name === "A5POKER"));
+  eq("…écriture annulée (transaction)", (db.prepare(`SELECT COUNT(*) n FROM affiliate_relationship_games WHERE relationship_id = 21`).get() as any).n, n0);
+  cents("…dû Samyaza inchangé", due(db, 421), 314.3693);
+  // Même override chez un agent jamais payé (Xabi) : aucune semaine gelée → autorisé.
+  const r2 = withFrozenGuardOn(db, 175, () => {
+    db.prepare(`UPDATE affiliate_relationship_games SET disclosed_action_pct = 30 WHERE relationship_id = 8 AND game_id = 1`).run();
+  }, TODAY);
+  check("override chez un agent jamais payé : autorisé", r2.ok);
+  eq("…et écrit", (db.prepare(`SELECT disclosed_action_pct v FROM affiliate_relationship_games WHERE relationship_id = 8 AND game_id = 1`).get() as any).v, 30);
+  // La course du formulaire : enregistrer une liste vide supprime les overrides existants → refus si des semaines payées bougent.
+  const leoBefore = due(db, 9);
+  const r3 = withFrozenGuardOn(db, 9, () => {
+    db.prepare(`DELETE FROM affiliate_relationship_games WHERE relationship_id = 18`).run();
+  }, TODAY);
+  check("suppression des overrides (vides) de Nicolas, Leo payé : pas un refus, la base ne bouge pas (A5 au perçu 20 %)", r3.ok, JSON.stringify(r3).slice(0, 160));
+  cents("…dû de Leo réellement inchangé", due(db, 9), leoBefore);
+  // Audit F-A : override posé pendant une PAUSE, puis réactivation.
+  const db2 = loadFixture(); runAffiliateAgentRatesMigrationV1(db2);
+  const r4 = withFrozenGuardOn(db2, 421, () => {
+    db2.prepare(`UPDATE affiliate_relationships SET status = 'paused' WHERE id = 21`).run();
+    db2.prepare(`INSERT INTO affiliate_relationship_games (relationship_id, game_id, disclosed_action_pct) VALUES (21, 6, 50)`).run();
+  }, TODAY);
+  check("pause + override dans la même écriture : REFUSÉ", !r4.ok, JSON.stringify(r4).slice(0, 160));
+  eq("…statut resté actif (rien écrit)", (db2.prepare(`SELECT status FROM affiliate_relationships WHERE id = 21`).get() as any).status, "active");
+  db2.prepare(`UPDATE affiliate_relationships SET status = 'paused' WHERE id = 21`).run();   // pause « à part » (hors garde, chantier séparé)
+  const r5 = withFrozenGuardOn(db2, 421, () => {
+    db2.prepare(`INSERT INTO affiliate_relationship_games (relationship_id, game_id, disclosed_action_pct) VALUES (21, 6, 50)`).run();
+  }, TODAY);
+  check("override sur relation EN PAUSE dont les semaines sont payées : REFUSÉ", !r5.ok, JSON.stringify(r5).slice(0, 160));
+  db2.prepare(`UPDATE affiliate_relationships SET status = 'active' WHERE id = 21`).run();
+  cents("…réactivée : dû Samyaza toujours 314,37", due(db2, 421), 314.3693);
 }
 
 console.log(`\n${passed} ✔  ${failures.length} ✘`);
