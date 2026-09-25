@@ -994,10 +994,19 @@ export function agentPortalViewOn(db: DB, affiliatePlayerId: number, opts: CalcO
     // au même % fusionnés ; le dernier segment d'une période ouverte reste ouvert (end null)
     // et porte donc le taux EN VIGUEUR.
     const round4 = (x: number) => Math.round(x * 1e4) / 1e4;
+    // Seuls les changements de perçu DÉJÀ en vigueur découpent : un perçu daté dans le futur
+    // ne doit ni remplacer le % de la semaine en cours, ni révéler sa date (audit 6ᵉ passe).
+    const curWeek = mondayOf(opts.today ?? todayIso());
     const pStarts = (opts.perceived && opts.perceived.game_id === l.game_id ? opts.perceived.periods : perceivedPeriodsOn(db, l.game_id))
-      .map(q => q.start_week).filter((w): w is string => w !== null).sort();
+      .map(q => q.start_week).filter((w): w is string => w !== null && w <= curWeek).sort();
     const periods: (PortalRatePeriod & { agent_pct: number })[] = [];
-    for (const p of l.periods) {
+    // Pareil pour les TAUX : une période qui démarre après la semaine en cours n'existe pas
+    // encore pour l'agent, et celle qui couvre la semaine en cours s'affiche ouverte (sa fin
+    // future trahirait un changement pas encore en vigueur).
+    const visible = l.periods
+      .filter(p => p.start_week === null || p.start_week <= curWeek)
+      .map(p => (p.end_week !== null && p.end_week >= curWeek ? { ...p, end_week: null } : p));
+    for (const p of visible) {
       const cuts = pStarts.filter(b => (p.start_week === null || b > p.start_week) && (p.end_week === null || b <= p.end_week));
       const starts: (string | null)[] = [p.start_week, ...cuts];
       const segs: (PortalRatePeriod & { agent_pct: number })[] = [];

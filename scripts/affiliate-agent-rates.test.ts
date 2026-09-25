@@ -580,13 +580,25 @@ console.log("\n══ K. Vue PORTAIL (Samyaza après Grobel A5 à 25 % dès le 0
   // Audit : taux en vigueur même sans activité après le changement ; pas de chevauchement si le perçu revient.
   const dbT = loadFixture(); runAffiliateAgentRatesMigrationV1(dbT);
   setPerceivedDealOn(dbT, { game_id: 5, action_pct: 40, rakeback_pct: null, insurance_pct: null, start_week: "2026-09-28", today: TODAY });
-  eq("KK perçu 40 % dès le 28/09 sans activité depuis : portail Grobel KK = 10 % jusqu'au 21/09 puis 20 % en cours",
+  eq("KK perçu 40 % dès le 28/09 (futur au 26/09) : le portail montre le 10 % EN VIGUEUR, sans révéler la date future",
      agentPortalViewOn(dbT, 421, { today: TODAY }).filleuls.find(f => f.name === "Grobel")!.games.find(g => g.game_name === "KKPOKER")!.periods.map(p => [p.player_pct, p.start_week, p.end_week]),
+     [[10, null, null]]);
+  eq("…le 28/09 venu : 10 % jusqu'au 21/09, puis 20 % en cours",
+     agentPortalViewOn(dbT, 421, { today: "2026-09-29" }).filleuls.find(f => f.name === "Grobel")!.games.find(g => g.game_name === "KKPOKER")!.periods.map(p => [p.player_pct, p.start_week, p.end_week]),
      [[10, null, "2026-09-21"], [20, "2026-09-28", null]]);
   setPerceivedDealOn(dbT, { game_id: 5, action_pct: 20, rakeback_pct: null, insurance_pct: null, start_week: "2026-10-05", today: TODAY });
-  eq("perçu qui revient à 20 % : segments sans chevauchement (le 20 % du 28/09, sans activité et révolu, n'est pas affiché)",
-     agentPortalViewOn(dbT, 421, { today: TODAY }).filleuls.find(f => f.name === "Grobel")!.games.find(g => g.game_name === "KKPOKER")!.periods.map(p => [p.player_pct, p.start_week, p.end_week]),
+  eq("perçu qui revient à 20 % (vu au 06/10) : segments sans chevauchement (le 20 % du 28/09, sans activité et révolu, n'est pas affiché)",
+     agentPortalViewOn(dbT, 421, { today: "2026-10-06" }).filleuls.find(f => f.name === "Grobel")!.games.find(g => g.game_name === "KKPOKER")!.periods.map(p => [p.player_pct, p.start_week, p.end_week]),
      [[10, null, "2026-09-21"], [10, "2026-10-05", null]]);
+  // Taux agent daté dans le futur : le portail montre le taux EN VIGUEUR, pas le futur.
+  const dbU = loadFixture(); runAffiliateAgentRatesMigrationV1(dbU);
+  setAgentRateOn(dbU, { relationship_id: 21, game_id: 5, player_pct: 3, start_week: "2026-10-12", today: TODAY });
+  eq("Grobel KK passe à 3 % du résultat au 12/10 (futur) : le portail montre 10 % en cours, sans la date",
+     agentPortalViewOn(dbU, 421, { today: TODAY }).filleuls.find(f => f.name === "Grobel")!.games.find(g => g.game_name === "KKPOKER")!.periods.map(p => [p.player_pct, p.start_week, p.end_week]),
+     [[10, null, null]]);
+  eq("…le 12/10 venu : 10 % jusqu'au 11/10, puis 3 % en cours",
+     agentPortalViewOn(dbU, 421, { today: "2026-10-13" }).filleuls.find(f => f.name === "Grobel")!.games.find(g => g.game_name === "KKPOKER")!.periods.map(p => [p.player_pct, p.start_week, p.end_week]),
+     [[10, null, "2026-10-05"], [3, "2026-10-12", null]]);
   // Bloqué : null, jamais 0.
   db.prepare(`INSERT INTO games (id, name) VALUES (888, 'NEWGAME')`).run();
   db.prepare(`INSERT INTO player_game_deals (player_id, game_id, created_at) VALUES (428, 888, '2026-09-25 10:00:00')`).run();
