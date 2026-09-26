@@ -2425,6 +2425,35 @@ function initSchema(db: Database.Database) {
     console.error(`[MIGRATION:add_group_first_msg_v1] FAILED:`, err.message);
   }
 
+  // `first_msg_source` : d'où vient `first_msg_at` (Hugo 2026-09-27, stock des anciens groupes).
+  //   'backfill'  — posé par add_group_first_msg_v1 (= COALESCE(joined_at, created_at)) : on ne
+  //                 SAIT PAS si le lead a parlé ; ces groupes sont protégés jusqu'à vérification
+  //   'webhook'   — premier message vu en direct par le webhook
+  //   'history'   — premier message retrouvé dans l'historique par le userbot
+  //   'history_none'        — historique lu EN ENTIER, aucun message du lead ⇒ first_msg_at NULL,
+  //                            le groupe redevient candidat du job silencieux (garde-fous inchangés)
+  //   'history_truncated'   — historique trop long pour conclure ⇒ reste protégé
+  //   'history_unreadable'  — 3 lectures en échec ⇒ reste protégé
+  // `history_attempts` compte les lectures en échec.
+  try {
+    const fix = db.prepare(`INSERT OR IGNORE INTO _applied_fixes (name) VALUES (?)`).run("add_group_first_msg_source_v1");
+    if (fix.changes > 0) {
+      try { db.exec(`ALTER TABLE group_creations ADD COLUMN first_msg_source TEXT`); } catch {}
+      try { db.exec(`ALTER TABLE group_creations ADD COLUMN history_attempts INTEGER NOT NULL DEFAULT 0`); } catch {}
+      db.exec(`
+        UPDATE group_creations
+        SET first_msg_source = CASE
+          WHEN first_msg_at IS NULL THEN NULL
+          WHEN first_msg_at = COALESCE(joined_at, created_at) THEN 'backfill'
+          ELSE 'webhook' END
+        WHERE first_msg_source IS NULL;
+      `);
+      console.log("[MIGRATION] add_group_first_msg_source_v1 applied");
+    }
+  } catch (err: any) {
+    console.error(`[MIGRATION:add_group_first_msg_source_v1] FAILED:`, err.message);
+  }
+
   // Porte unique de création de groupe (incident Alexis, 2026-08-04).
   //
   // Alexis avait déjà son groupe (`players.telegram_group_id = -1003723869680`, mai) ;

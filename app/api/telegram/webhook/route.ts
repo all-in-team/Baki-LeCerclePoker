@@ -136,7 +136,7 @@ export async function POST(req: NextRequest) {
       const { getDb } = await import("@/lib/db");
       getDb().prepare(
         `UPDATE group_creations
-           SET first_msg_at = strftime('%Y-%m-%d %H:%M:%f','now')
+           SET first_msg_at = strftime('%Y-%m-%d %H:%M:%f','now'), first_msg_source = 'webhook'
          WHERE chat_id = ? AND owner_key = ? AND first_msg_at IS NULL`
       ).run(String(logChat), logFrom);
     } catch (e: any) {

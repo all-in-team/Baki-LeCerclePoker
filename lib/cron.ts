@@ -88,32 +88,35 @@ export function initCronJobs() {
       console.log("[CRON] silent-group-cleanup firing");
       try {
         const db = getDb();
-        const flag = db.prepare(`SELECT value FROM settings WHERE key = 'silent_group_cleanup_dry_run_done'`)
-          .get() as { value: string } | undefined;
-        const dryRun = !flag;
-        const { runSilentGroupCleanup, reportSilentGroupCleanup } = await import("./group-lifecycle");
+        const { runSilentGroupCleanup, reportSilentGroupCleanup, verifyLegacyGroupHistory } = await import("./group-lifecycle");
+        const { silentCleanupModeOn, markSilentDryRunDoneOn } = await import("./group-silent-history");
+        // 1) Anciens groupes : relit l'historique d'un lot (lecture seule côté Telegram). Ceux
+        //    où le lead n'a jamais écrit redeviennent candidats de CE run.
+        let history: Awaited<ReturnType<typeof verifyLegacyGroupHistory>> | undefined;
+        try {
+          history = await verifyLegacyGroupHistory({ limit: 40 });
+          console.log(`[CRON] silent-group-cleanup: historique anciens groupes ok=${history.ok} checked=${history.checked} ` +
+            `counts=${JSON.stringify(history.counts)} remaining=${history.remaining}`);
+        } catch (e: any) {
+          console.error("[CRON] silent-group-cleanup: vérification d'historique en échec:", e?.message ?? e);
+        }
+        // 2) Dry-run tant que les nouveaux groupes OU le stock ancien n'ont pas eu leur aperçu.
+        const { dryRun, legacyPending } = silentCleanupModeOn(db);
         const result = await runSilentGroupCleanup({ dryRun });   // dryRun explicite, jamais implicite
         console.log(
-          `[CRON] silent-group-cleanup: dry_run=${result.dry_run} candidates=${result.candidates} ` +
+          `[CRON] silent-group-cleanup: dry_run=${result.dry_run} candidates=${result.candidates} legacy_pending=${legacyPending} ` +
           `purged=${result.purged.length} tagged=${result.tagged.length} healed=${result.self_healed.length} ` +
           `skipped=${result.skipped.length} churned=${result.churned.length}`
         );
-        await reportSilentGroupCleanup(result);
-        // Le dry-run n'est « fait » que s'il a EXAMINÉ au moins un groupe : un passage à vide
-        // (le cas des 7 premiers jours, la migration protégeant tous les groupes existants)
-        // ne doit pas débloquer un passage réel sur des candidats jamais prévisualisés.
-        if (dryRun && result.ok && result.scanned > 0) {
-          db.prepare(
-            `INSERT INTO settings (key, value) VALUES ('silent_group_cleanup_dry_run_done', ?)
-             ON CONFLICT(key) DO UPDATE SET value = excluded.value`
-          ).run(new Date().toISOString());
-          console.log("[CRON] silent-group-cleanup: dry-run marker posé, prochain run en mode réel");
-        }
+        await reportSilentGroupCleanup(result, history);
+        // 3) Marqueurs posés seulement après un dry-run qui a EXAMINÉ au moins un groupe.
+        const marked = markSilentDryRunDoneOn(db, { dryRun, ok: result.ok, scanned: result.scanned, legacyPending });
+        if (marked.length) console.log(`[CRON] silent-group-cleanup: dry-run fait (${marked.join(", ")}), prochain run en mode réel`);
       } catch (e: any) {
         console.error("[CRON] silent-group-cleanup failed:", e);
       }
     }, opts);
-    console.log("[CRON] silent-group-cleanup registered (tous les jours à 6h15 Paris — dry-run au 1er passage)");
+    console.log("[CRON] silent-group-cleanup registered (tous les jours à 6h15 Paris — dry-run au 1er passage, anciens groupes relus par lots de 40)");
   } else {
     console.log("[CRON] silent-group-cleanup DISABLED");
   }
