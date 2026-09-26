@@ -232,6 +232,13 @@ export function initCronJobs() {
         const { applyStatusAutoOn } = await import("./player-status-auto");
         const r = applyStatusAutoOn(getDb(), trigger);
         console.log(`[CRON] player-status-auto (${trigger}): ${r.applied.status} statut(s), ${r.applied.unarchived} désarchivage(s) — fenêtre depuis ${r.cutoff} UTC`);
+        if (r.staleRooms.length) {
+          const rooms = r.staleRooms.map(x => `${x.room} (dernière sync : ${x.last_sync ?? "jamais"} UTC)`).join(", ");
+          console.warn(`[CRON] player-status-auto (${trigger}): sync en retard — ${rooms} ; ${r.held.length} joueur(s) retenu(s) en actif`);
+          await notifyOps(`⚠️ <b>Statut auto des joueurs (${trigger})</b> : sync wallet en retard de plus de 3 jours — ${rooms}.\n`
+            + `${r.held.length} joueur(s) de ces rooms ne passent PAS inactive tant que la sync n'est pas à jour`
+            + (r.held.length ? ` (ids : ${r.held.map(h => h.player_id).join(", ")})` : "") + ".");
+        }
       } catch (e: any) {
         console.error(`[CRON] player-status-auto (${trigger}) failed — rien écrit:`, e);
         await notifyOps(`🚨 <b>Statut auto des joueurs (${trigger}) : rien n'a été écrit</b>\n<code>${String(e?.message ?? e).slice(0, 400)}</code>`);

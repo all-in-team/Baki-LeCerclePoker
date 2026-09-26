@@ -49,9 +49,12 @@ console.log("\n── A. Base en mémoire, schéma minimal ──");
 const db = new Database(":memory:");
 db.exec(`
   CREATE TABLE players (id INTEGER PRIMARY KEY, name TEXT, status TEXT, archived_at TEXT, archive_reason TEXT, created_at TEXT DEFAULT '2026-01-01 00:00:00', status_manual INTEGER NOT NULL DEFAULT 0);
-  CREATE TABLE games (id INTEGER PRIMARY KEY, name TEXT);
+  CREATE TABLE games (id INTEGER PRIMARY KEY, name TEXT, status TEXT DEFAULT 'active');
+  CREATE TABLE wallet_meres (game_id INT, status TEXT);
+  CREATE TABLE player_game_deals (player_id INT, game_id INT, end_date TEXT);
+  CREATE TABLE player_wallet_games (player_id INT, game_id INT);
   CREATE TABLE player_game_ids (player_id INT, game_id INT, external_id TEXT);
-  CREATE TABLE wallet_transactions (id INTEGER PRIMARY KEY, player_id INT, source TEXT, status TEXT, tx_datetime TEXT, tx_date TEXT);
+  CREATE TABLE wallet_transactions (id INTEGER PRIMARY KEY, player_id INT, game_id INT, source TEXT, status TEXT, tx_datetime TEXT, tx_date TEXT, created_at TEXT);
   CREATE TABLE nexa_affiliate_weeks (player_id INT, week_start TEXT, nlh REAL, mtt REAL, plo REAL, spins REAL);
   CREATE TABLE nexa_weekly_stats (member_id TEXT, week_start TEXT, rake REAL, winloss REAL);
   CREATE TABLE nexa_player_weekly_winloss (player_id INT, week_start TEXT, amount REAL);
@@ -67,7 +70,7 @@ db.exec(`
   -- Sources EXCLUES (règle 5) : présentes pour prouver qu'elles ne comptent pas.
   CREATE TABLE weekly_settlements (player_id INT, paid_at TEXT);
   CREATE TABLE cashout_requests (player_id INT, created_at TEXT);
-  INSERT INTO games VALUES (1, 'NEXAPOKER'), (2, 'KKPOKER');
+  INSERT INTO games (id, name) VALUES (1, 'NEXAPOKER'), (2, 'KKPOKER_OLD');
 `);
 db.exec(PLAYER_STATUS_CHANGES_SQL);
 
@@ -195,6 +198,38 @@ console.log("  Archive (décision 3 + désarchivage) :");
   eq("semaine qui commence dans le futur → pas de désarchivage", changeOf(f4, "unarchive"), undefined);
 }
 
+console.log("  Sync en retard d'une room encore active (Baki 2026-09-26) :");
+{
+  const { staleSyncRoomsOn, STALE_SYNC_DAYS } = require(path.join(REPO, "lib/player-status-auto.ts")) as typeof import("../lib/player-status-auto");
+  db.exec(`INSERT INTO games (id, name, status) VALUES (10, 'A5POKER', 'active'), (11, 'QQPK', 'active'), (12, 'KKPOKER', 'active'), (13, 'TELE', 'archived'), (14, 'NEXAPOKER2', 'active')`);
+  db.exec(`INSERT INTO wallet_meres VALUES (10, 'active'), (11, 'active'), (12, 'active'), (13, 'active'), (14, 'retired')`);
+  const sync = (game: number, created: string) => db.prepare(`INSERT INTO wallet_transactions (player_id, game_id, source, tx_datetime, created_at) VALUES (NULL, ?, 'sync', ?, ?)`).run(game, created, created);
+  sync(10, "2026-09-24 08:00:00");   // 1,5 jour : à jour
+  sync(11, "2026-09-21 08:00:00");   // 4,5 jours : en retard
+  sync(12, "2026-09-02 08:00:00");   // KKPOKER : exclue (plus jouée)
+  eq(`seule QQPK est en retard de plus de ${STALE_SYNC_DAYS} jours (KK exclue, room archivée et room sans mère active ignorées)`,
+    staleSyncRoomsOn(db, NOW).map(r => r.room), ["QQPK"]);
+  const q = P("active"); db.prepare(`INSERT INTO player_wallet_games VALUES (?, 11)`).run(q);
+  const q2 = P("active"); db.prepare(`INSERT INTO player_game_deals VALUES (?, 11, NULL)`).run(q2);
+  const q3 = P("active"); db.prepare(`INSERT INTO player_game_deals VALUES (?, 11, '2026-08-01')`).run(q3);
+  const a5 = P("active"); db.prepare(`INSERT INTO player_wallet_games VALUES (?, 10)`).run(a5);
+  const kk = P("active"); db.prepare(`INSERT INTO player_wallet_games VALUES (?, 12)`).run(kk);
+  const pl = planStatusAutoOn(db, NOW);
+  const heldIds = pl.held.map(h => h.player_id);
+  eq("joueur avec wallet QQPK : retenu, pas inactive", [heldIds.includes(q), newStatus(q)], [true, "inchangé"]);
+  eq("joueur avec deal QQPK ouvert : retenu", heldIds.includes(q2), true);
+  eq("deal QQPK clos : pas retenu → inactive", [heldIds.includes(q3), newStatus(q3)], [false, "inactive"]);
+  eq("joueur A5POKER (sync à jour) → inactive", newStatus(a5), "inactive");
+  eq("joueur KKPOKER (room exclue) → inactive", newStatus(kk), "inactive");
+  eq("motif de la retenue : la room", pl.held.find(h => h.player_id === q)?.rooms, ["QQPK"]);
+  const recentQ = P("inactive"); db.prepare(`INSERT INTO player_wallet_games VALUES (?, 11)`).run(recentQ);
+  db.prepare(`INSERT INTO grindhouse_sessions VALUES (?, ?)`).run(recentQ, RECENT);
+  eq("la retenue ne bloque pas un passage en ACTIVE", newStatus(recentQ), "active");
+  sync(11, "2026-09-25 06:00:00");
+  eq("sync QQPK revenue à jour : plus rien de retenu", [staleSyncRoomsOn(db, NOW).length, planStatusAutoOn(db, NOW).held.length], [0, 0]);
+  eq("…et ses joueurs passent inactive", newStatus(q), "inactive");
+}
+
 console.log("  Garde-fou de masse (audit C4) :");
 {
   const { MAX_VISIBLE_DEACTIVATIONS, visibleDeactivations, StatusAutoGuardError } = require(path.join(REPO, "lib/player-status-auto.ts")) as typeof import("../lib/player-status-auto");
@@ -274,6 +309,7 @@ else {
       console.log(`   plan sur le dump : ${toInactive.length} → inactive, ${toActive.length} → active, ${unarch.length} désarchivage(s)`);
       const visible = toInactive.filter(c => !(real!.prepare(`SELECT archived_at FROM players WHERE id = ?`).get(c.player_id) as any).archived_at).map(c => c.player_id).sort((a, b) => a - b);
       console.log(`   visibles → inactive : ${JSON.stringify(visible)}`);
+      console.log(`   rooms en retard : ${JSON.stringify(pl.staleRooms.map(r => [r.room, r.last_sync]))} ; retenus : ${JSON.stringify(pl.held.map(h => h.player_id))}`);
       // Statut manuel posé sur Baki #51 et Leo La Truite #9 (décision 1) : plus touchés.
       real.prepare(`UPDATE players SET status_manual = 1 WHERE id IN (9, 51)`).run();
       eq("statut manuel #9 et #51 : absents du plan", planStatusAutoOn(real, RNOW).changes.filter(c => c.kind === "status" && [9, 51].includes(c.player_id)).length, 0);

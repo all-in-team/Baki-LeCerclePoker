@@ -29,6 +29,32 @@ export const WINDOW_DAYS = 21;
 // déclenchement « manual » passe outre. Premier passage mesuré sur le dump du 25/09 : 6.
 export const MAX_VISIBLE_DEACTIVATIONS = 10;
 
+// Garde-fou de fraîcheur (Baki 2026-09-26) : si la dernière sync wallet d'une room ENCORE
+// ACTIVE (games.status = 'active' avec une wallet mère active) date de plus de
+// STALE_SYNC_DAYS jours, ses joueurs ne passent PAS inactive sur cette base : ils sont
+// « retenus » et le cron alerte l'ops. « Dernière sync » = dernière tx insérée par la sync
+// (created_at), comme l'indicateur « Dernière sync wallet » de l'agent. Rooms qu'on ne
+// joue plus, dont la sync arrêtée est normale : SYNC_GUARD_EXCLUDED_ROOMS.
+export const STALE_SYNC_DAYS = 3;
+export const SYNC_GUARD_EXCLUDED_ROOMS = ["KKPOKER", "AKS"];
+
+export type StaleRoom = { game_id: number; room: string; last_sync: string | null };
+
+/** Rooms encore actives dont la sync wallet est en retard de plus de STALE_SYNC_DAYS jours. */
+export function staleSyncRoomsOn(db: DB, now: Date): StaleRoom[] {
+  const limit = sqlNow(new Date(now.getTime() - STALE_SYNC_DAYS * 86_400_000));
+  const rooms = db.prepare(`
+    SELECT g.id AS game_id, g.name AS room,
+      (SELECT MAX(t.created_at) FROM wallet_transactions t WHERE t.game_id = g.id AND t.source = 'sync') AS last_sync
+    FROM games g
+    WHERE g.status = 'active'
+      AND g.name NOT IN (${SYNC_GUARD_EXCLUDED_ROOMS.map(() => "?").join(", ")})
+      AND EXISTS (SELECT 1 FROM wallet_meres w WHERE w.game_id = g.id AND w.status = 'active')
+    ORDER BY g.name
+  `).all(...SYNC_GUARD_EXCLUDED_ROOMS) as StaleRoom[];
+  return rooms.filter(r => !r.last_sync || normalizeTs(r.last_sync) < limit);
+}
+
 const WEEK_END = (col: string) => `date(${col}, '+6 days')`;
 
 // Chaque source rend (player_id, at, start) :
@@ -115,11 +141,34 @@ export type StatusChange = {
 
 const isActive = (s: string) => s === "active" || s === "signed";
 
-/** Bascules que l'automate ferait maintenant — sans rien écrire (test à blanc). */
-export function planStatusAutoOn(db: DB, now: Date = new Date()): { now: string; cutoff: string; changes: StatusChange[] } {
+export type HeldChange = StatusChange & { rooms: string[] };
+
+/**
+ * Bascules que l'automate ferait maintenant — sans rien écrire (test à blanc). `held` = les
+ * passages en inactive retenus parce qu'une room du joueur a une sync en retard (`staleRooms`).
+ */
+export function planStatusAutoOn(db: DB, now: Date = new Date()):
+  { now: string; cutoff: string; changes: StatusChange[]; held: HeldChange[]; staleRooms: StaleRoom[] } {
   const nowS = sqlNow(now);
   const cutoff = sqlNow(new Date(now.getTime() - WINDOW_DAYS * 86_400_000));
   const { last, lastStart } = lastActivityOn(db, nowS);
+  const staleRooms = staleSyncRoomsOn(db, now);
+  // Joueurs d'une room en retard : deal ouvert ou wallet de jeu sur cette room.
+  const staleRoomsOf = new Map<number, string[]>();
+  if (staleRooms.length) {
+    const ph = staleRooms.map(() => "?").join(", ");
+    const ids = staleRooms.map(r => r.game_id);
+    const rows = db.prepare(`
+      SELECT player_id, game_id FROM player_game_deals WHERE end_date IS NULL AND game_id IN (${ph})
+      UNION SELECT player_id, game_id FROM player_wallet_games WHERE game_id IN (${ph})
+    `).all(...ids, ...ids) as { player_id: number; game_id: number }[];
+    for (const r of rows) {
+      const room = staleRooms.find(x => x.game_id === r.game_id)!.room;
+      const cur = staleRoomsOf.get(r.player_id) ?? [];
+      if (!cur.includes(room)) staleRoomsOf.set(r.player_id, [...cur, room]);
+    }
+  }
+  const held: HeldChange[] = [];
   const players = db.prepare(`SELECT id, name, status, archived_at, created_at, COALESCE(status_manual, 0) AS status_manual FROM players`).all() as
     { id: number; name: string; status: string; archived_at: string | null; created_at: string | null; status_manual: number }[];
   const changes: StatusChange[] = [];
@@ -134,8 +183,11 @@ export function planStatusAutoOn(db: DB, now: Date = new Date()): { now: string;
         changes.push({ ...base, kind: "status", old_value: p.status, new_value: "active",
           reason: recent ? `activité de jeu le ${la!.at} (${la!.source})` : `nouveau joueur (créé le ${normalizeTs(p.created_at!).slice(0, 10)})` });
       } else if (!recent && !isNew && isActive(p.status)) {
-        changes.push({ ...base, kind: "status", old_value: p.status, new_value: "inactive",
-          reason: la ? `aucune activité de jeu depuis ${WINDOW_DAYS} jours (dernière : ${la.at}, ${la.source})` : "aucune activité de jeu enregistrée" });
+        const c: StatusChange = { ...base, kind: "status", old_value: p.status, new_value: "inactive",
+          reason: la ? `aucune activité de jeu depuis ${WINDOW_DAYS} jours (dernière : ${la.at}, ${la.source})` : "aucune activité de jeu enregistrée" };
+        const rooms = staleRoomsOf.get(p.id);
+        if (rooms) held.push({ ...c, rooms });
+        else changes.push(c);
       }
     }
     // Désarchivage : une NOUVELLE activité, c'est-à-dire dont le DÉBUT est postérieur à l'archivage.
@@ -146,7 +198,7 @@ export function planStatusAutoOn(db: DB, now: Date = new Date()): { now: string;
         reason: `nouvelle activité de jeu le ${ls.at} (${ls.source}), postérieure à l'archivage` });
     }
   }
-  return { now: nowS, cutoff, changes };
+  return { now: nowS, cutoff, changes, held, staleRooms };
 }
 
 export class StatusAutoGuardError extends Error {}

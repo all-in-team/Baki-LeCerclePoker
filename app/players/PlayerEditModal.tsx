@@ -148,9 +148,11 @@ export default function PlayerEditModal({ player, dealsByPlayer, activeGames, ap
           </div>
           <div style={{ flex: 1 }}>
             <label style={LBL} title="Active / inactive recalculé chaque nuit sur l'activité de jeu des 21 derniers jours, sauf en statut manuel">Statut CRM</label>
-            <select value={form.status} onChange={e => setForm({ ...form, status: e.target.value })} style={INP}>
+            {/* Changer le statut à la main coche « Statut manuel » (Baki) : sinon le recalcul
+                de la nuit le défait. Reste visible et décochable. « Signed » retiré : le CHECK
+                de players.status le refuse (active / inactive / churned). */}
+            <select value={form.status} onChange={e => setForm({ ...form, status: e.target.value, status_manual: true })} style={INP}>
               <option value="active">Active</option>
-              <option value="signed">Signed</option>
               <option value="inactive">Inactive</option>
               <option value="churned">Churned</option>
             </select>
