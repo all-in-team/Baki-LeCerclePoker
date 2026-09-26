@@ -134,6 +134,16 @@ export async function POST(req: NextRequest) {
   } catch (e: any) {
     console.error("[LECERCLE BROADCAST] suivi entrant:", e?.message ?? e);
   }
+  // Lead Nexa qui répond à une diffusion dans les 72 h : le bot automatique se tait
+  // (awaiting_human_since) AVANT la capture Nexa plus bas, qui voit alors le lead muselé.
+  if (update.message) {
+    try {
+      const { armNexaHoldIfBroadcastReply } = await import("@/lib/funnels/lecercle/relay");
+      await armNexaHoldIfBroadcastReply(update.message);
+    } catch (e: any) {
+      console.error("[LECERCLE RELAY] silence Nexa:", e?.message ?? e);
+    }
+  }
 
   // Handle inline keyboard button clicks
   if (update.callback_query) {
@@ -240,6 +250,17 @@ export async function POST(req: NextRequest) {
       if (await handleAdminChatMessage(msg)) return NextResponse.json({ ok: true });
     } catch (e: any) {
       console.error("[TG ADMIN RELAY]", e?.message ?? e);
+    }
+  }
+
+  // Sujets « 📣 réponse à une diffusion » (comptes hors Nexa) : ce que l'opérateur y
+  // poste part à la personne. Après le relais Nexa, qui a déjà écarté ses propres sujets.
+  if (msg && !msg.from?.is_bot) {
+    try {
+      const { handleBroadcastTopicMessage } = await import("@/lib/funnels/lecercle/relay");
+      if (await handleBroadcastTopicMessage(msg)) return NextResponse.json({ ok: true });
+    } catch (e: any) {
+      console.error("[LECERCLE RELAY] message opérateur:", e?.message ?? e);
     }
   }
 
@@ -419,6 +440,20 @@ export async function POST(req: NextRequest) {
     } catch (e: any) {
       // Le relais ne doit jamais faire tomber le funnel : on logge et on continue.
       console.error("[TG TAKEOVER CAPTURE]", e?.message ?? e);
+    }
+  }
+
+  // ── Réponse à une diffusion, compte HORS Nexa ───────────────────────────────────────────────
+  // Dans les 72 h d'une diffusion reçue (ou de la dernière réponse de l'opérateur), tout message
+  // privé non-commande — texte, photo, vocal, sticker… — est stocké et relayé dans le sujet de la
+  // personne au groupe Support, et le traitement s'arrête ici : ni scénario, ni « Envoie /start ».
+  // Hors fenêtre, ou en cas d'erreur : false, le webhook continue exactement comme avant.
+  if (msg && msg.chat?.type === "private") {
+    try {
+      const { captureBroadcastReply } = await import("@/lib/funnels/lecercle/relay");
+      if (await captureBroadcastReply(msg)) return NextResponse.json({ ok: true });
+    } catch (e: any) {
+      console.error("[LECERCLE RELAY] capture:", e?.message ?? e);
     }
   }
 

@@ -36,6 +36,7 @@ import {
 // @LeCercle_Lebot, partagés avec scripts/lecercle-broadcast.test.ts.
 import {
   LECERCLE_BROADCAST_SCHEMA_SQL, LECERCLE_MIGRATION_BROADCAST_V1, backfillBotUsers as lecercleBackfillBotUsers,
+  LECERCLE_DM_RELAY_SCHEMA_SQL, LECERCLE_DM_RELAY_ALTERS, LECERCLE_MIGRATION_DM_RELAY_V1,
 } from "./funnels/lecercle/schema";
 // Module pur (aucun import) : schéma du statut automatique des joueurs.
 import {
@@ -4125,5 +4126,25 @@ function initSchema(db: Database.Database) {
     }
   } catch (err: any) {
     console.error(`[MIGRATION:${WALLET_SYNC_RUNS_V1}] FAILED (sera rejouée au prochain boot):`, err.message);
+  }
+
+  // ── Relais des réponses aux diffusions (live takeover hors Nexa) ───────────
+  //
+  // Trois tables NOUVELLES et une colonne sur lecercle_broadcast_targets (table du
+  // module diffusion). Rien sur nexa_leads : le silence Nexa armé par une diffusion
+  // est mémorisé dans lecercle_nexa_holds. Une seule transaction.
+  try {
+    const already = db.prepare(`SELECT 1 FROM _applied_fixes WHERE name = ?`).get(LECERCLE_MIGRATION_DM_RELAY_V1);
+    if (!already) {
+      db.transaction(() => {
+        db.exec(LECERCLE_DM_RELAY_SCHEMA_SQL);
+        const cols = new Set((db.prepare(`PRAGMA table_info(lecercle_broadcast_targets)`).all() as any[]).map(c => c.name));
+        if (!cols.has("claimed_at")) for (const sql of LECERCLE_DM_RELAY_ALTERS) db.exec(sql);
+        db.prepare(`INSERT OR IGNORE INTO _applied_fixes (name) VALUES (?)`).run(LECERCLE_MIGRATION_DM_RELAY_V1);
+      })();
+      console.log(`[MIGRATION] ${LECERCLE_MIGRATION_DM_RELAY_V1} applied`);
+    }
+  } catch (err: any) {
+    console.error(`[MIGRATION:${LECERCLE_MIGRATION_DM_RELAY_V1}] FAILED (sera rejouée au prochain boot):`, err.message);
   }
 }
