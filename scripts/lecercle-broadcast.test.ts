@@ -21,7 +21,7 @@
 // └────────────────────────────────────────────────────────────────────────────┘
 
 import Database from "better-sqlite3";
-import { LECERCLE_BROADCAST_SCHEMA_SQL } from "../lib/funnels/lecercle/schema";
+import { LECERCLE_BROADCAST_SCHEMA_SQL, LECERCLE_DM_RELAY_SCHEMA_SQL, LECERCLE_DM_RELAY_ALTERS } from "../lib/funnels/lecercle/schema";
 import {
   resolveAudience, countAudience, backfillBotUsers, currentExclusion, DEFAULT_SEGMENT,
   type LecercleSegment, type DbLike,
@@ -71,6 +71,9 @@ function freshDb(): TestDb {
   const db = new Database(":memory:");
   db.exec(SOURCES_SQL);
   db.exec(LECERCLE_BROADCAST_SCHEMA_SQL);
+  // Migration suivante (relais des réponses) : la réservation écrit claimed_at.
+  db.exec(LECERCLE_DM_RELAY_SCHEMA_SQL);
+  for (const sql of LECERCLE_DM_RELAY_ALTERS) db.exec(sql);
   return db;
 }
 
@@ -502,6 +505,19 @@ function create(db: TestDb, seg: LecercleSegment = SEG) {
     eq("au-delà de 72 h : rien", attributeReply(1, "2026-09-23 10:00:01", db2), false);
     eq("à 72 h pile : compté", attributeReply(1, "2026-09-23 10:00:00", db2), true);
 
+    // Issue inconnue : la réponse est comptée comme pour un envoi, datée à la réservation.
+    const db4 = freshDb();
+    user(db4, 1);
+    const u = create(db4);
+    db4.exec(`UPDATE lecercle_broadcast_targets SET status = 'unknown', claimed_at = '2026-09-20 10:00:00' WHERE broadcast_id = ${u.id}`);
+    eq("réponse à un envoi « issue inconnue » : comptée", attributeReply(1, "2026-09-20 11:00:00", db4), true);
+    // Réponse datée entre la réservation et sent_at : comptée.
+    const db5 = freshDb();
+    user(db5, 1);
+    const v = create(db5);
+    db5.exec(`UPDATE lecercle_broadcast_targets SET status = 'sent', claimed_at = '2026-09-20 10:00:00', sent_at = '2026-09-20 10:00:05' WHERE broadcast_id = ${v.id}`);
+    eq("réponse datée avant sent_at mais après la réservation : comptée", attributeReply(1, "2026-09-20 10:00:02", db5), true);
+
   }
 
   // ─────────────────────────────────────────────────────────────────────────────
@@ -551,6 +567,19 @@ function create(db: TestDb, seg: LecercleSegment = SEG) {
     const log: Call[] = [];
     const res = await runBroadcastDrain({ sendFn: okSender(log), spacing: 0, owners: [OWNER] }, db);
     eq("tick suivant : démarrée et envoyée", [res.promoted, log.length], [r.id, 2]);
+  }
+
+  console.log("\nMigration du relais absente : la diffusion part quand même");
+  {
+    const db = new Database(":memory:");
+    db.exec(SOURCES_SQL);
+    db.exec(LECERCLE_BROADCAST_SCHEMA_SQL); // sans claimed_at
+    user(db, 1); user(db, 2);
+    const r = create(db);
+    startBroadcast(r.id!, 2, db);
+    const log: Call[] = [];
+    await runBroadcastDrain({ sendFn: okSender(log), spacing: 0, owners: [OWNER] }, db);
+    eq("sans la colonne claimed_at : envoi normal", log.length, 2);
   }
 
   console.log("\nListe nominative");

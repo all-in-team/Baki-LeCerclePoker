@@ -98,6 +98,33 @@ Deferred work from /plan-ceo-review (2026-04-28).
 
 ## P1 — High value, build next
 
+### Relais des réponses aux diffusions — reliquats de la 4e contre-expertise (GO, 2026-09-27)
+Branche `feat/lecercle-broadcast-relay` (`lib/funnels/lecercle/relay.ts`). Aucun BLOCKER/MAJOR ;
+règle d'arrêt de Hugo : les MINOR restants vont ici, pas dans un tour de plus.
+- **Nom de sujet trop long en UTF-16** (`relay.ts:440`) — `cut(…, 120)` coupe en points de code,
+  mais la limite Telegram de 128 est probablement en unités UTF-16 (inféré, non testé). Prénom
+  en emoji, sans @ : création refusée en 400, UNE alerte, puis messages bloqués pour cette
+  personne. À faire : couper à 128 unités UTF-16 sur une frontière de caractère, et sur un 400
+  de création réessayer une fois avec `📣 tg:<id>`.
+- **Réponse « Répondre à » dans un ancien sujet 📣 perdue sans retour** (`relay.ts:567-581`) —
+  l'ancien sujet n'est reconnu que par `reply_to_message.forum_topic_created`. À faire : table
+  des sujets retirés `(admin_chat_id, thread_id)` alimentée à la recréation / fermeture
+  d'orphelin, lue par `message_thread_id` (règle aussi le NIT « sujet nommé 📣 à la main »).
+- **Post refusé durablement dans un sujet existant = file bloquée sans alerte** (`relay.ts:351`,
+  `400-411`) — 403 « bot was kicked », ou 400 dont l'avis de repli échoue aussi. À faire :
+  `alertOnce` dans ces deux cas.
+- **Rafale de réponses : pas de budget de temps sur la création de sujet** (`relay.ts:277`,
+  `442`) — même token et même limite `createForumTopic` que Nexa, qui a un budget
+  (`TOPIC_CREATE_BUDGET_MS`). Rien n'est perdu (cron), mais le webhook et les sujets Nexa
+  ralentissent. À faire : même course contre un budget, puis report au cron.
+- NIT : `renew()` manquant avant le post qui suit une recréation de sujet (`relay.ts:346-349`) ;
+  `isServiceMessage` ne couvre pas `write_access_allowed` / `users_shared` / `chat_shared` /
+  `web_app_data` (sujet 📣 possible pour un « [message non textuel] ») ; % de réponses divisé
+  par `sent` alors que `replied` compte aussi les « issue inconnue » ; carte contexte triée sur
+  `COALESCE(sent_at, claimed_at)` au lieu de `claimed_at` d'abord ; `alertOnce` marque
+  l'alerte avant de vérifier le verrou (alerte perdue si verrou perdu à cet instant).
+
+
 ### Verrou « ouvert » des joueurs — trous hors périmètre du chantier Joueurs (contre-audit 2026-09-25)
 - **Session grindhouse déplacée après paiement** : `PATCH /api/grindhouse-sessions/[id]` peut changer
   `player_id` / `session_date` d'une session déjà couverte par un règlement payé ; le moteur

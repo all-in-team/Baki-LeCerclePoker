@@ -193,3 +193,87 @@ export function backfillBotUsers(db: SqlDb): number {
   const after = (db.prepare(`SELECT COUNT(*) AS n FROM lecercle_bot_users`).get() as { n: number }).n;
   return after - before;
 }
+
+// ── Relais des réponses aux diffusions (live takeover hors Nexa) ─────────────
+
+export const LECERCLE_MIGRATION_DM_RELAY_V1 = "add_lecercle_dm_relay_v1";
+
+export const LECERCLE_DM_RELAY_SCHEMA_SQL = `
+  -- Un fil par personne HORS Nexa ayant répondu à une diffusion : son sujet dans
+  -- le groupe Support. Les leads Nexa gardent leur sujet Nexa (nexa_leads).
+  --
+  -- last_operator_reply_at : prolonge la fenêtre de relais (72 h après le plus
+  -- tardif de : réception de la diffusion, dernière réponse de l'opérateur).
+  -- closed_at : /bot dans le sujet — le relais s'arrête jusqu'à la prochaine
+  -- diffusion reçue ou la prochaine réponse de l'opérateur.
+  -- relay_lock_until : un seul relais à la fois pour ce fil, en BASE (le cron et
+  -- le webhook tournent dans des bundles différents).
+  CREATE TABLE IF NOT EXISTS lecercle_dm_threads (
+    telegram_id            INTEGER PRIMARY KEY,
+    admin_chat_id          TEXT,
+    thread_id              INTEGER,
+    card_message_id        INTEGER,
+    topic_name             TEXT,
+    broadcast_id           INTEGER,
+    opened_at              TEXT NOT NULL DEFAULT (datetime('now')),
+    last_operator_reply_at TEXT,
+    closed_at              TEXT,
+    closed_by              TEXT,
+    notes                  TEXT,
+    last_relayed_msg_id    INTEGER NOT NULL DEFAULT 0,
+    relay_lock_until       TEXT,
+    relay_lock_owner       TEXT,
+    topic_alert_at         TEXT               -- alerte « relais bloqué » déjà postée
+  );
+  CREATE UNIQUE INDEX IF NOT EXISTS idx_lc_dm_thread
+    ON lecercle_dm_threads(admin_chat_id, thread_id) WHERE thread_id IS NOT NULL;
+
+  -- Le fil, dans les deux sens. Stocké AVANT tout relais : un échec Telegram ne
+  -- perd rien, le cron reprend au curseur last_relayed_msg_id.
+  CREATE TABLE IF NOT EXISTS lecercle_dm_messages (
+    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+    telegram_id         INTEGER NOT NULL,
+    direction           TEXT    NOT NULL CHECK (direction IN ('in','out')),
+    sender              TEXT    NOT NULL,
+    kind                TEXT    NOT NULL,
+    text                TEXT,
+    telegram_message_id INTEGER,
+    broadcast_id        INTEGER,
+    created_at          TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%f','now'))
+  );
+  CREATE INDEX IF NOT EXISTS idx_lc_dm_msg ON lecercle_dm_messages(telegram_id, id);
+  -- Un update rejoué ne s'insère pas deux fois, donc n'est pas relayé deux fois.
+  CREATE UNIQUE INDEX IF NOT EXISTS idx_lc_dm_msg_in
+    ON lecercle_dm_messages(telegram_id, telegram_message_id)
+    WHERE direction = 'in' AND telegram_message_id IS NOT NULL;
+
+  -- Lead Nexa mis en silence (awaiting_human_since) PAR une réponse à une
+  -- diffusion. Lu par listExpiredAwaiting (live-takeover.ts) : un tel silence
+  -- n'expire pas au bout de 90 min, il dure jusqu'à la réponse de l'opérateur
+  -- ou /bot. Table séparée : aucune colonne ajoutée à nexa_leads.
+  CREATE TABLE IF NOT EXISTS lecercle_nexa_holds (
+    lead_id      INTEGER PRIMARY KEY,
+    armed_at     TEXT NOT NULL,
+    broadcast_id INTEGER
+  );
+`;
+
+/**
+ * Heure d'envoi RÉSERVÉE : une ligne en 'unknown' n'a pas de sent_at, mais a pu
+ * être reçue — la fenêtre de relais part de là. Colonne ajoutée à une table de
+ * ce module (lecercle_broadcast_targets), jamais à une table d'un autre.
+ */
+export const LECERCLE_DM_RELAY_ALTERS = [
+  `ALTER TABLE lecercle_broadcast_targets ADD COLUMN claimed_at TEXT`,
+];
+
+/**
+ * Clause lue par listExpiredAwaiting (live-takeover.ts), sur l'alias de table
+ * `nexa_leads`. Vraie si le silence en cours a été armé (ou ré-armé) par une
+ * réponse à une diffusion : armed_at ≥ awaiting_human_since, car
+ * setAwaitingHuman garde le PREMIER horodatage (COALESCE).
+ */
+export const LECERCLE_HOLD_EXCLUSION_SQL = `
+  NOT EXISTS (SELECT 1 FROM lecercle_nexa_holds h
+               WHERE h.lead_id = nexa_leads.id
+                 AND h.armed_at >= nexa_leads.awaiting_human_since)`;

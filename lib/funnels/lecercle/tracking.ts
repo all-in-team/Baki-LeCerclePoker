@@ -113,12 +113,21 @@ function upsertSeen(from: any, at: string, db: DbLike): void {
  */
 export function attributeReply(telegramId: number, at: string, dbOverride?: DbLike): boolean {
   const db = dbOverride ?? getDb();
+  // Même règle que la fenêtre du relais (relay.ts) : envoyée OU issue inconnue,
+  // datée à la réservation (claimed_at) quand elle existe — sent_at n'est écrit
+  // qu'après la réponse de Telegram. Sans la colonne (migration du relais pas
+  // appliquée), on retombe sur sent_at et les seules lignes envoyées.
+  const hasClaimed = (db.prepare(
+    `SELECT COUNT(*) AS n FROM pragma_table_info('lecercle_broadcast_targets') WHERE name = 'claimed_at'`
+  ).get() as { n: number }).n > 0;
+  const ts = hasClaimed ? "COALESCE(claimed_at, sent_at)" : "sent_at";
+  const statuses = hasClaimed ? "('sent','unknown')" : "('sent')";
   const info = db.prepare(
     `UPDATE lecercle_broadcast_targets SET replied_at = ?
       WHERE id = (SELECT id FROM lecercle_broadcast_targets
-                   WHERE telegram_id = ? AND status = 'sent'
-                     AND sent_at <= ? AND sent_at >= datetime(?, ?)
-                   ORDER BY sent_at DESC, id DESC LIMIT 1)
+                   WHERE telegram_id = ? AND status IN ${statuses}
+                     AND ${ts} IS NOT NULL AND ${ts} <= ? AND ${ts} >= datetime(?, ?)
+                   ORDER BY ${ts} DESC, id DESC LIMIT 1)
         AND replied_at IS NULL`
   ).run(at, telegramId, at, at, `-${REPLY_WINDOW_HOURS} hours`);
   return info.changes > 0;

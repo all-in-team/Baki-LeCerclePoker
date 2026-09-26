@@ -38,4 +38,16 @@ export function initLecercleBroadcastCrons() {
       console.error("[LECERCLE CRON] file de diffusion:", e?.message ?? e);
     }
   }, { timezone: "Europe/Paris" });
+
+  // Relais des réponses aux diffusions : reprend ce qu'un échec Telegram a laissé
+  // en attente (sujet pas encore créé, 429, réseau). Décalé de la file d'envoi.
+  cron.schedule("2-59/5 * * * *", async () => {
+    try {
+      const { drainPendingDmRelays } = await import("./relay");
+      const r = await drainPendingDmRelays();
+      if (r.threads) console.log(`[LECERCLE RELAY] reprise — ${r.threads} fil(s), ${r.posted} posté(s), ${r.deferred} en attente`);
+    } catch (e: any) {
+      console.error("[LECERCLE CRON] reprise relais:", e?.message ?? e);
+    }
+  }, { timezone: "Europe/Paris" });
 }

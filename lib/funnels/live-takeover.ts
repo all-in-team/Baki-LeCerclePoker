@@ -21,6 +21,8 @@
 // Ce module ne dépend PAS de lib/nexa-funnel.ts (qui, lui, l'importe) : il lit
 // `nexa_leads` en direct. Sans ça, cycle d'import à la compilation.
 import { getDb } from "@/lib/db";
+// Module pur (aucun import) : la clause d'exclusion des silences armés par une diffusion.
+import { LECERCLE_HOLD_EXCLUSION_SQL } from "./lecercle/schema";
 import {
   adminChatId, esc, isServiceMessage, tg, type TgResult,
 } from "@/lib/funnels/telegram-api";
@@ -223,7 +225,13 @@ function releaseAwaitingOnly(leadId: number): void {
  * la main tout seul.
  */
 export function listExpiredAwaiting(): Array<{ id: number; awaiting_human_since: string }> {
-  return getDb().prepare(`
+  // Silence armé par une réponse à une diffusion @LeCercle_Lebot : il n'expire pas,
+  // il dure jusqu'à la réponse de l'opérateur ou /bot (Hugo, 2026-09-25). Clause
+  // ajoutée SEULEMENT si sa table existe : une migration en échec ne doit jamais
+  // faire tomber l'expiration des autres leads.
+  const db = getDb();
+  const holds = db.prepare(`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'lecercle_nexa_holds'`).get();
+  return db.prepare(`
     SELECT id, awaiting_human_since
     FROM nexa_leads
     WHERE awaiting_human_since IS NOT NULL
@@ -231,6 +239,7 @@ export function listExpiredAwaiting(): Array<{ id: number; awaiting_human_since:
       AND blocked = 0
       AND relances_off = 0
       AND awaiting_human_since <= datetime('now', ?)
+      ${holds ? `AND ${LECERCLE_HOLD_EXCLUSION_SQL}` : ""}
     ORDER BY awaiting_human_since
     LIMIT 50
   `).all(`-${AWAITING_EXPIRY_MINUTES} minutes`) as Array<{ id: number; awaiting_human_since: string }>;

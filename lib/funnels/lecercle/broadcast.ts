@@ -461,6 +461,38 @@ export interface TargetRow {
   first_click_at: string | null;
   click_count: number;
   replied_at: string | null;
+  /** Lien vers son sujet au groupe Support (Nexa ou relais des diffusions), s'il existe. */
+  topic_link?: string | null;
+}
+
+/** t.me/c/<id sans -100>/<sujet> — seulement pour un supergroupe (-100…). */
+function topicUrl(chatId: string | null | undefined, threadId: number | null | undefined): string | null {
+  const s = String(chatId ?? "");
+  if (!threadId || !s.startsWith("-100")) return null;
+  return `https://t.me/c/${s.slice(4)}/${threadId}`;
+}
+
+/**
+ * Sujet d'un compte : celui du relais des diffusions, sinon son sujet Nexa.
+ * Lecture tolérante : une table absente (migration en échec) donne « pas de lien »,
+ * jamais une page cassée.
+ */
+function topicLinksFor(telegramIds: number[], db: DbLike): Map<number, string> {
+  const out = new Map<number, string>();
+  const tryAll = (sql: string) => {
+    try {
+      const st = db.prepare(sql);
+      for (const id of telegramIds) {
+        if (out.has(id)) continue;
+        const r = st.get(id) as { c: string | null; t: number | null } | undefined;
+        const url = topicUrl(r?.c, r?.t);
+        if (url) out.set(id, url);
+      }
+    } catch { /* table ou colonne absente : pas de lien */ }
+  };
+  tryAll(`SELECT admin_chat_id AS c, thread_id AS t FROM lecercle_dm_threads WHERE telegram_id = ?`);
+  tryAll(`SELECT admin_topic_chat_id AS c, admin_thread_id AS t FROM nexa_leads WHERE tg_user_id = ?`);
+  return out;
 }
 
 export function listTargets(
@@ -483,11 +515,16 @@ export function listTargets(
     params.push(like, like, like);
   }
   params.push(limit);
-  return db.prepare(
+  const rows = db.prepare(
     `SELECT id, telegram_id, username, first_name, status, error_code, error, sent_at,
             first_click_at, click_count, replied_at
        FROM lecercle_broadcast_targets WHERE ${where.join(" AND ")} ORDER BY id LIMIT ?`
   ).all(...params) as TargetRow[];
+  // Lien pour tout destinataire qui a un sujet, réponse comptée ou non : une
+  // conversation relayée ne doit jamais être invisible depuis la diffusion.
+  const links = topicLinksFor(rows.map(r => r.telegram_id), db);
+  for (const r of rows) r.topic_link = links.get(r.telegram_id) ?? null;
+  return rows;
 }
 
 // ── Envoi ─────────────────────────────────────────────────
@@ -629,8 +666,14 @@ async function drainInner(owner: string, opts: DrainOpts, db: DbLike, dbOverride
       WHERE broadcast_id = ? AND status = 'pending' ORDER BY id LIMIT ?`
   ).all(bc.id, max) as Array<{ id: number; telegram_id: number; click_token: string }>;
 
+  // claimed_at vient de la migration du relais (add_lecercle_dm_relay_v1). Si elle
+  // a échoué, on réserve sans l'horodatage plutôt que de bloquer toutes les
+  // diffusions sur une colonne manquante (audit relais, finding 7).
+  const hasClaimedAt = (db.prepare(
+    `SELECT COUNT(*) AS n FROM pragma_table_info('lecercle_broadcast_targets') WHERE name = 'claimed_at'`
+  ).get() as { n: number }).n > 0;
   const claim = db.prepare(
-    `UPDATE lecercle_broadcast_targets SET status = 'sending', attempts = attempts + 1
+    `UPDATE lecercle_broadcast_targets SET status = 'sending', attempts = attempts + 1${hasClaimedAt ? ", claimed_at = datetime('now')" : ""}
       WHERE id = ? AND status = 'pending'
         AND EXISTS (SELECT 1 FROM lecercle_broadcasts WHERE id = ? AND status = 'running')
         AND EXISTS (SELECT 1 FROM lecercle_broadcast_lock WHERE id = 1 AND owner = ? AND until >= datetime('now'))`

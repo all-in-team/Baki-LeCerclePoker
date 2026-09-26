@@ -167,7 +167,13 @@ export default function BroadcastDetailClient({ broadcast, initialStats, initial
                   <td style={{ padding: "8px", color: r.first_click_at ? "#60A5FA" : "#3A3A48", whiteSpace: "nowrap" }}>
                     {r.first_click_at ? `${fmtUtc8(r.first_click_at)}${r.click_count > 1 ? ` · ×${r.click_count}` : ""}` : "—"}
                   </td>
-                  <td style={{ padding: "8px 18px", color: r.replied_at ? "#A78BFA" : "#3A3A48", whiteSpace: "nowrap" }}>{fmtUtc8(r.replied_at)}</td>
+                  <td style={{ padding: "8px 18px", color: r.replied_at ? "#A78BFA" : "#3A3A48", whiteSpace: "nowrap" }}>
+                    {fmtUtc8(r.replied_at)}
+                    {r.topic_link && (
+                      <a href={r.topic_link} target="_blank" rel="noopener noreferrer"
+                        style={{ marginLeft: 8, color: "#60A5FA", fontSize: 11.5 }}>ouvrir le sujet ↗</a>
+                    )}
+                  </td>
                 </tr>
               );
             })}
