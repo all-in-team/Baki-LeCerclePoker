@@ -2398,6 +2398,33 @@ function initSchema(db: Database.Database) {
     console.error(`[MIGRATION:add_group_lifecycle_v1] FAILED:`, err.message);
   }
 
+  // `first_msg_at` : horodatage du premier message envoyé par le propriétaire du
+  // groupe dans SON groupe. Alimente `runSilentGroupCleanup` — un lead qui a
+  // rejoint mais n'a jamais parlé dans les 7 j est considéré comme abandonné.
+  //
+  // BACKFILL : toutes les lignes existantes reçoivent une valeur non-NULL
+  // (`COALESCE(joined_at, created_at)`). On n'a JAMAIS tracé cette info avant, donc
+  // on ne peut pas départager un vieux groupe muet d'un vieux groupe actif. Les
+  // marquer « déjà parlés » les protège du nouveau job — seuls les groupes créés
+  // APRÈS cette migration seront candidats. Le rayon d'action est borné par
+  // construction, exactement comme `add_group_lifecycle_v1`.
+  try {
+    const fix = db.prepare(`INSERT OR IGNORE INTO _applied_fixes (name) VALUES (?)`).run("add_group_first_msg_v1");
+    if (fix.changes > 0) {
+      try { db.exec(`ALTER TABLE group_creations ADD COLUMN first_msg_at TEXT`); } catch {}
+      db.exec(`
+        UPDATE group_creations
+        SET first_msg_at = COALESCE(joined_at, created_at)
+        WHERE first_msg_at IS NULL;
+        CREATE INDEX IF NOT EXISTS idx_group_creations_silent
+          ON group_creations(cleaned_at, first_msg_at, joined_at, created_at);
+      `);
+      console.log("[MIGRATION] add_group_first_msg_v1 applied");
+    }
+  } catch (err: any) {
+    console.error(`[MIGRATION:add_group_first_msg_v1] FAILED:`, err.message);
+  }
+
   // Porte unique de création de groupe (incident Alexis, 2026-08-04).
   //
   // Alexis avait déjà son groupe (`players.telegram_group_id = -1003723869680`, mai) ;

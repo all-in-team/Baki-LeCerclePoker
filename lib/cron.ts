@@ -77,6 +77,47 @@ export function initCronJobs() {
     console.log("[CRON] ghost-group-cleanup DISABLED");
   }
 
+  // Groupes silencieux — 1×/jour à 6h15 Paris, juste après le job 24 h. Un groupe
+  // rejoint mais sans AUCUN message du lead depuis 7 j → purge + joueur en `churned`.
+  // 1er passage : DRY-RUN loggé, aucune action Telegram, marqueur `settings`
+  // `silent_group_cleanup_dry_run_done` posé au succès pour laisser passer le
+  // vrai run le lendemain. Garde-fous financiers : deal actif OU tx wallet ⇒ skip
+  // total (voir silentBusinessGuard).
+  if (process.env.SILENT_GROUP_CLEANUP_ENABLED !== "false") {
+    cron.schedule("15 6 * * *", async () => {
+      console.log("[CRON] silent-group-cleanup firing");
+      try {
+        const db = getDb();
+        const flag = db.prepare(`SELECT value FROM settings WHERE key = 'silent_group_cleanup_dry_run_done'`)
+          .get() as { value: string } | undefined;
+        const dryRun = !flag;
+        const { runSilentGroupCleanup, reportSilentGroupCleanup } = await import("./group-lifecycle");
+        const result = await runSilentGroupCleanup({ dryRun });   // dryRun explicite, jamais implicite
+        console.log(
+          `[CRON] silent-group-cleanup: dry_run=${result.dry_run} candidates=${result.candidates} ` +
+          `purged=${result.purged.length} tagged=${result.tagged.length} healed=${result.self_healed.length} ` +
+          `skipped=${result.skipped.length} churned=${result.churned.length}`
+        );
+        await reportSilentGroupCleanup(result);
+        // Le dry-run n'est « fait » que s'il a EXAMINÉ au moins un groupe : un passage à vide
+        // (le cas des 7 premiers jours, la migration protégeant tous les groupes existants)
+        // ne doit pas débloquer un passage réel sur des candidats jamais prévisualisés.
+        if (dryRun && result.ok && result.scanned > 0) {
+          db.prepare(
+            `INSERT INTO settings (key, value) VALUES ('silent_group_cleanup_dry_run_done', ?)
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value`
+          ).run(new Date().toISOString());
+          console.log("[CRON] silent-group-cleanup: dry-run marker posé, prochain run en mode réel");
+        }
+      } catch (e: any) {
+        console.error("[CRON] silent-group-cleanup failed:", e);
+      }
+    }, opts);
+    console.log("[CRON] silent-group-cleanup registered (tous les jours à 6h15 Paris — dry-run au 1er passage)");
+  } else {
+    console.log("[CRON] silent-group-cleanup DISABLED");
+  }
+
   // Snapshot quotidien de trésorerie — 23h50 Paris (graph "Trésorerie · évolution").
   if (process.env.TREASURY_SNAPSHOT_ENABLED !== "false") {
     cron.schedule("50 23 * * *", async () => {
