@@ -1,3 +1,4 @@
+import type Database from "better-sqlite3";
 import { getDb } from "@/lib/db";
 import { deletePlayer } from "@/lib/queries";
 import {
@@ -40,7 +41,19 @@ export function archivePlayers(ids: number[], reason: string): number {
 
 /** Désarchive : toujours permis, retour immédiat dans la vue principale. */
 export function unarchivePlayer(id: number): void {
-  getDb().prepare(`UPDATE players SET archived_at = NULL, archive_reason = NULL WHERE id = ?`).run(id);
+  unarchivePlayerOn(getDb(), id);
+}
+
+/**
+ * Variante à db explicite (désarchivage automatique, lib/player-status-auto.ts). Avec
+ * `expectedArchivedAt`, ne désarchive que si l'archive n'a pas bougé depuis le calcul.
+ * Retourne le nombre de lignes modifiées (0 ou 1).
+ */
+export function unarchivePlayerOn(db: Database.Database, id: number, expectedArchivedAt?: string): number {
+  if (expectedArchivedAt === undefined)
+    return db.prepare(`UPDATE players SET archived_at = NULL, archive_reason = NULL WHERE id = ?`).run(id).changes;
+  return db.prepare(`UPDATE players SET archived_at = NULL, archive_reason = NULL WHERE id = ? AND archived_at = ?`)
+    .run(id, expectedArchivedAt).changes;
 }
 
 /**

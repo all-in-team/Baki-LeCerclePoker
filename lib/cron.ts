@@ -222,6 +222,28 @@ export function initCronJobs() {
   }, opts);
   console.log("[CRON] relay-drain + awaiting-expiry + question-nudges registered (toutes les 5 min)");
 
+  // Statut active / inactive automatique (règle Baki 2026-09-25, lib/player-status-auto.ts) :
+  // chaque nuit à 04:30, et le dimanche à 11:45 — juste AVANT le rappel cashout de 12:00,
+  // pour qu'il parte sur des statuts à jour. Éteint tant que PLAYER_STATUS_AUTO_ENABLED
+  // n'est pas "true" (activation après pose des « statut manuel » et validation du plan).
+  if (process.env.PLAYER_STATUS_AUTO_ENABLED === "true") {
+    const runStatusAuto = async (trigger: "nightly" | "sunday") => {
+      try {
+        const { applyStatusAutoOn } = await import("./player-status-auto");
+        const r = applyStatusAutoOn(getDb(), trigger);
+        console.log(`[CRON] player-status-auto (${trigger}): ${r.applied.status} statut(s), ${r.applied.unarchived} désarchivage(s) — fenêtre depuis ${r.cutoff} UTC`);
+      } catch (e: any) {
+        console.error(`[CRON] player-status-auto (${trigger}) failed — rien écrit:`, e);
+        await notifyOps(`🚨 <b>Statut auto des joueurs (${trigger}) : rien n'a été écrit</b>\n<code>${String(e?.message ?? e).slice(0, 400)}</code>`);
+      }
+    };
+    cron.schedule("30 4 * * *", () => runStatusAuto("nightly"), opts);
+    cron.schedule("45 11 * * 0", () => runStatusAuto("sunday"), opts);
+    console.log("[CRON] player-status-auto registered (04:30 Paris chaque jour, dimanche 11:45 Paris)");
+  } else {
+    console.log("[CRON] player-status-auto DISABLED (set PLAYER_STATUS_AUTO_ENABLED=true to enable)");
+  }
+
   if (process.env.CASHOUT_CRONS_ENABLED !== "true") {
     console.log("[CRON] cashout crons DISABLED (set CASHOUT_CRONS_ENABLED=true to enable)");
     return;

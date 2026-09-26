@@ -31,6 +31,7 @@ export default function PlayerEditModal({ player, dealsByPlayer, activeGames, ap
     name: player?.name ?? "",
     tier: player?.tier ?? "B",
     status: player?.status ?? "active",
+    status_manual: !!player?.status_manual,
     telegram_handle: player?.telegram_handle ?? "",
     telegram_phone: player?.telegram_phone ?? "",
     notes: player?.notes ?? "",
@@ -62,7 +63,10 @@ export default function PlayerEditModal({ player, dealsByPlayer, activeGames, ap
         body: JSON.stringify({
           name: form.name.trim(),
           tier: form.tier,
-          status: form.status,
+          // Statut envoyé seulement s'il a été changé ici : sinon enregistrer la modale
+          // écraserait une bascule faite par l'automate depuis son ouverture.
+          ...(form.status !== (p.status ?? "active") ? { status: form.status } : {}),
+          status_manual: form.status_manual,
           telegram_handle: form.telegram_handle.trim() || null,
           telegram_phone: form.telegram_phone.trim() || null,
           notes: form.notes.trim() || null,
@@ -143,13 +147,18 @@ export default function PlayerEditModal({ player, dealsByPlayer, activeGames, ap
             </select>
           </div>
           <div style={{ flex: 1 }}>
-            <label style={LBL} title="Libellé manuel, sans effet sur l'affichage : seule l'archive masque un joueur">Statut CRM</label>
+            <label style={LBL} title="Active / inactive recalculé chaque nuit sur l'activité de jeu des 21 derniers jours, sauf en statut manuel">Statut CRM</label>
             <select value={form.status} onChange={e => setForm({ ...form, status: e.target.value })} style={INP}>
               <option value="active">Active</option>
               <option value="signed">Signed</option>
               <option value="inactive">Inactive</option>
               <option value="churned">Churned</option>
             </select>
+            <label style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 6, fontSize: 12, color: "var(--text-muted)", cursor: "pointer" }}
+              title="Coché : le recalcul automatique (active si activité de jeu dans les 21 derniers jours) ne touche plus au statut de ce joueur">
+              <input type="checkbox" checked={form.status_manual} onChange={e => setForm({ ...form, status_manual: e.target.checked })} />
+              Statut manuel
+            </label>
           </div>
         </div>
 

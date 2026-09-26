@@ -39,6 +39,7 @@ function getActivePlayersForCashout(): CashoutPlayer[] {
     SELECT id, name, telegram_handle, telegram_id, telegram_group_id, accounting_topic_id
     FROM players
     WHERE status IN ('active', 'signed')
+      AND archived_at IS NULL
       AND telegram_group_id IS NOT NULL
       AND accounting_topic_id IS NOT NULL
   `).all() as CashoutPlayer[];

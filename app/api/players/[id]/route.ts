@@ -13,7 +13,7 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
   try {
     // Champs vérifiés AVANT toute écriture : un champ refusé ne doit pas laisser un
     // archivage déjà écrit derrière lui.
-    if (Object.keys(fields).length > 0) assertUpdatablePlayerFields(Object.keys(fields));
+    if (Object.keys(fields).length > 0) assertUpdatablePlayerFields(Object.keys(fields), fields);
     if (archived === true) archivePlayers([Number(id)], archive_reason ?? "retiré à la main");
     else if (archived === false) unarchivePlayer(Number(id));
     if (Object.keys(fields).length > 0) updatePlayer(Number(id), fields);
