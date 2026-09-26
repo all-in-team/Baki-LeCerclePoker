@@ -88,7 +88,9 @@ const NEVER_PLAYER_KEEP_SQL = `
        OR EXISTS(SELECT 1 FROM qqpk_funnel_leads x WHERE x.telegram_id = p.telegram_id)
        OR EXISTS(SELECT 1 FROM pending_game_pitches x WHERE x.player_telegram_id = p.telegram_id)))
   -- statut déjà travaillé à la main + création manuelle (roster initial / modale Ajouter)
-  OR p.status != 'active'
+  -- (un inactive posé par l'automate, lib/player-status-auto.ts, n'est PAS un statut travaillé)
+  OR p.status_manual = 1
+  OR (p.status != 'active' AND NOT EXISTS(SELECT 1 FROM player_status_changes c WHERE c.player_id = p.id AND c.kind = 'status'))
   OR p.joined_via IS NULL
 `;
 
@@ -139,18 +141,26 @@ export function insertPlayer(data: { name: string; telegram_handle?: string; tel
 // écrivain lib/players-archive.ts) — et un nom de clé allait tel quel dans le SQL.
 const UPDATABLE_PLAYER_FIELDS = new Set([
   "name", "telegram_handle", "telegram_phone", "status", "notes", "action_pct",
-  "tron_address", "tron_app_id", "tier", "tele_wallet_cashout",
+  "tron_address", "tron_app_id", "tier", "tele_wallet_cashout", "status_manual",
 ]);
 
-/** Lève si une clé n'est pas modifiable — à appeler AVANT toute écriture (pas d'écriture partielle). */
-export function assertUpdatablePlayerFields(keys: string[]): void {
+/**
+ * Lève si une clé n'est pas modifiable, ou si `status_manual` n'est pas true/false/0/1 (une
+ * chaîne "false" est truthy : elle passerait le joueur en manuel) — à appeler AVANT toute
+ * écriture (pas d'écriture partielle).
+ */
+export function assertUpdatablePlayerFields(keys: string[], data?: Record<string, unknown>): void {
   const bad = keys.filter(k => !UPDATABLE_PLAYER_FIELDS.has(k));
   if (bad.length) throw new Error(`champ(s) non modifiable(s) : ${bad.join(", ")}`);
+  if (data && "status_manual" in data && ![true, false, 0, 1].includes(data.status_manual as never))
+    throw new Error(`status_manual non modifiable : valeur ${JSON.stringify(data.status_manual)} (attendu true/false)`);
 }
 
-export function updatePlayer(id: number, data: Partial<{ name: string; telegram_handle: string; telegram_phone: string; status: string; notes: string; action_pct: number; tron_address: string; tron_app_id: number; tier: string; tele_wallet_cashout: string }>) {
+export function updatePlayer(id: number, data: Partial<{ name: string; telegram_handle: string; telegram_phone: string; status: string; notes: string; action_pct: number; tron_address: string; tron_app_id: number; tier: string; tele_wallet_cashout: string; status_manual: boolean | number }>) {
   const db = getDb();
-  assertUpdatablePlayerFields(Object.keys(data));
+  assertUpdatablePlayerFields(Object.keys(data), data);
+  // SQLite ne lie pas de booléen : « statut manuel » est stocké en 0/1.
+  if ("status_manual" in data) data = { ...data, status_manual: data.status_manual ? 1 : 0 };
   const sets = Object.keys(data).map(k => `${k} = @${k}`).join(", ");
   db.prepare(`UPDATE players SET ${sets} WHERE id = @id`).run({ ...data, id });
 }

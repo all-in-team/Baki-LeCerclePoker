@@ -37,6 +37,12 @@ import {
 import {
   LECERCLE_BROADCAST_SCHEMA_SQL, LECERCLE_MIGRATION_BROADCAST_V1, backfillBotUsers as lecercleBackfillBotUsers,
 } from "./funnels/lecercle/schema";
+// Module pur (aucun import) : schéma du statut automatique des joueurs.
+import {
+  PLAYER_STATUS_AUTO_V1, PLAYER_STATUS_MANUAL_SQL, PLAYER_STATUS_CHANGES_SQL,
+} from "./player-status-auto-schema";
+// Module pur (aucun import) : trace des passages de sync wallet.
+import { WALLET_SYNC_RUNS_V1, WALLET_SYNC_RUNS_SQL } from "./wallet-sync-schema";
 
 // Quarantaine des mouvements wallet — cf. la migration en bas de ce fichier.
 export const WALLET_TX_QUARANTINE_V1 = "add_wallet_tx_quarantine_v1";
@@ -4081,5 +4087,43 @@ function initSchema(db: Database.Database) {
     }
   } catch (err: any) {
     console.error(`[MIGRATION:${LECERCLE_MIGRATION_BROADCAST_V1}] FAILED (sera rejouée au prochain boot):`, err.message);
+  }
+
+  // ── Statut active / inactive automatique ───────────────────────────────────
+  //
+  // Une colonne players.status_manual (défaut 0 : tous les joueurs restent gérés par
+  // l'automate) et une table de trace NOUVELLE. Aucune donnée existante modifiée :
+  // l'automate lui-même ne tourne que si PLAYER_STATUS_AUTO_ENABLED=true (lib/cron.ts).
+  try {
+    const already = db.prepare(`SELECT 1 FROM _applied_fixes WHERE name = ?`).get(PLAYER_STATUS_AUTO_V1);
+    if (!already) {
+      db.transaction(() => {
+        const hasCol = db.prepare(`SELECT 1 FROM pragma_table_info('players') WHERE name = 'status_manual'`).get();
+        if (!hasCol) db.exec(PLAYER_STATUS_MANUAL_SQL);
+        db.exec(PLAYER_STATUS_CHANGES_SQL);
+        db.prepare(`INSERT OR IGNORE INTO _applied_fixes (name) VALUES (?)`).run(PLAYER_STATUS_AUTO_V1);
+      })();
+      console.log(`[MIGRATION] ${PLAYER_STATUS_AUTO_V1} applied — players.status_manual + player_status_changes`);
+    }
+  } catch (err: any) {
+    console.error(`[MIGRATION:${PLAYER_STATUS_AUTO_V1}] FAILED (sera rejouée au prochain boot):`, err.message);
+  }
+
+  // ── Trace des passages de sync wallet ──────────────────────────────────────
+  //
+  // Table NOUVELLE, aucune donnée existante touchée. Sert au garde-fou du statut
+  // automatique : « dernière sync RÉUSSIE » d'une room, et non sa dernière tx (une
+  // room calme n'a pas de tx, elle n'est pas pour autant mal synchronisée).
+  try {
+    const already = db.prepare(`SELECT 1 FROM _applied_fixes WHERE name = ?`).get(WALLET_SYNC_RUNS_V1);
+    if (!already) {
+      db.transaction(() => {
+        db.exec(WALLET_SYNC_RUNS_SQL);
+        db.prepare(`INSERT OR IGNORE INTO _applied_fixes (name) VALUES (?)`).run(WALLET_SYNC_RUNS_V1);
+      })();
+      console.log(`[MIGRATION] ${WALLET_SYNC_RUNS_V1} applied — wallet_sync_runs`);
+    }
+  } catch (err: any) {
+    console.error(`[MIGRATION:${WALLET_SYNC_RUNS_V1}] FAILED (sera rejouée au prochain boot):`, err.message);
   }
 }

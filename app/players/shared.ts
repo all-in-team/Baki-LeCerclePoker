@@ -38,6 +38,8 @@ export interface Player {
   /** Archive : non-null ⇒ hors de la vue principale (sauf si ouvert), restaurable d'un clic. */
   archived_at: string | null;
   archive_reason: string | null;
+  /** 1 = « statut manuel » : l'automate (lib/player-status-auto.ts) ne touche pas au statut. */
+  status_manual: number;
   /**
    * Ce qui reste à régler (solde non nul…), libellés de lib/queries/player-open.ts. Non vide ⇒
    * dans « Archivés », le joueur passe en tête avec le badge « à régler » et ce motif.

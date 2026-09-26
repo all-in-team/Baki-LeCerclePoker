@@ -41,7 +41,7 @@ export default async function PlayersPage({ searchParams }: {
   const rawPlayers = db.prepare(`
     SELECT p.id, p.name, p.telegram_handle, p.telegram_phone, p.status, p.tier, p.notes,
       p.tron_address, p.tron_app_id, p.telegram_id, p.created_at, p.joined_via,
-      p.archived_at, p.archive_reason,
+      p.archived_at, p.archive_reason, p.status_manual,
       (SELECT MAX(created_at) FROM crm_notes WHERE player_id = p.id) AS last_note_at,
       EXISTS(SELECT 1 FROM affiliate_relationships WHERE affiliate_player_id = p.id AND status='active') AS is_affiliate,
       EXISTS(SELECT 1 FROM affiliate_relationships WHERE referred_player_id = p.id AND status='active') AS is_referred
