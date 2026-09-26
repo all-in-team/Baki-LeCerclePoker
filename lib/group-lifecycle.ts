@@ -29,8 +29,9 @@
 import { getDb } from "@/lib/db";
 import {
   getChatMembers, getUserbotMe, kickFromChannel, leaveUserbotChannels,
-  renamePlayerGroup, getInviteLink,
+  renamePlayerGroup, getInviteLink, findUserFirstMessage,
 } from "@/lib/telegram-userbot";
+import { legacyHistoryBatchOn, applyHistoryVerdictOn, type HistoryOutcome } from "@/lib/group-silent-history";
 import { sendMsg, AGENT_CHAT_ID } from "@/lib/telegram-commands/helpers";
 
 export type GroupOwnerKind = "player" | "nexa_lead";
@@ -57,6 +58,8 @@ export type GroupCreationRow = {
   cleaned_at: string | null;
   cleanup_reason: string | null;
   first_msg_at: string | null;
+  first_msg_source?: string | null;
+  history_attempts?: number;
 };
 
 // ── Registre ──────────────────────────────────────────────
@@ -918,14 +921,62 @@ export async function runSilentGroupCleanup(opts?: {
   return res;
 }
 
+// ── Stock des anciens groupes : vérification d'historique (Hugo 2026-09-27) ──
+// Logique base dans lib/group-silent-history.ts ; ici, la lecture Telegram par lots.
+
+export interface LegacyHistoryResult {
+  ok: boolean; error: string | null; checked: number; remaining: number;
+  counts: Record<HistoryOutcome, number>;
+}
+
+/**
+ * Relit l'historique de `limit` anciens groupes (source 'backfill') et tranche : a parlé ⇒
+ * protégé ; historique complet sans un mot du lead ⇒ redevient candidat du job silencieux.
+ * N'écrit que dans group_creations, jamais d'action Telegram (lecture seule côté Telegram).
+ */
+export async function verifyLegacyGroupHistory(opts?: { limit?: number }): Promise<LegacyHistoryResult> {
+  const limit = Math.min(opts?.limit ?? 40, 40);
+  const db = getDb();
+  const res: LegacyHistoryResult = {
+    ok: false, error: null, checked: 0, remaining: 0,
+    counts: { spoke: 0, silent: 0, truncated: 0, retry: 0, unreadable: 0, unchanged: 0 },
+  };
+  const rows = legacyHistoryBatchOn(db, limit);
+  if (rows.length === 0) { res.ok = true; return res; }
+  const me = await getUserbotMe();
+  if (!me) { res.error = "userbot non connecté"; return res; }
+  for (const row of rows) {
+    const v = await findUserFirstMessage(row.chat_id, Number(row.owner_key));
+    const outcome = applyHistoryVerdictOn(db, row.chat_id, v);
+    res.counts[outcome]++;
+    res.checked++;
+    if (v.error) console.warn(`[GROUPS] historique ${row.chat_id} illisible : ${v.error}`);
+    await sleep(800);
+  }
+  res.remaining = (db.prepare(
+    `SELECT COUNT(*) AS n FROM group_creations WHERE cleaned_at IS NULL AND joined_at IS NOT NULL AND first_msg_source = 'backfill'`
+  ).get() as { n: number }).n;
+  res.ok = true;
+  return res;
+}
+
 /** Rapport dans le chat agent. Silencieux si rien n'a bougé (même règle que ghost cleanup). */
-export async function reportSilentGroupCleanup(r: SilentGroupCleanupResult): Promise<void> {
+export async function reportSilentGroupCleanup(r: SilentGroupCleanupResult, history?: LegacyHistoryResult): Promise<void> {
   try {
     // Un dry-run qui a examiné au moins un groupe est TOUJOURS rapporté : c'est l'aperçu
     // que l'opérateur doit voir avant le premier passage réel.
     const quiet = r.purged.length === 0 && r.tagged.length === 0 && r.self_healed.length === 0 && r.churned.length === 0;
-    if (r.ok && quiet && !(r.dry_run && r.scanned > 0)) return;
+    const historyMoved = !!history && history.checked > 0;
+    if (r.ok && quiet && !(r.dry_run && r.scanned > 0) && !historyMoved) return;
     const lines: string[] = [`🕸 <b>Groupes silencieux (7 j)</b>${r.dry_run ? " — <i>dry-run</i>" : ""}`];
+    if (history && (history.checked > 0 || !history.ok)) {
+      const c = history.counts;
+      lines.push(history.ok
+        ? `🔎 Anciens groupes — historique relu : ${history.checked} · ${c.spoke} ont parlé (protégés) · ` +
+          `${c.silent} jamais un mot (→ candidats) · ${c.truncated + c.unreadable} indécidables (protégés)` +
+          (c.retry ? ` · ${c.retry} à relire` : "") + (history.remaining ? ` · ${history.remaining} restant(s)` : "")
+        : `🔎 Anciens groupes — lecture impossible : ${history.error}`);
+    }
     if (!r.ok) {
       lines.push(`❌ Échec : ${r.error}`);
     } else {

@@ -1550,3 +1550,48 @@ export async function deleteChannelAsOwner(chatId: string | number): Promise<{
     return { ok: false, deleted: false, error: errMsg(e), title: audit.title };
   }
 }
+
+// ── findUserFirstMessage ────────────────────────────────
+// A-t-il déjà parlé ? Parcourt l'historique d'un groupe (du plus récent au plus ancien, par
+// pages de 100) et rend la date du PLUS ANCIEN vrai message envoyé par `userId`. Les messages
+// de service (« X a rejoint », changement de titre…) ne comptent pas : seul un vrai message.
+// Au-delà de `maxMessages` sans avoir tout lu, `truncated` = true — l'appelant ne doit alors
+// RIEN conclure d'un « pas trouvé » (on n'a pas tout vu).
+export async function findUserFirstMessage(chatId: string, userId: number, maxMessages = 1500): Promise<{
+  checked: boolean; found_at: string | null; scanned: number; truncated: boolean; error: string | null;
+}> {
+  const res = { checked: false, found_at: null as string | null, scanned: 0, truncated: false, error: null as string | null };
+  const client = await getClient();
+  if (!client) { res.error = "userbot non connecté"; return res; }
+  try {
+    const numericId = parseInt(String(chatId).replace(/^-100/, ""), 10);
+    const channelPeer = await client.getInputEntity(
+      new Api.PeerChannel({ channelId: BigInt(numericId) as any })
+    ) as unknown as Api.InputChannel;
+    let offsetId = 0;
+    for (;;) {
+      const hist: any = await client.invoke(new Api.messages.GetHistory({
+        peer: channelPeer, offsetId, offsetDate: 0, addOffset: 0,
+        limit: 100, maxId: 0, minId: 0, hash: BigInt(0) as any,
+      }));
+      const msgs: any[] = (hist.messages ?? []).filter((m: any) => m.className !== "MessageEmpty");
+      if (msgs.length === 0) break;
+      for (const m of msgs) {
+        res.scanned++;
+        if (m.className !== "Message") continue;               // service : ne compte pas
+        const from = m.fromId?.userId;
+        if (from != null && toNum(from) === userId && m.date) {
+          res.found_at = new Date(m.date * 1000).toISOString();   // on garde le plus ancien vu
+        }
+      }
+      offsetId = msgs[msgs.length - 1].id;
+      if (msgs.length < 100) break;                            // début de l'historique atteint
+      if (res.scanned >= maxMessages) { res.truncated = true; break; }
+      await new Promise((r) => setTimeout(r, 400));
+    }
+    res.checked = true;
+  } catch (e: any) {
+    res.error = errMsg(e);
+  }
+  return res;
+}
