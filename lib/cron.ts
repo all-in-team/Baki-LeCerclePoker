@@ -92,14 +92,17 @@ export function initCronJobs() {
           .get() as { value: string } | undefined;
         const dryRun = !flag;
         const { runSilentGroupCleanup, reportSilentGroupCleanup } = await import("./group-lifecycle");
-        const result = await runSilentGroupCleanup({ dryRun });
+        const result = await runSilentGroupCleanup({ dryRun });   // dryRun explicite, jamais implicite
         console.log(
           `[CRON] silent-group-cleanup: dry_run=${result.dry_run} candidates=${result.candidates} ` +
           `purged=${result.purged.length} tagged=${result.tagged.length} healed=${result.self_healed.length} ` +
           `skipped=${result.skipped.length} churned=${result.churned.length}`
         );
         await reportSilentGroupCleanup(result);
-        if (dryRun && result.ok) {
+        // Le dry-run n'est « fait » que s'il a EXAMINÉ au moins un groupe : un passage à vide
+        // (le cas des 7 premiers jours, la migration protégeant tous les groupes existants)
+        // ne doit pas débloquer un passage réel sur des candidats jamais prévisualisés.
+        if (dryRun && result.ok && result.scanned > 0) {
           db.prepare(
             `INSERT INTO settings (key, value) VALUES ('silent_group_cleanup_dry_run_done', ?)
              ON CONFLICT(key) DO UPDATE SET value = excluded.value`

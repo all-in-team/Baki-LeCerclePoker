@@ -785,18 +785,22 @@ export interface SilentGroupCleanupResult {
  */
 function silentBusinessGuard(row: GroupCreationRow): string | null {
   const db = getDb();
-  if (row.owner_kind === "player") {
-    const p = db.prepare(
-      `SELECT id,
-         (SELECT COUNT(*) FROM wallet_transactions w WHERE w.player_id = players.id) AS txs,
-         (SELECT COUNT(*) FROM player_game_deals d WHERE d.player_id = players.id AND d.end_date IS NULL) AS deals_active
-       FROM players WHERE telegram_id = ?`
-    ).get(row.owner_key) as { id: number; txs: number; deals_active: number } | undefined;
-    if (!p) return null;
+  // TOUS les joueurs que la purge toucherait : le propriétaire (telegram_id) ET tout joueur
+  // rattaché à ce groupe (telegram_group_id) — c'est sur ce second ensemble que
+  // markPlayersChurnedByChatId écrit. Un seul avec deal actif ou mouvement wallet ⇒ skip.
+  // Vaut aussi quand le propriétaire est un lead (owner_kind ≠ player).
+  const linked = db.prepare(
+    `SELECT id,
+       (SELECT COUNT(*) FROM wallet_transactions w WHERE w.player_id = players.id) AS txs,
+       (SELECT COUNT(*) FROM player_game_deals d WHERE d.player_id = players.id AND d.end_date IS NULL) AS deals_active
+     FROM players
+     WHERE (? = 'player' AND telegram_id = ?) OR telegram_group_id = ?`
+  ).all(row.owner_kind, row.owner_key, String(row.chat_id)) as { id: number; txs: number; deals_active: number }[];
+  for (const p of linked) {
     if (p.txs > 0) return `joueur #${p.id} avec ${p.txs} mouvement(s) wallet`;
     if (p.deals_active > 0) return `joueur #${p.id} avec ${p.deals_active} deal(s) actif(s)`;
-    return null;
   }
+  if (row.owner_kind === "player") return null;
   try {
     const lead = db.prepare(`SELECT id, stage FROM nexa_leads WHERE tg_user_id = ?`)
       .get(row.owner_key) as { id: number; stage: string } | undefined;
@@ -834,7 +838,8 @@ export async function runSilentGroupCleanup(opts?: {
 }): Promise<SilentGroupCleanupResult> {
   const maxAgeDays = opts?.maxAgeDays ?? SILENT_DEFAULT_MAX_AGE_DAYS;
   const cap = Math.min(opts?.cap ?? SILENT_DEFAULT_CAP, SILENT_DEFAULT_CAP);
-  const dryRun = !!opts?.dryRun;
+  // DRY-RUN PAR DÉFAUT : seul un appel qui passe explicitement `dryRun: false` supprime.
+  const dryRun = opts?.dryRun ?? true;
   const res: SilentGroupCleanupResult = {
     ok: false, dry_run: dryRun, candidates: 0, scanned: 0,
     purged: [], tagged: [], self_healed: [], skipped: [], churned: [],
@@ -889,9 +894,10 @@ export async function runSilentGroupCleanup(opts?: {
 /** Rapport dans le chat agent. Silencieux si rien n'a bougé (même règle que ghost cleanup). */
 export async function reportSilentGroupCleanup(r: SilentGroupCleanupResult): Promise<void> {
   try {
-    if (r.ok && r.purged.length === 0 && r.tagged.length === 0 && r.self_healed.length === 0 && r.churned.length === 0) {
-      return;
-    }
+    // Un dry-run qui a examiné au moins un groupe est TOUJOURS rapporté : c'est l'aperçu
+    // que l'opérateur doit voir avant le premier passage réel.
+    const quiet = r.purged.length === 0 && r.tagged.length === 0 && r.self_healed.length === 0 && r.churned.length === 0;
+    if (r.ok && quiet && !(r.dry_run && r.scanned > 0)) return;
     const lines: string[] = [`🕸 <b>Groupes silencieux (7 j)</b>${r.dry_run ? " — <i>dry-run</i>" : ""}`];
     if (!r.ok) {
       lines.push(`❌ Échec : ${r.error}`);
