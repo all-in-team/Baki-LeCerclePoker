@@ -29,30 +29,38 @@ export const WINDOW_DAYS = 21;
 // déclenchement « manual » passe outre. Premier passage mesuré sur le dump du 25/09 : 6.
 export const MAX_VISIBLE_DEACTIVATIONS = 10;
 
-// Garde-fou de fraîcheur (Baki 2026-09-26) : si la dernière sync wallet d'une room ENCORE
-// ACTIVE (games.status = 'active' avec une wallet mère active) date de plus de
-// STALE_SYNC_DAYS jours, ses joueurs ne passent PAS inactive sur cette base : ils sont
-// « retenus » et le cron alerte l'ops. « Dernière sync » = dernière tx insérée par la sync
-// (created_at), comme l'indicateur « Dernière sync wallet » de l'agent. Rooms qu'on ne
-// joue plus, dont la sync arrêtée est normale : SYNC_GUARD_EXCLUDED_ROOMS.
+// Garde-fou de fraîcheur (Baki 2026-09-26/27) : si la dernière sync RÉUSSIE d'une room
+// encore jouée date de plus de STALE_SYNC_DAYS jours, ses joueurs ne passent PAS inactive
+// sur cette base : ils sont « retenus » et le cron alerte l'ops. « Sync réussie » = un
+// passage tracé ok dans wallet_sync_runs (lib/wallet-sync.ts), PAS la dernière tx : une
+// room calme n'a pas de tx sans être mal synchronisée. Aucun passage réussi tracé = en retard.
+// Room « encore jouée » = games.status 'active', au moins une wallet mère active, hors
+// ROOMS_NO_LONGER_PLAYED (sync arrêtée normale). Ce sont aussi les rooms que le job de
+// nuit synchronise lui-même avant de recalculer (lib/cron.ts).
 export const STALE_SYNC_DAYS = 3;
-export const SYNC_GUARD_EXCLUDED_ROOMS = ["KKPOKER", "AKS"];
+export const ROOMS_NO_LONGER_PLAYED = ["KKPOKER", "AKS", "QQPK"];
 
-export type StaleRoom = { game_id: number; room: string; last_sync: string | null };
+export type StaleRoom = { game_id: number; room: string; last_sync: string | null; last_error: string | null };
 
-/** Rooms encore actives dont la sync wallet est en retard de plus de STALE_SYNC_DAYS jours. */
-export function staleSyncRoomsOn(db: DB, now: Date): StaleRoom[] {
-  const limit = sqlNow(new Date(now.getTime() - STALE_SYNC_DAYS * 86_400_000));
-  const rooms = db.prepare(`
+/** Rooms encore jouées à synchroniser, avec leur dernière sync réussie (UTC, ou null). */
+export function playedSyncRoomsOn(db: DB): StaleRoom[] {
+  return db.prepare(`
     SELECT g.id AS game_id, g.name AS room,
-      (SELECT MAX(t.created_at) FROM wallet_transactions t WHERE t.game_id = g.id AND t.source = 'sync') AS last_sync
+      (SELECT MAX(r.finished_at) FROM wallet_sync_runs r WHERE r.game_id = g.id AND r.ok = 1) AS last_sync,
+      -- motif du dernier passage s'il a échoué : dit à l'ops QUOI corriger
+      (SELECT r.error FROM wallet_sync_runs r WHERE r.game_id = g.id ORDER BY r.finished_at DESC, r.id DESC LIMIT 1) AS last_error
     FROM games g
     WHERE g.status = 'active'
-      AND g.name NOT IN (${SYNC_GUARD_EXCLUDED_ROOMS.map(() => "?").join(", ")})
+      AND g.name NOT IN (${ROOMS_NO_LONGER_PLAYED.map(() => "?").join(", ")})
       AND EXISTS (SELECT 1 FROM wallet_meres w WHERE w.game_id = g.id AND w.status = 'active')
     ORDER BY g.name
-  `).all(...SYNC_GUARD_EXCLUDED_ROOMS) as StaleRoom[];
-  return rooms.filter(r => !r.last_sync || normalizeTs(r.last_sync) < limit);
+  `).all(...ROOMS_NO_LONGER_PLAYED) as StaleRoom[];
+}
+
+/** Rooms encore jouées dont la dernière sync réussie a plus de STALE_SYNC_DAYS jours (ou aucune). */
+export function staleSyncRoomsOn(db: DB, now: Date): StaleRoom[] {
+  const limit = sqlNow(new Date(now.getTime() - STALE_SYNC_DAYS * 86_400_000));
+  return playedSyncRoomsOn(db).filter(r => !r.last_sync || normalizeTs(r.last_sync) < limit);
 }
 
 const WEEK_END = (col: string) => `date(${col}, '+6 days')`;

@@ -73,6 +73,7 @@ db.exec(`
   INSERT INTO games (id, name) VALUES (1, 'NEXAPOKER'), (2, 'KKPOKER_OLD');
 `);
 db.exec(PLAYER_STATUS_CHANGES_SQL);
+db.exec((require(path.join(REPO, "lib/wallet-sync-schema.ts")) as typeof import("../lib/wallet-sync-schema")).WALLET_SYNC_RUNS_SQL);
 
 const NOW = new Date("2026-09-25T21:22:00Z");       // fenêtre : depuis 2026-09-04 21:22:00
 const RECENT = "2026-09-20", OLD = "2026-08-01";
@@ -198,36 +199,54 @@ console.log("  Archive (décision 3 + désarchivage) :");
   eq("semaine qui commence dans le futur → pas de désarchivage", changeOf(f4, "unarchive"), undefined);
 }
 
-console.log("  Sync en retard d'une room encore active (Baki 2026-09-26) :");
+console.log("  Sync réussie en retard d'une room encore jouée (Baki 2026-09-26/27) :");
 {
-  const { staleSyncRoomsOn, STALE_SYNC_DAYS } = require(path.join(REPO, "lib/player-status-auto.ts")) as typeof import("../lib/player-status-auto");
-  db.exec(`INSERT INTO games (id, name, status) VALUES (10, 'A5POKER', 'active'), (11, 'QQPK', 'active'), (12, 'KKPOKER', 'active'), (13, 'TELE', 'archived'), (14, 'NEXAPOKER2', 'active')`);
-  db.exec(`INSERT INTO wallet_meres VALUES (10, 'active'), (11, 'active'), (12, 'active'), (13, 'active'), (14, 'retired')`);
-  const sync = (game: number, created: string) => db.prepare(`INSERT INTO wallet_transactions (player_id, game_id, source, tx_datetime, created_at) VALUES (NULL, ?, 'sync', ?, ?)`).run(game, created, created);
-  sync(10, "2026-09-24 08:00:00");   // 1,5 jour : à jour
-  sync(11, "2026-09-21 08:00:00");   // 4,5 jours : en retard
-  sync(12, "2026-09-02 08:00:00");   // KKPOKER : exclue (plus jouée)
-  eq(`seule QQPK est en retard de plus de ${STALE_SYNC_DAYS} jours (KK exclue, room archivée et room sans mère active ignorées)`,
-    staleSyncRoomsOn(db, NOW).map(r => r.room), ["QQPK"]);
+  const { staleSyncRoomsOn, playedSyncRoomsOn, STALE_SYNC_DAYS } = require(path.join(REPO, "lib/player-status-auto.ts")) as typeof import("../lib/player-status-auto");
+  db.exec(`INSERT INTO games (id, name, status) VALUES (10, 'A5POKER', 'active'), (11, 'OKPOKER', 'active'), (12, 'KKPOKER', 'active'),
+    (15, 'QQPK', 'active'), (13, 'TELE', 'archived'), (14, 'SANSMERE', 'active'), (16, 'CALME', 'active')`);
+  db.exec(`INSERT INTO wallet_meres VALUES (10, 'active'), (11, 'active'), (12, 'active'), (15, 'active'), (13, 'active'), (14, 'retired'), (16, 'active')`);
+  const run = (game: number, finished: string, ok: 0 | 1) => db.prepare(`INSERT INTO wallet_sync_runs (game_id, trigger, started_at, finished_at, ok) VALUES (?, 'nightly', ?, ?, ?)`).run(game, finished, finished, ok);
+  eq("rooms synchronisées par le job : encore jouées, hors KK / AKS / QQPK, hors archivées et sans mère active",
+    playedSyncRoomsOn(db).map(r => r.room), ["A5POKER", "CALME", "OKPOKER"]);
+  eq("aucun passage réussi tracé → en retard", staleSyncRoomsOn(db, NOW).map(r => r.room), ["A5POKER", "CALME", "OKPOKER"]);
+  run(10, "2026-09-24 08:00:00", 1);                                   // A5 : réussie il y a 1,5 j
+  run(16, "2026-09-25 04:31:00", 1);                                   // room CALME : aucune tx, sync réussie cette nuit
+  run(11, "2026-09-21 08:00:00", 1); run(11, "2026-09-25 04:31:00", 0); // OKPOKER : dernière réussie il y a 4,5 j, celle de cette nuit a échoué
+  db.prepare(`UPDATE wallet_sync_runs SET error = '1 wallet(s) en erreur — p : TABC… TronGrid 400' WHERE game_id = 11 AND ok = 0`).run();
+  eq("l'alerte porte le motif du dernier passage raté", staleSyncRoomsOn(db, NOW).find(r => r.room === "OKPOKER")?.last_error, "1 wallet(s) en erreur — p : TABC… TronGrid 400");
+  eq(`room calme sans tx mais sync réussie : à jour ; échec de cette nuit ne compte pas (> ${STALE_SYNC_DAYS} j)`,
+    staleSyncRoomsOn(db, NOW).map(r => [r.room, r.last_sync]), [["OKPOKER", "2026-09-21 08:00:00"]]);
   const q = P("active"); db.prepare(`INSERT INTO player_wallet_games VALUES (?, 11)`).run(q);
   const q2 = P("active"); db.prepare(`INSERT INTO player_game_deals VALUES (?, 11, NULL)`).run(q2);
   const q3 = P("active"); db.prepare(`INSERT INTO player_game_deals VALUES (?, 11, '2026-08-01')`).run(q3);
   const a5 = P("active"); db.prepare(`INSERT INTO player_wallet_games VALUES (?, 10)`).run(a5);
-  const kk = P("active"); db.prepare(`INSERT INTO player_wallet_games VALUES (?, 12)`).run(kk);
+  const qq = P("active"); db.prepare(`INSERT INTO player_wallet_games VALUES (?, 15)`).run(qq);
   const pl = planStatusAutoOn(db, NOW);
   const heldIds = pl.held.map(h => h.player_id);
-  eq("joueur avec wallet QQPK : retenu, pas inactive", [heldIds.includes(q), newStatus(q)], [true, "inchangé"]);
-  eq("joueur avec deal QQPK ouvert : retenu", heldIds.includes(q2), true);
-  eq("deal QQPK clos : pas retenu → inactive", [heldIds.includes(q3), newStatus(q3)], [false, "inactive"]);
-  eq("joueur A5POKER (sync à jour) → inactive", newStatus(a5), "inactive");
-  eq("joueur KKPOKER (room exclue) → inactive", newStatus(kk), "inactive");
-  eq("motif de la retenue : la room", pl.held.find(h => h.player_id === q)?.rooms, ["QQPK"]);
+  eq("joueur avec wallet OKPOKER : retenu, pas inactive", [heldIds.includes(q), newStatus(q)], [true, "inchangé"]);
+  eq("joueur avec deal OKPOKER ouvert : retenu", heldIds.includes(q2), true);
+  eq("deal OKPOKER clos : pas retenu → inactive", [heldIds.includes(q3), newStatus(q3)], [false, "inactive"]);
+  eq("joueur A5POKER (sync réussie récente) → inactive", newStatus(a5), "inactive");
+  eq("joueur QQPK (room plus jouée, exclue) → inactive", newStatus(qq), "inactive");
+  eq("motif de la retenue : la room", pl.held.find(h => h.player_id === q)?.rooms, ["OKPOKER"]);
   const recentQ = P("inactive"); db.prepare(`INSERT INTO player_wallet_games VALUES (?, 11)`).run(recentQ);
   db.prepare(`INSERT INTO grindhouse_sessions VALUES (?, ?)`).run(recentQ, RECENT);
   eq("la retenue ne bloque pas un passage en ACTIVE", newStatus(recentQ), "active");
-  sync(11, "2026-09-25 06:00:00");
-  eq("sync QQPK revenue à jour : plus rien de retenu", [staleSyncRoomsOn(db, NOW).length, planStatusAutoOn(db, NOW).held.length], [0, 0]);
+  run(11, "2026-09-25 06:00:00", 1);
+  eq("sync OKPOKER réussie à nouveau : plus rien de retenu", [staleSyncRoomsOn(db, NOW).length, planStatusAutoOn(db, NOW).held.length], [0, 0]);
   eq("…et ses joueurs passent inactive", newStatus(q), "inactive");
+}
+
+console.log("  Verdict d'un passage de sync (hors réseau) :");
+{
+  const { syncRunVerdict } = require(path.join(REPO, "lib/wallet-sync.ts")) as typeof import("../lib/wallet-sync");
+  eq("passage complet sans erreur → réussi", syncRunVerdict({ status: 200, body: { ok: true, imported: 3, results: [{ player: "a", deposits: 2, cashouts: 1 }] } }),
+    { ok: true, walletErrors: 0, imported: 3, error: null });
+  eq("une wallet en erreur TronGrid → échoué", syncRunVerdict({ status: 200, body: { ok: true, imported: 1, results: [{ player: "a", deposits: 1, cashouts: 0 }, { player: "b", deposits: 0, cashouts: 0, error: "TXYZ… TronGrid 500" }] } }),
+    { ok: false, walletErrors: 1, imported: 1, error: "1 wallet(s) en erreur — b : TXYZ… TronGrid 500" });
+  eq("aucun joueur sur la room → réussi (rien à synchroniser)", syncRunVerdict({ status: 200, body: { ok: true, imported: 0, message: "Aucun joueur avec un Wallet Game configuré." } })?.ok, true);
+  eq("room inconnue → échoué", syncRunVerdict({ status: 200, body: { ok: false, message: "Game X not found." } })?.ok, false);
+  eq("room archivée (403) → rien à tracer", syncRunVerdict({ status: 403, body: { error: "archived" } }), null);
 }
 
 console.log("  Garde-fou de masse (audit C4) :");
@@ -284,6 +303,8 @@ console.log("  PATCH : valeur de status_manual (audit C5) :");
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
+// Bloc B asynchrone (vraie sync tracée) : script CommonJS, pas de await au niveau haut.
+(async () => {
 console.log("\n── B. Copie d'un dump migré, schéma réel ──");
 let skippedB = "";
 if (!DB_SRC) skippedB = "aucune base source (LECERCLE_DB_SRC)";
@@ -316,6 +337,22 @@ else {
       const { getNeverPlayerBucket } = require(path.join(REPO, "lib/queries.ts")) as typeof import("../lib/queries");
       const bucket0 = getNeverPlayerBucket().map(r => r.id).sort((a, b) => a - b);
       const r = applyStatusAutoOn(real, "manual", RNOW);
+      // Trace d'un vrai passage de sync, sans réseau : TW72 n'a aucune wallet game ni mère
+      // active (aucun appel TronGrid possible). TELE est archivée : 403, rien de tracé.
+      const { syncGameWallets } = require(path.join(REPO, "lib/wallet-sync.ts")) as typeof import("../lib/wallet-sync");
+      const noNet = (real.prepare(`SELECT (SELECT COUNT(*) FROM player_wallet_games pw JOIN games g ON g.id = pw.game_id WHERE g.name = 'TW72')
+        + (SELECT COUNT(*) FROM wallet_meres w JOIN games g ON g.id = w.game_id WHERE g.name = 'TW72' AND w.status = 'active') AS n`).get() as any).n;
+      if (noNet === 0) {
+        const origFetch = globalThis.fetch;
+        globalThis.fetch = (() => { throw new Error("réseau interdit dans le test"); }) as any;
+        try {
+          const tw = await syncGameWallets("TW72", "nightly");
+          const row = real.prepare(`SELECT r.trigger, r.ok, r.wallet_errors FROM wallet_sync_runs r JOIN games g ON g.id = r.game_id WHERE g.name = 'TW72'`).all();
+          eq("vrai passage TW72 (sans réseau) : réponse inchangée et trace ok", [tw.status, tw.body.ok, row], [200, true, [{ trigger: "nightly", ok: 1, wallet_errors: 0 }]]);
+          const tele = await syncGameWallets("TELE", "manual");
+          eq("room archivée : 403 et rien de tracé", [tele.status, (real.prepare(`SELECT COUNT(*) n FROM wallet_sync_runs r JOIN games g ON g.id = r.game_id WHERE g.name = 'TELE'`).get() as any).n], [403, 0]);
+        } finally { globalThis.fetch = origFetch; }
+      } else console.log("   (TW72 a une wallet ou une mère : test de trace réel sauté, il appellerait TronGrid)");
       // Audit C3 : un inactive posé par l'automate n'est pas un « statut travaillé à la main ».
       eq(`bucket « jamais joueur » inchangé par l'automate (${bucket0.length})`, getNeverPlayerBucket().map(r => r.id).sort((a, b) => a - b), bucket0);
       eq("application : bascules = traces", (real.prepare(`SELECT COUNT(*) n FROM player_status_changes`).get() as any).n, r.applied.status + r.applied.unarchived);
@@ -327,3 +364,4 @@ else {
 fs.rmSync(TMP, { recursive: true, force: true });
 console.log(`\n${passed} ✔, ${failures.length} ✘${skippedB ? ` (bloc B sauté : ${skippedB})` : ""}`);
 if (failures.length) { console.log("ÉCHECS :", failures); process.exit(1); }
+})().catch(e => { console.error(e); process.exit(1); });
