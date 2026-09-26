@@ -6,7 +6,7 @@ import PlayersTableView from "./PlayersTableView";
 import PlayersKanbanView from "./PlayersKanbanView";
 import PlayerEditModal from "./PlayerEditModal";
 import AddPlayerModal from "./AddPlayerModal";
-import type { Player, PlayersViewProps } from "./shared";
+import { archivedCounts, isHiddenFromMain, sortArchivedView, type Player, type PlayersViewProps } from "./shared";
 
 // Barre commune (toggle + recherche + Add Player) + modale d'édition unique, partagées
 // par les deux vues. Avant la fusion : la recherche n'existait qu'en Kanban et le bouton
@@ -17,7 +17,8 @@ export default function PlayersViewToggle(props: PlayersViewProps) {
   const [search, setSearch] = useState("");
   const [editPlayer, setEditPlayer] = useState<Player | null>(null);
   const [addOpen, setAddOpen] = useState(false);
-  const [showArchived, setShowArchived] = useState(false);
+  // main = vue principale (non archivé OU ouvert) ; archived = les archivés ; all = tout le monde.
+  const [scope, setScope] = useState<"main" | "archived" | "all">("main");
 
   useEffect(() => {
     // Reprend la préférence de l'ancienne clé CRM pour ne pas repartir de zéro.
@@ -30,10 +31,14 @@ export default function PlayersViewToggle(props: PlayersViewProps) {
     localStorage.setItem("players_view", v);
   }
 
-  // Archivés masqués par défaut (soft-delete) : le toggle « Archivés » les fait réapparaître
-  // pour restauration. Aucune ligne n'est jamais supprimée.
-  const archivedCount = players.filter(p => p.archived_at).length;
-  const visible = showArchived ? players.filter(p => p.archived_at) : players.filter(p => !p.archived_at);
+  // Vue principale = actifs non archivés (règle Baki, seconde version). « Archivés » met en
+  // tête ceux qui ont quelque chose à régler (badge « à régler » + motif) ; « Tout afficher »
+  // montre tout le monde, inactifs non archivés compris.
+  const hiddenCount = players.filter(isHiddenFromMain).length;
+  const { total: archivedCount, toSettle } = archivedCounts(players);
+  const visible = scope === "all" ? players
+    : scope === "archived" ? sortArchivedView(players.filter(p => p.archived_at))
+    : players.filter(p => !isHiddenFromMain(p));
 
   const q = search.trim().toLowerCase();
   const filtered = q
@@ -67,18 +72,35 @@ export default function PlayersViewToggle(props: PlayersViewProps) {
         </div>
 
         <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 12 }}>
-          {(archivedCount > 0 || showArchived) && (
+          {hiddenCount > 0 && scope === "main" && (
             <button
-              onClick={() => setShowArchived(v => !v)}
-              title="Lignes archivées : jamais supprimées, restaurables d'un clic"
+              onClick={() => setScope("all")}
+              title="Inactifs et archivés : hors de la vue principale, jamais supprimés"
+              style={{ padding: "6px 12px", borderRadius: 7, fontSize: 12, fontWeight: 600, cursor: "pointer", border: "1px solid var(--border)", background: "var(--bg-surface)", color: "var(--text-muted)" }}
+            >
+              {hiddenCount} masqué{hiddenCount > 1 ? "s" : ""} · Tout afficher
+            </button>
+          )}
+          {(archivedCount > 0 || scope !== "main") && (
+            <button
+              onClick={() => setScope(s => s === "archived" ? "main" : "archived")}
+              title="Joueurs archivés : consultables et désarchivables d'un clic"
               style={{
                 padding: "6px 12px", borderRadius: 7, fontSize: 12, fontWeight: 600, cursor: "pointer",
-                border: showArchived ? "1px solid rgba(240,185,11,0.4)" : "1px solid var(--border)",
-                background: showArchived ? "rgba(240,185,11,0.12)" : "var(--bg-surface)",
-                color: showArchived ? "#F0B90B" : "var(--text-muted)",
+                border: scope === "archived" ? "1px solid rgba(240,185,11,0.4)" : "1px solid var(--border)",
+                background: scope === "archived" ? "rgba(240,185,11,0.12)" : "var(--bg-surface)",
+                color: scope === "archived" ? "#F0B90B" : "var(--text-muted)",
               }}
             >
-              {showArchived ? `← Retour à la liste` : `Archivés (${archivedCount})`}
+              {scope === "archived" ? "← Retour à la liste" : `Archivés (${archivedCount} · ${toSettle} à régler)`}
+            </button>
+          )}
+          {scope === "all" && (
+            <button
+              onClick={() => setScope("main")}
+              style={{ padding: "6px 12px", borderRadius: 7, fontSize: 12, fontWeight: 600, cursor: "pointer", border: "1px solid var(--green)", background: "rgba(34,197,94,0.12)", color: "var(--green)" }}
+            >
+              ← Vue principale
             </button>
           )}
           <span style={{ fontSize: 11, color: "var(--text-dim)" }}>
@@ -94,6 +116,12 @@ export default function PlayersViewToggle(props: PlayersViewProps) {
         </div>
       </div>
 
+      {props.openError && (
+        <div role="alert" style={{ marginBottom: 12, padding: "8px 12px", borderRadius: 8, fontSize: 12, border: "1px solid rgba(239,68,68,0.4)", background: "rgba(239,68,68,0.08)", color: "#EF4444" }}>
+          L&apos;état « à régler » des joueurs n&apos;a pas pu être calculé : par sécurité, tous les archivés sont marqués « à régler ». ({props.openError})
+        </div>
+      )}
+
       {view === "table"
         ? <PlayersTableView
             players={filtered}
@@ -102,6 +130,7 @@ export default function PlayersViewToggle(props: PlayersViewProps) {
             agencyByPlayer={props.agencyByPlayer}
             period={period}
             onEdit={setEditPlayer}
+            toSettleFirst={scope === "archived"}
           />
         : <PlayersKanbanView
             players={filtered}

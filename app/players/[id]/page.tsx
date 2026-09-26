@@ -318,7 +318,7 @@ export default async function PlayerDetailPage({ params, searchParams }: { param
         </div>
       )}
 
-      <PlayerDangerZone playerId={playerId} playerName={player.name} status={player.status} />
+      <PlayerDangerZone playerId={playerId} playerName={player.name} archivedAt={player.archived_at ?? null} />
 
       <div style={{ marginTop: 16 }}>
         <Link href="/players" style={{ fontSize: 12, color: "var(--text-muted)", textDecoration: "none" }}>← Retour aux joueurs</Link>

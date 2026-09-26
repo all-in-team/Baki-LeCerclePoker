@@ -58,14 +58,14 @@ Deferred work from /plan-ceo-review (2026-04-28).
 - **Fait (2026-09-25).** `db-diagnostic` (run-sql, reset-player, migrate), hors auth, clé en dur
   dans un dépôt alors public : supprimée. `/api/admin/*` exige une session (merge `ba59fb0`,
   vérifié en prod : 36 routes × GET/POST → 401). `ADMIN_RECONCILE_TOKEN` tourné, nouvelle
-  valeur en variable Railway uniquement. **Dépôt GitHub encore PUBLIC au 2026-09-25 18:47 UTC
-  (`gh api` → `private: false`, page accessible sans connexion) : à passer en privé.** Les 9 clés en dur retirées
+  valeur en variable Railway uniquement. **Dépôt GitHub encore PUBLIC — dernière vérification 2026-09-25 19:39 UTC
+  (`gh api` → `private: false`). À passer en privé par Baki (accès GitHub à récupérer).** Les 9 clés en dur retirées
   (branche `chore/admin-keys-cleanup`). **Lecture prod = dump `railway volume files download`,
   jamais une route.**
 - **Comparaison au 16/08 (sauvegarde locale) : rien d'inexpliqué côté argent.** 2 433 tx
   communes, aucune colonne d'argent modifiée ; les 1 987 tx disparues = purge de l'incident
-  « contrat USDT » du 16/08 (joueur 148, cf. `dd45937`), faite à la main hors code. Non
-  attribuables faute de trace : 9 `action_pct` modifiés (dont 3 passés à 100 %). Reste ouvert :
+  « contrat USDT » du 16/08 (joueur 148, cf. `dd45937`), faite à la main hors code. Les 9
+  `action_pct` modifiés depuis le 16/08 (dont 3 passés à 100 %) : reconnus par Baki le 2026-09-25. Reste ouvert :
   la sauvegarde locale diffère du fichier du volume de même nom (6 336 512 vs 6 320 128 o).
 - **Webhooks Telegram / DZPK fail-open** (`app/api/telegram/webhook/route.ts:50-54`,
   `app/api/telegram/dzpk/webhook/route.ts:20-22`) : secret vérifié seulement s'il est défini.
@@ -97,6 +97,51 @@ Deferred work from /plan-ceo-review (2026-04-28).
   prendre une base créée par la suite elle-même.
 
 ## P1 — High value, build next
+
+### Relais des réponses aux diffusions — reliquats de la 4e contre-expertise (GO, 2026-09-27)
+Branche `feat/lecercle-broadcast-relay` (`lib/funnels/lecercle/relay.ts`). Aucun BLOCKER/MAJOR ;
+règle d'arrêt de Hugo : les MINOR restants vont ici, pas dans un tour de plus.
+- **Nom de sujet trop long en UTF-16** (`relay.ts:440`) — `cut(…, 120)` coupe en points de code,
+  mais la limite Telegram de 128 est probablement en unités UTF-16 (inféré, non testé). Prénom
+  en emoji, sans @ : création refusée en 400, UNE alerte, puis messages bloqués pour cette
+  personne. À faire : couper à 128 unités UTF-16 sur une frontière de caractère, et sur un 400
+  de création réessayer une fois avec `📣 tg:<id>`.
+- **Réponse « Répondre à » dans un ancien sujet 📣 perdue sans retour** (`relay.ts:567-581`) —
+  l'ancien sujet n'est reconnu que par `reply_to_message.forum_topic_created`. À faire : table
+  des sujets retirés `(admin_chat_id, thread_id)` alimentée à la recréation / fermeture
+  d'orphelin, lue par `message_thread_id` (règle aussi le NIT « sujet nommé 📣 à la main »).
+- **Post refusé durablement dans un sujet existant = file bloquée sans alerte** (`relay.ts:351`,
+  `400-411`) — 403 « bot was kicked », ou 400 dont l'avis de repli échoue aussi. À faire :
+  `alertOnce` dans ces deux cas.
+- **Rafale de réponses : pas de budget de temps sur la création de sujet** (`relay.ts:277`,
+  `442`) — même token et même limite `createForumTopic` que Nexa, qui a un budget
+  (`TOPIC_CREATE_BUDGET_MS`). Rien n'est perdu (cron), mais le webhook et les sujets Nexa
+  ralentissent. À faire : même course contre un budget, puis report au cron.
+- NIT : `renew()` manquant avant le post qui suit une recréation de sujet (`relay.ts:346-349`) ;
+  `isServiceMessage` ne couvre pas `write_access_allowed` / `users_shared` / `chat_shared` /
+  `web_app_data` (sujet 📣 possible pour un « [message non textuel] ») ; % de réponses divisé
+  par `sent` alors que `replied` compte aussi les « issue inconnue » ; carte contexte triée sur
+  `COALESCE(sent_at, claimed_at)` au lieu de `claimed_at` d'abord ; `alertOnce` marque
+  l'alerte avant de vérifier le verrou (alerte perdue si verrou perdu à cet instant).
+
+
+### Verrou « ouvert » des joueurs — trous hors périmètre du chantier Joueurs (contre-audit 2026-09-25)
+- **Session grindhouse déplacée après paiement** : `PATCH /api/grindhouse-sessions/[id]` peut changer
+  `player_id` / `session_date` d'une session déjà couverte par un règlement payé ; le moteur
+  (`lib/queries/player-open.ts`, garde `created_at`) ne voit pas ce cas. Garde-fou à mettre dans
+  l'API : refuser de modifier une session couverte par un règlement.
+- **Buy-ins XPoker** : un buy-in sans cash-out garde le joueur ouvert indéfiniment (source
+  `xpoker_chips`) — fail-closed conservé, décision Baki 2026-09-25.
+
+### Solder l'héritage TELE par un acte explicite (décision Baki 2026-09-25)
+- **Constat.** 417 tx TELE `settled=0` et 72 semaines hebdo non reçues (`weekly_settlements`
+  `auto_settled`/`pending_manual`, avril–juin 2026) : le moteur hebdo TELE n'a jamais utilisé le
+  flag `settled`, et le code les qualifie de fossiles (`manual-settlement-engine.ts:678`).
+- **Aujourd'hui :** comptées comme OUVERTES par `lib/queries/player-open.ts` (sources 1 et 2),
+  sans exception dans le filtre — 25 joueurs restent donc dans la vue principale de /players.
+- **À faire :** un acte explicite, joueur par joueur, sur le modèle de « acter à 0 » NEXA :
+  constater le solde TELE, le marquer réglé (trace : qui, quand, montant), jamais une purge
+  silencieuse. Ensuite seulement ces joueurs deviennent archivables.
 
 ### Smart alerts (loss threshold)
 - **What:** Telegram alert when a player's net P&L crosses a configurable threshold (e.g. -$2000)
@@ -134,6 +179,34 @@ Deferred work from /plan-ceo-review (2026-04-28).
 - **À faire :** traiter « tx en quarantaine à arbitrer » comme un point ouvert (ligne affichée,
   marque dédiée distincte de « à régler »), après avoir cadré quels `status` signifient « à
   arbitrer » vs « écarté définitivement ». Logique : `components/ledger/period-presence.ts`.
+
+### Affiliation — suites du chantier « taux agent versionné » (clos le 2026-09-25, merge 8446d8a)
+Le chantier a posé : taux agent par (filleul, game) versionné par semaine, perçu versionné par
+game, gel des semaines payées (`setAgentRateOn`, `setPerceivedDealOn`, `withFrozenGuardOn` sur
+les overrides de relation). Restent HORS de ce gel — une écriture par ces voies peut encore
+modifier une commission déjà payée (décision Baki : chantiers séparés) :
+- **Pause / réactivation de relation** — `PATCH /api/affiliate-relationships/[id]` (`status`)
+  n'est pas sous garde : seules les relations actives entrent dans le dû, donc réactiver remet
+  tout l'historique du filleul dans le cumul, et terminer l'en retire (ses paiements restent).
+- **Deal joueur** — `player_game_deals` (`action_pct` = dernier repli de la cascade de la base,
+  `start_date` / `end_date` = bornes des transactions comptées, suppression) : modifiable par
+  `app/api/games/deals/[id]/route.ts` et `lib/queries.ts` sans contrôle des semaines payées.
+- **Transactions anciennes** — ajout, suppression ou redatage d'une `wallet_transactions`
+  (ou d'un `rakeback_reports.report_date`) dans une semaine gelée change sa commission.
+- **Taux CNY** — `settings.exchange_rate_cny_usdt` réécrit tout l'historique Wepoker, semaines
+  payées comprises ; à 0, la part Wepoker vaut 0 en silence (zéro inventé, préexistant).
+- **Régularisation Antoine (@BerruPKR, filleul de Xabi)** — son deal joueur est à **50 %**
+  mais `player_game_deals` KK et A5 sont à **70 %** depuis une date entre le 07/07 et le 27/07
+  (heure exacte non lue). 7 règlements payés à 70 % : KK n° 134, 151, 165, 187, 199, 225
+  (net +75,00 → Antoine a dû 15,00 de trop au Cercle) et A5 n° 133 (net −397,10 → le Cercle
+  lui a versé 79,42 de trop) : **solde 64,42 en faveur d'Antoine**. À vérifier aussi : n° 59
+  (KK à 40 %) et n° 45 (A5 à 20 %). Rien n'a été modifié — Baki décide de la régularisation,
+  puis correction du deal en base.
+
+Nettoyages liés : supprimer `GET /api/affiliate-agent-rates/migration-check` et
+`legacyAgentCommissionOn` (preuve faite en prod le 2026-09-25 : 12/12 agents identiques au
+centime) ; supprimer `app/crm/affiliates/AffiliateDetailDrawer.tsx` (plus importé, types
+périmés : `due_now` traité comme un nombre).
 
 ## P2 — Medium value, needs careful planning
 

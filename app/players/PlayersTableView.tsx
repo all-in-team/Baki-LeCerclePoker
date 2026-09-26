@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { Pencil, Archive, RotateCcw, ChevronUp, ChevronDown, EyeOff } from "lucide-react";
+import { Pencil, Archive, RotateCcw, ChevronUp, ChevronDown } from "lucide-react";
 import { agencyColumnLabel, badgeFor, fmtAmt, isActiveStatus, type Deal, type Player, type PlayersPeriod } from "./shared";
 
 type SortKey = "name" | "games" | "agency" | "status";
@@ -14,11 +14,13 @@ interface Props {
   agencyByPlayer: Record<number, number>;
   period: PlayersPeriod;
   onEdit: (p: Player) => void;
+  /** Vue « Archivés » : les joueurs à régler restent en tête, quel que soit le tri choisi. */
+  toSettleFirst?: boolean;
 }
 
 const TH: React.CSSProperties = { padding: "8px", cursor: "pointer", userSelect: "none", whiteSpace: "nowrap" };
 
-export default function PlayersTableView({ players, gamesByPlayer, agencyByPlayer, period, onEdit }: Props) {
+export default function PlayersTableView({ players, gamesByPlayer, agencyByPlayer, period, onEdit, toSettleFirst = false }: Props) {
   const router = useRouter();
   // Défaut : agency cut décroissant — les plus rentables en haut. Le tri porte sur
   // agencyByPlayer, déjà résolu pour la période active côté serveur : changer de
@@ -34,6 +36,10 @@ export default function PlayersTableView({ players, gamesByPlayer, agencyByPlaye
   }
 
   const sorted = [...players].sort((a, b) => {
+    if (toSettleFirst) {
+      const pin = Number(b.open.length > 0) - Number(a.open.length > 0);
+      if (pin !== 0) return pin;
+    }
     const dir = sort.dir === "asc" ? 1 : -1;
     switch (sort.key) {
       case "name": return a.name.localeCompare(b.name, "fr") * dir;
@@ -47,32 +53,21 @@ export default function PlayersTableView({ players, gamesByPlayer, agencyByPlaye
     }
   });
 
-  // Soft-delete : sort la ligne de la liste par défaut (toggle « Archivés » pour la revoir),
-  // orthogonal au status active/inactive du bouton d'à côté. Jamais de suppression.
+  // Archive (un seul concept) : sort le joueur de la vue principale, jamais de suppression.
+  // Toujours permise ; un joueur à régler passe en tête d'« Archivés ».
   async function setArchived(p: Player, archived: boolean) {
     setArchiving(p.id);
     try {
-      await fetch(`/api/players/${p.id}`, {
+      const res = await fetch(`/api/players/${p.id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ archived, archive_reason: archived ? "retiré à la main" : null }),
       });
-      router.refresh();
-    } catch (e: any) {
-      alert("Erreur: " + (e.message ?? e));
-    } finally {
-      setArchiving(null);
-    }
-  }
-
-  async function toggleArchive(p: Player) {
-    setArchiving(p.id);
-    try {
-      await fetch(`/api/players/${p.id}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ status: isActiveStatus(p.status) ? "inactive" : "active" }),
-      });
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({}));
+        alert(d.error ?? `Erreur ${res.status}`);
+        return;
+      }
       router.refresh();
     } catch (e: any) {
       alert("Erreur: " + (e.message ?? e));
@@ -111,7 +106,7 @@ export default function PlayersTableView({ players, gamesByPlayer, agencyByPlaye
               <tr
                 key={p.id}
                 onClick={() => router.push(`/players/${p.id}`)}
-                style={{ borderBottom: "1px solid var(--border)", cursor: "pointer", opacity: isActiveStatus(p.status) ? 1 : 0.6 }}
+                style={{ borderBottom: "1px solid var(--border)", cursor: "pointer", opacity: p.archived_at && p.open.length === 0 ? 0.6 : 1 }}
               >
                 <td style={{ padding: "10px 8px" }}>
                   <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
@@ -122,6 +117,9 @@ export default function PlayersTableView({ players, gamesByPlayer, agencyByPlaye
                   <div style={{ fontSize: 11, color: "var(--text-dim)", marginTop: 2 }}>
                     {p.telegram_handle ? `@${p.telegram_handle.replace(/^@/, "")}` : p.telegram_phone ? p.telegram_phone : "—"}
                   </div>
+                  {p.archived_at && p.open.length > 0 && (
+                    <div style={{ fontSize: 11, color: "#EF4444", marginTop: 3, maxWidth: 420 }}>À régler : {p.open.join(" ; ")}</div>
+                  )}
                 </td>
                 <td style={{ textAlign: "center", padding: "10px 8px" }}>
                   {playerGames.length === 0 && <span style={{ color: "var(--text-dim)" }}>—</span>}
@@ -134,13 +132,23 @@ export default function PlayersTableView({ players, gamesByPlayer, agencyByPlaye
                   {agency !== 0 ? `${fmtAmt(agency)} USDT` : "—"}
                 </td>
                 <td style={{ textAlign: "center", padding: "10px 8px" }}>
-                  {p.archived_at
-                    ? <span title={p.archive_reason ?? "archivé"} style={{ padding: "2px 8px", borderRadius: 4, fontSize: 10, fontWeight: 600, background: "rgba(240,185,11,0.15)", color: "#F0B90B" }}>archivé</span>
-                    : <span style={{
-                        padding: "2px 8px", borderRadius: 4, fontSize: 10, fontWeight: 600,
-                        background: isActiveStatus(p.status) ? "rgba(16,185,129,0.15)" : "rgba(156,163,175,0.15)",
-                        color: isActiveStatus(p.status) ? "#10B981" : "var(--text-muted)",
-                      }}>{p.status}</span>}
+                  <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 3 }}>
+                    {p.archived_at && p.open.length > 0 && (
+                      <span title={"À régler : " + p.open.join(" ; ")} style={{ padding: "2px 8px", borderRadius: 4, fontSize: 10, fontWeight: 700, background: "rgba(239,68,68,0.15)", color: "#EF4444", whiteSpace: "nowrap" }}>à régler</span>
+                    )}
+                    {p.archived_at && p.open.length === 0 && (
+                      <span title={p.archive_reason ?? "archivé"} style={{ padding: "2px 8px", borderRadius: 4, fontSize: 10, fontWeight: 600, background: "rgba(240,185,11,0.15)", color: "#F0B90B" }}>archivé</span>
+                    )}
+                    {p.archived_at && p.links.length > 0 && (
+                      <span title={"Lien actif (pas de l'argent) : " + p.links.join(", ")} style={{ padding: "1px 6px", borderRadius: 4, fontSize: 9, fontWeight: 600, background: "rgba(96,165,250,0.15)", color: "#60A5FA", whiteSpace: "nowrap" }}>lien actif</span>
+                    )}
+                    {/* Statut CRM : libellé manuel, sans effet sur l'affichage (seule l'archive masque). */}
+                    <span title="Statut CRM" style={{
+                      padding: "2px 8px", borderRadius: 4, fontSize: 10, fontWeight: 600,
+                      background: isActiveStatus(p.status) ? "rgba(16,185,129,0.15)" : "rgba(156,163,175,0.15)",
+                      color: isActiveStatus(p.status) ? "#10B981" : "var(--text-muted)",
+                    }}>{p.status}</span>
+                  </div>
                 </td>
                 <td style={{ textAlign: "center", padding: "10px 8px" }} onClick={e => e.stopPropagation()}>
                   <div style={{ display: "flex", justifyContent: "center", gap: 6 }}>
@@ -151,30 +159,20 @@ export default function PlayersTableView({ players, gamesByPlayer, agencyByPlaye
                       <button
                         onClick={() => setArchived(p, false)}
                         disabled={archiving === p.id}
-                        title="Restaurer dans la liste"
+                        title="Désarchiver (retour dans la vue principale)"
                         style={{ background: "none", border: "1px solid rgba(240,185,11,0.4)", borderRadius: 6, cursor: "pointer", padding: "4px 6px", color: "#F0B90B", display: "flex", alignItems: "center", opacity: archiving === p.id ? 0.4 : 1 }}
                       >
                         <RotateCcw size={13} />
                       </button>
                     ) : (
-                      <>
-                        <button
-                          onClick={() => toggleArchive(p)}
-                          disabled={archiving === p.id}
-                          title={isActiveStatus(p.status) ? "Passer en inactive" : "Réactiver"}
-                          style={{ background: "none", border: "1px solid var(--border)", borderRadius: 6, cursor: "pointer", padding: "4px 6px", color: "var(--text-muted)", display: "flex", alignItems: "center", opacity: archiving === p.id ? 0.4 : 1 }}
-                        >
-                          {isActiveStatus(p.status) ? <Archive size={13} /> : <RotateCcw size={13} />}
-                        </button>
-                        <button
-                          onClick={() => setArchived(p, true)}
-                          disabled={archiving === p.id}
-                          title="Retirer de la liste (archiver, réversible)"
-                          style={{ background: "none", border: "1px solid var(--border)", borderRadius: 6, cursor: "pointer", padding: "4px 6px", color: "var(--text-muted)", display: "flex", alignItems: "center", opacity: archiving === p.id ? 0.4 : 1 }}
-                        >
-                          <EyeOff size={13} />
-                        </button>
-                      </>
+                      <button
+                        onClick={() => setArchived(p, true)}
+                        disabled={archiving === p.id}
+                        title={p.open.length > 0 ? "Archiver — il restera en tête d'« Archivés » (à régler : " + p.open.join(" ; ") + ")" : "Archiver (sort de la vue principale, réversible)"}
+                        style={{ background: "none", border: "1px solid var(--border)", borderRadius: 6, cursor: "pointer", padding: "4px 6px", color: "var(--text-muted)", display: "flex", alignItems: "center", opacity: archiving === p.id ? 0.4 : 1 }}
+                      >
+                        <Archive size={13} />
+                      </button>
                     )}
                   </div>
                 </td>

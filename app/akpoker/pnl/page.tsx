@@ -116,7 +116,9 @@ export default async function TELEPage({ searchParams }: { searchParams: Promise
     };
   }
   const netSeries = getNetPnlSeries({ ...filters, player_id: playerFilter }) as { day: string; cumulative_net: number }[];
-  const players = getPlayers() as any[];
+  // includeArchived : un archivé peut avoir des lignes ici (historique TELE) — sans lui dans
+  // la liste, sa wallet s'affichait « Non configuré » et n'était plus éditable.
+  const players = getPlayers({ includeArchived: true }) as any[];
   const games = (getGames() as any[]).filter((g) => g.name === "TELE");
   const teleGameId = (getDb().prepare(`SELECT id FROM games WHERE name = 'TELE'`).get() as { id: number } | undefined)?.id;
   const walletMeres = teleGameId ? getWalletMeresForGame(teleGameId) : [];

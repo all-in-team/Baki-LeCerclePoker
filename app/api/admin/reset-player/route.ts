@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getDb } from "@/lib/db";
+import { resetPlayerChecked } from "@/lib/players-archive";
+import { PlayerOpenError } from "@/lib/queries/player-open";
 
 export async function POST(req: NextRequest) {
   const token = process.env.ADMIN_RECONCILE_TOKEN;
@@ -13,37 +14,14 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Provide telegram_id or player_id" }, { status: 400 });
   }
 
-  const db = getDb();
-
-  const player = telegram_id
-    ? db.prepare(`SELECT id, name, telegram_chat_id FROM players WHERE telegram_id = ?`).get(telegram_id) as any
-    : db.prepare(`SELECT id, name, telegram_chat_id FROM players WHERE id = ?`).get(player_id) as any;
-
-  if (!player) {
-    return NextResponse.json({ error: "Player not found" }, { status: 404 });
+  // Verrou « ouvert » : un joueur qui a quelque chose à régler n'est jamais effacé (409 + motifs).
+  try {
+    const r = resetPlayerChecked({ telegram_id, player_id });
+    if (!r.found) return NextResponse.json({ error: "Player not found" }, { status: 404 });
+    const { found: _found, ...rest } = r;
+    return NextResponse.json({ ok: true, ...rest });
+  } catch (e: any) {
+    if (e instanceof PlayerOpenError) return NextResponse.json({ error: e.message, blocked: e.blocked }, { status: 409 });
+    throw e;
   }
-
-  let deletedSession = false;
-  if (player.telegram_chat_id) {
-    const r = db.prepare(`DELETE FROM telegram_sessions WHERE chat_id = ?`).run(player.telegram_chat_id);
-    deletedSession = r.changes > 0;
-  }
-
-  db.prepare(`DELETE FROM crm_notes WHERE player_id = ?`).run(player.id);
-  db.prepare(`DELETE FROM players WHERE id = ?`).run(player.id);
-
-  // Clean onboarding_leads so /start flow runs fresh
-  let deletedLead = false;
-  if (telegram_id) {
-    const r = db.prepare(`DELETE FROM onboarding_leads WHERE telegram_id = ?`).run(telegram_id);
-    deletedLead = r.changes > 0;
-  }
-
-  return NextResponse.json({
-    ok: true,
-    deleted_player_id: player.id,
-    deleted_player_name: player.name,
-    deleted_session: deletedSession,
-    deleted_lead: deletedLead,
-  });
 }

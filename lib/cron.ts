@@ -8,6 +8,7 @@ import {
 import { notifyOps } from "./ops-notifications";
 import { getDb } from "./db";
 import { initDzpkCrons } from "./funnels/dzpk/crons";
+import { initLecercleBroadcastCrons } from "./funnels/lecercle/crons";
 
 const TZ = "Europe/Paris";
 const opts = { timezone: TZ };
@@ -259,6 +260,65 @@ export function initCronJobs() {
   }, opts);
   console.log("[CRON] relay-drain + awaiting-expiry + question-nudges registered (toutes les 5 min)");
 
+  // Statut active / inactive automatique (règle Baki 2026-09-25, lib/player-status-auto.ts) :
+  // chaque nuit à 04:30, et le dimanche à 11:45 — juste AVANT le rappel cashout de 12:00,
+  // pour qu'il parte sur des statuts à jour. Éteint tant que PLAYER_STATUS_AUTO_ENABLED
+  // n'est pas "true" (activation après pose des « statut manuel » et validation du plan).
+  // Le job lance lui-même la sync wallet des rooms encore jouées AVANT de recalculer.
+  if (process.env.PLAYER_STATUS_AUTO_ENABLED === "true") {
+    // Budget de la phase sync : le dimanche, le recalcul doit tomber AVANT le rappel
+    // cashout de 12:00 (départ 11:45 + 10 min). Passé le budget, on recalcule quand même ;
+    // la sync en cours continue et se trace seule. Une room pas encore synchronisée garde
+    // sa dernière sync réussie : le garde-fou retient ses joueurs si elle a plus de 3 jours.
+    const SYNC_BUDGET_MS = { nightly: 30 * 60_000, sunday: 10 * 60_000 } as const;
+    const runStatusAuto = async (trigger: "nightly" | "sunday") => {
+      // 1. Sync wallet des rooms encore jouées, une par une (TronGrid est bridé) : le
+      //    recalcul doit voir les tx de la veille. Un échec n'arrête pas le job.
+      const syncs = (async () => {
+        const { playedSyncRoomsOn } = await import("./player-status-auto");
+        const { syncGameWallets } = await import("./wallet-sync");
+        for (const { room } of playedSyncRoomsOn(getDb())) {
+          try {
+            const out = await syncGameWallets(room, trigger);
+            const errs = Array.isArray(out.body?.results) ? out.body.results.filter((x: { error?: string }) => x.error).length : 0;
+            console.log(`[CRON] player-status-auto (${trigger}): sync ${room} → ${out.status} imported=${out.body?.imported ?? "?"}${errs ? ` wallets_en_erreur=${errs}` : ""}`);
+          } catch (e: any) {
+            console.error(`[CRON] player-status-auto (${trigger}): sync ${room} failed:`, e?.message ?? e);
+          }
+        }
+      })().catch((e: any) => console.error(`[CRON] player-status-auto (${trigger}): syncs impossibles:`, e?.message ?? e));
+      let budgetTimer: ReturnType<typeof setTimeout> | undefined;
+      const overBudget = await Promise.race([
+        syncs.then(() => false),
+        new Promise<boolean>(r => { budgetTimer = setTimeout(() => r(true), SYNC_BUDGET_MS[trigger]); }),
+      ]);
+      clearTimeout(budgetTimer);
+      if (overBudget) console.warn(`[CRON] player-status-auto (${trigger}): budget sync dépassé (${SYNC_BUDGET_MS[trigger] / 60_000} min) — recalcul lancé, sync toujours en cours`);
+      // 2. Recalcul des statuts.
+      try {
+        const { applyStatusAutoOn } = await import("./player-status-auto");
+        const r = applyStatusAutoOn(getDb(), trigger);
+        console.log(`[CRON] player-status-auto (${trigger}): ${r.applied.status} statut(s), ${r.applied.unarchived} désarchivage(s) — fenêtre depuis ${r.cutoff} UTC`);
+        if (r.staleRooms.length) {
+          const rooms = r.staleRooms.map(x => `${x.room} (dernière sync réussie : ${x.last_sync ?? "jamais"} UTC`
+            + `${x.last_error ? ` ; dernier passage : ${x.last_error}` : ""})`).join(", ");
+          console.warn(`[CRON] player-status-auto (${trigger}): sync en retard — ${rooms} ; ${r.held.length} joueur(s) retenu(s) en actif`);
+          await notifyOps(`⚠️ <b>Statut auto des joueurs (${trigger})</b> : aucune sync wallet réussie depuis plus de 3 jours — ${rooms}.\n`
+            + `${r.held.length} joueur(s) de ces rooms ne passent PAS inactive tant que la sync n'est pas à jour`
+            + (r.held.length ? ` (ids : ${r.held.map(h => h.player_id).join(", ")})` : "") + ".");
+        }
+      } catch (e: any) {
+        console.error(`[CRON] player-status-auto (${trigger}) failed — rien écrit:`, e);
+        await notifyOps(`🚨 <b>Statut auto des joueurs (${trigger}) : rien n'a été écrit</b>\n<code>${String(e?.message ?? e).slice(0, 400)}</code>`);
+      }
+    };
+    cron.schedule("30 4 * * *", () => runStatusAuto("nightly"), opts);
+    cron.schedule("45 11 * * 0", () => runStatusAuto("sunday"), opts);
+    console.log("[CRON] player-status-auto registered (04:30 Paris chaque jour, dimanche 11:45 Paris)");
+  } else {
+    console.log("[CRON] player-status-auto DISABLED (set PLAYER_STATUS_AUTO_ENABLED=true to enable)");
+  }
+
   if (process.env.CASHOUT_CRONS_ENABLED !== "true") {
     console.log("[CRON] cashout crons DISABLED (set CASHOUT_CRONS_ENABLED=true to enable)");
     return;
@@ -358,5 +418,13 @@ export function initCronJobs() {
     console.log("[CRON] dzpk jobs registered (ingestion 3 min, alarme horaire)");
   } catch (e: any) {
     console.error("[CRON] dzpk jobs KO:", e?.message ?? e);
+  }
+
+  // Diffusions @LeCercle_Lebot : file d'envoi + démarrage des programmées.
+  try {
+    initLecercleBroadcastCrons();
+    console.log("[CRON] lecercle broadcast registered (file d'envoi, 1 min)");
+  } catch (e: any) {
+    console.error("[CRON] lecercle broadcast KO:", e?.message ?? e);
   }
 }

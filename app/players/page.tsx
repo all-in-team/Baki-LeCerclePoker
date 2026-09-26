@@ -1,10 +1,11 @@
 export const dynamic = "force-dynamic";
 import { getTopContributors, getWalletSummaryByPlayer, getApps, type Period } from "@/lib/queries";
 import { getDb } from "@/lib/db";
+import { getPlayersOpenState } from "@/lib/players-archive";
 import PageHeader from "@/components/PageHeader";
 import PlayersPeriodBar from "./PlayersPeriodBar";
 import PlayersViewToggle from "./PlayersViewToggle";
-import { periodSubtitle, resolvePlayersPeriod, type App, type Deal, type Game, type Player, type PlayersPeriod } from "./shared";
+import { attachOpenState, periodSubtitle, resolvePlayersPeriod, type App, type Deal, type Game, type Player, type PlayersPeriod } from "./shared";
 
 // Page Joueurs unique — fusion de l'ancien /crm (kanban + agency cut + deals) et de
 // l'ancien /players (roster + add/edit). /crm redirige ici.
@@ -35,18 +36,31 @@ export default async function PlayersPage({ searchParams }: {
   // Pas de whitelist de status : l'ancienne page /players affichait TOUS les joueurs alors
   // que le CRM filtrait 4 status. Sans ce SELECT ouvert, un joueur avec un status hors liste
   // deviendrait invisible partout.
-  // `archived_at` remonte ici : la liste masque les archivés par défaut côté client, avec
-  // un toggle « Archivés » pour les récupérer (soft-delete réversible, audit 2026-07-25).
-  const allPlayers = db.prepare(`
+  // `archived_at` et `status` remontent ici : vue principale = actifs non archivés, calculée
+  // côté client (isHiddenFromMain) ; « Archivés » (à régler en tête) et « Tout afficher » pour le reste.
+  const rawPlayers = db.prepare(`
     SELECT p.id, p.name, p.telegram_handle, p.telegram_phone, p.status, p.tier, p.notes,
       p.tron_address, p.tron_app_id, p.telegram_id, p.created_at, p.joined_via,
-      p.archived_at, p.archive_reason,
+      p.archived_at, p.archive_reason, p.status_manual,
       (SELECT MAX(created_at) FROM crm_notes WHERE player_id = p.id) AS last_note_at,
       EXISTS(SELECT 1 FROM affiliate_relationships WHERE affiliate_player_id = p.id AND status='active') AS is_affiliate,
       EXISTS(SELECT 1 FROM affiliate_relationships WHERE referred_player_id = p.id AND status='active') AS is_referred
     FROM players p
     ORDER BY p.name
-  `).all() as Player[];
+  `).all() as Omit<Player, "open" | "links">[];
+
+  // État « à régler » (badge et tri d'« Archivés »). Fail-closed : s'il ne se calcule pas, tout
+  // le monde est marqué « à régler » et un bandeau le dit — un « à régler » manqué, c'est un
+  // règlement oublié. Affichage seulement : aucun calcul d'argent ne lit ceci.
+  let openError: string | null = null;
+  let openState: ReturnType<typeof getPlayersOpenState> | null = null;
+  try {
+    openState = getPlayersOpenState();
+  } catch (e: any) {
+    openError = e?.message ?? String(e);
+    console.error("[players] état « à régler » incalculable, tous les archivés marqués à régler :", openError);
+  }
+  const allPlayers: Player[] = attachOpenState(rawPlayers, openState);
 
   const gameRows = db.prepare(`
     SELECT pgd.player_id, GROUP_CONCAT(g.name, ',') AS game_names
@@ -113,6 +127,7 @@ export default async function PlayersPage({ searchParams }: {
         apps={apps}
         affiliatedByPlayer={affiliatedByPlayer}
         period={period}
+        openError={openError}
       />
     </>
   );

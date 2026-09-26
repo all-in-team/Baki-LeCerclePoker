@@ -46,6 +46,9 @@ export const config = {
     // auth : le visiteur arrive d'une pub, il n'a pas de session — sans cette
     // exclusion chaque clic acheté partirait sur /login et serait perdu.
     // `api/admin` n'est PLUS exclu : cf. ADMIN_PREFIX ci-dessus.
-    "/((?!login|go|api/login|api/logout|api/portal|api/telegram|api/cron|api/version|api/morning-checkin|api/agent-dispatch|api/agent-report|_next/static|_next/image|favicon\\.ico|lecercle-logo\\.jpg|portal).*)",
+    // `b/` = lien tracké du bouton des diffusions @LeCercle_Lebot : ouvert par
+    // un joueur depuis Telegram, sans session. Avec le « / » pour ne pas
+    // exclure au passage toute page commençant par « b ».
+    "/((?!login|go|b/|api/login|api/logout|api/portal|api/telegram|api/cron|api/version|api/morning-checkin|api/agent-dispatch|api/agent-report|_next/static|_next/image|favicon\\.ico|lecercle-logo\\.jpg|portal).*)",
   ],
 };

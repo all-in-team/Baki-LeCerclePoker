@@ -2,7 +2,8 @@ export const dynamic = "force-dynamic";
 import { NextRequest, NextResponse } from "next/server";
 import { adminTokenGuard } from "@/lib/admin-token";
 import { getDb } from "@/lib/db";
-import { getNeverPlayerBucket, archivePlayers } from "@/lib/queries";
+import { getNeverPlayerBucket } from "@/lib/queries";
+import { archivePlayers } from "@/lib/players-archive";
 import { sendMsg, AGENT_CHAT_ID } from "@/lib/telegram-commands/helpers";
 
 // Nettoyage de la liste Joueurs — audit Hugo 2026-07-25, validé.

@@ -21,7 +21,6 @@ interface Props {
 
 export default function PlayersKanbanView({ players, gamesByPlayer, dealsByPlayer, agencyByPlayer, pnlByPlayerGame, activeGames, period, onEdit }: Props) {
   const router = useRouter();
-  const [showInactive, setShowInactive] = useState(false);
   const [addGameModal, setAddGameModal] = useState<Game | null>(null);
   const [removing, setRemoving] = useState<number | null>(null);
   const [drawerPlayer, setDrawerPlayer] = useState<Player | null>(null);
@@ -30,7 +29,9 @@ export default function PlayersKanbanView({ players, gamesByPlayer, dealsByPlaye
   const [archiving, setArchiving] = useState(false);
   const [showArchivedGames, setShowArchivedGames] = useState(false);
 
-  const filtered = players.filter(p => showInactive || isActiveStatus(p.status));
+  // Visibilité décidée au niveau page (vue principale / Archivés / Tout) — une seule règle
+  // pour les deux vues ; le statut CRM n'est qu'un libellé (carte grisée si inactive).
+  const filtered = players;
 
   const playerMap = new Map(filtered.map(p => [p.id, p]));
   const playersWithActiveDeals = new Set(Object.keys(dealsByPlayer).map(Number).filter(id => (dealsByPlayer[id] ?? []).some(d => !d.end_date)));
@@ -53,14 +54,6 @@ export default function PlayersKanbanView({ players, gamesByPlayer, dealsByPlaye
     <div>
       {/* Filtres propres à la Kanban (la recherche est au niveau page, partagée avec la vue Table) */}
       <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 16 }}>
-        <button onClick={() => setShowInactive(!showInactive)} style={{
-          padding: "6px 14px", borderRadius: 7, fontSize: 12, fontWeight: 600, cursor: "pointer",
-          border: showInactive ? "1px solid var(--green)" : "1px solid var(--border)",
-          background: showInactive ? "rgba(34,197,94,0.12)" : "var(--bg-surface)",
-          color: showInactive ? "var(--green)" : "var(--text-muted)",
-        }}>
-          {showInactive ? "Inactifs visibles" : "Show inactive"}
-        </button>
         <button onClick={() => setShowArchivedGames(!showArchivedGames)} style={{
           padding: "6px 14px", borderRadius: 7, fontSize: 12, fontWeight: 600, cursor: "pointer",
           border: showArchivedGames ? "1px solid var(--green)" : "1px solid var(--border)",
@@ -130,6 +123,7 @@ export default function PlayersKanbanView({ players, gamesByPlayer, dealsByPlaye
                         <X size={12} />
                       </button>
                       <div style={{ fontWeight: 600, fontSize: 13, color: "var(--text)", marginBottom: 2, paddingRight: 20 }}>{player.name}</div>
+                      <ArchiveBadge p={player} />
                       <div style={{ fontSize: 10, color: "var(--text-dim)", marginBottom: 4, display: "flex", alignItems: "center", gap: 4 }}>
                         {player.telegram_handle && <span>@{player.telegram_handle}</span>}
                         {!!player.is_affiliate && <span style={{ padding: "0px 4px", borderRadius: 3, background: "rgba(139,92,246,0.15)", color: "#A78BFA" }}>Aff</span>}
@@ -187,7 +181,7 @@ export default function PlayersKanbanView({ players, gamesByPlayer, dealsByPlaye
                 fontSize: 12, color: "var(--text-muted)", cursor: "pointer",
                 opacity: isActiveStatus(p.status) ? 1 : 0.5,
               }}>
-                {p.name}
+                {p.name} <ArchiveBadge p={p} />
               </div>
             ))}
           </div>
@@ -305,5 +299,19 @@ export default function PlayersKanbanView({ players, gamesByPlayer, dealsByPlaye
         )}
       </Modal>
     </div>
+  );
+}
+
+// Même règle que la vue Table : un archivé à régler porte « à régler » et son motif.
+function ArchiveBadge({ p }: { p: Player }) {
+  if (!p.archived_at) return null;
+  const open = p.open.length > 0;
+  return (
+    <span
+      title={open ? "À régler : " + p.open.join(" ; ") : (p.archive_reason ?? "archivé")}
+      style={{ display: "inline-block", marginBottom: 4, padding: "1px 6px", borderRadius: 4, fontSize: 9, fontWeight: 700, background: open ? "rgba(239,68,68,0.15)" : "rgba(240,185,11,0.15)", color: open ? "#EF4444" : "#F0B90B" }}
+    >
+      {open ? "à régler" : "archivé"}
+    </span>
   );
 }

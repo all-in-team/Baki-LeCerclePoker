@@ -79,7 +79,8 @@ export function loadNutspkLedger(
   const nutspkGameId = (getDb().prepare(`SELECT id FROM games WHERE name = 'NUTSPK'`).get() as { id: number } | undefined)?.id;
   const walletMeres = nutspkGameId ? getWalletMeresForGame(nutspkGameId) : [];
 
-  const players = getPlayers() as { id: number; name: string }[];
+  // Libellé du filtre seulement : un archivé filtré doit garder son nom, pas « #id ».
+  const players = getPlayers({ includeArchived: true }) as { id: number; name: string }[];
   const filterPlayerName = playerFilter ? (players.find((p) => p.id === playerFilter)?.name ?? `#${playerFilter}`) : null;
 
   // Aggregate deals per player + sort by my_pnl desc — copied verbatim from TELEClient.

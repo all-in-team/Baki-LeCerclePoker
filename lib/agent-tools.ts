@@ -766,7 +766,8 @@ export async function executeTool(name: string, input: any, ctx?: ToolContext): 
       `).get(weekStart) as { confirmed: number; not_played: number; pending: number };
       const totalEligible = (db.prepare(`
         SELECT COUNT(*) AS n FROM players
-        WHERE status IN ('active', 'signed') AND telegram_group_id IS NOT NULL AND accounting_topic_id IS NOT NULL
+        WHERE status IN ('active', 'signed') AND archived_at IS NULL
+          AND telegram_group_id IS NOT NULL AND accounting_topic_id IS NOT NULL
       `).get() as { n: number }).n;
       const notReminded = totalEligible - stats.confirmed - stats.not_played - stats.pending;
       return `Cashout semaine du ${weekStart}:\n✅ Confirmé: ${stats.confirmed}\n⏸️ Pas joué: ${stats.not_played}\n⏳ En attente: ${stats.pending}\n🔇 Pas encore relancé: ${notReminded < 0 ? 0 : notReminded}\nTotal éligibles: ${totalEligible}`;

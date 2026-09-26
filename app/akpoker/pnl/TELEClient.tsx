@@ -25,7 +25,7 @@ interface WalletTx {
   source: string | null;
 }
 
-interface Player { id: number; name: string; tron_address?: string | null; tele_wallet_cashout?: string | null; }
+interface Player { id: number; name: string; tron_address?: string | null; tele_wallet_cashout?: string | null; archived_at?: string | null; }
 interface Game { id: number; name: string; }
 interface KPIs { total_deposited: number; total_withdrawn: number; total_net: number; my_total_pnl: number; }
 interface WalletMere { id: number; address: string; label: string | null; }
@@ -123,7 +123,7 @@ export default function TELEClient({
 
   async function openWalletConfig(focusPlayerId?: number) {
     const [playersRes, settingsRes] = await Promise.all([
-      fetch("/api/players").then(r => r.json()),
+      fetch("/api/players?include_archived=1").then(r => r.json()),
       fetch("/api/settings").then(r => r.json()),
     ]);
     const cfg = playersRes.map((p: any) => ({ id: p.id, name: p.name, wallet_game: p.tron_address ?? null, wallet_cashout: p.tele_wallet_cashout ?? null }));
@@ -642,7 +642,7 @@ export default function TELEClient({
         <Field label="Joueur *">
           <select value={selectedPlayerId} onChange={e => onSelectPlayer(e.target.value)}>
             <option value="">Sélectionne un joueur…</option>
-            {players.filter(p => !listedPlayerIds.has(p.id)).map(p => <option key={p.id} value={String(p.id)}>{p.name}</option>)}
+            {players.filter(p => !listedPlayerIds.has(p.id) && !p.archived_at).map(p => <option key={p.id} value={String(p.id)}>{p.name}</option>)}
             <option value="__new__">+ Nouveau joueur (pas dans le CRM)</option>
           </select>
         </Field>

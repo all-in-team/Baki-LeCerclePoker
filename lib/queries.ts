@@ -6,11 +6,13 @@ import { assertWalletAddress } from "./wallet-address";
 import type { HistoryTx } from "./wallet-history";
 
 // ── Players ──────────────────────────────────────────────
-// Les lignes archivées (soft-delete, audit 2026-07-25) sont exclues : cette fonction
-// alimente les sélecteurs de joueurs (ledgers, PnL, /api/players), et une ligne archivée
-// n'a par construction aucune activité — donc rien d'historique à afficher. La page
-// Joueurs, elle, lit `players` directement pour pouvoir proposer son toggle « Archivés ».
-export function getPlayers() {
+// Un joueur archivé PEUT avoir un historique d'argent, et même quelque chose à régler
+// (archiver est toujours permis, et un dépôt peut arriver après archivage) : l'archive ne
+// sort un joueur que de la vue principale de /players (lib/players-archive.ts).
+// Par défaut getPlayers() l'exclut des seuls SÉLECTEURS qui ajoutent quelque chose (ajouter
+// un joueur à une room, assigner une wallet). Tout ce qui AFFICHE ou NOMME un joueur
+// (libellés de ledger, maps de wallets, modale de config) passe `includeArchived: true`.
+export function getPlayers(opts: { includeArchived?: boolean } = {}) {
   const db = getDb();
   return db.prepare(`
     SELECT p.*,
@@ -18,7 +20,7 @@ export function getPlayers() {
       SUM(CASE WHEN paa.status='active' THEN 1 ELSE 0 END) AS active_apps
     FROM players p
     LEFT JOIN player_app_assignments paa ON paa.player_id = p.id
-    WHERE p.archived_at IS NULL
+    ${opts.includeArchived ? "" : "WHERE p.archived_at IS NULL"}
     GROUP BY p.id
     ORDER BY p.name
   `).all();
@@ -86,7 +88,9 @@ const NEVER_PLAYER_KEEP_SQL = `
        OR EXISTS(SELECT 1 FROM qqpk_funnel_leads x WHERE x.telegram_id = p.telegram_id)
        OR EXISTS(SELECT 1 FROM pending_game_pitches x WHERE x.player_telegram_id = p.telegram_id)))
   -- statut déjà travaillé à la main + création manuelle (roster initial / modale Ajouter)
-  OR p.status != 'active'
+  -- (un inactive posé par l'automate, lib/player-status-auto.ts, n'est PAS un statut travaillé)
+  OR p.status_manual = 1
+  OR (p.status != 'active' AND NOT EXISTS(SELECT 1 FROM player_status_changes c WHERE c.player_id = p.id AND c.kind = 'status'))
   OR p.joined_via IS NULL
 `;
 
@@ -105,25 +109,8 @@ export function getNeverPlayerBucket(): NeverPlayerRow[] {
   `).all() as NeverPlayerRow[];
 }
 
-/** Archive / restaure un joueur. `archived = false` ⇒ retour dans la liste par défaut. */
-export function setPlayerArchived(id: number, archived: boolean, reason?: string | null): void {
-  getDb().prepare(
-    `UPDATE players SET archived_at = ?, archive_reason = ? WHERE id = ?`
-  ).run(archived ? new Date().toISOString().replace("T", " ").slice(0, 19) : null, archived ? (reason ?? null) : null, id);
-}
-
-/** Archivage en masse d'une liste d'ids explicite (jamais un WHERE ouvert). */
-export function archivePlayers(ids: number[], reason: string): number {
-  if (ids.length === 0) return 0;
-  const db = getDb();
-  const stmt = db.prepare(`UPDATE players SET archived_at = datetime('now'), archive_reason = ? WHERE id = ? AND archived_at IS NULL`);
-  const tx = db.transaction(() => {
-    let n = 0;
-    for (const id of ids) n += stmt.run(reason, id).changes;
-    return n;
-  });
-  return tx();
-}
+// L'archivage (archivePlayers / unarchivePlayer) et les suppressions gardées vivent dans
+// lib/players-archive.ts, seul écrivain de archived_at (non importable d'ici : cycle).
 
 export function getPlayerAssignments(playerId: number) {
   const db = getDb();
@@ -149,8 +136,31 @@ export function insertPlayer(data: { name: string; telegram_handle?: string; tel
   return r.lastInsertRowid;
 }
 
-export function updatePlayer(id: number, data: Partial<{ name: string; telegram_handle: string; telegram_phone: string; status: string; notes: string; action_pct: number; tron_address: string; tron_app_id: number; tier: string }>) {
+// Colonnes modifiables par PATCH /api/players/[id]. Liste FERMÉE : le SET était construit
+// à partir des clés reçues, donc n'importe quelle colonne (archived_at compris, hors du seul
+// écrivain lib/players-archive.ts) — et un nom de clé allait tel quel dans le SQL.
+const UPDATABLE_PLAYER_FIELDS = new Set([
+  "name", "telegram_handle", "telegram_phone", "status", "notes", "action_pct",
+  "tron_address", "tron_app_id", "tier", "tele_wallet_cashout", "status_manual",
+]);
+
+/**
+ * Lève si une clé n'est pas modifiable, ou si `status_manual` n'est pas true/false/0/1 (une
+ * chaîne "false" est truthy : elle passerait le joueur en manuel) — à appeler AVANT toute
+ * écriture (pas d'écriture partielle).
+ */
+export function assertUpdatablePlayerFields(keys: string[], data?: Record<string, unknown>): void {
+  const bad = keys.filter(k => !UPDATABLE_PLAYER_FIELDS.has(k));
+  if (bad.length) throw new Error(`champ(s) non modifiable(s) : ${bad.join(", ")}`);
+  if (data && "status_manual" in data && ![true, false, 0, 1].includes(data.status_manual as never))
+    throw new Error(`status_manual non modifiable : valeur ${JSON.stringify(data.status_manual)} (attendu true/false)`);
+}
+
+export function updatePlayer(id: number, data: Partial<{ name: string; telegram_handle: string; telegram_phone: string; status: string; notes: string; action_pct: number; tron_address: string; tron_app_id: number; tier: string; tele_wallet_cashout: string; status_manual: boolean | number }>) {
   const db = getDb();
+  assertUpdatablePlayerFields(Object.keys(data), data);
+  // SQLite ne lie pas de booléen : « statut manuel » est stocké en 0/1.
+  if ("status_manual" in data) data = { ...data, status_manual: data.status_manual ? 1 : 0 };
   const sets = Object.keys(data).map(k => `${k} = @${k}`).join(", ");
   db.prepare(`UPDATE players SET ${sets} WHERE id = @id`).run({ ...data, id });
 }
@@ -180,7 +190,7 @@ export function deletePlayer(id: number) {
       if (n > 0) blocking.push(`${n} ${label}`);
     }
     if (blocking.length > 0) {
-      throw new Error(`Suppression refusée : ce joueur a un historique financier (${blocking.join(", ")}). Archive-le (status) ou nettoie son historique d'abord — le supprimer effacerait son ledger.`);
+      throw new Error(`Suppression refusée : ce joueur a un historique financier (${blocking.join(", ")}). Archive-le (bouton Archiver) ou nettoie son historique d'abord — le supprimer effacerait son ledger.`);
     }
     // Referencing tables declared WITHOUT ON DELETE (would block the FK) — all non-money
     // at this point thanks to the guard above.

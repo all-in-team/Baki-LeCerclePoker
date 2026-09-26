@@ -32,6 +32,18 @@ import {
   XPOKER_GAME_NAME, XPOKER_DEFAULT_ACTION_PCT, XPOKER_SEED_CHIPS_PER_USD,
   XPOKER_SEED_RATE_EFFECTIVE_FROM, XPOKER_SEED_AGENCY_ACCOUNTS,
 } from "./games/xpoker/config";
+// Module pur (aucun import) : DDL + initialisation de l'audience des diffusions
+// @LeCercle_Lebot, partagés avec scripts/lecercle-broadcast.test.ts.
+import {
+  LECERCLE_BROADCAST_SCHEMA_SQL, LECERCLE_MIGRATION_BROADCAST_V1, backfillBotUsers as lecercleBackfillBotUsers,
+  LECERCLE_DM_RELAY_SCHEMA_SQL, LECERCLE_DM_RELAY_ALTERS, LECERCLE_MIGRATION_DM_RELAY_V1,
+} from "./funnels/lecercle/schema";
+// Module pur (aucun import) : schéma du statut automatique des joueurs.
+import {
+  PLAYER_STATUS_AUTO_V1, PLAYER_STATUS_MANUAL_SQL, PLAYER_STATUS_CHANGES_SQL,
+} from "./player-status-auto-schema";
+// Module pur (aucun import) : trace des passages de sync wallet.
+import { WALLET_SYNC_RUNS_V1, WALLET_SYNC_RUNS_SQL } from "./wallet-sync-schema";
 
 // Quarantaine des mouvements wallet — cf. la migration en bas de ce fichier.
 export const WALLET_TX_QUARANTINE_V1 = "add_wallet_tx_quarantine_v1";
@@ -4080,5 +4092,86 @@ function initSchema(db: Database.Database) {
     }
   } catch (err: any) {
     console.error(`[MIGRATION:${WALLET_MERE_KIND_V1}] FAILED (sera rejouée au prochain boot):`, err.message);
+  }
+
+  // ── Diffusions @LeCercle_Lebot ─────────────────────────────────────────────
+  //
+  // Quatre tables NOUVELLES, aucune colonne ajoutée ailleurs. L'initialisation
+  // de l'audience LIT onboarding_leads, nexa_leads, qqpk_funnel_leads,
+  // affiliate_leads et players ; elle n'y écrit rien. Tables et
+  // initialisation dans UNE transaction : pas d'audience à moitié remplie
+  // marquée comme faite. L'initialisation est idempotente (rejouable sans
+  // doublon ni écrasement), cf. backfillBotUsers.
+  try {
+    const already = db.prepare(`SELECT 1 FROM _applied_fixes WHERE name = ?`).get(LECERCLE_MIGRATION_BROADCAST_V1);
+    if (!already) {
+      let added = 0;
+      db.transaction(() => {
+        db.exec(LECERCLE_BROADCAST_SCHEMA_SQL);
+        added = lecercleBackfillBotUsers(db);
+        db.prepare(`INSERT OR IGNORE INTO _applied_fixes (name) VALUES (?)`).run(LECERCLE_MIGRATION_BROADCAST_V1);
+      })();
+      console.log(`[MIGRATION] ${LECERCLE_MIGRATION_BROADCAST_V1} applied — ${added} compte(s) dans l'audience du bot`);
+    }
+  } catch (err: any) {
+    console.error(`[MIGRATION:${LECERCLE_MIGRATION_BROADCAST_V1}] FAILED (sera rejouée au prochain boot):`, err.message);
+  }
+
+  // ── Statut active / inactive automatique ───────────────────────────────────
+  //
+  // Une colonne players.status_manual (défaut 0 : tous les joueurs restent gérés par
+  // l'automate) et une table de trace NOUVELLE. Aucune donnée existante modifiée :
+  // l'automate lui-même ne tourne que si PLAYER_STATUS_AUTO_ENABLED=true (lib/cron.ts).
+  try {
+    const already = db.prepare(`SELECT 1 FROM _applied_fixes WHERE name = ?`).get(PLAYER_STATUS_AUTO_V1);
+    if (!already) {
+      db.transaction(() => {
+        const hasCol = db.prepare(`SELECT 1 FROM pragma_table_info('players') WHERE name = 'status_manual'`).get();
+        if (!hasCol) db.exec(PLAYER_STATUS_MANUAL_SQL);
+        db.exec(PLAYER_STATUS_CHANGES_SQL);
+        db.prepare(`INSERT OR IGNORE INTO _applied_fixes (name) VALUES (?)`).run(PLAYER_STATUS_AUTO_V1);
+      })();
+      console.log(`[MIGRATION] ${PLAYER_STATUS_AUTO_V1} applied — players.status_manual + player_status_changes`);
+    }
+  } catch (err: any) {
+    console.error(`[MIGRATION:${PLAYER_STATUS_AUTO_V1}] FAILED (sera rejouée au prochain boot):`, err.message);
+  }
+
+  // ── Trace des passages de sync wallet ──────────────────────────────────────
+  //
+  // Table NOUVELLE, aucune donnée existante touchée. Sert au garde-fou du statut
+  // automatique : « dernière sync RÉUSSIE » d'une room, et non sa dernière tx (une
+  // room calme n'a pas de tx, elle n'est pas pour autant mal synchronisée).
+  try {
+    const already = db.prepare(`SELECT 1 FROM _applied_fixes WHERE name = ?`).get(WALLET_SYNC_RUNS_V1);
+    if (!already) {
+      db.transaction(() => {
+        db.exec(WALLET_SYNC_RUNS_SQL);
+        db.prepare(`INSERT OR IGNORE INTO _applied_fixes (name) VALUES (?)`).run(WALLET_SYNC_RUNS_V1);
+      })();
+      console.log(`[MIGRATION] ${WALLET_SYNC_RUNS_V1} applied — wallet_sync_runs`);
+    }
+  } catch (err: any) {
+    console.error(`[MIGRATION:${WALLET_SYNC_RUNS_V1}] FAILED (sera rejouée au prochain boot):`, err.message);
+  }
+
+  // ── Relais des réponses aux diffusions (live takeover hors Nexa) ───────────
+  //
+  // Trois tables NOUVELLES et une colonne sur lecercle_broadcast_targets (table du
+  // module diffusion). Rien sur nexa_leads : le silence Nexa armé par une diffusion
+  // est mémorisé dans lecercle_nexa_holds. Une seule transaction.
+  try {
+    const already = db.prepare(`SELECT 1 FROM _applied_fixes WHERE name = ?`).get(LECERCLE_MIGRATION_DM_RELAY_V1);
+    if (!already) {
+      db.transaction(() => {
+        db.exec(LECERCLE_DM_RELAY_SCHEMA_SQL);
+        const cols = new Set((db.prepare(`PRAGMA table_info(lecercle_broadcast_targets)`).all() as any[]).map(c => c.name));
+        if (!cols.has("claimed_at")) for (const sql of LECERCLE_DM_RELAY_ALTERS) db.exec(sql);
+        db.prepare(`INSERT OR IGNORE INTO _applied_fixes (name) VALUES (?)`).run(LECERCLE_MIGRATION_DM_RELAY_V1);
+      })();
+      console.log(`[MIGRATION] ${LECERCLE_MIGRATION_DM_RELAY_V1} applied`);
+    }
+  } catch (err: any) {
+    console.error(`[MIGRATION:${LECERCLE_MIGRATION_DM_RELAY_V1}] FAILED (sera rejouée au prochain boot):`, err.message);
   }
 }

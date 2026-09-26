@@ -31,6 +31,7 @@ export default function PlayerEditModal({ player, dealsByPlayer, activeGames, ap
     name: player?.name ?? "",
     tier: player?.tier ?? "B",
     status: player?.status ?? "active",
+    status_manual: !!player?.status_manual,
     telegram_handle: player?.telegram_handle ?? "",
     telegram_phone: player?.telegram_phone ?? "",
     notes: player?.notes ?? "",
@@ -62,7 +63,10 @@ export default function PlayerEditModal({ player, dealsByPlayer, activeGames, ap
         body: JSON.stringify({
           name: form.name.trim(),
           tier: form.tier,
-          status: form.status,
+          // Statut envoyé seulement s'il a été changé ici : sinon enregistrer la modale
+          // écraserait une bascule faite par l'automate depuis son ouverture.
+          ...(form.status !== (p.status ?? "active") ? { status: form.status } : {}),
+          status_manual: form.status_manual,
           telegram_handle: form.telegram_handle.trim() || null,
           telegram_phone: form.telegram_phone.trim() || null,
           notes: form.notes.trim() || null,
@@ -99,16 +103,21 @@ export default function PlayerEditModal({ player, dealsByPlayer, activeGames, ap
     }
   }
 
-  // Archive = soft, même sémantique que le bouton de la ligne (inactive / active).
+  // Archive (un seul concept, comme le bouton de la ligne) : sort le joueur de la vue
+  // principale. Toujours permis ; un joueur à régler passe en tête d'« Archivés ».
   async function toggleArchive() {
     setSaving(true);
     try {
-      const newStatus = isActiveStatus(p.status) ? "inactive" : "active";
-      await fetch(`/api/players/${p.id}`, {
+      const res = await fetch(`/api/players/${p.id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ status: newStatus }),
+        body: JSON.stringify({ archived: !p.archived_at, archive_reason: p.archived_at ? null : "retiré à la main" }),
       });
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({}));
+        alert(d.error ?? `Erreur ${res.status}`);
+        return;
+      }
       onClose();
       router.refresh();
     } catch (e: any) {
@@ -138,13 +147,20 @@ export default function PlayerEditModal({ player, dealsByPlayer, activeGames, ap
             </select>
           </div>
           <div style={{ flex: 1 }}>
-            <label style={LBL}>Status</label>
-            <select value={form.status} onChange={e => setForm({ ...form, status: e.target.value })} style={INP}>
+            <label style={LBL} title="Active / inactive recalculé chaque nuit sur l'activité de jeu des 21 derniers jours, sauf en statut manuel">Statut CRM</label>
+            {/* Changer le statut à la main coche « Statut manuel » (Baki) : sinon le recalcul
+                de la nuit le défait. Reste visible et décochable. « Signed » retiré : le CHECK
+                de players.status le refuse (active / inactive / churned). */}
+            <select value={form.status} onChange={e => setForm({ ...form, status: e.target.value, status_manual: true })} style={INP}>
               <option value="active">Active</option>
-              <option value="signed">Signed</option>
               <option value="inactive">Inactive</option>
               <option value="churned">Churned</option>
             </select>
+            <label style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 6, fontSize: 12, color: "var(--text-muted)", cursor: "pointer" }}
+              title="Coché : le recalcul automatique (active si activité de jeu dans les 21 derniers jours) ne touche plus au statut de ce joueur">
+              <input type="checkbox" checked={form.status_manual} onChange={e => setForm({ ...form, status_manual: e.target.checked })} />
+              Statut manuel
+            </label>
           </div>
         </div>
 
@@ -245,8 +261,13 @@ export default function PlayerEditModal({ player, dealsByPlayer, activeGames, ap
         </div>
 
         <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 8 }}>
-          <button disabled={saving} onClick={toggleArchive} style={{ padding: "8px 12px", borderRadius: 7, fontSize: 12, cursor: "pointer", background: "none", border: "1px solid var(--border)", color: "var(--text-muted)" }}>
-            {isActiveStatus(p.status) ? "Archiver" : "Réactiver"}
+          <button
+            disabled={saving}
+            onClick={toggleArchive}
+            title={!p.archived_at && p.open.length > 0 ? "Il restera en tête d'« Archivés » — à régler : " + p.open.join(" ; ") : undefined}
+            style={{ padding: "8px 12px", borderRadius: 7, fontSize: 12, cursor: "pointer", background: "none", border: "1px solid var(--border)", color: "var(--text-muted)" }}
+          >
+            {p.archived_at ? "Désarchiver" : "Archiver"}
           </button>
           <div style={{ flex: 1 }} />
           <button onClick={onClose} style={{ padding: "8px 18px", borderRadius: 7, fontSize: 13, cursor: "pointer", background: "none", border: "1px solid var(--border)", color: "var(--text-muted)" }}>
