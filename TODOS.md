@@ -153,6 +153,34 @@ Deferred work from /plan-ceo-review (2026-04-28).
   marque dédiée distincte de « à régler »), après avoir cadré quels `status` signifient « à
   arbitrer » vs « écarté définitivement ». Logique : `components/ledger/period-presence.ts`.
 
+### Affiliation — suites du chantier « taux agent versionné » (clos le 2026-09-25, merge 8446d8a)
+Le chantier a posé : taux agent par (filleul, game) versionné par semaine, perçu versionné par
+game, gel des semaines payées (`setAgentRateOn`, `setPerceivedDealOn`, `withFrozenGuardOn` sur
+les overrides de relation). Restent HORS de ce gel — une écriture par ces voies peut encore
+modifier une commission déjà payée (décision Baki : chantiers séparés) :
+- **Pause / réactivation de relation** — `PATCH /api/affiliate-relationships/[id]` (`status`)
+  n'est pas sous garde : seules les relations actives entrent dans le dû, donc réactiver remet
+  tout l'historique du filleul dans le cumul, et terminer l'en retire (ses paiements restent).
+- **Deal joueur** — `player_game_deals` (`action_pct` = dernier repli de la cascade de la base,
+  `start_date` / `end_date` = bornes des transactions comptées, suppression) : modifiable par
+  `app/api/games/deals/[id]/route.ts` et `lib/queries.ts` sans contrôle des semaines payées.
+- **Transactions anciennes** — ajout, suppression ou redatage d'une `wallet_transactions`
+  (ou d'un `rakeback_reports.report_date`) dans une semaine gelée change sa commission.
+- **Taux CNY** — `settings.exchange_rate_cny_usdt` réécrit tout l'historique Wepoker, semaines
+  payées comprises ; à 0, la part Wepoker vaut 0 en silence (zéro inventé, préexistant).
+- **Régularisation Antoine (@BerruPKR, filleul de Xabi)** — son deal joueur est à **50 %**
+  mais `player_game_deals` KK et A5 sont à **70 %** depuis une date entre le 07/07 et le 27/07
+  (heure exacte non lue). 7 règlements payés à 70 % : KK n° 134, 151, 165, 187, 199, 225
+  (net +75,00 → Antoine a dû 15,00 de trop au Cercle) et A5 n° 133 (net −397,10 → le Cercle
+  lui a versé 79,42 de trop) : **solde 64,42 en faveur d'Antoine**. À vérifier aussi : n° 59
+  (KK à 40 %) et n° 45 (A5 à 20 %). Rien n'a été modifié — Baki décide de la régularisation,
+  puis correction du deal en base.
+
+Nettoyages liés : supprimer `GET /api/affiliate-agent-rates/migration-check` et
+`legacyAgentCommissionOn` (preuve faite en prod le 2026-09-25 : 12/12 agents identiques au
+centime) ; supprimer `app/crm/affiliates/AffiliateDetailDrawer.tsx` (plus importé, types
+périmés : `due_now` traité comme un nombre).
+
 ## P2 — Medium value, needs careful planning
 
 ### Refactor Telegram webhook into command modules
