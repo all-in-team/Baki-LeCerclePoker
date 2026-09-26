@@ -584,7 +584,14 @@ export type PurgeOutcome = {
  */
 export async function purgeGroupById(
   chatId: string,
-  o: { reason: string; label?: string; dryRun?: boolean; backfillOwner?: { ownerKind: GroupOwnerKind; ownerKey: number } },
+  o: {
+    reason: string; label?: string; dryRun?: boolean; backfillOwner?: { ownerKind: GroupOwnerKind; ownerKey: number };
+    // Job silencieux 7 j UNIQUEMENT (Hugo 2026-09-27) : un humain présent n'arrête plus la
+    // purge — tous les membres sont kickés, lead compris, puis le groupe est supprimé.
+    // Le job fantôme 24 h ne le passe jamais : un humain présent y reste un « join réparé ».
+    kickHumans?: boolean;
+    abandonText?: string;   // message posté si la purge échoue et que le groupe est tagué abandonné
+  },
 ): Promise<PurgeOutcome> {
   const cid = String(chatId);
   const reg = getDb().prepare(`SELECT title, owner_label FROM group_creations WHERE chat_id = ?`)
@@ -605,20 +612,24 @@ export async function purgeGroupById(
     if (m.bot) return uname !== BOT_USERNAME;
     return !TEAM_USERNAMES.has(uname);
   });
-  if (strangers.length > 0) {
+  if (strangers.length > 0 && !o.kickHumans) {
     const human = strangers[0].username ?? strangers[0].first_name ?? String(strangers[0].id);
     if (!o.dryRun) markGroupJoined(cid, strangers[0].id);
     return { chat_id: cid, label, outcome: "has_human", detail: `${human} est dedans — join réparé, rien purgé`, regressed: [] };
   }
 
   if (o.dryRun) {
+    const who = strangers.map((m) => m.username ? `@${m.username}` : (m.first_name ?? String(m.id)));
     return {
       chat_id: cid, label, outcome: "purged",
-      detail: `dry-run — ${members.length} membre(s), équipe uniquement`, regressed: [],
+      detail: strangers.length
+        ? `dry-run — ${members.length} membre(s), serait kické(s) aussi : ${who.join(", ")}`
+        : `dry-run — ${members.length} membre(s), équipe uniquement`,
+      regressed: [],
     };
   }
 
-  const out = await purgeOrTag(cid, reg?.title ?? o.label ?? null, members, me.id);
+  const out = await purgeOrTag(cid, reg?.title ?? o.label ?? null, members, me.id, o.reason, o.abandonText);
   markCleaned(cid, out.outcome === "purged" ? o.reason : `abandoned_tagged (${o.reason}): ${out.reason}`,
     o.backfillOwner ? { ...o.backfillOwner, label } : undefined);
   const regressed = regressOwnerByChatId(cid);
@@ -633,6 +644,8 @@ export async function purgeGroupById(
  */
 async function purgeOrTag(
   chatId: string, title: string | null, members: { id: number; username?: string }[], meId: number,
+  reason = "not_joined_24h",
+  abandonText = `Le joueur n'a jamais rejoint ce canal dans les 24 h. Il est retiré du suivi — plus rien ne sera posté ici.`,
 ): Promise<{ outcome: "purged" | "tagged"; reason: string }> {
   for (const m of members) {
     if (m.id === meId) continue;
@@ -642,14 +655,13 @@ async function purgeOrTag(
       const tag = `⚰️ Abandonné — ${title ?? chatId}`.slice(0, 128);
       await renamePlayerGroup(chatId, tag).catch(() => {});
       await sendMsg(Number(chatId),
-        `⚰️ <b>Groupe abandonné</b>\n\nLe joueur n'a jamais rejoint ce canal dans les 24 h. ` +
-        `Il est retiré du suivi — plus rien ne sera posté ici.`
+        `⚰️ <b>Groupe abandonné</b>\n\n${abandonText}`
       ).catch(() => {});
       return { outcome: "tagged", reason: `kick impossible (${k.error ?? "?"})` };
     }
   }
   const leave = await leaveUserbotChannels([chatId]);
-  if (leave.left.includes(chatId)) return { outcome: "purged", reason: "not_joined_24h" };
+  if (leave.left.includes(chatId)) return { outcome: "purged", reason };
   const tag = `⚰️ Abandonné — ${title ?? chatId}`.slice(0, 128);
   await renamePlayerGroup(chatId, tag).catch(() => {});
   return { outcome: "tagged", reason: `leave échoué (${leave.failed[0]?.error ?? "?"})` };
@@ -749,16 +761,17 @@ export async function reportGhostCleanup(r: GhostCleanupResult): Promise<void> {
 // compte pas — la règle demandée est « aucun message ».
 //
 // GARDE-FOUS DURS (aucun ne peut être contourné par le cron automatique) :
-//   • deal actif dans player_game_deals (end_date IS NULL) → skip
-//   • ≥1 wallet_transactions sur le joueur → skip
+//   • deal actif (end_date IS NULL) OU ≥1 wallet_transactions sur N'IMPORTE QUEL joueur
+//     rattaché (propriétaire + joueurs du groupe via telegram_group_id) → skip
 //   • lead Nexa au-delà de `account_created` (dépôt constaté) → skip
-//   • humain hors équipe encore présent (relit les membres) → `has_human`, join réparé
+//   • message posté pendant le run (first_msg_at relu juste avant la purge) → skip
 //   • membres illisibles → skip (jamais de purge à l'aveugle) — hérité de purgeGroupById
-//   • cap par run (throttle Telegram)
+//   • cap par run (throttle Telegram) ; dry-run d'abord (cf. lib/cron.ts)
 //
-// Kick équipe + sortie userbot = suppression Telegram effective (côté API il n'y a
-// pas d'autre chemin — voir purgeOrTag). Après purge : le joueur associé passe en
-// `status = 'churned'`, JAMAIS d'écriture dans les tables financières.
+// Lead PRÉSENT mais muet = parasite (Hugo 2026-09-27) : TOUS les membres sont kickés,
+// lead compris (`kickHumans`), puis le userbot sort = suppression Telegram effective
+// (côté API il n'y a pas d'autre chemin — voir purgeOrTag). Après purge : le joueur
+// associé passe en `status = 'churned'`, JAMAIS d'écriture dans les tables financières.
 
 const SILENT_DEFAULT_MAX_AGE_DAYS = 7;
 const SILENT_DEFAULT_CAP = 20;
@@ -872,7 +885,21 @@ export async function runSilentGroupCleanup(opts?: {
     const guard = silentBusinessGuard(row);
     if (guard) { res.skipped.push({ chat_id: row.chat_id, label, reason: guard }); continue; }
 
-    const out = await purgeGroupById(row.chat_id, { reason: "silent_7d", label, dryRun });
+    // Relecture juste avant d'agir : le lead a pu poster pendant le run (throttle Telegram
+    // entre deux groupes). Un seul mot ⇒ il n'est plus « silencieux », on ne touche à rien.
+    const fresh = getDb().prepare(`SELECT first_msg_at, cleaned_at FROM group_creations WHERE chat_id = ?`)
+      .get(row.chat_id) as { first_msg_at: string | null; cleaned_at: string | null } | undefined;
+    if (!fresh || fresh.first_msg_at !== null || fresh.cleaned_at !== null) {
+      res.skipped.push({ chat_id: row.chat_id, label, reason: "a parlé ou déjà nettoyé pendant le run" });
+      continue;
+    }
+
+    // Lead présent mais muet = parasite (Hugo 2026-09-27) : TOUS les membres sont kickés,
+    // lead compris, puis le userbot sort ⇒ groupe supprimé.
+    const out = await purgeGroupById(row.chat_id, {
+      reason: "silent_7d", label, dryRun, kickHumans: true,
+      abandonText: `Aucun message dans ce groupe depuis 7 jours : il est fermé et retiré du suivi.`,
+    });
     if (out.outcome === "purged") res.purged.push({ chat_id: row.chat_id, label });
     else if (out.outcome === "tagged") res.tagged.push({ chat_id: row.chat_id, label, reason: out.detail });
     else if (out.outcome === "has_human") res.self_healed.push({ chat_id: row.chat_id, label, human: out.detail });
